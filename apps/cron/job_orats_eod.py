@@ -1,17 +1,10 @@
 import os, argparse
-from shared.utils.data_io import get_engine
-from sqlalchemy import text
+from shared.ingest.orats_eod import run as run_orats_eod
 
 def main(date: str | None):
     token = os.getenv("ORATS_API_KEY", "")
     print(f"[cron] date={date or 'auto'} token_len={len(token)}")
-
-    # DB sanity check
-    eng = get_engine()
-    with eng.connect() as cx:
-        res = cx.execute(text("select 1")).scalar_one()
-    print(f"[cron] DB check ok (select 1 -> {res})")
-
+    run_orats_eod(date)
     print("[cron] Done.")
 
 if __name__ == "__main__":
