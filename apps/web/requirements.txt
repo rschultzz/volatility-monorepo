@@ -4,3 +4,5 @@ plotly>=5.22
 pandas>=2.2
 gunicorn>=21.2
 python-dotenv>=1.0
+SQLAlchemy>=2.0
+psycopg[binary,pool]>=3.2
