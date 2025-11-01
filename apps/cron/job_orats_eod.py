@@ -1,20 +1,21 @@
-
-import os
-import argparse
-from datetime import datetime, timezone
+import os, argparse
+from shared.utils.data_io import get_engine
+from sqlalchemy import text
 
 def main(date: str | None):
     token = os.getenv("ORATS_API_KEY", "")
-    if not token:
-        print("[cron] WARNING: ORATS_API_KEY is not set.")
-    print(f"[cron] Running EOD ingest for date={date or 'auto'} with token len={len(token)}")
-    # TODO: import your real job here; this is just a stub.
-    # from shared.utils.data_io import upsert_orats_batch
-    # upsert_orats_batch(...)
+    print(f"[cron] date={date or 'auto'} token_len={len(token)}")
+
+    # DB sanity check
+    eng = get_engine()
+    with eng.connect() as cx:
+        res = cx.execute(text("select 1")).scalar_one()
+    print(f"[cron] DB check ok (select 1 -> {res})")
+
     print("[cron] Done.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--date", help="Trade date YYYY-MM-DD (optional)", default=None)
+    parser.add_argument("--date", help="YYYY-MM-DD (optional)", default=None)
     args = parser.parse_args()
     main(args.date)
