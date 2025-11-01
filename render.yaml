@@ -1,0 +1,31 @@
+
+services:
+  - type: web
+    name: volatility-web
+    env: python
+    rootDir: apps/web
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:server
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false   # or use fromDatabase in the dashboard
+      - key: ORATS_API_KEY
+        sync: false
+      - key: PYTHONPATH
+        value: packages
+
+  - type: worker
+    name: orats-cron
+    env: python
+    rootDir: apps/cron
+    buildCommand: pip install -r requirements.txt
+    startCommand: python job_orats_eod.py --token $ORATS_API_KEY
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ORATS_API_KEY
+        sync: false
+      - key: PYTHONPATH
+        value: packages

@@ -1,0 +1,27 @@
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+venv/
+ENV/
+env/
+.dist-info/
+*.egg-info/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Build
+build/
+dist/
+
+# Render/Logs
+render-build.log
