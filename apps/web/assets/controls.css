@@ -1,0 +1,129 @@
+/* ===================== THEME TOKENS ===================== */
+:root{
+  /* tweak this one to fine-tune the blue to your screenshot */
+  --ui-blue: #506784;         /* slate-blue like Plotly Dark table */
+  --ui-blue-d1: #3f5263;      /* hover/pressed */
+  --ui-blue-d2: #2e3e4f;      /* deepest */
+  --ui-blue-l1: #6c85a0;      /* lighter text/placeholder contrast */
+  --ui-border: #3b4f63;
+  --ui-text: #ffffff;
+}
+
+/* ===================== LAYOUT HELPERS ===================== */
+.header-wrap { display:grid; grid-template-columns: repeat(3, minmax(280px, 1fr)); gap:16px; align-items:start; width:100%; }
+.stack { display:flex; flex-direction:column; gap:10px; }
+.block { width:100%; }
+.round { border-radius:6px; }
+.label { font-size:12px; color:#eaf2ff; margin-bottom:6px; display:block; }
+
+/* ===================== DROPDOWN (dcc.Dropdown / react-select) ===================== */
+.dash-dropdown { width:100%; }
+
+/* control */
+.dash-dropdown .Select-control,
+.dash-dropdown [class*="control"] {
+  background:var(--ui-blue) !important;
+  border:1px solid var(--ui-border) !important;
+  min-height:40px;
+}
+
+/* placeholder */
+.dash-dropdown .Select-placeholder,
+.dash-dropdown [class*="placeholder"] {
+  color:var(--ui-blue-l1) !important; line-height:38px;
+}
+
+/* single value */
+.dash-dropdown .Select--single > .Select-control .Select-value,
+.dash-dropdown [class*="singleValue"] {
+  color:var(--ui-text) !important; line-height:38px;
+}
+
+/* input text */
+.dash-dropdown .Select-input input,
+.dash-dropdown [class*="input"] input {
+  color:var(--ui-text) !important;
+}
+
+/* multi tags */
+.dash-dropdown .Select--multi .Select-value,
+.dash-dropdown [class*="multiValue"] {
+  background:var(--ui-blue-d1) !important; border:1px solid var(--ui-border) !important; color:var(--ui-text) !important;
+}
+.dash-dropdown .Select--multi .Select-value-icon,
+.dash-dropdown [class*="multiValueRemove"] {
+  border-right:1px solid var(--ui-border) !important; color:var(--ui-text) !important;
+}
+
+/* menu (floating portal) */
+.Select-menu-outer,
+.dash-dropdown [class*="menu"] {
+  background:var(--ui-blue) !important; border:1px solid var(--ui-border) !important; color:var(--ui-text) !important; z-index:2000;
+}
+.Select-menu,
+.dash-dropdown [class*="menu-list"] {
+  background:var(--ui-blue) !important;
+}
+
+/* options */
+.Select-option,
+.dash-dropdown [class*="option"] { color:var(--ui-text) !important; }
+.Select-option.is-focused,
+.dash-dropdown [class*="option"].is-focused { background:var(--ui-blue-d1) !important; }
+.Select-option.is-selected,
+.dash-dropdown [class*="option"].is-selected { background:var(--ui-blue-d2) !important; }
+
+/* legacy arrow */
+.dash-dropdown .Select-arrow { border-color:var(--ui-text) transparent transparent !important; }
+
+/* ===================== DATEPICKER ===================== */
+.SingleDatePickerInput, .SingleDatePickerInput__withBorder {
+  background:var(--ui-blue) !important; border:1px solid var(--ui-border) !important;
+}
+.DateInput, .DateInput_1 { background:var(--ui-blue) !important; }
+.DateInput_input, .DateInput_input__focused {
+  background:var(--ui-blue) !important; color:var(--ui-text) !important; border:0 !important;
+}
+
+/* calendar popover */
+.DayPicker__withBorder, .DayPicker_portal__vertical { background:var(--ui-blue) !important; }
+.CalendarDay__default, .CalendarDay {
+  background:var(--ui-blue) !important; color:var(--ui-text) !important; border:1px solid var(--ui-border) !important;
+}
+.CalendarDay__selected, .CalendarDay__selected_span {
+  background:var(--ui-blue-d2) !important; color:var(--ui-text) !important; border:1px solid var(--ui-blue-d2) !important;
+}
+.CalendarDay__hovered_span, .CalendarDay__default:hover {
+  background:var(--ui-blue-d1) !important; color:var(--ui-text) !important;
+}
+
+/* ===================== TEXT INPUT ===================== */
+input[type="text"] {
+  background:var(--ui-blue) !important; color:var(--ui-text) !important; border:1px solid var(--ui-border) !important;
+  height:40px; padding:6px 10px; border-radius:6px;
+}
+
+/* ===================== BUTTON ===================== */
+.bluebtn {
+  background:var(--ui-blue) !important; color:var(--ui-text) !important; border:1px solid var(--ui-border) !important;
+  height:40px; width:100%; border-radius:6px;
+}
+.bluebtn:hover { background:var(--ui-blue-d1) !important; border-color:var(--ui-blue-d1) !important; cursor:pointer; }
+
+/* ===================== SLIDER ===================== */
+.rc-slider-rail { background-color:var(--ui-blue-d2) !important; }
+.rc-slider-track { background-color:var(--ui-blue) !important; }
+.rc-slider-handle { border: solid 2px var(--ui-text) !important; background-color:var(--ui-blue) !important; }
+.rc-slider-mark-text { color:var(--ui-text) !important; }
+
+/* Make all three grid columns truly even */
+.header-wrap { justify-items: stretch; }      /* children fill each grid track */
+
+/* Force DatePicker (col 1) to full width so col 1 = col 2 = col 3 */
+.SingleDatePicker { display:block !important; width:100% !important; }
+.SingleDatePickerInput, .SingleDatePickerInput__withBorder { width:100% !important; box-sizing:border-box; }
+.DateInput, .DateInput_1 { width:100% !important; box-sizing:border-box; }
+.DateInput_input, .DateInput_input__focused { width:100% !important; text-align:center; }
+
+/* Ensure everything inside each stack fills its column (labels excluded) */
+.stack > *:not(.label) { width:100%; }
