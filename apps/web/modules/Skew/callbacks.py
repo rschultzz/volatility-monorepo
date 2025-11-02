@@ -1,7 +1,7 @@
-# modules/Skew/callbacks.py — Skew table with live "now" minute + 1-min refresh
+# apps/web/modules/Skew/callbacks.py — Skew table with ATM expected vs actual + Δ skews restored
 from __future__ import annotations
 import datetime as dt
-from typing import List, Tuple
+from typing import Tuple
 import pandas as pd
 import plotly.graph_objs as go
 from dash import Input, Output
@@ -13,7 +13,8 @@ SMILE_TIME_INPUT = "smile-time-input"
 SKEW_TABLE = "SKEW_TABLE"
 CLOCK_ID = "CLOCK"
 
-from shared.options_orats import fetch_one_minute_monies, pt_minute_to_et, PT_TZ
+from packages.shared.options_orats import fetch_one_minute_monies, pt_minute_to_et, PT_TZ
+from packages.shared.surface_compare import TimeSlice, expected_vs_actual_atm, k_for_abs_delta
 
 TICKER = "SPX"
 
@@ -32,7 +33,7 @@ def _get_row(df: pd.DataFrame) -> pd.Series | None:
     return row
 
 def _skews_from_row(row: pd.Series) -> Tuple[float, float, float]:
-    """Return (stock, call_skew, put_skew) in IV percentage points: (C25−ATM, P25−ATM)*100."""
+    """Return (atm_sigma, call_skew_pp, put_skew_pp). Skews in IV percentage points."""
     atm = float(pd.to_numeric(row["vol50"], errors="coerce"))
     c25 = float(pd.to_numeric(row["vol25"], errors="coerce"))
     p25 = float(pd.to_numeric(row["vol75"], errors="coerce"))
@@ -44,6 +45,24 @@ def _pct_change(curr: float | None, prev: float | None) -> float | None:
     if prev is None or prev == 0 or curr is None:
         return None
     return (curr - prev) / abs(prev) * 100.0
+
+def _years_to_exp(ts_et: dt.datetime, expiration_iso: str) -> float:
+    exp_date = dt.date.fromisoformat(expiration_iso)
+    # Use midnight ET for simplicity; minute-level error is negligible for intraday ATM comparison
+    remaining = dt.datetime.combine(exp_date, dt.time(0, 0)) - ts_et.replace(tzinfo=None)
+    return max(0.0, remaining.days / 365.0 + remaining.seconds / (365.0 * 24 * 3600))
+
+def _estimate_slope(atm_sigma: float, T: float, c25_sigma: float, p25_sigma: float) -> float:
+    """
+    Estimate dσ/dk at ATM using symmetric 25Δ wings.
+    Uses constant-vol deltas to get k25 (good enough intraday).
+    """
+    if T <= 0:
+        return 0.0
+    k_put  = k_for_abs_delta(0.25, is_put=True,  sigma=atm_sigma, T=T)   # negative
+    k_call = k_for_abs_delta(0.25, is_put=False, sigma=atm_sigma, T=T)   # positive
+    # Central slope around k=0
+    return (c25_sigma - p25_sigma) / (k_call - k_put)
 
 def register_callbacks(app):
     @app.callback(
@@ -57,9 +76,11 @@ def register_callbacks(app):
         # Guards
         if not trade_date_iso or not expiration_iso:
             return go.Figure(data=[go.Table(
-                header=dict(values=["Time (PT)", "Stock", "Call Skew", "Put Skew", "Δ Call Skew %", "Δ Put Skew %", "Δ Stock %", "Δ ATM IV %"],
+                header=dict(values=["Time (PT)", "Stock", "ATM IV %", "Call Skew", "Put Skew",
+                                    "Δ Call Skew %", "Δ Put Skew %", "Δ Stock %", "Δ ATM IV %",
+                                    "ATM exp (SS) %", "ATM residual (bp)"],
                             fill_color="#444", font=dict(color="white")),
-                cells=dict(values=[[], [], [], [], [], [], [], []], fill_color="black", font=dict(color="white"))
+                cells=dict(values=[[] for _ in range(11)], fill_color="black", font=dict(color="white"))
             )]).update_layout(template="plotly_dark", title="Skew — select Trade Date & Expiration")
 
         if not times_pt:
@@ -77,9 +98,11 @@ def register_callbacks(app):
 
         rows = []
         prev_stock = None
-        prev_call = None
-        prev_put  = None
         prev_atm = None
+        prev_slope = None
+        prev_T = None
+        prev_call_skew_pp = None
+        prev_put_skew_pp = None
 
         for hhmm_pt in times_sorted:
             ts_et = pt_minute_to_et(trade_date_iso, hhmm_pt)
@@ -88,48 +111,73 @@ def register_callbacks(app):
             if row is None:
                 continue
 
-            # Try to get a representative stock for the minute (median if multiple)
-            if df is not None and "stockPrice" in df.columns:
-                stock = float(pd.to_numeric(df["stockPrice"], errors="coerce").median())
-            else:
-                stock = None
+            # Representative stock for the minute (median if multiple quotes)
+            stock = float(pd.to_numeric(df["stockPrice"], errors="coerce").median()) if "stockPrice" in df.columns else None
 
-            atm, call_skew, put_skew = _skews_from_row(row)
+            # Skews & ATM
+            atm, call_skew_pp, put_skew_pp = _skews_from_row(row)
 
-            d_stock = _pct_change(stock, prev_stock)
-            d_call  = _pct_change(call_skew, prev_call)
-            d_put   = _pct_change(put_skew,  prev_put)
-            d_atm   = _pct_change(atm, prev_atm)
+            # Compute time to expiry and local slope at ATM from 25Δ wings
+            T_years = _years_to_exp(ts_et, expiration_iso)
+            c25_sigma = atm + call_skew_pp/100.0
+            p25_sigma = atm + put_skew_pp/100.0
+            slope = _estimate_slope(atm, T_years, c25_sigma, p25_sigma)
+
+            # Expected ATM under sticky-strike using previous slice as the baseline
+            atm_exp_ss = None
+            atm_res_bp = None
+            if prev_atm is not None and prev_stock is not None and stock is not None and prev_T is not None:
+                prev_slice = TimeSlice(S=prev_stock, r=0.0, q=0.0, T=prev_T, sigma0=prev_atm, slope=prev_slope, curvature=0.0)
+                new_slice  = TimeSlice(S=stock,      r=0.0, q=0.0, T=T_years, sigma0=atm,     slope=slope,     curvature=0.0)
+                cmp = expected_vs_actual_atm(prev_slice, new_slice)
+                atm_exp_ss = cmp["pred_atm_sticky_strike"] * 100.0
+                atm_res_bp = (cmp["atm_actual"] - cmp["pred_atm_sticky_strike"]) * 10000.0
+
+            # % changes vs previous slice
+            d_stock       = _pct_change(stock,        prev_stock)
+            d_atm         = _pct_change(atm,          prev_atm)
+            d_call_skew   = _pct_change(call_skew_pp, prev_call_skew_pp)
+            d_put_skew    = _pct_change(put_skew_pp,  prev_put_skew_pp)
 
             rows.append({
                 "Time (PT)": hhmm_pt,
                 "Stock": None if stock is None else round(stock, 2),
-                "Call Skew": round(call_skew, 2),
-                "Put Skew":  round(put_skew,  2),
-                "Δ Call Skew %": None if d_call  is None else round(d_call,  2),
-                "Δ Put Skew %":  None if d_put   is None else round(d_put,   2),
-                "Δ Stock %":     None if d_stock is None else round(d_stock, 2),
-                "Δ ATM IV %":    None if d_atm   is None else round(d_atm,   2),
+                "ATM IV %": round(atm * 100.0, 2),
+                "Call Skew": round(call_skew_pp, 2),
+                "Put Skew":  round(put_skew_pp,  2),
+                "Δ Call Skew %": None if d_call_skew is None else round(d_call_skew, 2),
+                "Δ Put Skew %":  None if d_put_skew  is None else round(d_put_skew,  2),
+                "Δ Stock %":     None if d_stock     is None else round(d_stock,     2),
+                "Δ ATM IV %":    None if d_atm       is None else round(d_atm,       2),
+                "ATM exp (SS) %": None if atm_exp_ss is None else round(atm_exp_ss,  2),
+                "ATM residual (bp)": None if atm_res_bp is None else int(round(atm_res_bp)),
             })
 
             prev_stock = stock
-            prev_call, prev_put = call_skew, put_skew
-            prev_atm = atm
+            prev_atm   = atm
+            prev_slope = slope
+            prev_T     = T_years
+            prev_call_skew_pp = call_skew_pp
+            prev_put_skew_pp  = put_skew_pp
 
         # Build the table figure
+        headers = ["Time (PT)", "Stock", "ATM IV %", "Call Skew", "Put Skew",
+                   "Δ Call Skew %", "Δ Put Skew %", "Δ Stock %", "Δ ATM IV %",
+                   "ATM exp (SS) %", "ATM residual (bp)"]
+
         if not rows:
             return go.Figure(data=[go.Table(
-                header=dict(values=["Time (PT)", "Stock", "Call Skew", "Put Skew", "Δ Call Skew %", "Δ Put Skew %", "Δ Stock %", "Δ ATM IV %"],
-                            fill_color="#444", font=dict(color="white")),
-                cells=dict(values=[[], [], [], [], [], [], [], []], fill_color="black", font=dict(color="white"))
+                header=dict(values=headers, fill_color="#444", font=dict(color="white")),
+                cells=dict(values=[[] for _ in headers], fill_color="black", font=dict(color="white"))
             )]).update_layout(template="plotly_dark", title=f"Skew — no data for {trade_date_iso} / {expiration_iso}")
 
         tdf = pd.DataFrame(rows)
 
-        # Conditional cell backgrounds for Δ columns
+        # Conditional backgrounds for change/residual columns
+        color_cols = {'Δ Call Skew %', 'Δ Put Skew %', 'Δ Stock %', 'Δ ATM IV %', 'ATM residual (bp)'}
         cell_colors = []
         for col in tdf.columns:
-            if col in ['Δ Call Skew %', 'Δ Put Skew %', 'Δ Stock %', 'Δ ATM IV %']:
+            if col in color_cols:
                 colors = [
                     'green' if (v is not None and v > 0) else
                     'red'   if (v is not None and v < 0) else
