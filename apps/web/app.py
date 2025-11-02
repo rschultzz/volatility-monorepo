@@ -1,4 +1,13 @@
 # app_modular.py — Smile (time slices) on left (2/3) + GEX (date-only) on right (1/3)
+# --- make repo root importable so `packages.*` works on Render ---
+import sys
+from pathlib import Path
+REPO_ROOT = Path(__file__).resolve().parents[2]  # .../volatility-monorepo
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+# -----------------------------------------------------------------
+
+
 from __future__ import annotations
 # load local environment variables from .env
 try:
