@@ -253,5 +253,33 @@ def render_smile(trade_date_iso, expiration_iso, times_pt, _tick):
 
 server = app.server
 
+# --- at the bottom of apps/web/app.py ---
+import os, socket
+
+def _choose_port(preferred=8050, tries=50):
+    # Respect explicit PORT if set
+    p = os.getenv("PORT")
+    if p:
+        try:
+            return int(p)
+        except ValueError:
+            pass
+    # Try preferred, then 8051.. up to tries
+    for port in [preferred] + list(range(preferred + 1, preferred + tries)):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                # Bind to 0.0.0.0 to detect real conflicts
+                s.bind(("0.0.0.0", port))
+                return port
+            except OSError:
+                continue
+    # Last resort: let OS choose an ephemeral port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
 if __name__ == "__main__":
-    app.run(debug=True, port=0, use_reloader=False)
+    port = _choose_port()
+    app.run(host="0.0.0.0", port=port, debug=True)
+
+
