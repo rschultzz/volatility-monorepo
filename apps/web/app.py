@@ -1,26 +1,17 @@
-# app_modular.py — Smile (time slices) on left (2/3) + GEX (date-only) on right (1/3)
-
-
+# apps/web/app.py
 
 from __future__ import annotations
 # load local environment variables from .env
 try:
     from dotenv import load_dotenv
-    load_dotenv()  # reads .env in the project root
-except Exception:
-    pass
-# Load local env vars explicitly from project root
-from pathlib import Path
-try:
-    from dotenv import load_dotenv
-    load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
+    load_dotenv()
 except Exception:
     pass
 
 # --- make repo root importable so `packages.*` works on Render ---
 import sys
-from pathlib import Path
-REPO_ROOT = Path(__file__).resolve().parents[2]  # .../volatility-monorepo
+from pathlib import Path as _P
+REPO_ROOT = _P(__file__).resolve().parents[2]  # .../volatility-monorepo
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 # -----------------------------------------------------------------
@@ -31,19 +22,17 @@ from typing import List, Tuple
 import pandas as pd
 import plotly.graph_objs as go
 from dash import Dash, html, dcc
-from dash import Input, Output
 
-# ===== Existing Skew module (unchanged) =====
+# ===== Existing Skew module =====
 from modules.Skew.components import make_skew_block
 from modules.Skew.callbacks import register_callbacks as register_skew
 
-# ===== GEX module (components + callbacks) =====
+# ===== GEX module =====
 from modules.gamma.components import gex_block
 from modules.gamma import callbacks as _gex_callbacks  # registers the GEX callback
 
-# ===== ORATS helpers for Smile (unchanged) =====
+# ===== ORATS helpers for Smile =====
 from packages.shared.options_orats import fetch_one_minute_monies, pt_minute_to_et, PT_TZ
-
 
 # ===== IDs =====
 CLOCK_ID = "CLOCK"
@@ -51,11 +40,11 @@ TRADE_DATE_PICK = "trade-date"
 EXPIRATION_DATE_PICK = "expiration-date-pick"
 SMILE_TIME_INPUT = "smile-time-input"
 SMILE_GRAPH = "SMILE_GRAPH"
+EXPECTED_TOGGLE_ID = "expected-ss-toggle"   # <-- NEW external toggle
 
-# ===== Smile constants (unchanged) =====
+# ===== Smile constants =====
 TICKER = "SPX"
 CALL_DELTAS = [90, 85, 80, 75, 70, 65, 60, 55, 50, 45, 40, 35, 30, 25, 20, 15, 10]
-
 
 def delta_label(call_delta: int) -> str:
     if call_delta > 50:
@@ -63,7 +52,6 @@ def delta_label(call_delta: int) -> str:
     if call_delta == 50:
         return "ATM"
     return f"C{call_delta}"
-
 
 def row_to_full_bucket_line(row: pd.Series) -> Tuple[List[str], List[float]]:
     labels, ivs = [], []
@@ -77,8 +65,6 @@ def row_to_full_bucket_line(row: pd.Series) -> Tuple[List[str], List[float]]:
             ivs.append(float(v) * 100.0)
     return labels, ivs
 
-
-# ===== UI helpers (unchanged) =====
 def get_default_trade_date() -> dt.date:
     today = dt.date.today()
     if today.weekday() == 5:  # Sat
@@ -87,7 +73,6 @@ def get_default_trade_date() -> dt.date:
         return today - dt.timedelta(days=2)
     return today
 
-
 def third_friday_of_month(year, month):
     for day in range(15, 22):
         d = dt.date(year, month, day)
@@ -95,14 +80,12 @@ def third_friday_of_month(year, month):
             return d
     return None
 
-
 def third_friday_next_month() -> dt.date:
     today = dt.date.today()
     y, m = today.year, today.month + 1
     if m > 12:
         y, m = y + 1, 1
     return third_friday_of_month(y, m)
-
 
 def pt_time_options(start="06:30", end="13:00", step_min=1) -> List[dict]:
     t0 = dt.datetime.strptime(start, "%H:%M")
@@ -115,13 +98,12 @@ def pt_time_options(start="06:30", end="13:00", step_min=1) -> List[dict]:
         cur += dt.timedelta(minutes=step_min)
     return out
 
-
 # ===== App =====
 app = Dash(__name__, suppress_callback_exceptions=True)
 
 app.layout = html.Div(
     [
-        # 1-minute heartbeat (keeps *today* fresh; GEX ignores time selection)
+        # 1-minute heartbeat
         dcc.Interval(id=CLOCK_ID, interval=60_000, n_intervals=0),
 
         html.H3("Volatility Dash — Smile + Gamma", style={"color": "white"}),
@@ -166,8 +148,26 @@ app.layout = html.Div(
                     ],
                     style={"marginLeft": "16px"},
                 ),
+                html.Div(
+                    [
+                        html.Label("Expected (SS)", style={"color": "white"}),
+                        dcc.RadioItems(
+                            id=EXPECTED_TOGGLE_ID,
+                            options=[
+                                {"label": "ON",  "value": "on"},
+                                {"label": "OFF", "value": "off"},
+                            ],
+                            value="on",
+                            inline=True,
+                            inputStyle={"marginRight": "6px"},
+                            labelStyle={"marginRight": "12px"},
+                            style={"color": "white"},
+                        ),
+                    ],
+                    style={"marginLeft": "24px"},
+                ),
             ],
-            style={"display": "flex", "alignItems": "center", "gap": "16px"},
+            style={"display": "flex", "alignItems": "center", "gap": "16px", "flexWrap": "wrap"},
         ),
 
         html.Hr(style={"borderColor": "#444"}),
@@ -175,124 +175,50 @@ app.layout = html.Div(
         # ===== Two-column content row: Smile (2fr) | GEX (1fr) =====
         html.Div(
             [
-                # Left: Smile graph (2/3 width)
                 html.Div(
                     dcc.Graph(id=SMILE_GRAPH, style={"height": "840px"}),
-                    style={"minWidth": 0},  # prevents overflow in flex/grid
+                    style={"minWidth": 0},
                 ),
-                # Right: GEX block (1/3 width)
                 html.Div(
                     gex_block(),
                     style={"minWidth": 0},
                 ),
             ],
-            style={
-                "display": "grid",
-                "gridTemplateColumns": "2fr 1fr",  # 2/3 vs 1/3
-                "gap": "16px",
-                "alignItems": "stretch",
-            },
+            style={"display": "grid", "gridTemplateColumns": "2fr 1fr", "gap": "16px", "alignItems": "stretch"},
         ),
 
         html.Hr(style={"borderColor": "#333"}),
 
-        # Skew block (unchanged, full width)
+        # Skew block
         make_skew_block(),
     ],
     style={"backgroundColor": "black", "color": "white", "minHeight": "100vh", "padding": "16px"},
 )
 
-# Register Skew callbacks (unchanged)
+# Register callbacks
 register_skew(app)
-
-
-# ===== Smile callback (unchanged logic) =====
-# @app.callback(
-#     Output(SMILE_GRAPH, "figure"),
-#     Input(TRADE_DATE_PICK, "date"),
-#     Input(EXPIRATION_DATE_PICK, "date"),
-#     Input(SMILE_TIME_INPUT, "value"),
-#     Input(CLOCK_ID, "n_intervals"),
-# )
-# def render_smile(trade_date_iso, expiration_iso, times_pt, _tick):
-#     if not trade_date_iso or not expiration_iso:
-#         return go.Figure().update_layout(
-#             template="plotly_dark",
-#             title="Select Trade Date & Expiration",
-#             xaxis_title="Bucket (P10 … ATM … C10)",
-#             yaxis_title="IV (%)",
-#         )
-
-    # if not times_pt:
-    #     times_pt = ["06:31"]
-    #
-    # now_pt = dt.datetime.now(PT_TZ)
-    # if trade_date_iso == now_pt.date().isoformat():
-    #     now_hhmm = now_pt.strftime("%H:%M")
-    #     if "06:30" <= now_hhmm <= "13:00":
-    #         times_pt = sorted(set(times_pt + [now_hhmm]))
-    #
-    # traces = []
-    # for hhmm_pt in sorted(times_pt):
-    #     ts_et = pt_minute_to_et(trade_date_iso, hhmm_pt)
-    #     df = fetch_one_minute_monies(ts_et, TICKER, expiration_iso)
-    #     if df is None or df.empty:
-    #         continue
-    #
-    #     row0 = df.iloc[0]
-    #     labels, ivs = row_to_full_bucket_line(row0)
-    #     if not labels:
-    #         continue
-    #
-    #     traces.append(go.Scatter(x=labels, y=ivs, mode="lines+markers", name=f"{hhmm_pt} PT"))
-    #
-    # if not traces:
-    #     return go.Figure().update_layout(
-    #         template="plotly_dark",
-    #         title=f"No monies data for {trade_date_iso} / {expiration_iso} at selected times",
-    #         xaxis_title="Bucket (P10 … ATM … C10)",
-    #         yaxis_title="IV (%)",
-    #     )
-    #
-    # return go.Figure(data=traces).update_layout(
-    #     template="plotly_dark",
-    #     title=f"ORATS Smile Grid — {trade_date_iso} (Exp: {expiration_iso})",
-    #     xaxis_title="Bucket (P10 … ATM … C10)",
-    #     yaxis_title="IV (%)",
-    # )
-
 from modules.Smile.callbacks import register_callbacks as register_smile
 register_smile(app)
 
 server = app.server
 
-# --- at the bottom of apps/web/app.py ---
+# --- pick a free port locally ---
 import os, socket
-
 def _choose_port(preferred=8050, tries=50):
-    # Respect explicit PORT if set
     p = os.getenv("PORT")
     if p:
-        try:
-            return int(p)
-        except ValueError:
-            pass
-    # Try preferred, then 8051.. up to tries
+        try: return int(p)
+        except ValueError: pass
     for port in [preferred] + list(range(preferred + 1, preferred + tries)):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
-                # Bind to 0.0.0.0 to detect real conflicts
                 s.bind(("0.0.0.0", port))
                 return port
             except OSError:
                 continue
-    # Last resort: let OS choose an ephemeral port
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))
         return s.getsockname()[1]
 
 if __name__ == "__main__":
-    port = _choose_port()
-    app.run(host="0.0.0.0", port=port, debug=True)
-
-
+    app.run(host="0.0.0.0", port=_choose_port(), debug=True)
