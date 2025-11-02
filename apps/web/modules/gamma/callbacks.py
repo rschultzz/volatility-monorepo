@@ -6,6 +6,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import Input, Output, callback
 from sqlalchemy import text
+from sqlalchemy import create_engine
+from sqlalchemy.engine.url import make_url
 
 # ---------- Config ----------
 # Optional zoom: set GEX_ZOOM_PCT to a float like "0.03" for ±3% of max call gamma.
@@ -27,10 +29,20 @@ try:
 except Exception:
     # Basic fallback if shared import isn't available
     from sqlalchemy import create_engine
+
+
     def get_engine():
-        url = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
-        if not url:
-            raise RuntimeError("DATABASE_URL is not set")
+        raw = (
+                os.getenv("DATABASE_URL")
+                or os.getenv("POSTGRES_URL")
+                or os.getenv("POSTGRES_CONNECTION_STRING")
+                or "postgresql://localhost/postgres"
+        )
+        url = make_url(raw)
+        # If the URL doesn't specify a driver or says psycopg2, force psycopg (v3)
+        if url.get_backend_name() == "postgresql" and url.get_driver_name() in (None, "", "psycopg2"):
+            url = url.set(drivername="postgresql+psycopg")
+        # If you’re using read-only roles, keep your existing pool args
         return create_engine(url, pool_pre_ping=True, pool_recycle=300)
 
 

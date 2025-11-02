@@ -42,7 +42,8 @@ from modules.gamma.components import gex_block
 from modules.gamma import callbacks as _gex_callbacks  # registers the GEX callback
 
 # ===== ORATS helpers for Smile (unchanged) =====
-from shared.options_orats import fetch_one_minute_monies, pt_minute_to_et, PT_TZ
+from packages.shared.options_orats import fetch_one_minute_monies, pt_minute_to_et, PT_TZ
+
 
 # ===== IDs =====
 CLOCK_ID = "CLOCK"
@@ -206,60 +207,62 @@ register_skew(app)
 
 
 # ===== Smile callback (unchanged logic) =====
-@app.callback(
-    Output(SMILE_GRAPH, "figure"),
-    Input(TRADE_DATE_PICK, "date"),
-    Input(EXPIRATION_DATE_PICK, "date"),
-    Input(SMILE_TIME_INPUT, "value"),
-    Input(CLOCK_ID, "n_intervals"),
-)
-def render_smile(trade_date_iso, expiration_iso, times_pt, _tick):
-    if not trade_date_iso or not expiration_iso:
-        return go.Figure().update_layout(
-            template="plotly_dark",
-            title="Select Trade Date & Expiration",
-            xaxis_title="Bucket (P10 … ATM … C10)",
-            yaxis_title="IV (%)",
-        )
+# @app.callback(
+#     Output(SMILE_GRAPH, "figure"),
+#     Input(TRADE_DATE_PICK, "date"),
+#     Input(EXPIRATION_DATE_PICK, "date"),
+#     Input(SMILE_TIME_INPUT, "value"),
+#     Input(CLOCK_ID, "n_intervals"),
+# )
+# def render_smile(trade_date_iso, expiration_iso, times_pt, _tick):
+#     if not trade_date_iso or not expiration_iso:
+#         return go.Figure().update_layout(
+#             template="plotly_dark",
+#             title="Select Trade Date & Expiration",
+#             xaxis_title="Bucket (P10 … ATM … C10)",
+#             yaxis_title="IV (%)",
+#         )
 
-    if not times_pt:
-        times_pt = ["06:31"]
+    # if not times_pt:
+    #     times_pt = ["06:31"]
+    #
+    # now_pt = dt.datetime.now(PT_TZ)
+    # if trade_date_iso == now_pt.date().isoformat():
+    #     now_hhmm = now_pt.strftime("%H:%M")
+    #     if "06:30" <= now_hhmm <= "13:00":
+    #         times_pt = sorted(set(times_pt + [now_hhmm]))
+    #
+    # traces = []
+    # for hhmm_pt in sorted(times_pt):
+    #     ts_et = pt_minute_to_et(trade_date_iso, hhmm_pt)
+    #     df = fetch_one_minute_monies(ts_et, TICKER, expiration_iso)
+    #     if df is None or df.empty:
+    #         continue
+    #
+    #     row0 = df.iloc[0]
+    #     labels, ivs = row_to_full_bucket_line(row0)
+    #     if not labels:
+    #         continue
+    #
+    #     traces.append(go.Scatter(x=labels, y=ivs, mode="lines+markers", name=f"{hhmm_pt} PT"))
+    #
+    # if not traces:
+    #     return go.Figure().update_layout(
+    #         template="plotly_dark",
+    #         title=f"No monies data for {trade_date_iso} / {expiration_iso} at selected times",
+    #         xaxis_title="Bucket (P10 … ATM … C10)",
+    #         yaxis_title="IV (%)",
+    #     )
+    #
+    # return go.Figure(data=traces).update_layout(
+    #     template="plotly_dark",
+    #     title=f"ORATS Smile Grid — {trade_date_iso} (Exp: {expiration_iso})",
+    #     xaxis_title="Bucket (P10 … ATM … C10)",
+    #     yaxis_title="IV (%)",
+    # )
 
-    now_pt = dt.datetime.now(PT_TZ)
-    if trade_date_iso == now_pt.date().isoformat():
-        now_hhmm = now_pt.strftime("%H:%M")
-        if "06:30" <= now_hhmm <= "13:00":
-            times_pt = sorted(set(times_pt + [now_hhmm]))
-
-    traces = []
-    for hhmm_pt in sorted(times_pt):
-        ts_et = pt_minute_to_et(trade_date_iso, hhmm_pt)
-        df = fetch_one_minute_monies(ts_et, TICKER, expiration_iso)
-        if df is None or df.empty:
-            continue
-
-        row0 = df.iloc[0]
-        labels, ivs = row_to_full_bucket_line(row0)
-        if not labels:
-            continue
-
-        traces.append(go.Scatter(x=labels, y=ivs, mode="lines+markers", name=f"{hhmm_pt} PT"))
-
-    if not traces:
-        return go.Figure().update_layout(
-            template="plotly_dark",
-            title=f"No monies data for {trade_date_iso} / {expiration_iso} at selected times",
-            xaxis_title="Bucket (P10 … ATM … C10)",
-            yaxis_title="IV (%)",
-        )
-
-    return go.Figure(data=traces).update_layout(
-        template="plotly_dark",
-        title=f"ORATS Smile Grid — {trade_date_iso} (Exp: {expiration_iso})",
-        xaxis_title="Bucket (P10 … ATM … C10)",
-        yaxis_title="IV (%)",
-    )
-
+from modules.Smile.callbacks import register_callbacks as register_smile
+register_smile(app)
 
 server = app.server
 
