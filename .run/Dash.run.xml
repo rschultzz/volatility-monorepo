@@ -8,6 +8,7 @@
       <env name="PYTHONUNBUFFERED" value="1" />
       <env name="PYTHONPATH" value="../../packages" />
       <env name="PORT" value="8060" />
+      <env name="DATABASE_URL" value="postgresql+psycopg://rschultz:5hUHvSVPDyVXhz7acgJZvlvnj7nFMDap@dpg-d38sm515pdvs738rknj0-a.oregon-postgres.render.com/curve_trading?sslmode=require " />
     </envs>
     <option name="SDK_HOME" value="" />
     <option name="SDK_NAME" value="Python 3.10 virtualenv at ~/code/volatility-monorepo/apps/web/.venv" />
