@@ -22,6 +22,8 @@ from typing import List, Tuple
 import pandas as pd
 import plotly.graph_objs as go
 from dash import Dash, html, dcc
+import dash_auth
+
 
 # ===== Existing Skew module =====
 from modules.Skew.components import make_skew_block
@@ -100,6 +102,16 @@ def pt_time_options(start="06:30", end="13:00", step_min=1) -> List[dict]:
 
 # ===== App =====
 app = Dash(__name__, suppress_callback_exceptions=True)
+VALID_USERNAME_PASSWORD_PAIRS = {
+    "ryan": "ChangeThisPassword123!"  # pick whatever you actually want
+}
+
+auth = dash_auth.BasicAuth(
+    app,
+    VALID_USERNAME_PASSWORD_PAIRS,
+    secret_key="some-really-long-random-string"
+)
+
 
 app.layout = html.Div(
     [
