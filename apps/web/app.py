@@ -113,7 +113,7 @@ def pt_time_options(start="06:30", end="13:00", step_min=1) -> List[dict]:
 app = Dash(__name__, suppress_callback_exceptions=True)
 
 VALID_USERNAME_PASSWORD_PAIRS = {
-    "ryan": "ChangeThisPassword123!"  # update as needed
+    "ryan": "ChangeThisPassword123!", "sara":"ChangeThisPassword123!"  # update as needed
 }
 
 auth = dash_auth.BasicAuth(
