@@ -45,9 +45,9 @@ def _normalize_orats_minute(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
           "div_yield": 0.0132,
           "expirations": [
             { "expiry_date": "2025-12-20", "dte": 46, "forward": 5989.5,
-              "smile": {
-                  "p10":0.192, ..., "atm":0.158, "c10":0.159,
-                  "vol90":0.192, ..., "vol10":0.159
+              "smile": {  # we store this dict VERBATIM as JSON
+                "p10": 0.19, "p15": 0.18, ..., "atm": 0.16, "c10": 0.17,
+                "vol90": 0.31, "vol85": ..., "vol10": 0.32, "mwVol": 0.27
               }
             }, ...
           ]
@@ -121,6 +121,7 @@ def upsert_minute_payload(payload: Dict[str, Any], *, grid: str = "delta") -> in
     rows = _normalize_orats_minute(payload)
     if not rows:
         return 0
+    # tag rows
     for r in rows:
         r["grid"] = grid
     init_orats_monies_schema()
@@ -130,7 +131,8 @@ def upsert_minute_payload(payload: Dict[str, Any], *, grid: str = "delta") -> in
 
 
 # ============================================================================
-# INGEST FROM DASHBOARD DATAFRAME (canonicalize + store volXX)
+# INGEST FROM DASHBOARD DATAFRAME
+#   → build smile dict DIRECTLY from ORATS columns (no P/C → volXX remapping)
 # ============================================================================
 
 def upsert_from_dashboard_minute(
@@ -143,15 +145,20 @@ def upsert_from_dashboard_minute(
     store_volxx: Optional[bool] = None,  # default True: keep volXX for smile chart
 ) -> int:
     """
-    Normalize a per-minute DataFrame (one row per expiry).
+    Normalize a per-minute DataFrame (one row per expiry) coming from the
+    ORATS 'monies' minute endpoint.
 
-    We build a canonical smile dict with:
-      - p10,p15,p20,p25,p30,p35,atm,c35,c30,c25,c20,c15,c10  (if available)
-      - AND all volXX/mwVol columns (vol90..vol10, mwVol) from the DataFrame.
+    IMPORTANT:
+      * Each row becomes a 'smile' dict that:
+          - copies any P/C/ATM columns directly (p10, p15, ..., atm, c10, etc)
+          - copies ALL volXX and mwVol columns directly (vol100..vol0, mwVol)
+      * There is NO mapping from P/C/ATM → volXX here. The volXX keys in the
+        DB always come straight from the ORATS vol grid.
 
-    The DB 'smile' JSON will therefore contain both the canonical P/C/ATM keys
-    and the raw volXX keys. When reading back for the smile chart we prefer
-    the volXX keys so the curve matches the live ORATS API exactly.
+    Also IMPORTANT:
+      The ORATS DataFrame for a single expiry can have MANY rows. We only want
+      ONE smile per (minute, expiry), so we collapse to *one row per expiry*
+      before building the smile.
     """
     if df_minute is None or df_minute.empty:
         return 0
@@ -175,12 +182,13 @@ def upsert_from_dashboard_minute(
     if not minute_col or not expiry_col:
         raise RuntimeError(f"required columns missing; have: {list(df_minute.columns)}")
 
-    # minute + trade_date
+    # minute + trade_date (UTC)
     ts0 = pd.to_datetime(df_minute[minute_col].iloc[0], utc=True, errors="coerce")
     if pd.isna(ts0):
         raise RuntimeError("invalid minute timestamp")
-    minute_utc = pd.Timestamp(ts0).tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
-    trade_date = pd.Timestamp(ts0).tz_convert("UTC").date()
+    ts0 = pd.Timestamp(ts0).tz_convert("UTC")
+    minute_utc = ts0.strftime("%Y-%m-%dT%H:%M:%SZ")
+    trade_date = ts0.date()
 
     # underlying
     underlying = None
@@ -189,60 +197,64 @@ def upsert_from_dashboard_minute(
         if s.notna().any():
             underlying = float(s.dropna().iloc[0])
 
-    # maps to derive the canonical smile (P/C/ATM)
-    pc_keys = ["p10", "p15", "p20", "p25", "p30", "p35", "atm",
-               "c35", "c30", "c25", "c20", "c15", "c10"]
-    vol_to_pc = {
-        "vol90": "p10", "vol85": "p15", "vol80": "p20", "vol75": "p25",
-        "vol70": "p30", "vol65": "p35",
-        "vol50": "atm",
-        "vol35": "c35", "vol30": "c30", "vol25": "c25", "vol20": "c20",
-        "vol15": "c15", "vol10": "c10",
+    # Canonical P/C/ATM names we care about
+    PC_CANON = {
+        "p10", "p15", "p20", "p25", "p30", "p35",
+        "atm",
+        "c35", "c30", "c25", "c20", "c15", "c10",
     }
 
-    def get_val(row, *cands):
-        """Try multiple column names (case-insensitive); return float or None."""
-        for name in cands:
-            col = lower.get(str(name).lower())
-            if col is not None:
-                v = pd.to_numeric(row[col], errors="coerce")
-                if pd.notna(v):
-                    return float(v)
-        return None
-
+    # --- collapse to ONE row per expiry ---
     df = df_minute.copy()
     df[expiry_col] = pd.to_datetime(df[expiry_col], errors="coerce").dt.date
+    df = df.dropna(subset=[expiry_col])
+
+    # For each expiry_date, keep the *first* row — this matches your debug use of head(1)
+    df = df.sort_values(by=[expiry_col])
+    df = df.drop_duplicates(subset=[expiry_col], keep="first")
 
     expirations: List[Dict[str, Any]] = []
-    for _, row in df.dropna(subset=[expiry_col]).iterrows():
+    for _, row in df.iterrows():
         exp_date = row[expiry_col]
         dte = int(max((exp_date - trade_date).days, 0)) if isinstance(exp_date, dt.date) else 0
 
-        # Build a canonical smile dict with P/C/ATM keys...
         smile: Dict[str, float] = {}
 
-        # 1) prefer P/C/ATM columns if present
-        for k in pc_keys:
-            v = get_val(row, k)  # e.g., "p10", "atm", "c10"
-            if v is not None:
-                smile[k] = v
+        # 1) Copy P/C/ATM columns directly (canonicalised to lowercase)
+        for col in row.index:
+            lc = str(col).lower()
+            if lc in PC_CANON:
+                v = pd.to_numeric(row[col], errors="coerce")
+                if pd.notna(v):
+                    smile[lc] = float(v)
 
-        # 2) fill any missing from volXX columns
-        for vol_col, pc_key in vol_to_pc.items():
-            if pc_key not in smile:
-                v = get_val(row, vol_col)
-                if v is not None:
-                    smile[pc_key] = v
-
-        # 3) also store raw volXX/mwVol alongside (preferred for smile chart)
+        # 2) Copy volXX + mwVol columns directly from ORATS (if requested)
         if store_volxx:
-            for c in row.index:
-                lc = str(c).lower()
+            for col in row.index:
+                lc = str(col).lower()
                 if lc == "mwvol" or lc.startswith("vol"):
-                    v = pd.to_numeric(row[c], errors="coerce")
+                    v = pd.to_numeric(row[col], errors="coerce")
                     if pd.notna(v):
-                        # e.g., "vol90", "vol50", "mwVol"
-                        smile[str(c)] = float(v)
+                        # keep the volXX key name as-is (lowercase)
+                        smile[lc] = float(v)
+
+        # 3) Ensure we have an 'atm' key: if missing but vol50 exists, use that
+        if "atm" not in smile and "vol50" in smile:
+            smile["atm"] = smile["vol50"]
+
+        # 4) Optional debug: see exactly what we're writing for each minute/expiry
+        if os.getenv("DEBUG_MONIES_UPSERT") == "1":
+            try:
+                key_vols = {k: smile.get(k) for k in ("p10", "atm", "c10", "vol90", "vol50", "vol10")}
+                print(
+                    "[monies_upsert]",
+                    "minute", minute_utc,
+                    "exp", exp_date,
+                    "key_vols", key_vols,
+                )
+            except Exception:
+                # never let debug printing break ingestion
+                pass
 
         expirations.append({
             "expiry_date": exp_date.isoformat(),
@@ -259,6 +271,7 @@ def upsert_from_dashboard_minute(
         "div_yield": None,
         "expirations": expirations,
     }
+    # tag this as delta-grid data
     return upsert_minute_payload(payload, grid="delta")
 
 
@@ -296,14 +309,11 @@ def read_minutes_df(
     where = ["ticker = :t", "trade_date = :d"]
     params: Dict[str, Any] = {"t": ticker, "d": trade_date}
     if expiry_date:
-        where.append("expiry_date = :e")
-        params["e"] = expiry_date
+        where.append("expiry_date = :e"); params["e"] = expiry_date
     if start:
-        where.append("minute_ts >= :s")
-        params["s"] = start
+        where.append("minute_ts >= :s"); params["s"] = start
     if end:
-        where.append("minute_ts <= :u")
-        params["u"] = end
+        where.append("minute_ts <= :u"); params["u"] = end
 
     sql = f"""
       SELECT minute_ts, expiry_date, underlying, atm_iv, smile
@@ -321,10 +331,8 @@ def read_minutes_df(
 # Map DB smile -> volXX so your callback can keep using row["vol50"], etc.
 _DB_TO_VOLXX = {
     "atm": "vol50",
-    "p10": "vol90", "p15": "vol85", "p20": "vol80", "p25": "vol75",
-    "p30": "vol70", "p35": "vol65",
-    "c35": "vol35", "c30": "vol30", "c25": "vol25", "c20": "vol20",
-    "c15": "vol15", "c10": "vol10",
+    "p10": "vol90", "p15": "vol85", "p20": "vol80", "p25": "vol75", "p30": "vol70", "p35": "vol65",
+    "c35": "vol35", "c30": "vol30", "c25": "vol25", "c20": "vol20", "c15": "vol15", "c10": "vol10",
 }
 
 
@@ -337,39 +345,45 @@ def read_minute_expiry_df_from_db(
     """
     Return a single-row DataFrame for (minute, expiry) with columns like vol50..vol10.
 
-    Behavior:
+    BEHAVIOR:
+      - We query the DB *directly* (no day-cache) and pick the row with
+        minute_ts closest to the requested minute.
       - If the DB 'smile' JSON contains volXX keys (vol90..vol10, vol50), we use
         those directly — this matches the live ORATS API smile 1:1.
-      - If NOT, but it has canonical P/C/ATM keys, we map those to volXX and
-        mark the row as '__legacy_smile' = True so the callback can choose to
-        re-fetch from the API for *today's* date.
-      - As a last resort, we look for dedicated volXX columns in the row.
+      - Otherwise, we fall back to canonical P/C/ATM keys (p10,p15,...,atm,c10)
+        and map them to volXX using _DB_TO_VOLXX.
     """
-    # lazy imports to avoid cycles
-    from packages.shared.cache.day_cache import get_day_df, refresh_today_if_needed
-
-    # Convert PT minute -> ET tz-aware -> UTC window [floor, floor+60s)
+    # Convert PT minute -> ET tz-aware -> UTC
     ts_et = pt_minute_to_et(trade_date_iso, hhmm_pt)
     ts = pd.Timestamp(ts_et)
     if ts.tz is None:
         ts = ts.tz_localize(ET_TZ)
-    ts_floor_utc = ts.tz_convert("UTC").floor("min")
-    ts_end_utc = ts_floor_utc + pd.Timedelta(minutes=1)
+    ts_utc = ts.tz_convert("UTC")
 
-    # If it's today, allow an incremental refresh; else just read cached day.
-    is_today = (trade_date_iso == dt.date.today().isoformat())
-    day_df = refresh_today_if_needed(ticker, trade_date_iso, expiration_iso)[0] if is_today \
-             else get_day_df(ticker, trade_date_iso, expiration_iso)
+    trade_date = dt.date.fromisoformat(trade_date_iso)
+    expiry_date = dt.date.fromisoformat(expiration_iso)
 
-    if day_df is None or day_df.empty:
+    # Query the closest minute from DB directly
+    sql = """
+      SELECT minute_ts, expiry_date, underlying, atm_iv, smile
+        FROM orats_monies_minute
+       WHERE ticker = :t
+         AND trade_date = :d
+         AND expiry_date = :e
+       ORDER BY ABS(EXTRACT(EPOCH FROM (minute_ts - :ts)))
+       LIMIT 1;
+    """
+
+    with tx() as conn:
+        rec = conn.execute(
+            text(sql),
+            {"t": ticker, "d": trade_date, "e": expiry_date, "ts": ts_utc.to_pydatetime()},
+        ).mappings().first()
+
+    if not rec:
         return pd.DataFrame()
 
-    # Slice the cached day in memory
-    mask = (day_df["minute_ts"] >= ts_floor_utc) & (day_df["minute_ts"] < ts_end_utc)
-    sel = day_df.loc[mask].tail(1)
-    if sel.empty:
-        return pd.DataFrame()
-    r = sel.iloc[0]
+    r = rec
 
     # Base fields
     ts_db = pd.Timestamp(r["minute_ts"])
@@ -378,9 +392,8 @@ def read_minute_expiry_df_from_db(
     out: Dict[str, Any] = {
         "quoteDate": ts_db.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "expiry": expiration_iso,
-        "underlying": float(r["underlying"]) if pd.notna(r.get("underlying")) else None,
-        "__src": "db-cache",
-        "__legacy_smile": False,
+        "underlying": float(r["underlying"]) if r.get("underlying") is not None else None,
+        "__src": "db-direct",
     }
 
     # Decode smile JSON if present
@@ -398,27 +411,13 @@ def read_minute_expiry_df_from_db(
     ]
 
     wrote = 0
-    legacy_smile = False
-
     if isinstance(smile, dict) and smile:
         # normalize keys to lowercase for lookup
         lower_smile = {str(k).lower(): v for k, v in smile.items()}
 
-        # Does JSON already have volXX keys?
+        # 1) Prefer raw volXX keys if any are present
         has_volxx = any(k.lower() in lower_smile for k in vol_keys)
-
-        # Does JSON have canonical P/C/ATM keys?
-        pc_keys_lower = [
-            "atm", "p10", "p15", "p20", "p25", "p30", "p35",
-            "c35", "c30", "c25", "c20", "c15", "c10",
-        ]
-        has_pc = any(pk in lower_smile for pk in pc_keys_lower)
-
-        # Legacy definition: canonical keys present but no volXX in JSON
-        legacy_smile = (not has_volxx) and has_pc
-
         if has_volxx:
-            # 1) Prefer raw volXX keys if any are present
             for vk in vol_keys:
                 v = lower_smile.get(vk.lower())
                 if v is not None:
@@ -438,12 +437,11 @@ def read_minute_expiry_df_from_db(
                     except Exception:
                         pass
 
-    out["__legacy_smile"] = legacy_smile
-
-    # 3) Last-resort fallback: copy any dedicated volXX columns from the row
-    if wrote == 0:
-        for c in vol_keys:
-            if c in sel.columns and pd.notna(r.get(c)):
-                out[c] = float(r[c])
+    # 3) Last-resort fallback: nothing in smile → just return ATM if present
+    if wrote == 0 and r.get("atm_iv") is not None:
+        try:
+            out["vol50"] = float(r["atm_iv"])
+        except Exception:
+            pass
 
     return pd.DataFrame([out])
