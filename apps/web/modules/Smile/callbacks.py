@@ -33,6 +33,9 @@ COLORWAY = [
     "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"
 ]
 
+# canonical buckets we care about (matches the live dash)
+_CANONICAL_BUCKETS = [90, 85, 80, 75, 70, 65, 50, 35, 30, 25, 20, 15, 10]
+
 # Map live P/C/ATM -> volXX when API rows don’t include volXX
 _PC_TO_VOL = {
     "p10": "vol90", "p15": "vol85", "p20": "vol80", "p25": "vol75", "p30": "vol70", "p35": "vol65",
@@ -40,9 +43,11 @@ _PC_TO_VOL = {
     "c35": "vol35", "c30": "vol30", "c25": "vol25", "c20": "vol20", "c15": "vol15", "c10": "vol10",
 }
 
+
 def _log(msg: str) -> None:
     if DEBUG:
         print(f"[smile] {msg}")
+
 
 # -----------------------------------------------------------------------------
 # Minute LRU cache (process-local) to make repeated clicks instant
@@ -50,6 +55,7 @@ def _log(msg: str) -> None:
 _MINUTE_CACHE: Dict[tuple, tuple[pd.DataFrame, float]] = {}
 _MINUTE_CACHE_MAX = 600  # entries
 _MINUTE_CACHE_TTL = 300  # seconds
+
 
 def _cache_key(trade_date_iso: str, expiration_iso: str, hhmm_pt: str) -> tuple:
     # Use the actual minute floor UTC so key is stable across TZs
@@ -59,6 +65,7 @@ def _cache_key(trade_date_iso: str, expiration_iso: str, hhmm_pt: str) -> tuple:
         ts = ts.tz_localize(ET_TZ)
     ts_floor_utc = ts.tz_convert("UTC").floor("min")
     return (TICKER, trade_date_iso, expiration_iso, ts_floor_utc.to_pydatetime())
+
 
 def _cache_get(k: tuple) -> Optional[pd.DataFrame]:
     rec = _MINUTE_CACHE.get(k)
@@ -73,11 +80,13 @@ def _cache_get(k: tuple) -> Optional[pd.DataFrame]:
         return None
     return df
 
+
 def _cache_put(k: tuple, df: pd.DataFrame) -> None:
     if len(_MINUTE_CACHE) >= _MINUTE_CACHE_MAX:
         # Drop an arbitrary item (simple LRU-ish)
         _MINUTE_CACHE.pop(next(iter(_MINUTE_CACHE)))
     _MINUTE_CACHE[k] = (df, dt.datetime.now().timestamp())
+
 
 # ---------- helpers ----------
 def _ensure_volxx(df: pd.DataFrame) -> pd.DataFrame:
@@ -85,9 +94,11 @@ def _ensure_volxx(df: pd.DataFrame) -> pd.DataFrame:
         return df
     out = df.copy()
     lower = {c.lower(): c for c in out.columns}
+
     def get(name: str):
         col = lower.get(name.lower())
         return col if col in out.columns else None
+
     for pc, vol in _PC_TO_VOL.items():
         if vol not in out.columns:
             src = get(pc)
@@ -95,34 +106,47 @@ def _ensure_volxx(df: pd.DataFrame) -> pd.DataFrame:
                 out[vol] = out[src]
     return out
 
+
 def _available_buckets(row: pd.Series) -> List[int]:
-    bucks = []
-    for c in row.index:
-        if isinstance(c, str) and c.startswith("vol") and c[3:].isdigit():
-            n = int(c[3:])
-            if 1 <= n <= 99:
-                bucks.append(n)
-    return sorted(bucks, reverse=True)
+    """
+    Use a fixed, canonical bucket set to guarantee:
+      P10 P15 P20 P25 P30 P35 ATM C35 C30 C25 C20 C15 C10
+    Only include buckets that actually exist & are non-NA.
+    """
+    present: List[int] = []
+    for n in _CANONICAL_BUCKETS:
+        col = f"vol{n}"
+        if col in row.index and pd.notna(row[col]):
+            present.append(n)
+    return present
+
 
 def _bucket_labels_order(buckets: List[int]) -> Tuple[List[int], List[str]]:
+    """
+    Given numeric buckets like [90, 85, ..., 50, 35, ..., 10],
+    return them in P10..ATM..C10 order with labels like P10..ATM..C10.
+    """
     puts = [n for n in buckets if n >= 50]
     calls = [n for n in buckets if n < 50]
     order = puts + calls
-    labels = []
+
+    labels: List[str] = []
     for n in order:
         if n > 50:
-            labels.append(f"P{100-n}")
+            labels.append(f"P{100 - n}")
         elif n == 50:
             labels.append("ATM")
         else:
             labels.append(f"C{n}")
     return order, labels
 
+
 def _years_to_exp(ts_et: dt.datetime, expiration_iso: str) -> float:
     exp_date = dt.date.fromisoformat(expiration_iso)
     rem = dt.datetime.combine(exp_date, dt.time(0, 0)) - ts_et.replace(tzinfo=None)
-    T = max(0.0, rem.days/365.0 + rem.seconds/(365.0*24*3600))
+    T = max(0.0, rem.days / 365.0 + rem.seconds / (365.0 * 24 * 3600))
     return max(T, EPS_T)
+
 
 def _k_grid_for_row(row: pd.Series, T: float) -> Tuple[np.ndarray, np.ndarray]:
     buckets = _available_buckets(row)
@@ -143,6 +167,7 @@ def _k_grid_for_row(row: pd.Series, T: float) -> Tuple[np.ndarray, np.ndarray]:
     mask = np.concatenate(([True], np.diff(k) > 1e-12))
     return k[mask], s[mask]
 
+
 def _interp_linear_extrap(x: float, xs: np.ndarray, ys: np.ndarray) -> float:
     if x <= xs[0]:
         x0, x1, y0, y1 = xs[0], xs[1], ys[0], ys[1]
@@ -151,6 +176,7 @@ def _interp_linear_extrap(x: float, xs: np.ndarray, ys: np.ndarray) -> float:
         x0, x1, y0, y1 = xs[-2], xs[-1], ys[-2], ys[-1]
         return float(y1 + (y1 - y0) * (x - x1) / (x1 - x0))
     return float(np.interp(x, xs, ys))
+
 
 def _expected_curve_shifted(prev_row: pd.Series,
                             prev_T: float,
@@ -162,7 +188,6 @@ def _expected_curve_shifted(prev_row: pd.Series,
     k_shift = math.log(now_stock / prev_stock) if (prev_stock and now_stock) else 0.0
 
     buckets = _available_buckets(now_row)
-    buckets = [n for n in buckets if n not in (95, 5)]
     if not buckets or 50 not in buckets:
         raise ValueError("now row missing buckets/ATM")
     order, labels = _bucket_labels_order(buckets)
@@ -185,32 +210,41 @@ def _expected_curve_shifted(prev_row: pd.Series,
     expected = shape + (atm_exp - exp_atm_shape)
     return labels, expected * 100.0, atm_exp * 100.0
 
+
 # ---------- unified minute fetcher (CACHE -> DB/day-cache -> API) ----------
 def _minute_df(trade_date_iso: str, expiration_iso: str, hhmm_pt: str) -> tuple[pd.DataFrame, str]:
     """
     Returns a 1-row DataFrame with volXX columns and a source tag:
       'db'  -> from day-cache/DB OR from in-process minute cache
-      'api' -> live API fallback (only if DB miss)
+      'api' -> live API fallback (only if DB miss or legacy row)
       'none'-> nothing found
+
+    If the DB row is marked '__legacy_smile' (no volXX stored), we treat it
+    as a cache miss: refetch from API, re-upsert with volXX, and re-read.
     """
     key = _cache_key(trade_date_iso, expiration_iso, hhmm_pt)
     cached = _cache_get(key)
     if cached is not None and not cached.empty:
-        return _ensure_volxx(cached), "db"  # treat memory as DB for legend clarity
+        return _ensure_volxx(cached), "db"  # treat memory as DB for legend
 
-    # Try day-cache / DB
+    # Try day-cache / DB first
     df_db = read_minute_expiry_df_from_db(TICKER, trade_date_iso, expiration_iso, hhmm_pt)
     if df_db is not None and not df_db.empty:
-        df_db = _ensure_volxx(df_db)
-        _cache_put(key, df_db)
-        return df_db, "db"
+        legacy = bool(df_db.iloc[0].get("__legacy_smile", False))
+        if not legacy:
+            df_db = _ensure_volxx(df_db)
+            _cache_put(key, df_db)
+            return df_db, "db"
+        else:
+            _log(f"{hhmm_pt} PT: legacy DB row (no volXX) — refetching from API")
 
-    # API -> upsert -> re-read
+    # API -> upsert (with volXX) -> re-read
     ts_et = pt_minute_to_et(trade_date_iso, hhmm_pt)
     df_api = fetch_one_minute_monies(ts_et, TICKER, expiration_iso)
     if df_api is not None and not df_api.empty:
         try:
-            upsert_from_dashboard_minute(df_api, ticker=TICKER)
+            # Force volXX into the stored smile JSON for this minute
+            upsert_from_dashboard_minute(df_api, ticker=TICKER, store_volxx=True)
             df_db2 = read_minute_expiry_df_from_db(TICKER, trade_date_iso, expiration_iso, hhmm_pt)
             if df_db2 is not None and not df_db2.empty:
                 df_db2 = _ensure_volxx(df_db2)
@@ -218,12 +252,14 @@ def _minute_df(trade_date_iso: str, expiration_iso: str, hhmm_pt: str) -> tuple[
                 return df_db2, "db"
         except Exception as e:
             _log(f"upsert error @ {hhmm_pt}: {e}")
-        # last resort: plot from API and cache briefly
+
+        # last resort: plot straight from API and cache briefly
         df_api = _ensure_volxx(df_api)
         _cache_put(key, df_api)
         return df_api, "api"
 
     return pd.DataFrame(), "none"
+
 
 # ----------------- main callback -----------------
 def register_callbacks(app):
@@ -245,7 +281,7 @@ def register_callbacks(app):
             title=f"ORATS Smile Grid — {trade_date_iso or ''} (Exp: {expiration_iso or ''})",
             xaxis_title="Bucket (P10 … ATM … C10)",
             yaxis_title="IV (%)",
-            legend=dict(orientation="v", x=1.02, y=1.0, bgcolor="rgba(0,0,0,0)"),
+            legend=dict(orientation="v", x=1.02, y=1.0, bgcolor="rgba(0, 0, 0, 0)"),
             colorway=COLORWAY,
         )
 
@@ -280,7 +316,6 @@ def register_callbacks(app):
 
             color = COLORWAY[i % len(COLORWAY)]
             buckets_now = _available_buckets(row_now)
-            buckets_now = [n for n in buckets_now if n not in (95, 5)]
             if not buckets_now:
                 _log(f"{hhmm_pt} PT: no volXX buckets to plot")
                 continue
@@ -289,7 +324,8 @@ def register_callbacks(app):
             y_now = [float(row_now.get(f"vol{n}")) * 100.0 for n in order_now]
 
             fig.add_trace(go.Scatter(
-                x=labels_now, y=y_now,
+                x=labels_now,
+                y=y_now,
                 mode="lines+markers",
                 name=f"{hhmm_pt} PT" + (" (DB)" if source == "db" else " (API)"),
                 line=dict(width=2, color=color),
@@ -301,7 +337,8 @@ def register_callbacks(app):
             stock_now = None
             for sname in ("underlying", "stockPrice"):
                 if sname in row_now.index and pd.notna(row_now[sname]):
-                    stock_now = float(row_now[sname]); break
+                    stock_now = float(row_now[sname])
+                    break
 
             ts_et = pt_minute_to_et(trade_date_iso, hhmm_pt)
             if expected_on and prev_row is not None and prev_T is not None and prev_stock is not None and stock_now is not None:
@@ -311,13 +348,15 @@ def register_callbacks(app):
                         row_now, _years_to_exp(ts_et, expiration_iso), stock_now
                     )
                     fig.add_trace(go.Scatter(
-                        x=labels_exp, y=expected_y,
+                        x=labels_exp,
+                        y=expected_y,
                         mode="lines",
                         name=f"Expected (SS) — {hhmm_pt}",
                         line=dict(width=2, dash="dot", color=color),
                     ))
                     fig.add_trace(go.Scatter(
-                        x=["ATM"], y=[atm_exp_pct],
+                        x=["ATM"],
+                        y=[atm_exp_pct],
                         mode="markers",
                         marker=dict(symbol="triangle-up", size=9, color=color),
                         name="ATM exp (SS)",
