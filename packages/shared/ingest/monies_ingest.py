@@ -48,7 +48,7 @@ def _normalize_orats_minute(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
             { "expiry_date": "2025-12-20", "dte": 46, "forward": 5989.5,
               "smile": {  # we store this dict VERBATIM as JSON
                 "p10": 0.19, "p15": 0.18, ..., "atm": 0.16, "c10": 0.17,
-                "vol90": 0.31, "vol85": ..., "vol10": 0.32, "mwVol": 0.27
+                "vol90": 0.31, "vol85": ..., "vol10": 0.22, "mwVol": 0.27
               }
             }, ...
           ]
@@ -226,7 +226,11 @@ def upsert_from_dashboard_minute(
         "p25",
         "p30",
         "p35",
+        "p40",
+        "p45",
         "atm",
+        "c45",
+        "c40",
         "c35",
         "c30",
         "c25",
@@ -355,6 +359,10 @@ _DB_TO_VOLXX = {
     "p25": "vol75",
     "p30": "vol70",
     "p35": "vol65",
+    "p40": "vol60",
+    "p45": "vol55",
+    "c45": "vol45",
+    "c40": "vol40",
     "c35": "vol35",
     "c30": "vol30",
     "c25": "vol25",
@@ -371,7 +379,7 @@ def read_minute_expiry_df_from_db(
     hhmm_pt: str,  # "HH:MM" in PT
 ) -> pd.DataFrame:
     """
-    Return a single-row DataFrame for (minute, expiry) with columns like vol50..vol10.
+    Return a single-row DataFrame for (minute, expiry) with columns like vol90..vol10.
 
     BEHAVIOR:
       - Load the entire day for (ticker, trade_date, expiry) via the day-cache/DB.
@@ -443,6 +451,7 @@ def read_minute_expiry_df_from_db(
         except Exception:
             smile = None
 
+    # FULL volXX strip for P10..P45, ATM, C45..C10
     vol_keys = [
         "vol90",
         "vol85",
@@ -450,7 +459,11 @@ def read_minute_expiry_df_from_db(
         "vol75",
         "vol70",
         "vol65",
+        "vol60",
+        "vol55",
         "vol50",
+        "vol45",
+        "vol40",
         "vol35",
         "vol30",
         "vol25",
