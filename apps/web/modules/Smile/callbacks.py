@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objs as go
 from dash import Input, Output
+from sqlalchemy import create_engine, text
 
 # ---- App IDs ----
 TRADE_DATE_ID = "trade-date"
@@ -16,43 +17,60 @@ SMILE_GRAPH = "SMILE_GRAPH"
 EXPECTED_TOGGLE_ID = "expected-ss-toggle"
 CLOCK_ID = "CLOCK"
 
-# ---- Data helpers ----
-from packages.shared.options_orats import fetch_one_minute_monies, pt_minute_to_et, PT_TZ
-from packages.shared.surface_compare import k_for_abs_delta
+# ---- Database Configuration ----
+DATABASE_URL = "postgresql+psycopg://rschultz:5hUHvSVPDyVXhz7acgJZvlvnj7nFMDap@dpg-d38sm515pdvs738rknj0-a.oregon-postgres.render.com/curve_trading?sslmode=require"
+DB_TABLE_NAME = "orats_monies_minute"
+DB_ENGINE = create_engine(DATABASE_URL)
 
+# ---- Plotting Constants ----
 TICKER = "SPX"
 EPS_T = 1e-4
-NEEDED_COLS = ["vol25", "vol50", "vol75"]
-
-# leverage add-on (must match what you want on the Smile)
-BETA_VOLPTS_PER_1PCT = 4.5       # vol points per 1% spot down
-BETA_MAX_SHIFT_PP = 6.0          # clamp add-on in +/- vol points
-
-# fixed colorway so expected traces can reuse the same color as their actual slice
+BETA_VOLPTS_PER_1PCT = 4.5
+BETA_MAX_SHIFT_PP = 6.0
 COLORWAY = [
     "#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
     "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"
 ]
 
-# ---------------- utils ----------------
-def _get_row(df: pd.DataFrame) -> Optional[pd.Series]:
-    if df is None or df.empty:
-        return None
-    row = df.iloc[0]
-    if not all(c in row.index for c in NEEDED_COLS):
-        return None
-    return row
+# ----------------- Data Fetching -----------------
+def fetch_data_from_db(trade_date_iso: str, expiration_iso: str, times_pt: List[str]) -> pd.DataFrame:
+    """
+    Fetches all necessary data for a given trade date, expiration, and time slices
+    from the database with a single query.
+    """
+    if not trade_date_iso or not expiration_iso or not times_pt:
+        return pd.DataFrame()
 
-def _years_to_exp(ts_et: dt.datetime, expiration_iso: str) -> float:
+    time_filters = [f"'{trade_date_iso} {hhmm}:00'" for hhmm in times_pt]
+    query = text(f"""
+        SELECT *
+        FROM "{DB_TABLE_NAME}"
+        WHERE
+            trade_date = :trade_date AND
+            expir_date = :expir_date AND
+            snapshot_pt IN ({','.join(time_filters)})
+        ORDER BY snapshot_pt;
+    """)
+
+    try:
+        with DB_ENGINE.connect() as connection:
+            df = pd.read_sql(query, connection, params={
+                "trade_date": trade_date_iso,
+                "expir_date": expiration_iso,
+            })
+        return df
+    except Exception as e:
+        print(f"Database query failed: {e}")
+        return pd.DataFrame()
+
+# ----------------- Plotting Utils -----------------
+def _years_to_exp(ts_utc: dt.datetime, expiration_iso: str) -> float:
     exp_date = dt.date.fromisoformat(expiration_iso)
-    rem = dt.datetime.combine(exp_date, dt.time(0, 0)) - ts_et.replace(tzinfo=None)
-    T = max(0.0, rem.days/365.0 + rem.seconds/(365.0*24*3600))
+    rem = dt.datetime.combine(exp_date, dt.time(16, 0), tzinfo=dt.timezone.utc) - ts_utc
+    T = max(0.0, rem.total_seconds() / (365.0 * 24 * 3600))
     return max(T, EPS_T)
 
 def _available_buckets(row: pd.Series) -> List[int]:
-    """
-    Return available ORATS 'volNN' buckets as ints (e.g., 95,90,...,5).
-    """
     out = []
     for c in row.index:
         if c.startswith("vol") and c[3:].isdigit():
@@ -62,49 +80,27 @@ def _available_buckets(row: pd.Series) -> List[int]:
     return sorted(out, reverse=True)
 
 def _bucket_labels_order(buckets: List[int]) -> Tuple[List[int], List[str]]:
-    """
-    Order for plotting:
-      P side: 95 -> 50, then ATM, then C side: 45 -> 5
-    Labels:
-      n>50 -> P{100-n}, n=50 -> ATM, n<50 -> C{n}
-    """
     puts = [n for n in buckets if n >= 50]
     calls = [n for n in buckets if n < 50]
     order = puts + calls
-    labels = []
-    for n in order:
-        if n > 50:
-            labels.append(f"P{100-n}")
-        elif n == 50:
-            labels.append("ATM")
-        else:
-            labels.append(f"C{n}")
+    labels = [f"P{100-n}" if n > 50 else "ATM" if n == 50 else f"C{n}" for n in order]
     return order, labels
 
+from packages.shared.surface_compare import k_for_abs_delta
 def _k_grid_for_row(row: pd.Series, T: float) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Build (k, sigma) grid for a row using its *own* ATM for Δ->k mapping.
-    """
     buckets = _available_buckets(row)
-    if not buckets or 50 not in buckets:
-        raise ValueError("row missing buckets/ATM")
+    if not buckets or 'vol50' not in row or pd.isna(row['vol50']):
+        return np.array([]), np.array([])
     atm = float(row["vol50"])
     k_list, s_list = [], []
     for n in buckets:
-        if n == 50:
-            k = 0.0
+        if n == 50: k = 0.0
         else:
-            # convert volNN to absolute delta:
-            if n > 50:
-                p, is_put = (100 - n) / 100.0, True
-            else:
-                p, is_put = n / 100.0, False
+            p, is_put = ((100 - n) / 100.0, True) if n > 50 else (n / 100.0, False)
             k = k_for_abs_delta(p, is_put=is_put, sigma=atm, T=T)
         k_list.append(k)
         s_list.append(float(row[f"vol{n}"]))
-    k = np.array(k_list, float)
-    s = np.array(s_list, float)
-    # ensure strict monotonic k
+    k, s = np.array(k_list, float), np.array(s_list, float)
     mask = np.concatenate(([True], np.diff(k) > 1e-12))
     return k[mask], s[mask]
 
@@ -117,164 +113,100 @@ def _interp_linear_extrap(x: float, xs: np.ndarray, ys: np.ndarray) -> float:
         return float(y1 + (y1 - y0) * (x - x1) / (x1 - x0))
     return float(np.interp(x, xs, ys))
 
-# --------------- expected curve ----------------
-def _expected_curve_shifted(prev_row: pd.Series,
-                            prev_T: float,
-                            prev_stock: float,
-                            now_row: pd.Series,
-                            now_T: float,
-                            now_stock: float) -> Tuple[List[str], np.ndarray, float]:
-    """
-    Build the dotted expected curve for the current minute as:
-      1) SHAPE: sticky-strike from previous surface using *current* σ_now for Δ->k,
-         evaluate prev surface at (k_now + k_shift).
-      2) ATM anchor: expected ATM = prev surface at k_shift + leverage add-on.
-      3) VERTICAL SHIFT: shift entire shape by (atm_exp - shape_atm) so ATM lines up.
-
-    Returns:
-      labels (x axis), expected_y (percent), atm_exp_percent
-    """
-    # previous surface in its own k-space
+def _expected_curve_shifted(prev_row, prev_T, prev_stock, now_row, now_T, now_stock):
     k_prev, s_prev = _k_grid_for_row(prev_row, prev_T)
-    # k shift from spot change
+    if k_prev.size == 0: return [], np.array([]), 0.0
     k_shift = math.log(now_stock / prev_stock) if (prev_stock and now_stock) else 0.0
-
-    # buckets/x-labels to display (use what's in "now" row so x matches live line)
-    buckets = _available_buckets(now_row)
-    # ---- filter out 5Δ (P5/C5): drop 95 and 5
-    buckets = [n for n in buckets if n not in (95, 5)]
-    if not buckets or 50 not in buckets:
-        raise ValueError("now row missing buckets/ATM")
+    buckets = [n for n in _available_buckets(now_row) if n not in (95, 5)]
+    if not buckets or 'vol50' not in now_row or pd.isna(now_row['vol50']):
+        return [], np.array([]), 0.0
     order, labels = _bucket_labels_order(buckets)
-
-    # current ATM (fraction) for Δ->k mapping
     atm_now = float(now_row["vol50"])
-
-    # --- shape values from previous surface at (k_now + k_shift)
     shape_vals = []
     for n in order:
-        if n == 50:
-            k_now = 0.0
+        if n == 50: k_now = 0.0
         else:
-            if n > 50:
-                p, is_put = (100 - n) / 100.0, True
-            else:
-                p, is_put = n / 100.0, False
+            p, is_put = ((100 - n) / 100.0, True) if n > 50 else (n / 100.0, False)
             k_now = k_for_abs_delta(p, is_put=is_put, sigma=atm_now, T=now_T)
         shape_vals.append(_interp_linear_extrap(k_now + k_shift, k_prev, s_prev))
     shape = np.array(shape_vals, float)
-
-    # --- expected ATM anchor: previous surface at k_shift + leverage add-on
     exp_atm_shape = _interp_linear_extrap(k_shift, k_prev, s_prev)
-    ret_frac = (now_stock - prev_stock) / prev_stock
-    level_shift_pp = max(-BETA_MAX_SHIFT_PP,
-                         min(BETA_MAX_SHIFT_PP, (-ret_frac) * 100.0 * BETA_VOLPTS_PER_1PCT))
+    ret_frac = (now_stock - prev_stock) / prev_stock if prev_stock else 0.0
+    level_shift_pp = max(-BETA_MAX_SHIFT_PP, min(BETA_MAX_SHIFT_PP, (-ret_frac) * 100.0 * BETA_VOLPTS_PER_1PCT))
     atm_exp = exp_atm_shape + level_shift_pp / 100.0
-
-    # --- vertical shift of entire curve so ATM equals atm_exp
     shift = atm_exp - exp_atm_shape
     expected = shape + shift
+    return labels, expected * 100.0, atm_exp * 100.0
 
-    return labels, expected * 100.0, atm_exp * 100.0  # return in percent for plotting
-
-# ----------------- main callback -----------------
+# ----------------- Main Callback -----------------
 def register_callbacks(app):
     @app.callback(
         Output(SMILE_GRAPH, "figure"),
-        Input(TRADE_DATE_ID, "date"),
-        Input(EXPIRATION_ID, "date"),
-        Input(SMILE_TIME_INPUT, "value"),
-        Input(EXPECTED_TOGGLE_ID, "value"),
-        Input(CLOCK_ID, "n_intervals"),
+        [Input(TRADE_DATE_ID, "date"),
+         Input(EXPIRATION_ID, "date"),
+         Input(SMILE_TIME_INPUT, "value"),
+         Input(EXPECTED_TOGGLE_ID, "value")]
     )
-    def render_smile(trade_date_iso, expiration_iso, times_pt, expected_value, _tick):
-        expected_on = (expected_value != "off")
-
+    def render_smile(trade_date_iso, expiration_iso, times_pt, expected_value):
         fig = go.Figure()
         fig.update_layout(
             template="plotly_dark",
             margin=dict(l=20, r=20, t=40, b=40),
-            title=f"ORATS Smile Grid — {trade_date_iso or ''} (Exp: {expiration_iso or ''})",
+            title=f"ORATS Smile Grid (DB) — {trade_date_iso or ''} (Exp: {expiration_iso or ''})",
             xaxis_title="Bucket (P10 … ATM … C10)",
             yaxis_title="IV (%)",
             legend=dict(orientation="v", x=1.02, y=1.0, bgcolor="rgba(0,0,0,0)"),
             colorway=COLORWAY,
         )
 
-        if not trade_date_iso or not expiration_iso:
+        if not all([trade_date_iso, expiration_iso, times_pt]):
             return fig
 
-        # ensure a “now” point is present for today
-        if not times_pt:
-            times_pt = ["06:31"]
-        now_pt = dt.datetime.now(PT_TZ)
-        if trade_date_iso == now_pt.date().isoformat():
-            hhmm = now_pt.strftime("%H:%M")
-            if "06:30" <= hhmm <= "13:00":
-                times_pt = sorted(set(times_pt + [hhmm]))
-        times_sorted = sorted(times_pt)
+        df = fetch_data_from_db(trade_date_iso, expiration_iso, sorted(times_pt))
+        if df.empty:
+            return fig
 
-        prev_row = None
-        prev_stock = None
-        prev_T = None
+        prev_row, prev_stock, prev_T = None, None, None
 
-        # plot each selected time
-        for i, hhmm_pt in enumerate(times_sorted):
-            ts_et = pt_minute_to_et(trade_date_iso, hhmm_pt)
-            df_now = fetch_one_minute_monies(ts_et, TICKER, expiration_iso)
-            row_now = _get_row(df_now)
-            if row_now is None:
-                continue
-
-            # choose the color for this timeslice and reuse for expected
+        for i, (snapshot, row_now) in enumerate(df.groupby('snapshot_pt')):
+            row_now = row_now.iloc[0]
+            hhmm_pt = snapshot.strftime("%H:%M")
             color = COLORWAY[i % len(COLORWAY)]
 
-            # live line (actual)
-            buckets_now = _available_buckets(row_now)
-            # ---- filter out 5Δ (P5/C5): drop 95 and 5
-            buckets_now = [n for n in buckets_now if n not in (95, 5)]
+            buckets_now = [n for n in _available_buckets(row_now) if n not in (95, 5)]
             order_now, labels_now = _bucket_labels_order(buckets_now)
-            y_now = [float(row_now[f"vol{n}"]) * 100.0 for n in order_now]
-
+            y_now = [float(row_now.get(f"vol{n}", 0)) * 100.0 for n in order_now]
             fig.add_trace(go.Scatter(
-                x=labels_now, y=y_now,
-                mode="lines+markers",
-                name=f"{hhmm_pt} PT",
-                line=dict(width=2, color=color),
-                marker=dict(size=5, color=color),
+                x=labels_now, y=y_now, mode="lines+markers", name=f"{hhmm_pt} PT",
+                line=dict(width=2, color=color), marker=dict(size=5, color=color)
             ))
 
-            # expected dotted curve for slices after the first, if toggle ON
-            stock_now = float(pd.to_numeric(df_now["stockPrice"], errors="coerce").median()) if "stockPrice" in df_now.columns else None
-            if expected_on and prev_row is not None and prev_T is not None and prev_stock is not None and stock_now is not None:
+            stock_now = float(row_now.get("stock_price", 0))
+            
+            # FIX: Use correct 'snap_shot_date' column and handle missing values
+            ts_utc_val = row_now.get("snap_shot_date")
+            now_T = 0
+            if pd.notna(ts_utc_val):
+                ts_utc = pd.to_datetime(ts_utc_val, utc=True)
+                now_T = _years_to_exp(ts_utc, expiration_iso)
+
+            if expected_value == "on" and prev_row is not None and prev_stock is not None and prev_T is not None and now_T > 0:
                 try:
-                    labels_exp, expected_y, atm_exp_pct = _expected_curve_shifted(
-                        prev_row, prev_T, prev_stock,
-                        row_now, _years_to_exp(ts_et, expiration_iso), stock_now
+                    labels_exp, y_exp, atm_exp_pct = _expected_curve_shifted(
+                        prev_row, prev_T, prev_stock, row_now, now_T, stock_now
                     )
+                    if labels_exp:
+                        fig.add_trace(go.Scatter(
+                            x=labels_exp, y=y_exp, mode="lines", name=f"Expected — {hhmm_pt}",
+                            line=dict(width=2, dash="dot", color=color)
+                        ))
+                        fig.add_trace(go.Scatter(
+                            x=["ATM"], y=[atm_exp_pct], mode="markers",
+                            marker=dict(symbol="triangle-up", size=9, color=color), showlegend=False
+                        ))
+                except Exception as e:
+                    print(f"Could not calculate expected curve for {hhmm_pt}: {e}")
 
-                    # dotted expected line — same color as actual
-                    fig.add_trace(go.Scatter(
-                        x=labels_exp, y=expected_y,
-                        mode="lines",
-                        name=f"Expected (SS) — {hhmm_pt}",
-                        line=dict(width=2, dash="dot", color=color),
-                    ))
-
-                    # triangle marker for ATM expected (no legend) — same color
-                    fig.add_trace(go.Scatter(
-                        x=["ATM"], y=[atm_exp_pct],
-                        mode="markers",
-                        marker=dict(symbol="triangle-up", size=9, color=color),
-                        name="ATM exp (SS)",
-                        showlegend=False,
-                    ))
-                except Exception:
-                    pass
-
-            # advance previous pointers
-            prev_row = row_now
-            prev_stock = stock_now
-            prev_T = _years_to_exp(ts_et, expiration_iso)
+            prev_row, prev_stock, prev_T = row_now, stock_now, now_T
 
         return fig
