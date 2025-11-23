@@ -20,7 +20,7 @@ from packages.shared.options_orats import (
 from packages.shared.surface_compare import k_for_abs_delta
 from packages.shared.ingest.monies_ingest import (
     upsert_from_dashboard_minute,
-    read_minute_expiry_df_from_db,
+    # read_minute_expiry_df_from_db,  # not used for plotting (for now)
 )
 
 # -----------------------------------------------------------------------------
@@ -67,7 +67,32 @@ _PC_TO_VOL = {
 
 def _log(msg: str) -> None:
     if DEBUG:
-        print(f"[smile] {msg}")
+        ts = dt.datetime.now().strftime("%H:%M:%S")
+        print(f"[smile {ts}] {msg}")
+
+
+def _summ_row(tag: str, row: pd.Series) -> None:
+    """Small helper to log key fields from a row."""
+    if not DEBUG or row is None:
+        return
+
+    def g(name: str) -> Any:
+        return float(row[name]) if name in row.index and pd.notna(row[name]) else None
+
+    vol50 = g("vol50")
+    vol40 = g("vol40")
+    vol45 = g("vol45")
+    vol60 = g("vol60")
+    atm = g("atm")
+    und = None
+    for nm in ("underlying", "stockPrice", "spotPrice"):
+        if nm in row.index and pd.notna(row[nm]):
+            und = float(row[nm])
+            break
+    _log(
+        f"{tag}: underlying={und} atm={atm} "
+        f"vol50={vol50} vol45={vol45} vol40={vol40} vol60={vol60}"
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -76,7 +101,7 @@ def _log(msg: str) -> None:
 # -----------------------------------------------------------------------------
 
 ALLOWED_BUCKETS: List[int] = [
-    90, 85, 80, 75, 70, 65, 60, 55, 50, 45, 40, 35, 30, 25, 20, 15, 10
+    90, 85, 80, 75, 70, 65, 60, 55, 50, 45, 40, 35, 30, 25, 20, 15, 10,
 ]
 
 
@@ -101,9 +126,6 @@ _MINUTE_CACHE_TTL = 300  # seconds
 
 
 def _cache_key(trade_date_iso: str, expiration_iso: str, hhmm_pt: str) -> tuple:
-    """
-    Use the actual minute floor UTC so the key is stable and unambiguous.
-    """
     ts_et = pt_minute_to_et(trade_date_iso, hhmm_pt)
     ts = pd.Timestamp(ts_et)
     if ts.tz is None:
@@ -128,8 +150,7 @@ def _cache_get(k: tuple) -> Optional[pd.DataFrame]:
 
 def _cache_put(k: tuple, df: pd.DataFrame) -> None:
     if len(_MINUTE_CACHE) >= _MINUTE_CACHE_MAX:
-        # simple LRU-ish eviction
-        _MINUTE_CACHE.pop(next(iter(_MINUTE_CACHE)))
+        _MINUTE_CACHE.pop(next(iter(_MINUTE_CACHE)))  # simple eviction
     _MINUTE_CACHE[k] = (df, dt.datetime.now().timestamp())
 
 
@@ -161,10 +182,6 @@ def _ensure_volxx(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _available_buckets(row: pd.Series) -> List[int]:
-    """
-    Return the list of ALLOWED_BUCKETS that have non-null volXX in this row,
-    in canonical order (P10..P45, ATM, C45..C10).
-    """
     present: List[int] = []
     for n in ALLOWED_BUCKETS:
         col = f"vol{n}"
@@ -174,10 +191,6 @@ def _available_buckets(row: pd.Series) -> List[int]:
 
 
 def _bucket_labels_order(buckets: List[int]) -> Tuple[List[int], List[str]]:
-    """
-    Given a subset of ALLOWED_BUCKETS, return them in canonical order with
-    their display labels.
-    """
     s = {int(b) for b in buckets}
     order = [n for n in ALLOWED_BUCKETS if n in s]
     labels = [_label_for_bucket(n) for n in order]
@@ -192,9 +205,6 @@ def _years_to_exp(ts_et: dt.datetime, expiration_iso: str) -> float:
 
 
 def _k_grid_for_row(row: pd.Series, T: float) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Build a log-moneyness grid k plus smile values using the canonical buckets.
-    """
     buckets = _available_buckets(row)
     if not buckets or 50 not in buckets:
         raise ValueError("row missing required buckets / ATM")
@@ -207,7 +217,6 @@ def _k_grid_for_row(row: pd.Series, T: float) -> Tuple[np.ndarray, np.ndarray]:
         if n == 50:
             k = 0.0
         else:
-            # convert volXX bucket to abs-delta probability
             p, is_put = ((100 - n) / 100.0, True) if n > 50 else (n / 100.0, False)
             k = k_for_abs_delta(p, is_put=is_put, sigma=atm, T=T)
         k_list.append(k)
@@ -215,16 +224,11 @@ def _k_grid_for_row(row: pd.Series, T: float) -> Tuple[np.ndarray, np.ndarray]:
 
     k = np.array(k_list, float)
     s = np.array(s_list, float)
-
-    # enforce strictly increasing k (safe-guard)
     mask = np.concatenate(([True], np.diff(k) > 1e-12))
     return k[mask], s[mask]
 
 
 def _interp_linear_extrap(x: float, xs: np.ndarray, ys: np.ndarray) -> float:
-    """
-    Linear interpolation with linear extrapolation on both ends.
-    """
     if x <= xs[0]:
         x0, x1, y0, y1 = xs[0], xs[1], ys[0], ys[1]
         return float(y0 + (y1 - y0) * (x - x0) / (x1 - x0))
@@ -242,18 +246,9 @@ def _expected_curve_shifted(
     now_T: float,
     now_stock: float,
 ) -> Tuple[List[str], np.ndarray, float]:
-    """
-    Sticky-strike expected smile for `now_row`, using the previous row as the
-    reference shape and shifting in log-moneyness, plus a crude ATM level
-    adjustment based on the stock move.
-    """
-    # previous smile in k-space
     k_prev, s_prev = _k_grid_for_row(prev_row, prev_T)
-
-    # log-moneyness shift from previous stock to current stock
     k_shift = math.log(now_stock / prev_stock) if (prev_stock and now_stock) else 0.0
 
-    # current buckets / labels (canonical subset)
     buckets = _available_buckets(now_row)
     if not buckets or 50 not in buckets:
         raise ValueError("now row missing required buckets / ATM")
@@ -272,8 +267,6 @@ def _expected_curve_shifted(
         shape_vals.append(_interp_linear_extrap(k_now + k_shift, k_prev, s_prev))
 
     shape = np.array(shape_vals, float)
-
-    # crude ATM level adjustment heuristic
     exp_atm_shape = _interp_linear_extrap(k_shift, k_prev, s_prev)
     ret_frac = (now_stock - prev_stock) / prev_stock
     level_shift_pp = max(-6.0, min(6.0, (-ret_frac) * 100.0 * 4.5))
@@ -284,7 +277,7 @@ def _expected_curve_shifted(
 
 
 # -----------------------------------------------------------------------------
-# Unified minute fetcher (CACHE → DB/day-cache → API)
+# Minute fetcher — API ONLY for plotting (DB is write-only here)
 # -----------------------------------------------------------------------------
 
 def _minute_df(
@@ -293,42 +286,34 @@ def _minute_df(
     hhmm_pt: str,
 ) -> tuple[pd.DataFrame, str]:
     """
-    Returns a 1-row DataFrame with volXX columns and a source tag:
-        'db'   → from DB / day-cache (or in-process minute cache)
-        'api'  → live API fallback (only if DB miss)
-        'none' → nothing found
+    Returns a 1-row DataFrame with volXX columns and a source tag.
+    For now, we ALWAYS use the live one-minute API for plotting, and
+    optionally upsert that payload into the DB for storage.
     """
     key = _cache_key(trade_date_iso, expiration_iso, hhmm_pt)
     cached = _cache_get(key)
     if cached is not None and not cached.empty:
-        return _ensure_volxx(cached), "db"  # treat memory as DB for legend clarity
+        row = cached.iloc[0]
+        _summ_row(f"{hhmm_pt} cache-hit", row)
+        return _ensure_volxx(cached), "api"
 
-    # Try DB / day-cache
-    df_db = read_minute_expiry_df_from_db(TICKER, trade_date_iso, expiration_iso, hhmm_pt)
-    if df_db is not None and not df_db.empty:
-        df_db = _ensure_volxx(df_db)
-        _cache_put(key, df_db)
-        return df_db, "db"
-
-    # API → upsert → re-read
     ts_et = pt_minute_to_et(trade_date_iso, hhmm_pt)
     df_api = fetch_one_minute_monies(ts_et, TICKER, expiration_iso)
     if df_api is not None and not df_api.empty:
+        df_api = _ensure_volxx(df_api)
+        _summ_row(f"{hhmm_pt} API-raw", df_api.iloc[0])
+
+        # Best-effort upsert; failures shouldn’t break the chart.
         try:
             upsert_from_dashboard_minute(df_api, ticker=TICKER)
-            df_db2 = read_minute_expiry_df_from_db(TICKER, trade_date_iso, expiration_iso, hhmm_pt)
-            if df_db2 is not None and not df_db2.empty:
-                df_db2 = _ensure_volxx(df_db2)
-                _cache_put(key, df_db2)
-                return df_db2, "db"
+            _log(f"{hhmm_pt} upsert_from_dashboard_minute done")
         except Exception as e:
             _log(f"upsert error @ {hhmm_pt}: {e}")
 
-        # last resort: plot directly from API
-        df_api = _ensure_volxx(df_api)
         _cache_put(key, df_api)
         return df_api, "api"
 
+    _log(f"{hhmm_pt} no data from API")
     return pd.DataFrame(), "none"
 
 
@@ -371,7 +356,6 @@ def register_callbacks(app):
         if not trade_date_iso or not expiration_iso:
             return fig
 
-        # normalise times input (can be None, string, or list)
         base_times = times_pt or []
         if isinstance(base_times, str):
             base_times = [base_times]
@@ -381,7 +365,6 @@ def register_callbacks(app):
         if not base_times:
             base_times = ["06:31"]
 
-        # auto-append "now" if today & inside RTH
         now_pt = dt.datetime.now(PT_TZ)
         if trade_date_iso == now_pt.date().isoformat():
             hhmm_now = now_pt.strftime("%H:%M")
@@ -389,6 +372,10 @@ def register_callbacks(app):
                 base_times = sorted(set(base_times + [hhmm_now]))
 
         times_sorted = sorted(set(base_times))
+        _log(
+            f"render_smile: trade_date={trade_date_iso} exp={expiration_iso} "
+            f"times={times_sorted} expected_on={expected_on}"
+        )
 
         prev_row: Optional[pd.Series] = None
         prev_stock: Optional[float] = None
@@ -398,10 +385,11 @@ def register_callbacks(app):
         for i, hhmm_pt in enumerate(times_sorted):
             df_now, source = _minute_df(trade_date_iso, expiration_iso, hhmm_pt)
             if df_now is None or df_now.empty:
-                _log(f"{hhmm_pt} PT: no data from DB/API")
+                _log(f"{hhmm_pt} PT: no data from API")
                 continue
 
             row_now = df_now.iloc[0]
+            _summ_row(f"{hhmm_pt} row_for_plot ({source})", row_now)
 
             if "vol50" not in row_now.index or pd.isna(row_now["vol50"]):
                 _log(f"{hhmm_pt} PT: missing vol50")
@@ -422,7 +410,7 @@ def register_callbacks(app):
                     x=labels_now,
                     y=y_now,
                     mode="lines+markers",
-                    name=f"{hhmm_pt} PT" + (" (DB)" if source == "db" else " (API)"),
+                    name=f"{hhmm_pt} PT (API)",
                     line=dict(width=2, color=color),
                     marker=dict(size=5, color=color),
                 )
@@ -431,7 +419,7 @@ def register_callbacks(app):
 
             # pull stock for expected curve, if present
             stock_now = None
-            for sname in ("underlying", "stockPrice"):
+            for sname in ("underlying", "stockPrice", "spotPrice"):
                 if sname in row_now.index and pd.notna(row_now[sname]):
                     stock_now = float(row_now[sname])
                     break
