@@ -7,5 +7,5 @@ SKEW_TABLE = "SKEW_TABLE"
 def make_skew_block():
     return html.Div([
 
-        dcc.Graph(id=SKEW_TABLE, style={"height": "360px"}),
+        dcc.Graph(id=SKEW_TABLE, style={"height": "225px"}),
     ], id="skew-block", style={"marginTop": "16px"})

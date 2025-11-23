@@ -2,6 +2,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 from typing import List, Tuple, Optional
+import os # Import the os module
 
 import numpy as np
 import pandas as pd
@@ -18,7 +19,11 @@ CLOCK_ID = "CLOCK"
 EXPECTED_TOGGLE_ID = "expected-ss-toggle"
 
 # ---- Database Configuration ----
-DATABASE_URL = "postgresql+psycopg://rschultz:5hUHvSVPDyVXhz7acgJZvlvnj7nFMDap@dpg-d38sm515pdvs738rknj0-a.oregon-postgres.render.com/curve_trading?sslmode=require"
+DATABASE_URL = os.getenv("DATABASE_URL")  # or "CURVE_DB_URL" if you prefer a custom name
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is not set")
+
 DB_TABLE_NAME = "orats_monies_minute"
 DB_ENGINE = create_engine(DATABASE_URL)
 

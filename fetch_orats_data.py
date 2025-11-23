@@ -19,8 +19,8 @@ ENDPOINT = "/datav2/hist/live/one-minute/monies/implied.csv"
 TICKER = "SPX"
 
 # --- Date Range for Backfill ---
-START_DATE = "2025-11-10"
-END_DATE = "2025-11-14"
+START_DATE = "2025-11-03"
+END_DATE = "2025-11-07"
 
 def camel_to_snake(name):
     """Converts a camelCase string to snake_case."""
