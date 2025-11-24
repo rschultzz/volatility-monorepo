@@ -9,7 +9,7 @@ def make_term_structure_block() -> html.Div:
     """
     return html.Div(
         [
-            html.H3("ATM Term Structure", style={"textAlign": "center"}),
+            html.H3( style={"textAlign": "center"}),
             dcc.Graph(
                 id=TERM_STRUCTURE_GRAPH_ID,
                 style={"height": "480px"}

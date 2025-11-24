@@ -157,7 +157,7 @@ def register_callbacks(app):
         fig.update_layout(
             template="plotly_dark",
             margin=dict(l=20, r=20, t=40, b=40),
-            title=f"ORATS Smile Grid (DB) — {trade_date_iso or ''} (Exp: {expiration_iso or ''})",
+            title=f"Smile Grid — {trade_date_iso or ''} (Exp: {expiration_iso or ''})",
             xaxis_title="Bucket (P10 … ATM … C10)",
             yaxis_title="IV (%)",
             legend=dict(orientation="v", x=1.02, y=1.0, bgcolor="rgba(0,0,0,0)"),

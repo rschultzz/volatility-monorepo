@@ -175,5 +175,5 @@ def register_callbacks(app):
         cell_colors = [['green' if v is not None and v > 0 else 'red' if v is not None and v < 0 else 'black' for v in df_table[c]] if c in {'Δ Stock %','Δ ATM IV %','Δ Call Skew %','Δ Put Skew %','ATM residual (bp)'} else ['black'] * len(df_table) for c in df_table.columns]
         
         fig = go.Figure(data=[go.Table(header=dict(values=list(df_table.columns)), cells=dict(values=[df_table[c] for c in df_table.columns], fill_color=cell_colors, align="left", font=dict(color="white")))])
-        fig.update_layout(template="plotly_dark", title=f"Skew (DB) — {trade_date_iso}   Exp: {expiration_iso}", margin=dict(l=0, r=0, t=36, b=0))
+        fig.update_layout(template="plotly_dark", title=f"Skew — {trade_date_iso}   Exp: {expiration_iso}", margin=dict(l=0, r=0, t=36, b=0))
         return fig

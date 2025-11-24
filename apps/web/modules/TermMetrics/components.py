@@ -8,7 +8,7 @@ def make_term_metrics_block():
             # Just the graph; the figure's title ("Term Metrics") will be shown inside it
             dcc.Graph(
                 id="term-metrics-table",
-                style={"height": "160px"},
+                style={"height": "240px"},
             ),
         ],
         className="mb-4",

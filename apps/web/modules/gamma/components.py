@@ -10,7 +10,7 @@ def gex_block():
             dcc.Graph(
                 id="GEX_GRAPH",
                 config={"displayModeBar": True, "responsive": True},
-                style={"height": "780px"}
+                style={"height": "840px"}
             ),
 
         ],
