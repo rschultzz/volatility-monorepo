@@ -2,13 +2,14 @@ from __future__ import annotations
 import datetime as dt
 import math
 from typing import List, Tuple, Optional
-import os # Import the os module
+import os
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objs as go
 from dash import Input, Output
-from sqlalchemy import create_engine, text
+
+from packages.shared.utils import fetch_skew_data
 
 # ---- Dash IDs ----
 TRADE_DATE_ID = "trade-date"
@@ -17,15 +18,7 @@ SMILE_TIME_INPUT = "smile-time-input"
 SKEW_TABLE = "SKEW_TABLE"
 CLOCK_ID = "CLOCK"
 EXPECTED_TOGGLE_ID = "expected-ss-toggle"
-
-# ---- Database Configuration ----
-DATABASE_URL = os.getenv("DATABASE_URL")  # or "CURVE_DB_URL" if you prefer a custom name
-
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL environment variable is not set")
-
-DB_TABLE_NAME = "orats_monies_minute"
-DB_ENGINE = create_engine(DATABASE_URL)
+LIVE_DATA_STORE_ID = "live-data-store"
 
 # ---- Constants ----
 TICKER = "SPX"
@@ -33,24 +26,7 @@ EPS_T = 1e-4
 MIN_SKEW_DENOM_PP = 0.25
 BETA_VOLPTS_PER_1PCT = 4.5
 BETA_MAX_SHIFT_PP = 6.0
-
-# ----------------- Data Fetching -----------------
-def fetch_data_from_db(trade_date_iso: str, expiration_iso: str, times_pt: List[str]) -> pd.DataFrame:
-    if not trade_date_iso or not expiration_iso or not times_pt:
-        return pd.DataFrame()
-    time_filters = [f"'{trade_date_iso} {hhmm}:00'" for hhmm in times_pt]
-    query = text(f"""
-        SELECT * FROM "{DB_TABLE_NAME}"
-        WHERE trade_date = :trade_date AND expir_date = :expir_date
-          AND snapshot_pt IN ({','.join(time_filters)})
-        ORDER BY snapshot_pt;
-    """)
-    try:
-        with DB_ENGINE.connect() as connection:
-            return pd.read_sql(query, connection, params={"trade_date": trade_date_iso, "expir_date": expiration_iso})
-    except Exception as e:
-        print(f"Skew DB query failed: {e}")
-        return pd.DataFrame()
+LIVE_COLOR = "#FFD700"
 
 # ----------------- Calculation Utils -----------------
 def _skews_from_row(row: pd.Series) -> Tuple[float, float, float]:
@@ -101,72 +77,99 @@ def register_callbacks(app):
     @app.callback(
         Output(SKEW_TABLE, "figure"),
         [Input(TRADE_DATE_ID, "date"), Input(EXPIRATION_ID, "date"),
-         Input(SMILE_TIME_INPUT, "value"), Input(EXPECTED_TOGGLE_ID, "value")]
+         Input(SMILE_TIME_INPUT, "value"), Input(EXPECTED_TOGGLE_ID, "value"),
+         Input(LIVE_DATA_STORE_ID, "data")]
     )
-    def render_skew_table(trade_date_iso, expiration_iso, times_pt, expected_value):
+    def render_skew_table(trade_date_iso, expiration_iso, times_pt, expected_value, live_data_json):
         expected_on = (expected_value == "on")
         base_cols = ["Time (PT)", "Stock", "Δ Stock %", "ATM IV %", "Call Skew", "Put Skew", "Δ ATM IV %", "Δ Call Skew %", "Δ Put Skew %"]
         exp_cols = ["ATM exp (SS) %", "ATM residual (bp)"]
         
-        if not all([trade_date_iso, expiration_iso, times_pt]):
-            cols = base_cols if not expected_on else base_cols[:4] + exp_cols + base_cols[4:]
-            return go.Figure(data=[go.Table(header=dict(values=cols), cells=dict(values=[[] for _ in cols]))]).update_layout(template="plotly_dark", title="Skew — Select Date & Expiration")
+        cols = base_cols if not expected_on else base_cols[:4] + exp_cols + base_cols[4:]
+        fig = go.Figure(data=[go.Table(header=dict(values=cols), cells=dict(values=[[] for _ in cols]))]).update_layout(template="plotly_dark", title="Skew — Select Date & Expiration")
 
-        df_data = fetch_data_from_db(trade_date_iso, expiration_iso, sorted(times_pt))
-        if df_data.empty:
-            return go.Figure().update_layout(template="plotly_dark", title=f"Skew — No data for {trade_date_iso} / {expiration_iso}")
+        if not all([trade_date_iso, expiration_iso]):
+            return fig
 
         table_rows = []
         prev_row, prev_stock, prev_T = None, None, None
         prev_stock_actual, prev_atm_actual, prev_call_skew_pp_actual, prev_put_skew_pp_actual = None, None, None, None
 
-        # FIX: Group by snapshot_pt to handle potential duplicates (e.g., AM/PM settlements)
-        for _, group in df_data.groupby('snapshot_pt'):
-            row_now = group.iloc[0] # Take the first row for this timestamp
-            
-            stock_now = float(row_now.get("stock_price", 0))
-            atm_now, call_skew_pp_now, put_skew_pp_now = _skews_from_row(row_now)
-            ts_utc_val = row_now.get("snap_shot_date"); now_T = 0
-            if pd.notna(ts_utc_val): now_T = _years_to_exp(pd.to_datetime(ts_utc_val, utc=True), expiration_iso)
-
-            d_stock_pct = _pct_change_frac(stock_now, prev_stock_actual)
-            d_atm_pct = _pct_change_frac(atm_now, prev_atm_actual)
-            d_call_pct = _pct_change_pp(call_skew_pp_now, prev_call_skew_pp_actual)
-            d_put_pct = _pct_change_pp(put_skew_pp_now, prev_put_skew_pp_actual)
-            atm_exp_pct, atm_res_bp = None, None
-
-            if expected_on and prev_row is not None and prev_T is not None and prev_stock is not None and now_T > 0:
-                try:
-                    k_prev, s_prev = _k_grid_for_row(prev_row, prev_T)
-                    k_shift = math.log(stock_now / prev_stock) if prev_stock else 0.0
-                    exp_atm_shape = _interp_linear_extrap(k_shift, k_prev, s_prev)
-                    ret_frac = (stock_now - prev_stock) / prev_stock if prev_stock else 0.0
-                    level_shift_pp = max(-BETA_MAX_SHIFT_PP, min(BETA_MAX_SHIFT_PP, (-ret_frac) * 100.0 * BETA_VOLPTS_PER_1PCT))
-                    atm_exp = exp_atm_shape + (level_shift_pp / 100.0)
+        if times_pt:
+            df_data = fetch_skew_data(trade_date_iso, expiration_iso, sorted(times_pt))
+            if not df_data.empty:
+                for _, group in df_data.groupby('snapshot_pt'):
+                    row_now = group.iloc[0]
                     
-                    k_c25 = k_for_abs_delta(0.25, is_put=False, sigma=atm_now, T=now_T)
-                    k_p25 = k_for_abs_delta(0.25, is_put=True, sigma=atm_now, T=now_T)
-                    exp_c25_shape = _interp_linear_extrap(k_c25 + k_shift, k_prev, s_prev)
-                    exp_p25_shape = _interp_linear_extrap(k_p25 + k_shift, k_prev, s_prev)
-                    shift_frac = atm_exp - exp_atm_shape
-                    exp_c25, exp_p25 = exp_c25_shape + shift_frac, exp_p25_shape + shift_frac
-                    exp_call_skew_pp, exp_put_skew_pp = (exp_c25 - atm_exp) * 100.0, (exp_p25 - atm_exp) * 100.0
-                    
-                    d_atm_pct = _pct_change_frac(atm_now, atm_exp)
-                    d_call_pct = _pct_change_pp(call_skew_pp_now, exp_call_skew_pp)
-                    d_put_pct = _pct_change_pp(put_skew_pp_now, exp_put_skew_pp)
-                    atm_exp_pct, atm_res_bp = round(atm_exp * 100.0, 2), int(round((atm_now - atm_exp) * 10000.0))
-                except Exception as e:
-                    print(f"Could not calculate expected skew for {row_now.snapshot_pt.strftime('%H:%M')}: {e}")
+                    stock_now = float(row_now.get("stock_price", 0))
+                    atm_now, call_skew_pp_now, put_skew_pp_now = _skews_from_row(row_now)
+                    ts_utc_val = row_now.get("snap_shot_date"); now_T = 0
+                    if pd.notna(ts_utc_val): now_T = _years_to_exp(pd.to_datetime(ts_utc_val, utc=True), expiration_iso)
 
-            table_rows.append({
-                "Time (PT)": row_now.snapshot_pt.strftime("%H:%M"), "Stock": round(stock_now, 2), "Δ Stock %": round(d_stock_pct, 2) if d_stock_pct is not None else None,
-                "ATM IV %": round(atm_now * 100.0, 2), "ATM exp (SS) %": atm_exp_pct, "ATM residual (bp)": atm_res_bp,
-                "Call Skew": round(call_skew_pp_now, 2), "Put Skew": round(put_skew_pp_now, 2),
-                "Δ ATM IV %": round(d_atm_pct, 2) if d_atm_pct is not None else None, "Δ Call Skew %": round(d_call_pct, 2) if d_call_pct is not None else None, "Δ Put Skew %": round(d_put_pct, 2) if d_put_pct is not None else None,
-            })
-            prev_row, prev_stock, prev_T = row_now, stock_now, now_T
-            prev_stock_actual, prev_atm_actual, prev_call_skew_pp_actual, prev_put_skew_pp_actual = stock_now, atm_now, call_skew_pp_now, put_skew_pp_now
+                    d_stock_pct = _pct_change_frac(stock_now, prev_stock_actual)
+                    d_atm_pct = _pct_change_frac(atm_now, prev_atm_actual)
+                    d_call_pct = _pct_change_pp(call_skew_pp_now, prev_call_skew_pp_actual)
+                    d_put_pct = _pct_change_pp(put_skew_pp_now, prev_put_skew_pp_actual)
+                    atm_exp_pct, atm_res_bp = None, None
+
+                    if expected_on and prev_row is not None and prev_T is not None and prev_stock is not None and now_T > 0:
+                        try:
+                            k_prev, s_prev = _k_grid_for_row(prev_row, prev_T)
+                            if k_prev.size >= 2:
+                                k_shift = math.log(stock_now / prev_stock) if prev_stock else 0.0
+                                exp_atm_shape = _interp_linear_extrap(k_shift, k_prev, s_prev)
+                                ret_frac = (stock_now - prev_stock) / prev_stock if prev_stock else 0.0
+                                level_shift_pp = max(-BETA_MAX_SHIFT_PP, min(BETA_MAX_SHIFT_PP, (-ret_frac) * 100.0 * BETA_VOLPTS_PER_1PCT))
+                                atm_exp = exp_atm_shape + (level_shift_pp / 100.0)
+                                
+                                k_c25 = k_for_abs_delta(0.25, is_put=False, sigma=atm_now, T=now_T)
+                                k_p25 = k_for_abs_delta(0.25, is_put=True, sigma=atm_now, T=now_T)
+                                exp_c25_shape = _interp_linear_extrap(k_c25 + k_shift, k_prev, s_prev)
+                                exp_p25_shape = _interp_linear_extrap(k_p25 + k_shift, k_prev, s_prev)
+                                shift_frac = atm_exp - exp_atm_shape
+                                exp_c25, exp_p25 = exp_c25_shape + shift_frac, exp_p25_shape + shift_frac
+                                exp_call_skew_pp, exp_put_skew_pp = (exp_c25 - atm_exp) * 100.0, (exp_p25 - atm_exp) * 100.0
+                                
+                                d_atm_pct = _pct_change_frac(atm_now, atm_exp)
+                                d_call_pct = _pct_change_pp(call_skew_pp_now, exp_call_skew_pp)
+                                d_put_pct = _pct_change_pp(put_skew_pp_now, exp_put_skew_pp)
+                                atm_exp_pct, atm_res_bp = round(atm_exp * 100.0, 2), int(round((atm_now - atm_exp) * 10000.0))
+                        except Exception as e:
+                            print(f"Could not calculate expected skew for {row_now.snapshot_pt.strftime('%H:%M')}: {e}")
+
+                    table_rows.append({
+                        "Time (PT)": row_now.snapshot_pt.strftime("%H:%M"), "Stock": round(stock_now, 2), "Δ Stock %": round(d_stock_pct, 2) if d_stock_pct is not None else None,
+                        "ATM IV %": round(atm_now * 100.0, 2), "ATM exp (SS) %": atm_exp_pct, "ATM residual (bp)": atm_res_bp,
+                        "Call Skew": round(call_skew_pp_now, 2), "Put Skew": round(put_skew_pp_now, 2),
+                        "Δ ATM IV %": round(d_atm_pct, 2) if d_atm_pct is not None else None, "Δ Call Skew %": round(d_call_pct, 2) if d_call_pct is not None else None, "Δ Put Skew %": round(d_put_pct, 2) if d_put_pct is not None else None,
+                    })
+                    prev_row, prev_stock, prev_T = row_now, stock_now, now_T
+                    prev_stock_actual, prev_atm_actual, prev_call_skew_pp_actual, prev_put_skew_pp_actual = stock_now, atm_now, call_skew_pp_now, put_skew_pp_now
+
+        if live_data_json:
+            df_live = pd.read_json(live_data_json, orient="split")
+            live_row = df_live[df_live["expir_date"] == expiration_iso]
+
+            if not live_row.empty:
+                live_row = live_row.iloc[0]
+                stock_live = float(live_row.get("stock_price", 0))
+                atm_live, call_skew_pp_live, put_skew_pp_live = _skews_from_row(live_row)
+                
+                d_stock_pct = _pct_change_frac(stock_live, prev_stock_actual)
+                d_atm_pct = _pct_change_frac(atm_live, prev_atm_actual)
+                d_call_pct = _pct_change_pp(call_skew_pp_live, prev_call_skew_pp_actual)
+                d_put_pct = _pct_change_pp(put_skew_pp_live, prev_put_skew_pp_actual)
+                atm_exp_pct, atm_res_bp = None, None
+
+                table_rows.append({
+                    "Time (PT)": "Live", "Stock": round(stock_live, 2), "Δ Stock %": round(d_stock_pct, 2) if d_stock_pct is not None else None,
+                    "ATM IV %": round(atm_live * 100.0, 2), "ATM exp (SS) %": atm_exp_pct, "ATM residual (bp)": atm_res_bp,
+                    "Call Skew": round(call_skew_pp_live, 2), "Put Skew": round(put_skew_pp_live, 2),
+                    "Δ ATM IV %": round(d_atm_pct, 2) if d_atm_pct is not None else None, "Δ Call Skew %": round(d_call_pct, 2) if d_call_pct is not None else None, "Δ Put Skew %": round(d_put_pct, 2) if d_put_pct is not None else None,
+                })
+
+        if not table_rows:
+            return fig
 
         df_table = pd.DataFrame(table_rows)
         ordered_cols = base_cols[:4] + exp_cols + base_cols[4:] if expected_on else base_cols
@@ -174,6 +177,14 @@ def register_callbacks(app):
         
         cell_colors = [['green' if v is not None and v > 0 else 'red' if v is not None and v < 0 else 'black' for v in df_table[c]] if c in {'Δ Stock %','Δ ATM IV %','Δ Call Skew %','Δ Put Skew %','ATM residual (bp)'} else ['black'] * len(df_table) for c in df_table.columns]
         
-        fig = go.Figure(data=[go.Table(header=dict(values=list(df_table.columns)), cells=dict(values=[df_table[c] for c in df_table.columns], fill_color=cell_colors, align="left", font=dict(color="white")))])
+        fig = go.Figure(data=[go.Table(
+            header=dict(values=list(df_table.columns)), 
+            cells=dict(
+                values=[df_table[c] for c in df_table.columns], 
+                fill_color=cell_colors, 
+                align="left", 
+                font=dict(color='white')
+            )
+        )])
         fig.update_layout(template="plotly_dark", title=f"Skew — {trade_date_iso}   Exp: {expiration_iso}", margin=dict(l=0, r=0, t=36, b=0))
         return fig

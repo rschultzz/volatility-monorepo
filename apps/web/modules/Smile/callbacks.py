@@ -7,8 +7,9 @@ import os
 import numpy as np
 import pandas as pd
 import plotly.graph_objs as go
-from dash import Input, Output
-from sqlalchemy import create_engine, text
+from dash import Input, Output, State
+
+from packages.shared.utils import fetch_live_orats_data, fetch_data_from_db
 
 # ---- App IDs ----
 TRADE_DATE_ID = "trade-date"
@@ -17,15 +18,8 @@ SMILE_TIME_INPUT = "smile-time-input"
 SMILE_GRAPH = "SMILE_GRAPH"
 EXPECTED_TOGGLE_ID = "expected-ss-toggle"
 CLOCK_ID = "CLOCK"
-
-# ---- Database Configuration ----
-DATABASE_URL = os.getenv("DATABASE_URL")  # or "CURVE_DB_URL" if you prefer a custom name
-
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL environment variable is not set")
-
-DB_TABLE_NAME = "orats_monies_minute"
-DB_ENGINE = create_engine(DATABASE_URL)
+LIVE_DATA_STORE_ID = "live-data-store"
+LIVE_UPDATE_TIMER_ID = "live-update-timer"
 
 # ---- Plotting Constants ----
 TICKER = "SPX"
@@ -36,37 +30,7 @@ COLORWAY = [
     "#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
     "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"
 ]
-
-# ----------------- Data Fetching -----------------
-def fetch_data_from_db(trade_date_iso: str, expiration_iso: str, times_pt: List[str]) -> pd.DataFrame:
-    """
-    Fetches all necessary data for a given trade date, expiration, and time slices
-    from the database with a single query.
-    """
-    if not trade_date_iso or not expiration_iso or not times_pt:
-        return pd.DataFrame()
-
-    time_filters = [f"'{trade_date_iso} {hhmm}:00'" for hhmm in times_pt]
-    query = text(f"""
-        SELECT *
-        FROM "{DB_TABLE_NAME}"
-        WHERE
-            trade_date = :trade_date AND
-            expir_date = :expir_date AND
-            snapshot_pt IN ({','.join(time_filters)})
-        ORDER BY snapshot_pt;
-    """)
-
-    try:
-        with DB_ENGINE.connect() as connection:
-            df = pd.read_sql(query, connection, params={
-                "trade_date": trade_date_iso,
-                "expir_date": expiration_iso,
-            })
-        return df
-    except Exception as e:
-        print(f"Database query failed: {e}")
-        return pd.DataFrame()
+LIVE_COLOR = "#FFD700"  # Gold color for live data
 
 # ----------------- Plotting Utils -----------------
 def _years_to_exp(ts_utc: dt.datetime, expiration_iso: str) -> float:
@@ -110,6 +74,8 @@ def _k_grid_for_row(row: pd.Series, T: float) -> Tuple[np.ndarray, np.ndarray]:
     return k[mask], s[mask]
 
 def _interp_linear_extrap(x: float, xs: np.ndarray, ys: np.ndarray) -> float:
+    if xs.size < 2:
+        return float(ys[0]) if ys.size > 0 else np.nan
     if x <= xs[0]:
         x0, x1, y0, y1 = xs[0], xs[1], ys[0], ys[1]
         return float(y0 + (y1 - y0) * (x - x0) / (x1 - x0))
@@ -120,7 +86,7 @@ def _interp_linear_extrap(x: float, xs: np.ndarray, ys: np.ndarray) -> float:
 
 def _expected_curve_shifted(prev_row, prev_T, prev_stock, now_row, now_T, now_stock):
     k_prev, s_prev = _k_grid_for_row(prev_row, prev_T)
-    if k_prev.size == 0: return [], np.array([]), 0.0
+    if k_prev.size < 2: return [], np.array([]), 0.0
     k_shift = math.log(now_stock / prev_stock) if (prev_stock and now_stock) else 0.0
     buckets = [n for n in _available_buckets(now_row) if n not in (95, 5)]
     if not buckets or 'vol50' not in now_row or pd.isna(now_row['vol50']):
@@ -146,13 +112,24 @@ def _expected_curve_shifted(prev_row, prev_T, prev_stock, now_row, now_T, now_st
 # ----------------- Main Callback -----------------
 def register_callbacks(app):
     @app.callback(
+        Output(LIVE_DATA_STORE_ID, "data"),
+        Input(LIVE_UPDATE_TIMER_ID, "n_intervals")
+    )
+    def update_live_data(n):
+        df_live = fetch_live_orats_data()
+        if df_live is not None:
+            return df_live.to_json(orient="split")
+        return None
+
+    @app.callback(
         Output(SMILE_GRAPH, "figure"),
         [Input(TRADE_DATE_ID, "date"),
          Input(EXPIRATION_ID, "date"),
          Input(SMILE_TIME_INPUT, "value"),
-         Input(EXPECTED_TOGGLE_ID, "value")]
+         Input(EXPECTED_TOGGLE_ID, "value"),
+         Input(LIVE_DATA_STORE_ID, "data")]
     )
-    def render_smile(trade_date_iso, expiration_iso, times_pt, expected_value):
+    def render_smile(trade_date_iso, expiration_iso, times_pt, expected_value, live_data_json):
         fig = go.Figure()
         fig.update_layout(
             template="plotly_dark",
@@ -164,54 +141,100 @@ def register_callbacks(app):
             colorway=COLORWAY,
         )
 
-        if not all([trade_date_iso, expiration_iso, times_pt]):
-            return fig
-
-        df = fetch_data_from_db(trade_date_iso, expiration_iso, sorted(times_pt))
-        if df.empty:
+        if not all([trade_date_iso, expiration_iso]):
             return fig
 
         prev_row, prev_stock, prev_T = None, None, None
+        ref_row, ref_stock, ref_T = None, None, None
 
-        for i, (snapshot, row_now) in enumerate(df.groupby('snapshot_pt')):
-            row_now = row_now.iloc[0]
-            hhmm_pt = snapshot.strftime("%H:%M")
-            color = COLORWAY[i % len(COLORWAY)]
+        # Plot historical data
+        if times_pt:
+            df = fetch_data_from_db(trade_date_iso, expiration_iso, sorted(times_pt))
+            if not df.empty:
+                for i, (snapshot, row_now) in enumerate(df.groupby('snapshot_pt')):
+                    row_now = row_now.iloc[0]
+                    hhmm_pt = snapshot.strftime("%H:%M")
+                    color = COLORWAY[i % len(COLORWAY)]
 
-            buckets_now = [n for n in _available_buckets(row_now) if n not in (95, 5)]
-            order_now, labels_now = _bucket_labels_order(buckets_now)
-            y_now = [float(row_now.get(f"vol{n}", 0)) * 100.0 for n in order_now]
-            fig.add_trace(go.Scatter(
-                x=labels_now, y=y_now, mode="lines+markers", name=f"{hhmm_pt} PT",
-                line=dict(width=2, color=color), marker=dict(size=5, color=color)
-            ))
+                    buckets_now = [n for n in _available_buckets(row_now) if n not in (95, 5)]
+                    order_now, labels_now = _bucket_labels_order(buckets_now)
+                    y_now = [float(row_now.get(f"vol{n}", 0)) * 100.0 for n in order_now]
+                    fig.add_trace(go.Scatter(
+                        x=labels_now, y=y_now, mode="lines+markers", name=f"{hhmm_pt} PT",
+                        line=dict(width=2, color=color), marker=dict(size=5, color=color)
+                    ))
 
-            stock_now = float(row_now.get("stock_price", 0))
-            
-            # FIX: Use correct 'snap_shot_date' column and handle missing values
-            ts_utc_val = row_now.get("snap_shot_date")
-            now_T = 0
-            if pd.notna(ts_utc_val):
-                ts_utc = pd.to_datetime(ts_utc_val, utc=True)
-                now_T = _years_to_exp(ts_utc, expiration_iso)
+                    stock_now = float(row_now.get("stock_price", 0))
+                    
+                    ts_utc_val = row_now.get("snap_shot_date")
+                    now_T = 0
+                    if pd.notna(ts_utc_val):
+                        ts_utc = pd.to_datetime(ts_utc_val, utc=True)
+                        now_T = _years_to_exp(ts_utc, expiration_iso)
 
-            if expected_value == "on" and prev_row is not None and prev_stock is not None and prev_T is not None and now_T > 0:
-                try:
-                    labels_exp, y_exp, atm_exp_pct = _expected_curve_shifted(
-                        prev_row, prev_T, prev_stock, row_now, now_T, stock_now
-                    )
-                    if labels_exp:
-                        fig.add_trace(go.Scatter(
-                            x=labels_exp, y=y_exp, mode="lines", name=f"Expected — {hhmm_pt}",
-                            line=dict(width=2, dash="dot", color=color)
-                        ))
-                        fig.add_trace(go.Scatter(
-                            x=["ATM"], y=[atm_exp_pct], mode="markers",
-                            marker=dict(symbol="triangle-up", size=9, color=color), showlegend=False
-                        ))
-                except Exception as e:
-                    print(f"Could not calculate expected curve for {hhmm_pt}: {e}")
+                    if expected_value == "on" and prev_row is not None and prev_stock is not None and prev_T is not None and now_T > 0:
+                        try:
+                            labels_exp, y_exp, atm_exp_pct = _expected_curve_shifted(
+                                prev_row, prev_T, prev_stock, row_now, now_T, stock_now
+                            )
+                            if labels_exp:
+                                fig.add_trace(go.Scatter(
+                                    x=labels_exp, y=y_exp, mode="lines", name=f"Expected — {hhmm_pt}",
+                                    line=dict(width=2, dash="dot", color=color)
+                                ))
+                                fig.add_trace(go.Scatter(
+                                    x=["ATM"], y=[atm_exp_pct], mode="markers",
+                                    marker=dict(symbol="triangle-up", size=9, color=color), showlegend=False
+                                ))
+                        except Exception as e:
+                            print(f"Could not calculate expected curve for {hhmm_pt}: {e}")
 
-            prev_row, prev_stock, prev_T = row_now, stock_now, now_T
+                    prev_row, prev_stock, prev_T = row_now, stock_now, now_T
+                    
+                    k_now_ref, _ = _k_grid_for_row(row_now, now_T)
+                    if k_now_ref.size >= 2:
+                        ref_row, ref_stock, ref_T = row_now, stock_now, now_T
+
+        
+        # Plot live data
+        if live_data_json:
+            df_live = pd.read_json(live_data_json, orient="split")
+            live_row = df_live[df_live["expir_date"] == expiration_iso]
+
+            if not live_row.empty:
+                live_row = live_row.iloc[0]
+                buckets_live = [n for n in _available_buckets(live_row) if n not in (95, 5)]
+                order_live, labels_live = _bucket_labels_order(buckets_live)
+                y_live = [float(live_row.get(f"vol{n}", 0)) * 100.0 for n in order_live]
+                
+                fig.add_trace(go.Scatter(
+                    x=labels_live, y=y_live, mode="lines+markers", name="Live",
+                    line=dict(width=3, color=LIVE_COLOR), marker=dict(size=6, color=LIVE_COLOR)
+                ))
+
+                if expected_value == "on" and ref_row is not None and ref_stock is not None and ref_T is not None:
+                    stock_live = float(live_row.get("stock_price", 0))
+                    ts_utc_live_val = live_row.get("snap_shot_date")
+                    live_T = 0
+                    if pd.notna(ts_utc_live_val):
+                        ts_utc_live = pd.to_datetime(ts_utc_live_val, utc=True)
+                        live_T = _years_to_exp(ts_utc_live, expiration_iso)
+                    
+                    if live_T > 0:
+                        try:
+                            labels_exp_live, y_exp_live, atm_exp_pct_live = _expected_curve_shifted(
+                                ref_row, ref_T, ref_stock, live_row, live_T, stock_live
+                            )
+                            if labels_exp_live:
+                                fig.add_trace(go.Scatter(
+                                    x=labels_exp_live, y=y_exp_live, mode="lines", name="Expected — Live",
+                                    line=dict(width=2, dash="dot", color=LIVE_COLOR)
+                                ))
+                                fig.add_trace(go.Scatter(
+                                    x=["ATM"], y=[atm_exp_pct_live], mode="markers",
+                                    marker=dict(symbol="triangle-up", size=9, color=LIVE_COLOR), showlegend=False
+                                ))
+                        except Exception as e:
+                            print(f"Could not calculate live expected curve: {e}")
 
         return fig

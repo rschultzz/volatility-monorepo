@@ -42,6 +42,8 @@ EXPIRATION_DATE_PICK = "expiration-date-pick"
 SMILE_TIME_INPUT = "smile-time-input"
 SMILE_GRAPH = "SMILE_GRAPH"
 EXPECTED_TOGGLE_ID = "expected-ss-toggle"
+LIVE_DATA_STORE_ID = "live-data-store"
+LIVE_UPDATE_TIMER_ID = "live-update-timer"
 
 
 # ===== UI Helpers =====
@@ -96,6 +98,8 @@ auth = dash_auth.BasicAuth(app, VALID_USERNAME_PASSWORD_PAIRS)
 
 app.layout = html.Div(
     [
+        dcc.Store(id=LIVE_DATA_STORE_ID),
+        dcc.Interval(id=LIVE_UPDATE_TIMER_ID, interval=15 * 1000, n_intervals=0),
         html.Div(
             [
                 html.Div(
