@@ -258,6 +258,7 @@ def register_callbacks(app):
             df = fetch_data_from_db(trade_date_iso, expiration_iso, times_sorted)
 
             if df is not None and not df.empty:
+                df["snapshot_pt"] = pd.to_datetime(df["snapshot_pt"]).dt.strftime("%H:%M")
                 for i, hhmm_pt in enumerate(times_sorted):
                     # Fetch the row for this PT time
                     rows = df[df["snapshot_pt"] == hhmm_pt]
