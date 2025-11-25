@@ -10,6 +10,8 @@ import plotly.graph_objs as go
 from dash import Input, Output, State
 
 from packages.shared.utils import fetch_live_orats_data, fetch_data_from_db
+from packages.shared.surface_compare import k_for_abs_delta
+from packages.shared.options_orats import ET_TZ
 
 # ---- App IDs ----
 TRADE_DATE_ID = "trade-date"
@@ -32,15 +34,36 @@ COLORWAY = [
 ]
 LIVE_COLOR = "#FFD700"  # Gold color for live data
 
-# ----------------- Plotting Utils -----------------
-def _years_to_exp(ts_utc: dt.datetime, expiration_iso: str) -> float:
+# ----------------- Time / bucket utils -----------------
+def _years_to_exp(ts_et: dt.datetime, expiration_iso: str) -> float:
+    """
+    Match the original smile callback: time to expiry in years using
+    an ET timestamp and midnight on the expiration date.
+    """
     exp_date = dt.date.fromisoformat(expiration_iso)
-    rem = dt.datetime.combine(exp_date, dt.time(16, 0), tzinfo=dt.timezone.utc) - ts_utc
-    T = max(0.0, rem.total_seconds() / (365.0 * 24 * 3600))
+    rem = dt.datetime.combine(exp_date, dt.time(0, 0)) - ts_et.replace(tzinfo=None)
+    T = max(0.0, rem.days / 365.0 + rem.seconds / (365.0 * 24 * 3600))
     return max(T, EPS_T)
 
+
+def _T_from_row_snapshot(row: pd.Series, expiration_iso: str) -> Optional[float]:
+    """
+    Convert the stored UTC snapshot to ET and then to a year fraction,
+    so behaviour matches the original pt_minute_to_et + _years_to_exp.
+    """
+    ts_utc_val = row.get("snap_shot_date")
+    if ts_utc_val is None or pd.isna(ts_utc_val):
+        return None
+    ts_utc = pd.to_datetime(ts_utc_val, utc=True).to_pydatetime()
+    ts_et = ts_utc.astimezone(ET_TZ)
+    return _years_to_exp(ts_et, expiration_iso)
+
+
 def _available_buckets(row: pd.Series) -> List[int]:
-    out = []
+    """
+    Return available ORATS 'volNN' buckets as ints (e.g., 95, 90, ..., 5).
+    """
+    out: List[int] = []
     for c in row.index:
         if c.startswith("vol") and c[3:].isdigit():
             n = int(c[3:])
@@ -48,34 +71,69 @@ def _available_buckets(row: pd.Series) -> List[int]:
                 out.append(n)
     return sorted(out, reverse=True)
 
+
 def _bucket_labels_order(buckets: List[int]) -> Tuple[List[int], List[str]]:
+    """
+    Order for plotting:
+      P side: 95 -> 50, then ATM, then C side: 45 -> 5
+    Labels:
+      n>50 -> P{100-n}, n=50 -> ATM, n<50 -> C{n}
+    """
     puts = [n for n in buckets if n >= 50]
     calls = [n for n in buckets if n < 50]
     order = puts + calls
-    labels = [f"P{100-n}" if n > 50 else "ATM" if n == 50 else f"C{n}" for n in order]
+    labels: List[str] = []
+    for n in order:
+        if n > 50:
+            labels.append(f"P{100-n}")
+        elif n == 50:
+            labels.append("ATM")
+        else:
+            labels.append(f"C{n}")
     return order, labels
 
-from packages.shared.surface_compare import k_for_abs_delta
+
 def _k_grid_for_row(row: pd.Series, T: float) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Build (k, sigma) grid for a row using its *own* ATM for Δ->k mapping.
+    Mirrors the original implementation so the sticky-strike logic matches.
+    """
     buckets = _available_buckets(row)
-    if not buckets or 'vol50' not in row or pd.isna(row['vol50']):
-        return np.array([]), np.array([])
+    if not buckets or 50 not in buckets or "vol50" not in row or pd.isna(row["vol50"]):
+        raise ValueError("row missing buckets/ATM for k-grid")
+
     atm = float(row["vol50"])
-    k_list, s_list = [], []
+    k_list: List[float] = []
+    s_list: List[float] = []
     for n in buckets:
-        if n == 50: k = 0.0
+        if n == 50:
+            k = 0.0
         else:
-            p, is_put = ((100 - n) / 100.0, True) if n > 50 else (n / 100.0, False)
+            if n > 50:
+                p, is_put = (100 - n) / 100.0, True
+            else:
+                p, is_put = n / 100.0, False
             k = k_for_abs_delta(p, is_put=is_put, sigma=atm, T=T)
         k_list.append(k)
         s_list.append(float(row[f"vol{n}"]))
-    k, s = np.array(k_list, float), np.array(s_list, float)
+    k = np.array(k_list, float)
+    s = np.array(s_list, float)
+
+    # ensure strict monotonic k (important for interpolation)
     mask = np.concatenate(([True], np.diff(k) > 1e-12))
     return k[mask], s[mask]
 
+
 def _interp_linear_extrap(x: float, xs: np.ndarray, ys: np.ndarray) -> float:
-    if xs.size < 2:
-        return float(ys[0]) if ys.size > 0 else np.nan
+    """
+    Linear interpolation with flat-slope extrapolation at the wings,
+    same as in the original callback.
+    """
+    if xs.size == 0 or ys.size == 0:
+        return float("nan")
+    if xs.size == 1:
+        return float(ys[0])
+
     if x <= xs[0]:
         x0, x1, y0, y1 = xs[0], xs[1], ys[0], ys[1]
         return float(y0 + (y1 - y0) * (x - x0) / (x1 - x0))
@@ -84,52 +142,100 @@ def _interp_linear_extrap(x: float, xs: np.ndarray, ys: np.ndarray) -> float:
         return float(y1 + (y1 - y0) * (x - x1) / (x1 - x0))
     return float(np.interp(x, xs, ys))
 
-def _expected_curve_shifted(prev_row, prev_T, prev_stock, now_row, now_T, now_stock):
+
+def _expected_curve_shifted(
+    prev_row: pd.Series,
+    prev_T: float,
+    prev_stock: float,
+    now_row: pd.Series,
+    now_T: float,
+    now_stock: float,
+) -> Tuple[List[str], np.ndarray, float]:
+    """
+    Sticky-strike expected curve, copied from the working API version.
+
+    Build the dotted expected curve for the current minute as:
+      1) SHAPE: sticky-strike from previous surface using *current* σ_now for Δ->k
+         mapping, evaluate prev surface at (k_now + k_shift).
+      2) ATM anchor: expected ATM = prev surface at k_shift + leverage add-on.
+      3) VERTICAL SHIFT: shift entire shape by (atm_exp - shape_atm) so ATM lines up.
+
+    Returns:
+      labels (x axis), expected_y (percent), atm_exp_percent
+    """
+    # previous surface in its own k-space
     k_prev, s_prev = _k_grid_for_row(prev_row, prev_T)
-    if k_prev.size < 2: return [], np.array([]), 0.0
+
+    # k shift from spot change
     k_shift = math.log(now_stock / prev_stock) if (prev_stock and now_stock) else 0.0
-    buckets = [n for n in _available_buckets(now_row) if n not in (95, 5)]
-    if not buckets or 'vol50' not in now_row or pd.isna(now_row['vol50']):
-        return [], np.array([]), 0.0
+
+    # buckets/x-labels to display (use what's in "now" row so x matches live line)
+    buckets = _available_buckets(now_row)
+    # filter out 5Δ (P5/C5): drop 95 and 5
+    buckets = [n for n in buckets if n not in (95, 5)]
+    if not buckets or 50 not in buckets:
+        raise ValueError("now row missing buckets/ATM")
     order, labels = _bucket_labels_order(buckets)
+
+    # current ATM (fraction) for Δ->k mapping
     atm_now = float(now_row["vol50"])
-    shape_vals = []
+
+    # --- shape values from previous surface at (k_now + k_shift)
+    shape_vals: List[float] = []
     for n in order:
-        if n == 50: k_now = 0.0
+        if n == 50:
+            k_now = 0.0
         else:
-            p, is_put = ((100 - n) / 100.0, True) if n > 50 else (n / 100.0, False)
+            if n > 50:
+                p, is_put = (100 - n) / 100.0, True
+            else:
+                p, is_put = n / 100.0, False
             k_now = k_for_abs_delta(p, is_put=is_put, sigma=atm_now, T=now_T)
         shape_vals.append(_interp_linear_extrap(k_now + k_shift, k_prev, s_prev))
     shape = np.array(shape_vals, float)
+
+    # --- expected ATM anchor: previous surface at k_shift + leverage add-on
     exp_atm_shape = _interp_linear_extrap(k_shift, k_prev, s_prev)
-    ret_frac = (now_stock - prev_stock) / prev_stock if prev_stock else 0.0
-    level_shift_pp = max(-BETA_MAX_SHIFT_PP, min(BETA_MAX_SHIFT_PP, (-ret_frac) * 100.0 * BETA_VOLPTS_PER_1PCT))
+    ret_frac = (now_stock - prev_stock) / prev_stock
+    level_shift_pp = max(
+        -BETA_MAX_SHIFT_PP,
+        min(BETA_MAX_SHIFT_PP, (-ret_frac) * 100.0 * BETA_VOLPTS_PER_1PCT),
+    )
     atm_exp = exp_atm_shape + level_shift_pp / 100.0
+
+    # --- vertical shift of entire curve so ATM equals atm_exp
     shift = atm_exp - exp_atm_shape
     expected = shape + shift
+
     return labels, expected * 100.0, atm_exp * 100.0
 
-# ----------------- Main Callback -----------------
+
+# ----------------- Main Callbacks -----------------
 def register_callbacks(app):
     @app.callback(
         Output(LIVE_DATA_STORE_ID, "data"),
-        Input(LIVE_UPDATE_TIMER_ID, "n_intervals")
+        Input(LIVE_UPDATE_TIMER_ID, "n_intervals"),
     )
     def update_live_data(n):
         df_live = fetch_live_orats_data()
-        if df_live is not None:
+        if df_live is not None and not df_live.empty:
             return df_live.to_json(orient="split")
         return None
 
     @app.callback(
         Output(SMILE_GRAPH, "figure"),
-        [Input(TRADE_DATE_ID, "date"),
-         Input(EXPIRATION_ID, "date"),
-         Input(SMILE_TIME_INPUT, "value"),
-         Input(EXPECTED_TOGGLE_ID, "value"),
-         Input(LIVE_DATA_STORE_ID, "data")]
+        [
+            Input(TRADE_DATE_ID, "date"),
+            Input(EXPIRATION_ID, "date"),
+            Input(SMILE_TIME_INPUT, "value"),
+            Input(EXPECTED_TOGGLE_ID, "value"),
+            Input(LIVE_DATA_STORE_ID, "data"),
+        ],
     )
     def render_smile(trade_date_iso, expiration_iso, times_pt, expected_value, live_data_json):
+        # Match original toggle semantics: anything except "off" draws expected
+        expected_on = (expected_value != "off")
+
         fig = go.Figure()
         fig.update_layout(
             template="plotly_dark",
@@ -141,100 +247,216 @@ def register_callbacks(app):
             colorway=COLORWAY,
         )
 
-        if not all([trade_date_iso, expiration_iso]):
+        if not trade_date_iso or not expiration_iso:
             return fig
 
-        prev_row, prev_stock, prev_T = None, None, None
-        ref_row, ref_stock, ref_T = None, None, None
+        prev_row: Optional[pd.Series] = None
+        prev_stock: Optional[float] = None
+        prev_T: Optional[float] = None
 
-        # Plot historical data
+        # reference slice for live expected (last good historical slice)
+        ref_row: Optional[pd.Series] = None
+        ref_stock: Optional[float] = None
+        ref_T: Optional[float] = None
+
+        # --------- Historical slices from DB ---------
         if times_pt:
             df = fetch_data_from_db(trade_date_iso, expiration_iso, sorted(times_pt))
-            if not df.empty:
-                for i, (snapshot, row_now) in enumerate(df.groupby('snapshot_pt')):
-                    row_now = row_now.iloc[0]
+            if df is not None and not df.empty:
+                # ensure chronological order by snapshot_pt
+                grouped = sorted(df.groupby("snapshot_pt"), key=lambda kv: kv[0])
+
+                for i, (snapshot, group) in enumerate(grouped):
+                    row_now = group.iloc[0]
                     hhmm_pt = snapshot.strftime("%H:%M")
                     color = COLORWAY[i % len(COLORWAY)]
 
-                    buckets_now = [n for n in _available_buckets(row_now) if n not in (95, 5)]
+                    # actual line (same bucket handling as original)
+                    buckets_now = _available_buckets(row_now)
+                    buckets_now = [n for n in buckets_now if n not in (95, 5)]
+                    if not buckets_now or 50 not in buckets_now:
+                        continue
                     order_now, labels_now = _bucket_labels_order(buckets_now)
-                    y_now = [float(row_now.get(f"vol{n}", 0)) * 100.0 for n in order_now]
-                    fig.add_trace(go.Scatter(
-                        x=labels_now, y=y_now, mode="lines+markers", name=f"{hhmm_pt} PT",
-                        line=dict(width=2, color=color), marker=dict(size=5, color=color)
-                    ))
+                    try:
+                        y_now = [float(row_now[f"vol{n}"]) * 100.0 for n in order_now]
+                    except KeyError:
+                        # if this snapshot is incomplete, skip it
+                        continue
 
-                    stock_now = float(row_now.get("stock_price", 0))
-                    
-                    ts_utc_val = row_now.get("snap_shot_date")
-                    now_T = 0
-                    if pd.notna(ts_utc_val):
-                        ts_utc = pd.to_datetime(ts_utc_val, utc=True)
-                        now_T = _years_to_exp(ts_utc, expiration_iso)
+                    fig.add_trace(
+                        go.Scatter(
+                            x=labels_now,
+                            y=y_now,
+                            mode="lines+markers",
+                            name=f"{hhmm_pt} PT",
+                            line=dict(width=2, color=color),
+                            marker=dict(size=5, color=color),
+                        )
+                    )
 
-                    if expected_value == "on" and prev_row is not None and prev_stock is not None and prev_T is not None and now_T > 0:
+                    # stock + T for this slice
+                    stock_val = row_now.get("stock_price")
+                    stock_now = (
+                        float(stock_val)
+                        if stock_val is not None and not pd.isna(stock_val)
+                        else None
+                    )
+                    now_T = _T_from_row_snapshot(row_now, expiration_iso)
+
+                    # expected dotted curve relative to previous slice
+                    if (
+                        expected_on
+                        and prev_row is not None
+                        and prev_stock is not None
+                        and prev_T is not None
+                        and stock_now is not None
+                        and now_T is not None
+                    ):
                         try:
                             labels_exp, y_exp, atm_exp_pct = _expected_curve_shifted(
-                                prev_row, prev_T, prev_stock, row_now, now_T, stock_now
+                                prev_row, prev_T, prev_stock,
+                                row_now, now_T, stock_now,
                             )
-                            if labels_exp:
-                                fig.add_trace(go.Scatter(
-                                    x=labels_exp, y=y_exp, mode="lines", name=f"Expected — {hhmm_pt}",
-                                    line=dict(width=2, dash="dot", color=color)
-                                ))
-                                fig.add_trace(go.Scatter(
-                                    x=["ATM"], y=[atm_exp_pct], mode="markers",
-                                    marker=dict(symbol="triangle-up", size=9, color=color), showlegend=False
-                                ))
+
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=labels_exp,
+                                    y=y_exp,
+                                    mode="lines",
+                                    name=f"Expected (SS) — {hhmm_pt}",
+                                    line=dict(width=2, dash="dot", color=color),
+                                )
+                            )
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=["ATM"],
+                                    y=[atm_exp_pct],
+                                    mode="markers",
+                                    marker=dict(
+                                        symbol="triangle-up", size=9, color=color
+                                    ),
+                                    name="ATM exp (SS)",
+                                    showlegend=False,
+                                )
+                            )
                         except Exception as e:
                             print(f"Could not calculate expected curve for {hhmm_pt}: {e}")
 
+                    # advance previous pointers
                     prev_row, prev_stock, prev_T = row_now, stock_now, now_T
-                    
-                    k_now_ref, _ = _k_grid_for_row(row_now, now_T)
-                    if k_now_ref.size >= 2:
+
+                    # keep a reference slice for live expected if k-grid is valid
+                    try:
+                        if now_T is not None:
+                            k_now_ref, _ = _k_grid_for_row(row_now, now_T)
+                        else:
+                            k_now_ref = np.array([])
+                    except Exception:
+                        k_now_ref = np.array([])
+                    if (
+                        k_now_ref.size >= 2
+                        and stock_now is not None
+                        and now_T is not None
+                    ):
                         ref_row, ref_stock, ref_T = row_now, stock_now, now_T
 
-        
-        # Plot live data
+        # --------- Live slice from ORATS API ---------
         if live_data_json:
             df_live = pd.read_json(live_data_json, orient="split")
-            live_row = df_live[df_live["expir_date"] == expiration_iso]
+            if df_live is not None and not df_live.empty:
+                live_row_df = df_live[df_live["expir_date"] == expiration_iso]
+                if not live_row_df.empty:
+                    live_row = live_row_df.iloc[0]
 
-            if not live_row.empty:
-                live_row = live_row.iloc[0]
-                buckets_live = [n for n in _available_buckets(live_row) if n not in (95, 5)]
-                order_live, labels_live = _bucket_labels_order(buckets_live)
-                y_live = [float(live_row.get(f"vol{n}", 0)) * 100.0 for n in order_live]
-                
-                fig.add_trace(go.Scatter(
-                    x=labels_live, y=y_live, mode="lines+markers", name="Live",
-                    line=dict(width=3, color=LIVE_COLOR), marker=dict(size=6, color=LIVE_COLOR)
-                ))
-
-                if expected_value == "on" and ref_row is not None and ref_stock is not None and ref_T is not None:
-                    stock_live = float(live_row.get("stock_price", 0))
-                    ts_utc_live_val = live_row.get("snap_shot_date")
-                    live_T = 0
-                    if pd.notna(ts_utc_live_val):
-                        ts_utc_live = pd.to_datetime(ts_utc_live_val, utc=True)
-                        live_T = _years_to_exp(ts_utc_live, expiration_iso)
-                    
-                    if live_T > 0:
+                    buckets_live = _available_buckets(live_row)
+                    buckets_live = [n for n in buckets_live if n not in (95, 5)]
+                    if buckets_live and 50 in buckets_live:
+                        order_live, labels_live = _bucket_labels_order(buckets_live)
                         try:
-                            labels_exp_live, y_exp_live, atm_exp_pct_live = _expected_curve_shifted(
-                                ref_row, ref_T, ref_stock, live_row, live_T, stock_live
+                            y_live = [
+                                float(live_row[f"vol{n}"]) * 100.0 for n in order_live
+                            ]
+                        except KeyError:
+                            y_live = []
+
+                        if y_live:
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=labels_live,
+                                    y=y_live,
+                                    mode="lines+markers",
+                                    name="Live",
+                                    line=dict(width=3, color=LIVE_COLOR),
+                                    marker=dict(size=6, color=LIVE_COLOR),
+                                )
                             )
-                            if labels_exp_live:
-                                fig.add_trace(go.Scatter(
-                                    x=labels_exp_live, y=y_exp_live, mode="lines", name="Expected — Live",
-                                    line=dict(width=2, dash="dot", color=LIVE_COLOR)
-                                ))
-                                fig.add_trace(go.Scatter(
-                                    x=["ATM"], y=[atm_exp_pct_live], mode="markers",
-                                    marker=dict(symbol="triangle-up", size=9, color=LIVE_COLOR), showlegend=False
-                                ))
-                        except Exception as e:
-                            print(f"Could not calculate live expected curve: {e}")
+
+                            # expected vs last historical slice
+                            stock_live_val = live_row.get("stock_price")
+                            stock_live = (
+                                float(stock_live_val)
+                                if stock_live_val is not None and not pd.isna(stock_live_val)
+                                else None
+                            )
+
+                            live_T: Optional[float] = None
+                            ts_utc_live_val = live_row.get("snap_shot_date")
+                            if ts_utc_live_val is not None and not pd.isna(ts_utc_live_val):
+                                ts_utc_live = (
+                                    pd.to_datetime(ts_utc_live_val, utc=True)
+                                    .to_pydatetime()
+                                )
+                                ts_et_live = ts_utc_live.astimezone(ET_TZ)
+                                live_T = _years_to_exp(ts_et_live, expiration_iso)
+
+                            if (
+                                expected_on
+                                and ref_row is not None
+                                and ref_stock is not None
+                                and ref_T is not None
+                                and stock_live is not None
+                                and live_T is not None
+                            ):
+                                try:
+                                    labels_exp_live, y_exp_live, atm_exp_pct_live = (
+                                        _expected_curve_shifted(
+                                            ref_row,
+                                            ref_T,
+                                            ref_stock,
+                                            live_row,
+                                            live_T,
+                                            stock_live,
+                                        )
+                                    )
+
+                                    fig.add_trace(
+                                        go.Scatter(
+                                            x=labels_exp_live,
+                                            y=y_exp_live,
+                                            mode="lines",
+                                            name="Expected (SS) — Live",
+                                            line=dict(
+                                                width=2, dash="dot", color=LIVE_COLOR
+                                            ),
+                                        )
+                                    )
+                                    fig.add_trace(
+                                        go.Scatter(
+                                            x=["ATM"],
+                                            y=[atm_exp_pct_live],
+                                            mode="markers",
+                                            marker=dict(
+                                                symbol="triangle-up",
+                                                size=9,
+                                                color=LIVE_COLOR,
+                                            ),
+                                            name="ATM exp (SS)",
+                                            showlegend=False,
+                                        )
+                                    )
+                                except Exception as e:
+                                    print(
+                                        f"Could not calculate live expected curve: {e}"
+                                    )
 
         return fig
