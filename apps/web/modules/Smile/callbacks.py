@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objs as go
 from dash import Input, Output
+import pytz
 
 from packages.shared.utils import fetch_live_orats_data, fetch_data_from_db
 from packages.shared.surface_compare import k_for_abs_delta
@@ -32,6 +33,11 @@ COLORWAY = [
     "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52",
 ]
 LIVE_COLOR = "#FFD700"  # Gold for live
+
+# ---- Market Hours ----
+MARKET_OPEN = dt.time(9, 30)
+MARKET_CLOSE = dt.time(16, 0)
+MARKET_TIMEZONE = pytz.timezone("US/Eastern")
 
 
 # ----------------- Time / bucket utils -----------------
@@ -346,7 +352,10 @@ def register_callbacks(app):
                         ref_row, ref_stock, ref_T = row_now, stock_now, now_T
 
         # --------- Live slice from ORATS API ---------
-        if live_data_json:
+        now_et = dt.datetime.now(MARKET_TIMEZONE)
+        is_market_hours = MARKET_OPEN <= now_et.time() <= MARKET_CLOSE and now_et.weekday() < 5
+
+        if live_data_json and is_market_hours:
             df_live = pd.read_json(live_data_json, orient="split")
             if df_live is not None and not df_live.empty:
                 live_row_df = df_live[df_live["expir_date"] == expiration_iso]

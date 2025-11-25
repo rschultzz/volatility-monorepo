@@ -4,8 +4,9 @@ import plotly.graph_objs as go
 from typing import List
 import numpy as np
 import os
+from io import StringIO
 
-from packages.shared.utils import fetch_term_metrics_data
+from packages.shared.utils import fetch_term_metrics_data, is_market_hours
 
 # ---- App IDs ----
 TRADE_DATE_ID = "trade-date"
@@ -96,8 +97,8 @@ def register_callbacks(app):
                     })
                     prev_spread, prev_ratio, prev_slope = spread, ratio, slope
 
-        if live_data_json:
-            df_live = pd.read_json(live_data_json, orient="split")
+        if live_data_json and is_market_hours():
+            df_live = pd.read_json(StringIO(live_data_json), orient="split")
             if not df_live.empty:
                 live_metrics = calculate_term_metrics(df_live)
                 if not live_metrics.empty:

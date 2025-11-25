@@ -4,7 +4,7 @@ import plotly.graph_objs as go
 from dash import Input, Output
 from typing import List
 
-from packages.shared.utils import fetch_term_structure_data
+from packages.shared.utils import fetch_term_structure_data, is_market_hours
 
 # ---- App IDs ----
 TRADE_DATE_ID = "trade-date"
@@ -38,7 +38,7 @@ def register_callbacks(app):
             legend=dict(orientation="v", x=1.02, y=1.0, bgcolor="rgba(0,0,0,0)"),
             colorway=COLORWAY,
             xaxis=dict(
-                rangeslider=dict(visible=True),
+                rangeslider=dict(visible=False),
                 range=[0, 90]
             )
         )
@@ -55,6 +55,7 @@ def register_callbacks(app):
                 df['expir_date'] = pd.to_datetime(df['expir_date'])
                 df['trade_date'] = pd.to_datetime(df['trade_date'])
                 df['dte'] = (df['expir_date'] - df['trade_date']).dt.days
+                df = df[(df['dte'] >= 3) & (df['dte'] <= 90)]
                 
                 for i, (snapshot, group) in enumerate(df.groupby('snapshot_pt')):
                     hhmm_pt = snapshot.strftime("%H:%M")
@@ -69,12 +70,13 @@ def register_callbacks(app):
                         marker=dict(size=6)
                     ))
 
-        if live_data_json:
+        if live_data_json and is_market_hours():
             df_live = pd.read_json(live_data_json, orient="split")
             if not df_live.empty:
                 df_live['expir_date'] = pd.to_datetime(df_live['expir_date'])
                 df_live['trade_date'] = pd.to_datetime(df_live['trade_date'])
                 df_live['dte'] = (df_live['expir_date'] - df_live['trade_date']).dt.days
+                df_live = df_live[(df_live['dte'] >= 3) & (df_live['dte'] <= 90)]
                 
                 fig.add_trace(go.Scatter(
                     x=df_live['dte'],
