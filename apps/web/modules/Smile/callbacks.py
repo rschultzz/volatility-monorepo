@@ -2,16 +2,15 @@ from __future__ import annotations
 import datetime as dt
 import math
 from typing import List, Optional, Tuple
-import os
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objs as go
-from dash import Input, Output, State
+from dash import Input, Output
 
 from packages.shared.utils import fetch_live_orats_data, fetch_data_from_db
 from packages.shared.surface_compare import k_for_abs_delta
-from packages.shared.options_orats import ET_TZ
+from packages.shared.options_orats import pt_minute_to_et
 
 # ---- App IDs ----
 TRADE_DATE_ID = "trade-date"
@@ -30,33 +29,21 @@ BETA_VOLPTS_PER_1PCT = 4.5
 BETA_MAX_SHIFT_PP = 6.0
 COLORWAY = [
     "#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
-    "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"
+    "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52",
 ]
-LIVE_COLOR = "#FFD700"  # Gold color for live data
+LIVE_COLOR = "#FFD700"  # Gold for live
+
 
 # ----------------- Time / bucket utils -----------------
 def _years_to_exp(ts_et: dt.datetime, expiration_iso: str) -> float:
     """
-    Match the original smile callback: time to expiry in years using
-    an ET timestamp and midnight on the expiration date.
+    Match the original smile callback: time to expiry in years using an ET
+    timestamp and midnight on the expiration date.
     """
     exp_date = dt.date.fromisoformat(expiration_iso)
     rem = dt.datetime.combine(exp_date, dt.time(0, 0)) - ts_et.replace(tzinfo=None)
     T = max(0.0, rem.days / 365.0 + rem.seconds / (365.0 * 24 * 3600))
     return max(T, EPS_T)
-
-
-def _T_from_row_snapshot(row: pd.Series, expiration_iso: str) -> Optional[float]:
-    """
-    Convert the stored UTC snapshot to ET and then to a year fraction,
-    so behaviour matches the original pt_minute_to_et + _years_to_exp.
-    """
-    ts_utc_val = row.get("snap_shot_date")
-    if ts_utc_val is None or pd.isna(ts_utc_val):
-        return None
-    ts_utc = pd.to_datetime(ts_utc_val, utc=True).to_pydatetime()
-    ts_et = ts_utc.astimezone(ET_TZ)
-    return _years_to_exp(ts_et, expiration_iso)
 
 
 def _available_buckets(row: pd.Series) -> List[int]:
@@ -126,7 +113,7 @@ def _k_grid_for_row(row: pd.Series, T: float) -> Tuple[np.ndarray, np.ndarray]:
 
 def _interp_linear_extrap(x: float, xs: np.ndarray, ys: np.ndarray) -> float:
     """
-    Linear interpolation with flat-slope extrapolation at the wings,
+    Linear interpolation with straight-line extrapolation at the wings,
     same as in the original callback.
     """
     if xs.size == 0 or ys.size == 0:
@@ -233,7 +220,7 @@ def register_callbacks(app):
         ],
     )
     def render_smile(trade_date_iso, expiration_iso, times_pt, expected_value, live_data_json):
-        # Match original toggle semantics: anything except "off" draws expected
+        # Same semantics as original: anything except "off" shows expected
         expected_on = (expected_value != "off")
 
         fig = go.Figure()
@@ -261,17 +248,19 @@ def register_callbacks(app):
 
         # --------- Historical slices from DB ---------
         if times_pt:
-            df = fetch_data_from_db(trade_date_iso, expiration_iso, sorted(times_pt))
-            if df is not None and not df.empty:
-                # ensure chronological order by snapshot_pt
-                grouped = sorted(df.groupby("snapshot_pt"), key=lambda kv: kv[0])
+            times_sorted = sorted(times_pt)  # e.g. ["06:31", "07:00"]
+            df = fetch_data_from_db(trade_date_iso, expiration_iso, times_sorted)
 
-                for i, (snapshot, group) in enumerate(grouped):
-                    row_now = group.iloc[0]
-                    hhmm_pt = snapshot.strftime("%H:%M")
+            if df is not None and not df.empty:
+                for i, hhmm_pt in enumerate(times_sorted):
+                    # Fetch the row for this PT time
+                    rows = df[df["snapshot_pt"] == hhmm_pt]
+                    if rows.empty:
+                        continue
+                    row_now = rows.iloc[0]
                     color = COLORWAY[i % len(COLORWAY)]
 
-                    # actual line (same bucket handling as original)
+                    # Actual line (same bucket handling as original)
                     buckets_now = _available_buckets(row_now)
                     buckets_now = [n for n in buckets_now if n not in (95, 5)]
                     if not buckets_now or 50 not in buckets_now:
@@ -280,7 +269,6 @@ def register_callbacks(app):
                     try:
                         y_now = [float(row_now[f"vol{n}"]) * 100.0 for n in order_now]
                     except KeyError:
-                        # if this snapshot is incomplete, skip it
                         continue
 
                     fig.add_trace(
@@ -301,7 +289,9 @@ def register_callbacks(app):
                         if stock_val is not None and not pd.isna(stock_val)
                         else None
                     )
-                    now_T = _T_from_row_snapshot(row_now, expiration_iso)
+
+                    ts_et = pt_minute_to_et(trade_date_iso, hhmm_pt)
+                    now_T = _years_to_exp(ts_et, expiration_iso)
 
                     # expected dotted curve relative to previous slice
                     if (
@@ -310,7 +300,6 @@ def register_callbacks(app):
                         and prev_stock is not None
                         and prev_T is not None
                         and stock_now is not None
-                        and now_T is not None
                     ):
                         try:
                             labels_exp, y_exp, atm_exp_pct = _expected_curve_shifted(
@@ -347,16 +336,12 @@ def register_callbacks(app):
 
                     # keep a reference slice for live expected if k-grid is valid
                     try:
-                        if now_T is not None:
-                            k_now_ref, _ = _k_grid_for_row(row_now, now_T)
-                        else:
-                            k_now_ref = np.array([])
+                        k_now_ref, _ = _k_grid_for_row(row_now, now_T)
                     except Exception:
                         k_now_ref = np.array([])
                     if (
                         k_now_ref.size >= 2
                         and stock_now is not None
-                        and now_T is not None
                     ):
                         ref_row, ref_stock, ref_T = row_now, stock_now, now_T
 
@@ -391,7 +376,6 @@ def register_callbacks(app):
                                 )
                             )
 
-                            # expected vs last historical slice
                             stock_live_val = live_row.get("stock_price")
                             stock_live = (
                                 float(stock_live_val)
@@ -399,15 +383,19 @@ def register_callbacks(app):
                                 else None
                             )
 
-                            live_T: Optional[float] = None
-                            ts_utc_live_val = live_row.get("snap_shot_date")
-                            if ts_utc_live_val is not None and not pd.isna(ts_utc_live_val):
-                                ts_utc_live = (
-                                    pd.to_datetime(ts_utc_live_val, utc=True)
-                                    .to_pydatetime()
-                                )
-                                ts_et_live = ts_utc_live.astimezone(ET_TZ)
-                                live_T = _years_to_exp(ts_et_live, expiration_iso)
+                            ts_live_val = live_row.get("snapshot_pt")
+                            # snapshot_pt is PT hh:mm for live, same as historical
+                            if isinstance(ts_live_val, str):
+                                hhmm_live = ts_live_val
+                            else:
+                                # fallback if we stored a time/datetime
+                                try:
+                                    hhmm_live = pd.to_datetime(ts_live_val).strftime("%H:%M")
+                                except Exception:
+                                    hhmm_live = "06:31"
+
+                            ts_et_live = pt_minute_to_et(trade_date_iso, hhmm_live)
+                            live_T = _years_to_exp(ts_et_live, expiration_iso)
 
                             if (
                                 expected_on
@@ -415,7 +403,6 @@ def register_callbacks(app):
                                 and ref_stock is not None
                                 and ref_T is not None
                                 and stock_live is not None
-                                and live_T is not None
                             ):
                                 try:
                                     labels_exp_live, y_exp_live, atm_exp_pct_live = (
