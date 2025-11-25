@@ -55,6 +55,7 @@ def register_callbacks(app):
                 df['expir_date'] = pd.to_datetime(df['expir_date'])
                 df['trade_date'] = pd.to_datetime(df['trade_date'])
                 df['dte'] = (df['expir_date'] - df['trade_date']).dt.days
+                df['expir_date_str'] = df['expir_date'].dt.strftime('%Y-%m-%d') # New line
                 df = df[(df['dte'] >= 3) & (df['dte'] <= 90)]
                 
                 for i, (snapshot, group) in enumerate(df.groupby('snapshot_pt')):
@@ -67,7 +68,13 @@ def register_callbacks(app):
                         mode='lines+markers',
                         name=f"{hhmm_pt} PT",
                         line=dict(width=2, color=color),
-                        marker=dict(size=6)
+                        marker=dict(size=6),
+                        customdata=group[['expir_date_str']], # New line
+                        hovertemplate=( # New line
+                            "<b>DTE</b>: %{x}<br>"
+                            "<b>ATM IV</b>: %{y:.2f}%<br>"
+                            "<b>Expiration</b>: %{customdata[0]}<extra></extra>"
+                        )
                     ))
 
         if live_data_json and is_market_hours():
@@ -76,6 +83,7 @@ def register_callbacks(app):
                 df_live['expir_date'] = pd.to_datetime(df_live['expir_date'])
                 df_live['trade_date'] = pd.to_datetime(df_live['trade_date'])
                 df_live['dte'] = (df_live['expir_date'] - df_live['trade_date']).dt.days
+                df_live['expir_date_str'] = df_live['expir_date'].dt.strftime('%Y-%m-%d') # New line
                 df_live = df_live[(df_live['dte'] >= 3) & (df_live['dte'] <= 90)]
                 
                 fig.add_trace(go.Scatter(
@@ -84,7 +92,13 @@ def register_callbacks(app):
                     mode='lines+markers',
                     name="Live",
                     line=dict(width=3, color=LIVE_COLOR),
-                    marker=dict(size=6)
+                    marker=dict(size=6),
+                    customdata=df_live[['expir_date_str']], # New line
+                    hovertemplate=( # New line
+                        "<b>DTE</b>: %{x}<br>"
+                        "<b>ATM IV</b>: %{y:.2f}%<br>"
+                        "<b>Expiration</b>: %{customdata[0]}<extra></extra>"
+                    )
                 ))
 
         return fig
