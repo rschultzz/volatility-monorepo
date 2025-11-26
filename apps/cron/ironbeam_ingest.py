@@ -250,7 +250,9 @@ def write_bars_to_db(bars: List[Dict[str, Any]], engine):
         return
 
     try:
-        df.to_sql(DB_TABLE_NAME, engine, if_exists="append", index=False)
+        with engine.connect() as connection:
+            df.to_sql(DB_TABLE_NAME, connection, if_exists="append", index=False)
+            connection.commit() # Explicitly commit the transaction
         print(f"Wrote {len(df)} rows to {DB_TABLE_NAME}.")
     except Exception as e:
         msg = str(e)

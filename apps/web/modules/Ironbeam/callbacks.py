@@ -28,8 +28,7 @@ def register_ironbeam_callbacks(app):
         State('ironbeam-latest-ts-store', 'data')
     )
     def update_chart(n, latest_ts_str):
-        # On the first load, latest_ts_str will be None. This is a more robust
-        # way to detect the initial load.
+        # On the first load, latest_ts_str will be None.
         if not latest_ts_str:
             query = text(f"""
                 SELECT * FROM {DB_TABLE_NAME}
@@ -37,7 +36,8 @@ def register_ironbeam_callbacks(app):
                 ORDER BY datetime ASC
             """)
             try:
-                df = pd.read_sql(query, engine, parse_dates=['datetime'])
+                with engine.connect() as connection:
+                    df = pd.read_sql(query, connection, parse_dates=['datetime'])
             except Exception as e:
                 print(f"Error on initial data load: {e}")
                 return go.Figure(layout_title_text="Database error on initial load."), no_update
@@ -72,7 +72,8 @@ def register_ironbeam_callbacks(app):
             ORDER BY datetime ASC
         """)
         try:
-            df_new = pd.read_sql(query, engine, params={'latest_ts': latest_ts_str}, parse_dates=['datetime'])
+            with engine.connect() as connection:
+                df_new = pd.read_sql(query, connection, params={'latest_ts': latest_ts_str}, parse_dates=['datetime'])
         except Exception as e:
             print(f"Error fetching new data: {e}")
             return no_update, no_update
@@ -83,8 +84,6 @@ def register_ironbeam_callbacks(app):
         df_new['datetime_pt'] = df_new['datetime'].dt.tz_localize('UTC').dt.tz_convert('America/Los_Angeles')
         new_latest_ts = df_new['datetime'].iloc[-1].isoformat()
 
-        # Create a Patch object to extend the existing trace.
-        # It's crucial to convert the pandas Series to lists with .tolist()
         patched_figure = Patch()
         patched_figure['data'][0]['x'].extend(df_new['datetime_pt'].tolist())
         patched_figure['data'][0]['open'].extend(df_new['open'].tolist())
