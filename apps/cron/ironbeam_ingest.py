@@ -266,7 +266,7 @@ def write_bars_to_db(bars: List[Dict[str, Any]], engine):
 
 def main():
     db_url = _get_db_url()
-    engine = create_engine(db_url)
+    engine = create_engine(db_url, pool_pre_ping=True)
     
     token = authenticate()
     es_symbol = discover_es_front_month(token)

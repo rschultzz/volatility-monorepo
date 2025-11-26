@@ -4,6 +4,8 @@ from dash import dcc, html
 def ironbeam_layout():
     return html.Div([
         html.H2("Ironbeam ES 1-Minute Bars"),
+        # Hidden store to track the timestamp of the latest bar
+        dcc.Store(id='ironbeam-latest-ts-store'),
         dcc.Graph(id='ironbeam-chart'),
         dcc.Interval(
             id='ironbeam-interval',

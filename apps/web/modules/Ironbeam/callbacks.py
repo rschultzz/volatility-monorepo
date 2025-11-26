@@ -2,8 +2,8 @@
 import os
 import datetime as dt
 import pandas as pd
-from dash import Input, Output
-from sqlalchemy import create_engine
+from dash import Input, Output, State, no_update, Patch
+from sqlalchemy import create_engine, text
 import plotly.graph_objects as go
 from zoneinfo import ZoneInfo
 
@@ -15,49 +15,81 @@ def _get_db_url() -> str:
         raise RuntimeError("DATABASE_URL is not set in the environment")
     return db_url
 
+# Create the engine once when the module is loaded.
+# pool_pre_ping=True tells the engine to check if connections are alive before using them.
+db_url = _get_db_url()
+engine = create_engine(db_url, pool_pre_ping=True)
+
 def register_ironbeam_callbacks(app):
     @app.callback(
         Output('ironbeam-chart', 'figure'),
-        Input('ironbeam-interval', 'n_intervals')
+        Output('ironbeam-latest-ts-store', 'data'),
+        Input('ironbeam-interval', 'n_intervals'),
+        State('ironbeam-latest-ts-store', 'data')
     )
-    def update_chart(n):
-        db_url = _get_db_url()
-        engine = create_engine(db_url)
+    def update_chart(n, latest_ts_str):
+        # On the first load, latest_ts_str will be None. This is a more robust
+        # way to detect the initial load.
+        if not latest_ts_str:
+            query = text(f"""
+                SELECT * FROM {DB_TABLE_NAME}
+                WHERE datetime >= (NOW() AT TIME ZONE 'utc') - INTERVAL '1 hour'
+                ORDER BY datetime ASC
+            """)
+            try:
+                df = pd.read_sql(query, engine, parse_dates=['datetime'])
+            except Exception as e:
+                print(f"Error on initial data load: {e}")
+                return go.Figure(layout_title_text="Database error on initial load."), no_update
 
-        # Fetch the last 1 hour of data. The `datetime` in the DB is naive but represents UTC.
-        # We explicitly compare it against the current UTC time.
-        query = f"""
-        SELECT * FROM {DB_TABLE_NAME}
-        WHERE datetime >= (NOW() AT TIME ZONE 'utc') - INTERVAL '1 hour'
-        ORDER BY datetime ASC
-        """
+            if df.empty:
+                return go.Figure(layout_title_text="No data available for the last hour."), None
+
+            df['datetime_pt'] = df['datetime'].dt.tz_localize('UTC').dt.tz_convert('America/Los_Angeles')
+            new_latest_ts = df['datetime'].iloc[-1].isoformat()
+
+            fig = go.Figure(data=[go.Candlestick(
+                x=df['datetime_pt'],
+                open=df['open'],
+                high=df['high'],
+                low=df['low'],
+                close=df['close'],
+                name='ES'
+            )])
+            fig.update_layout(
+                title='ES Front Month - 1m OHLC (Live)',
+                xaxis_title='Time (Pacific Time)',
+                yaxis_title='Price',
+                xaxis_rangeslider_visible=False,
+                template="plotly_dark"
+            )
+            return fig, new_latest_ts
+
+        # For all subsequent updates, fetch only new data and patch the figure
+        query = text(f"""
+            SELECT * FROM {DB_TABLE_NAME}
+            WHERE datetime > :latest_ts
+            ORDER BY datetime ASC
+        """)
         try:
-            df = pd.read_sql(query, engine, parse_dates=['datetime'])
+            df_new = pd.read_sql(query, engine, params={'latest_ts': latest_ts_str}, parse_dates=['datetime'])
         except Exception as e:
-            print(f"Error fetching data: {e}")
-            return go.Figure()
+            print(f"Error fetching new data: {e}")
+            return no_update, no_update
 
-        if df.empty:
-            return go.Figure(layout_title_text="No data available for the last hour.")
+        if df_new.empty:
+            return no_update, no_update
 
-        # Convert UTC datetime to Pacific Time for display
-        # 1. Localize the naive datetime column to UTC
-        # 2. Convert it to Pacific Time
-        df['datetime_pt'] = df['datetime'].dt.tz_localize('UTC').dt.tz_convert('America/Los_Angeles')
+        df_new['datetime_pt'] = df_new['datetime'].dt.tz_localize('UTC').dt.tz_convert('America/Los_Angeles')
+        new_latest_ts = df_new['datetime'].iloc[-1].isoformat()
 
-        fig = go.Figure(data=[go.Candlestick(
-            x=df['datetime_pt'],  # Use the new Pacific Time column
-            open=df['open'],
-            high=df['high'],
-            low=df['low'],
-            close=df['close']
-        )])
+        # Create a Patch object to extend the existing trace.
+        # It's crucial to convert the pandas Series to lists with .tolist()
+        patched_figure = Patch()
+        patched_figure['data'][0]['x'].extend(df_new['datetime_pt'].tolist())
+        patched_figure['data'][0]['open'].extend(df_new['open'].tolist())
+        patched_figure['data'][0]['high'].extend(df_new['high'].tolist())
+        patched_figure['data'][0]['low'].extend(df_new['low'].tolist())
+        patched_figure['data'][0]['close'].extend(df_new['close'].tolist())
 
-        fig.update_layout(
-            title='ES Front Month - 1m OHLC (Last Hour)',
-            xaxis_title='Time (Pacific Time)',  # Update axis title
-            yaxis_title='Price',
-            xaxis_rangeslider_visible=False,
-            template="plotly_dark"
-        )
-        return fig
+        return patched_figure, new_latest_ts
