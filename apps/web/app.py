@@ -34,6 +34,8 @@ from modules.TermStructure.components import make_term_structure_block
 from modules.TermStructure.callbacks import register_callbacks as register_term_structure
 from modules.TermMetrics.components import make_term_metrics_block
 from modules.TermMetrics.callbacks import register_callbacks as register_term_metrics
+from modules.Ironbeam.components import ironbeam_layout
+from modules.Ironbeam.callbacks import register_ironbeam_callbacks
 
 # ===== IDs =====
 CLOCK_ID = "CLOCK"
@@ -265,6 +267,8 @@ app.layout = html.Div(
                 "alignItems": "stretch",
             },
         ),
+        html.Hr(style={"borderColor": "#333"}),
+        ironbeam_layout(),
     ],
     style={
         "backgroundColor": "black",
@@ -279,6 +283,7 @@ register_smile(app)
 register_skew(app)
 register_term_structure(app)
 register_term_metrics(app)
+register_ironbeam_callbacks(app)
 
 if __name__ == "__main__":
     import socket
