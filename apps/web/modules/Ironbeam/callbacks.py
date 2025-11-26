@@ -5,6 +5,7 @@ import pandas as pd
 from dash import Input, Output
 from sqlalchemy import create_engine
 import plotly.graph_objects as go
+from zoneinfo import ZoneInfo
 
 DB_TABLE_NAME = os.environ.get("IRONBEAM_BARS_TABLE", "ironbeam_es_1m_bars")
 
@@ -23,14 +24,15 @@ def register_ironbeam_callbacks(app):
         db_url = _get_db_url()
         engine = create_engine(db_url)
 
-        # Fetch the last 1 hour of data
+        # Fetch the last 1 hour of data. The `datetime` in the DB is naive but represents UTC.
+        # We explicitly compare it against the current UTC time.
         query = f"""
         SELECT * FROM {DB_TABLE_NAME}
-        WHERE datetime >= NOW() - INTERVAL '1 hour'
+        WHERE datetime >= (NOW() AT TIME ZONE 'utc') - INTERVAL '1 hour'
         ORDER BY datetime ASC
         """
         try:
-            df = pd.read_sql(query, engine)
+            df = pd.read_sql(query, engine, parse_dates=['datetime'])
         except Exception as e:
             print(f"Error fetching data: {e}")
             return go.Figure()
@@ -38,8 +40,13 @@ def register_ironbeam_callbacks(app):
         if df.empty:
             return go.Figure(layout_title_text="No data available for the last hour.")
 
+        # Convert UTC datetime to Pacific Time for display
+        # 1. Localize the naive datetime column to UTC
+        # 2. Convert it to Pacific Time
+        df['datetime_pt'] = df['datetime'].dt.tz_localize('UTC').dt.tz_convert('America/Los_Angeles')
+
         fig = go.Figure(data=[go.Candlestick(
-            x=df['datetime'],
+            x=df['datetime_pt'],  # Use the new Pacific Time column
             open=df['open'],
             high=df['high'],
             low=df['low'],
@@ -48,7 +55,7 @@ def register_ironbeam_callbacks(app):
 
         fig.update_layout(
             title='ES Front Month - 1m OHLC (Last Hour)',
-            xaxis_title='Time',
+            xaxis_title='Time (Pacific Time)',  # Update axis title
             yaxis_title='Price',
             xaxis_rangeslider_visible=False,
             template="plotly_dark"

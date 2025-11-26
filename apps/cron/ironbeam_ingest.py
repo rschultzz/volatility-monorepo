@@ -238,9 +238,9 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
     return bars
 
 
-def write_bars_to_db(bars: List[Dict[str, Any]], db_url: str):
+def write_bars_to_db(bars: List[Dict[str, Any]], engine):
     """
-    Writes a list of bar data to the database.
+    Writes a list of bar data to the database using a pre-existing engine.
     """
     if not bars:
         return
@@ -250,7 +250,6 @@ def write_bars_to_db(bars: List[Dict[str, Any]], db_url: str):
         return
 
     try:
-        engine = create_engine(db_url)
         df.to_sql(DB_TABLE_NAME, engine, if_exists="append", index=False)
         print(f"Wrote {len(df)} rows to {DB_TABLE_NAME}.")
     except Exception as e:
@@ -267,6 +266,8 @@ def write_bars_to_db(bars: List[Dict[str, Any]], db_url: str):
 
 def main():
     db_url = _get_db_url()
+    engine = create_engine(db_url)
+    
     token = authenticate()
     es_symbol = discover_es_front_month(token)
     stream_id = create_stream(token)
@@ -295,7 +296,7 @@ def main():
 
         new_bars = parse_time_bars_from_message(msg)
         if new_bars:
-            write_bars_to_db(new_bars, db_url)
+            write_bars_to_db(new_bars, engine)
 
     def on_error(ws, error):
         print("WS error:", error)

@@ -7,7 +7,7 @@ def ironbeam_layout():
         dcc.Graph(id='ironbeam-chart'),
         dcc.Interval(
             id='ironbeam-interval',
-            interval=5 * 1000,  # in milliseconds
+            interval=1 * 1000,  # in milliseconds
             n_intervals=0
         )
     ])
