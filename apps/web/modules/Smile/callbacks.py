@@ -298,7 +298,7 @@ def register_callbacks(app):
                     )
 
                     ts_et = pt_minute_to_et(trade_date_iso, hhmm_pt)
-                    now_T = _years_to_exp(ts_et, expiration_iso)
+                    T_now = _years_to_exp(ts_et, expiration_iso)
 
                     # expected dotted curve relative to previous slice
                     if (
@@ -311,7 +311,7 @@ def register_callbacks(app):
                         try:
                             labels_exp, y_exp, atm_exp_pct = _expected_curve_shifted(
                                 prev_row, prev_T, prev_stock,
-                                row_now, now_T, stock_now,
+                                row_now, T_now, stock_now,
                             )
 
                             fig.add_trace(
@@ -339,18 +339,18 @@ def register_callbacks(app):
                             print(f"Could not calculate expected curve for {hhmm_pt}: {e}")
 
                     # advance previous pointers
-                    prev_row, prev_stock, prev_T = row_now, stock_now, now_T
+                    prev_row, prev_stock, prev_T = row_now, stock_now, T_now
 
                     # keep a reference slice for live expected if k-grid is valid
                     try:
-                        k_now_ref, _ = _k_grid_for_row(row_now, now_T)
+                        k_now_ref, _ = _k_grid_for_row(row_now, T_now)
                     except Exception:
                         k_now_ref = np.array([])
                     if (
                         k_now_ref.size >= 2
                         and stock_now is not None
                     ):
-                        ref_row, ref_stock, ref_T = row_now, stock_now, now_T
+                        ref_row, ref_stock, ref_T = row_now, stock_now, T_now
 
         # --------- Live slice from ORATS API ---------
         now_et = dt.datetime.now(MARKET_TIMEZONE)
