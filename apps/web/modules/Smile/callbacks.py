@@ -354,9 +354,10 @@ def register_callbacks(app):
 
         # --------- Live slice from ORATS API ---------
         now_et = dt.datetime.now(MARKET_TIMEZONE)
+        today_iso = now_et.date().isoformat()
         is_market_hours = MARKET_OPEN <= now_et.time() <= MARKET_CLOSE and now_et.weekday() < 5
 
-        if live_data_json and is_market_hours:
+        if live_data_json and is_market_hours and trade_date_iso == today_iso:
             df_live = pd.read_json(live_data_json, orient="split")
             if df_live is not None and not df_live.empty:
                 live_row_df = df_live[df_live["expir_date"] == expiration_iso]

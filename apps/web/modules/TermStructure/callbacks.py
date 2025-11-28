@@ -3,6 +3,8 @@ import pandas as pd
 import plotly.graph_objs as go
 from dash import Input, Output
 from typing import List
+import datetime as dt
+import pytz
 
 from packages.shared.utils import fetch_term_structure_data, is_market_hours
 
@@ -18,6 +20,7 @@ COLORWAY = [
     "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"
 ]
 LIVE_COLOR = "#FFD700"
+MARKET_TIMEZONE = pytz.timezone("US/Eastern")
 
 # ----------------- Main Callback -----------------
 def register_callbacks(app):
@@ -77,7 +80,9 @@ def register_callbacks(app):
                         )
                     ))
 
-        if live_data_json and is_market_hours():
+        now_et = dt.datetime.now(MARKET_TIMEZONE)
+        today_iso = now_et.date().isoformat()
+        if live_data_json and is_market_hours() and trade_date_iso == today_iso:
             df_live = pd.read_json(live_data_json, orient="split")
             if not df_live.empty:
                 df_live['expir_date'] = pd.to_datetime(df_live['expir_date'])

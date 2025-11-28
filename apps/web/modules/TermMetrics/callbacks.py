@@ -5,6 +5,8 @@ from typing import List
 import numpy as np
 import os
 from io import StringIO
+import datetime as dt
+import pytz
 
 from packages.shared.utils import fetch_term_metrics_data, is_market_hours
 
@@ -15,6 +17,7 @@ LIVE_DATA_STORE_ID = "live-data-store"
 
 # ---- Constants ----
 LIVE_COLOR = "#FFD700"
+MARKET_TIMEZONE = pytz.timezone("US/Eastern")
 
 def _pct_change(curr: float | None, prev: float | None) -> float | None:
     if prev in (None, 0) or curr is None or pd.isna(prev) or pd.isna(curr):
@@ -97,7 +100,9 @@ def register_callbacks(app):
                     })
                     prev_spread, prev_ratio, prev_slope = spread, ratio, slope
 
-        if live_data_json and is_market_hours():
+        now_et = dt.datetime.now(MARKET_TIMEZONE)
+        today_iso = now_et.date().isoformat()
+        if live_data_json and is_market_hours() and trade_date_iso == today_iso:
             df_live = pd.read_json(StringIO(live_data_json), orient="split")
             if not df_live.empty:
                 live_metrics = calculate_term_metrics(df_live)

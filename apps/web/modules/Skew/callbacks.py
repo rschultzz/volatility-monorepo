@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objs as go
 from dash import Input, Output
+import pytz
 
 from packages.shared.utils import fetch_skew_data, is_market_hours
 from packages.shared.surface_compare import k_for_abs_delta
@@ -31,6 +32,8 @@ MIN_SKEW_DENOM_PP = 0.25
 # leverage add-on (must match Smile expected overlay)
 BETA_VOLPTS_PER_1PCT = 4.5
 BETA_MAX_SHIFT_PP = 6.0
+
+MARKET_TIMEZONE = pytz.timezone("US/Eastern")
 
 
 # ----------------- Helpers -----------------
@@ -359,7 +362,9 @@ def register_callbacks(app):
                     ) = (call_skew_pp_now, put_skew_pp_now)
 
         # --------- Live row from live ORATS data ---------
-        if live_data_json and is_market_hours():
+        now_et = dt.datetime.now(MARKET_TIMEZONE)
+        today_iso = now_et.date().isoformat()
+        if live_data_json and is_market_hours() and trade_date_iso == today_iso:
             df_live = pd.read_json(StringIO(live_data_json), orient="split")
             live_row_df = df_live[df_live["expir_date"] == expiration_iso]
             if live_row_df is not None and not live_row_df.empty:
