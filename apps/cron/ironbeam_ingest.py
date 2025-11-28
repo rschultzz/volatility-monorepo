@@ -5,7 +5,7 @@ Ironbeam ES 1m bars ingest worker for Render.
 - Auth with /auth
 - Discover front-month ES via /info/symbol/search/futures/XCME/ES
 - Create streamId (GET /stream/create)
-- Open WebSocket stream (wss://.../v2/stream/{streamId}?token=...)
+- Open WebSocket stream (wss://demo.ironbeamapi.com/v2/stream/{streamId}?token=...)
 - Subscribe to 1-minute Time Bars for ES in on_open
 - Parse 'ti' time-bar messages and write to Postgres table
 
@@ -14,7 +14,7 @@ Environment variables expected:
   IRONBEAM_USERNAME        (required)
   IRONBEAM_PASSWORD        (required – password or API key)
   IRONBEAM_TENANT_API_KEY  (optional)
-  DATABASE_URL             (required – SQLAlchemy/Postgres URL)
+  DATABASE_URL             (required – Postgres URL)
   IRONBEAM_BARS_TABLE      (optional – default "ironbeam_es_1m_bars")
 """
 
@@ -58,11 +58,26 @@ MONTH_MAP = {
 }
 
 
+# ---------------------------------------------------------------------------
+# DB HELPERS
+# ---------------------------------------------------------------------------
+
+def _normalize_db_url(url: str) -> str:
+    """
+    Render often gives postgres://; SQLAlchemy prefers postgresql+psycopg://
+    """
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://") and "+psycopg" not in url:
+        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return url
+
+
 def _get_db_url() -> str:
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
         raise RuntimeError("DATABASE_URL is not set in the environment")
-    return db_url
+    return _normalize_db_url(db_url)
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +100,7 @@ def authenticate() -> str:
     if TENANT_API_KEY:
         payload["apikey"] = TENANT_API_KEY
 
+    print(f"[AUTH] POST {url}")
     resp = requests.post(url, json=payload)
     if DEBUG_HTTP:
         print("AUTH status:", resp.status_code)
@@ -106,6 +122,7 @@ def discover_es_front_month(token: str) -> str:
     """
     url = f"{API_BASE}/info/symbol/search/futures/XCME/ES"
     headers = {"Authorization": f"Bearer {token}"}
+    print(f"[SYMBOL] GET {url}")
     resp = requests.get(url, headers=headers)
     if DEBUG_HTTP:
         print("SYMBOL FUTURES status:", resp.status_code)
@@ -145,10 +162,10 @@ def create_stream(token: str) -> str:
     Create a streamId for WebSocket streaming.
 
     IMPORTANT: This uses GET, exactly like your working script.
-    Using POST here causes the 405 Method Not Allowed you just saw.
     """
     url = f"{API_BASE}/stream/create"
     headers = {"Authorization": f"Bearer {token}"}
+    print(f"[STREAM] GET {url}")
     resp = requests.get(url, headers=headers)
     if DEBUG_HTTP:
         print("STREAM CREATE status:", resp.status_code)
@@ -184,6 +201,7 @@ def subscribe_time_bars(token: str, stream_id: str, symbol: str) -> Dict[str, An
         "barType": "MINUTE",
         "loadSize": LOAD_SIZE,
     }
+    print(f"[SUBSCRIBE] POST {url} {payload}")
     resp = requests.post(url, headers=headers, json=payload)
     print("TIME BARS SUBSCRIBE status:", resp.status_code)
     if DEBUG_HTTP:
@@ -229,7 +247,8 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 # Heuristic: ms vs s
                 if ts > 10_000_000_000:
                     ts /= 1000.0
-                dt_utc = dt.datetime.utcfromtimestamp(ts)
+                # Use timezone-aware UTC to avoid DeprecationWarning
+                dt_utc = dt.datetime.fromtimestamp(ts, dt.timezone.utc)
             except Exception:
                 continue
 
@@ -271,16 +290,16 @@ def write_bars_to_db(bars: List[Dict[str, Any]], engine):
         return
 
     try:
-        with engine.connect() as connection:
+        # engine.begin() opens a transaction and commits on success
+        with engine.begin() as connection:
             df.to_sql(DB_TABLE_NAME, connection, if_exists="append", index=False)
-            connection.commit()
-        print(f"Wrote {len(df)} rows to {DB_TABLE_NAME}.")
+        print(f"[DB] Wrote {len(df)} rows to {DB_TABLE_NAME}.")
     except Exception as e:
         msg = str(e)
         if "violates unique constraint" in msg or "duplicate key value" in msg:
-            print("Duplicates found, skipping.")
+            print("[DB] Duplicates found, skipping.")
         else:
-            print(f"DB write error: {e}")
+            print(f"[DB] write error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +309,7 @@ def write_bars_to_db(bars: List[Dict[str, Any]], engine):
 def run_worker():
     db_url = _get_db_url()
     engine = create_engine(db_url, pool_pre_ping=True)
+    print(f"[INIT] Using DB table '{DB_TABLE_NAME}'")
 
     # Optional: turn on full websocket trace logs
     # if DEBUG_WS_RAW:
@@ -328,14 +348,14 @@ def run_worker():
 
                 new_bars = parse_time_bars_from_message(msg)
                 if new_bars:
-                    print(f"Got {len(new_bars)} new bars.")
+                    print(f"[WS] Got {len(new_bars)} new bars.")
                     write_bars_to_db(new_bars, engine)
 
             def on_error(ws, error):
-                print("WS error:", error)
+                print("[WS] error:", error)
 
             def on_close(ws, code, reason):
-                print("WebSocket closed:", code, reason)
+                print("[WS] closed:", code, reason)
 
             ws_app = websocket.WebSocketApp(
                 ws_url,
@@ -356,7 +376,7 @@ def run_worker():
             )
 
         except Exception as e:
-            print("Top-level worker error:", e)
+            print("[TOP-LEVEL] worker error:", e)
 
         print("WebSocket disconnected or error; reconnecting in 5 seconds...")
         time.sleep(5)
