@@ -76,6 +76,23 @@ def register_ironbeam_callbacks(app):
             yaxis_title="Price",
             xaxis_rangeslider_visible=False,
             template="plotly_dark",
+            hovermode="closest",
+        )
+
+        # Add crosshairs (spikes) that track the cursor and show values on axes
+        fig.update_xaxes(
+            showspikes=True,
+            spikedash="dot",
+            spikemode="across",
+            spikesnap="cursor",
+            hoverformat="%H:%M:%S",  # Format for time display on axis
+        )
+        fig.update_yaxes(
+            showspikes=True,
+            spikedash="dot",
+            spikemode="across",
+            spikesnap="cursor",
+            hoverformat="%.2f",  # Format for price display on axis
         )
 
         # If the user has zoomed or panned, the relayout_data will contain the new ranges.
