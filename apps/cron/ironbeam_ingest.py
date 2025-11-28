@@ -1,15 +1,15 @@
 #!/usr/bin/env python
 """
-Ironbeam ES 1m bars + tick trades ingest worker for Render.
+Ironbeam ES 1m bars + trades ingest worker for Render.
 
 - Auth with /auth
 - Discover front-month ES via /info/symbol/search/futures/XCME/ES
 - Create streamId (GET /stream/create)
-- Open WebSocket stream (wss://.../stream/{streamId}?token=...)
+- Open WebSocket stream (wss://demo.ironbeamapi.com/v2/stream/{streamId}?token=...)
 - Subscribe to:
-    * 1-minute Time Bars indicator  -> 'ti' messages  -> BAR table
-    * Trades stream                 -> 'tr' messages  -> TICK table
-- Parse and write both into Postgres.
+    * 1-minute Time Bars indicator for ES
+    * Trades stream for ES
+- Parse 'ti' (time bars) and 'tr' (trades) messages and write to Postgres tables.
 
 Environment variables expected:
 
@@ -19,9 +19,6 @@ Environment variables expected:
   DATABASE_URL             (required – Postgres URL)
   IRONBEAM_BARS_TABLE      (optional – default "ironbeam_es_1m_bars")
   IRONBEAM_TRADES_TABLE    (optional – default "ironbeam_es_trades")
-  IRONBEAM_API_BASE        (optional – default https://demo.ironbeamapi.com/v2)
-  IRONBEAM_WS_BASE         (optional – default wss://demo.ironbeamapi.com/v2/stream)
-  IRONBEAM_LOAD_SIZE       (optional – initial bar load, default 2000)
 """
 
 import json
@@ -56,14 +53,13 @@ LOAD_SIZE = int(os.environ.get("IRONBEAM_LOAD_SIZE", "2000"))
 
 # Debug toggles
 DEBUG_HTTP = True
-DEBUG_WS_RAW = False
+DEBUG_WS_RAW = False   # set True temporarily if you want to see raw WS messages
 
 MONTH_MAP = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
     "MAY": 5, "JUN": 6, "JUL": 7, "AUG": 8,
     "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
 }
-
 
 # ---------------------------------------------------------------------------
 # DB HELPERS
@@ -86,7 +82,6 @@ def _get_db_url() -> str:
         raise RuntimeError("DATABASE_URL is not set in the environment")
     return _normalize_db_url(db_url)
 
-
 # ---------------------------------------------------------------------------
 # AUTH / SYMBOL DISCOVERY
 # ---------------------------------------------------------------------------
@@ -94,7 +89,6 @@ def _get_db_url() -> str:
 def authenticate() -> str:
     """
     POST /auth to obtain a bearer token.
-    Matches your working demo script.
     """
     if not USERNAME or not PASSWORD_OR_APIKEY:
         raise RuntimeError("IRONBEAM_USERNAME and IRONBEAM_PASSWORD must be set")
@@ -118,14 +112,13 @@ def authenticate() -> str:
     token = data.get("token")
     if not token:
         raise RuntimeError(f"Auth failed, no token in response: {data}")
-    print("[AUTH] Authenticated OK.")
+    print("Authenticated OK.")
     return token
 
 
 def discover_es_front_month(token: str) -> str:
     """
     Use GET /info/symbol/search/futures/XCME/ES to get ES futures, then pick front month.
-    Copied from your working demo.
     """
     url = f"{API_BASE}/info/symbol/search/futures/XCME/ES"
     headers = {"Authorization": f"Bearer {token}"}
@@ -156,11 +149,11 @@ def discover_es_front_month(token: str) -> str:
 
     for rec in symbols_sorted:
         if maturity(rec) >= today:
-            print(f"[SYMBOL] Using ES symbol (front month): {rec['symbol']} (maturity {maturity(rec)})")
+            print(f"Using ES symbol (front month): {rec['symbol']} (maturity {maturity(rec)})")
             return rec["symbol"]
 
     last = symbols_sorted[-1]
-    print("[SYMBOL] All maturities < today, using last symbol:", last["symbol"])
+    print("All maturities < today, using last symbol:", last["symbol"])
     return last["symbol"]
 
 
@@ -168,7 +161,7 @@ def create_stream(token: str) -> str:
     """
     Create a streamId for WebSocket streaming.
 
-    IMPORTANT: This uses GET, exactly like your working script.
+    /stream/create is GET in v2.
     """
     url = f"{API_BASE}/stream/create"
     headers = {"Authorization": f"Bearer {token}"}
@@ -182,12 +175,11 @@ def create_stream(token: str) -> str:
     if data.get("status") != "OK":
         raise RuntimeError(f"stream/create failed: {data}")
     stream_id = data["streamId"]
-    print("[STREAM] Stream created:", stream_id)
+    print("Stream created:", stream_id)
     return stream_id
 
-
 # ---------------------------------------------------------------------------
-# SUBSCRIPTIONS: TIME BARS + TRADES
+# SUBSCRIPTIONS
 # ---------------------------------------------------------------------------
 
 def subscribe_time_bars(token: str, stream_id: str, symbol: str) -> Dict[str, Any]:
@@ -195,7 +187,6 @@ def subscribe_time_bars(token: str, stream_id: str, symbol: str) -> Dict[str, An
     POST /indicator/{streamId}/timeBars/subscribe for 1-minute bars.
 
     NOTE: symbol must be like "XCME:ES.Z25" (exchange-prefixed).
-    Copied from your working script.
     """
     if ":" not in symbol:
         symbol = f"XCME:{symbol}"
@@ -210,14 +201,13 @@ def subscribe_time_bars(token: str, stream_id: str, symbol: str) -> Dict[str, An
     }
     print(f"[SUBSCRIBE] TimeBars POST {url} {payload}")
     resp = requests.post(url, headers=headers, json=payload)
-    print("[SUBSCRIBE] TIME BARS status:", resp.status_code)
+    print("TIME BARS SUBSCRIBE status:", resp.status_code)
     if DEBUG_HTTP:
-        print("TIME BARS body:", resp.text[:500])
+        print("TIME BARS SUBSCRIBE body:", resp.text[:500])
 
-    # Known Ironbeam quirk: 400/"Can't subscribe to time bars" can still mean
-    # the subscription is active and data will flow on the stream.
+    # Quirk: 400/"Can't subscribe to time bars" can still mean the stream is alive.
     if resp.status_code == 400 and "Can't subscribe to time bars" in resp.text:
-        print("[SUBSCRIBE] 'Can't subscribe to time bars' 400; continuing anyway.")
+        print("Got 'Can't subscribe to time bars' 400; continuing anyway (known Ironbeam quirk).")
         try:
             return resp.json()
         except Exception:
@@ -231,33 +221,51 @@ def subscribe_trades(token: str, stream_id: str, symbol: str) -> Dict[str, Any]:
     """
     GET /market/trades/subscribe/{streamId}?symbols=XCME:ES.Z25
 
-    Subscribes to live trades, which arrive on the WebSocket in the 'tr' field.
+    This is the low-latency trades stream. Data arrives in the 'tr' field
+    on the WebSocket payload.
     """
     if ":" not in symbol:
         symbol = f"XCME:{symbol}"
 
     url = f"{API_BASE}/market/trades/subscribe/{stream_id}"
     headers = {"Authorization": f"Bearer {token}"}
-    params = {"symbols": symbol}
-
-    print(f"[SUBSCRIBE] Trades GET {url} {params}")
+    params = {"symbols": symbol}  # single symbol; API expects comma-separated list
+    print(f"[SUBSCRIBE] Trades GET {url} params={params}")
     resp = requests.get(url, headers=headers, params=params)
-    print("[SUBSCRIBE] TRADES status:", resp.status_code)
+    print("TRADES SUBSCRIBE status:", resp.status_code)
     if DEBUG_HTTP:
-        print("TRADES body:", resp.text[:500])
+        print("TRADES SUBSCRIBE body:", resp.text[:500])
 
     resp.raise_for_status()
-    return resp.json()
-
+    try:
+        data = resp.json()
+    except Exception:
+        data = {}
+    return data
 
 # ---------------------------------------------------------------------------
 # PARSERS
 # ---------------------------------------------------------------------------
 
+def _to_utc_from_epoch(ts_raw: Any) -> dt.datetime | None:
+    if ts_raw is None:
+        return None
+    try:
+        ts = float(ts_raw)
+    except (TypeError, ValueError):
+        return None
+    # Heuristic: milliseconds vs seconds
+    if ts > 10_000_000_000:
+        ts /= 1000.0
+    try:
+        return dt.datetime.fromtimestamp(ts, tz=dt.timezone.utc)
+    except Exception:
+        return None
+
+
 def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Parse time bars from a WebSocket message.
-    (Same 'ti' structure you already had.)
+    Parse time bars from a WebSocket message. Looks for 'ti' entries.
     """
     bars: List[Dict[str, Any]] = []
 
@@ -272,17 +280,8 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not isinstance(bar, dict):
             continue
 
-        t = bar.get("t")
-        if t is None:
-            continue
-
-        try:
-            ts = float(t)
-            # ms vs s heuristic
-            if ts > 10_000_000_000:
-                ts /= 1000.0
-            dt_utc = dt.datetime.fromtimestamp(ts, dt.timezone.utc)
-        except Exception:
+        t_utc = _to_utc_from_epoch(bar.get("t"))
+        if t_utc is None:
             continue
 
         try:
@@ -294,19 +293,16 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
 
         v = bar.get("v")
-        try:
-            v_f = float(v) if v is not None else None
-        except (TypeError, ValueError):
-            v_f = None
+        v = float(v) if v is not None else None
 
         bars.append(
             {
-                "datetime": dt_utc,
+                "datetime": t_utc,
                 "open": o,
                 "high": h,
                 "low": l,
                 "close": c,
-                "volume": v_f,
+                "volume": v,
             }
         )
 
@@ -315,14 +311,21 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Parse live trades from WebSocket 'tr' messages.
+    Parse trades from a WebSocket message. Looks for 'tr' entries.
 
-    The Ironbeam docs say trades appear under 'tr' when subscribed.
-    Schema can vary slightly, so this parser is defensive:
-      - Timestamp: tries keys 't', 'sendTime', 'tt'
-      - Price:     'p' or 'price' or 'la'
-      - Size:      'sz' or 'size' or 'q'
-      - Total vol: 'tv' or 'totalVolume'
+    The docs don't fully spell out the streaming trade object schema, but
+    it should be consistent with /market/trades and quotes:
+
+      symbol: "XCME:ES.U16"      -> s or symbol
+      price:  1.13535            -> p or price or la (last)
+      size:   1                  -> sz or size or q
+      totalVolume: 1             -> tv or totalVolume
+      sendTime: 1234567890       -> sendTime or t (epoch)
+      tickDirection: "INVALID"   -> tickDirection
+      aggressorSide: 0           -> aggressorSide
+      tradeId: 2131220200101     -> tradeId
+      sequenceNumber: 12132123   -> sequenceNumber
+      tradeDate: "20200101"      -> tradeDate
     """
     trades: List[Dict[str, Any]] = []
 
@@ -337,66 +340,52 @@ def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not isinstance(tr, dict):
             continue
 
-        # Timestamp
-        ts_val = None
-        for key in ("t", "sendTime", "tt"):
-            val = tr.get(key)
-            if val is not None:
-                try:
-                    ts_val = float(val)
-                    break
-                except (TypeError, ValueError):
-                    continue
-
-        if ts_val is None:
+        ts_utc = _to_utc_from_epoch(tr.get("sendTime") or tr.get("t"))
+        if ts_utc is None:
             continue
 
-        if ts_val > 10_000_000_000:
-            ts_val /= 1000.0
+        symbol = tr.get("s") or tr.get("symbol")
+        price = tr.get("p") or tr.get("price") or tr.get("la")
+        size = tr.get("sz") or tr.get("size") or tr.get("q")
+        total_volume = tr.get("tv") or tr.get("totalVolume")
 
         try:
-            dt_utc = dt.datetime.fromtimestamp(ts_val, dt.timezone.utc)
-        except Exception:
-            continue
-
-        # Price (required)
-        price_val = tr.get("p") or tr.get("price") or tr.get("la")
-        if price_val is None:
-            continue
-
-        try:
-            price = float(price_val)
+            price = float(price)
         except (TypeError, ValueError):
             continue
 
-        # Size, total volume (optional)
-        size_val = tr.get("sz") or tr.get("size") or tr.get("q")
-        tv_val = tr.get("tv") or tr.get("totalVolume")
-
         try:
-            size = float(size_val) if size_val is not None else None
+            size = int(size) if size is not None else None
         except (TypeError, ValueError):
             size = None
 
         try:
-            tv = float(tv_val) if tv_val is not None else None
+            total_volume = float(total_volume) if total_volume is not None else None
         except (TypeError, ValueError):
-            tv = None
+            total_volume = None
 
-        symbol = tr.get("s") or tr.get("symbol")
+        trade_id = tr.get("tradeId")
+        seq = tr.get("sequenceNumber")
+        aggr = tr.get("aggressorSide")
+        tick_dir = tr.get("tickDirection")
+        trade_date = tr.get("tradeDate")
 
         trades.append(
             {
-                "datetime": dt_utc,
+                "ts_utc": ts_utc,
                 "symbol": symbol,
                 "price": price,
                 "size": size,
-                "total_volume": tv,
+                "total_volume": total_volume,
+                "trade_id": trade_id,
+                "sequence_number": seq,
+                "aggressor_side": aggr,
+                "tick_direction": tick_dir,
+                "trade_date": trade_date,
             }
         )
 
     return trades
-
 
 # ---------------------------------------------------------------------------
 # DB WRITERS
@@ -404,7 +393,7 @@ def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def write_bars_to_db(bars: List[Dict[str, Any]], engine):
     """
-    Append 1m bars to Postgres using SQLAlchemy.
+    Append time bars to Postgres using SQLAlchemy.
     Drops duplicate datetimes inside the batch.
     """
     if not bars:
@@ -421,34 +410,32 @@ def write_bars_to_db(bars: List[Dict[str, Any]], engine):
     except Exception as e:
         msg = str(e)
         if "violates unique constraint" in msg or "duplicate key value" in msg:
-            print("[DB] Bars duplicates found, skipping.")
+            print(f"[DB] Bars duplicates found, skipping batch of {len(df)}.")
         else:
             print(f"[DB] Bars write error: {e}")
 
 
 def write_trades_to_db(trades: List[Dict[str, Any]], engine):
     """
-    Append ticks (trades) to Postgres.
-    De-dupes by (datetime, price, size) within the batch.
+    Append trades to Postgres.
     """
     if not trades:
         return
 
-    df = pd.DataFrame(trades).drop_duplicates(subset=["datetime", "price", "size"])
+    df = pd.DataFrame(trades).drop_duplicates(subset=["ts_utc", "price", "size"])
     if df.empty:
         return
 
     try:
         with engine.begin() as connection:
             df.to_sql(DB_TRADES_TABLE, connection, if_exists="append", index=False)
-        print(f"[DB] Wrote {len(df)} rows to {DB_TRADES_TABLE}.")
+        print(f"[DB] Wrote {len(df)} trades to {DB_TRADES_TABLE}.")
     except Exception as e:
         msg = str(e)
         if "violates unique constraint" in msg or "duplicate key value" in msg:
-            print("[DB] Trades duplicates found, skipping.")
+            print(f"[DB] Trades duplicates found, skipping batch of {len(df)}.")
         else:
             print(f"[DB] Trades write error: {e}")
-
 
 # ---------------------------------------------------------------------------
 # MAIN LOOP – RUN FOREVER, RECONNECT ON DISCONNECT
@@ -457,9 +444,9 @@ def write_trades_to_db(trades: List[Dict[str, Any]], engine):
 def run_worker():
     db_url = _get_db_url()
     engine = create_engine(db_url, pool_pre_ping=True)
-    print(f"[INIT] Using DB bars table '{DB_BARS_TABLE}', trades table '{DB_TRADES_TABLE}'")
+    print(f"[INIT] Using DB tables bars='{DB_BARS_TABLE}', trades='{DB_TRADES_TABLE}'")
 
-    # Optional: full websocket trace logs
+    # Optional: enable full websocket trace logs
     # if DEBUG_WS_RAW:
     #     websocket.enableTrace(True)
 
@@ -471,23 +458,21 @@ def run_worker():
             stream_id = create_stream(token)
 
             ws_url = f"{WS_BASE}/{stream_id}?token={token}"
-            print("[WS] Opening WebSocket:", ws_url)
+            print("Opening WebSocket:", ws_url)
 
             def on_open(ws):
-                print("[WS] Opened, subscribing to time bars + trades...")
-                # Time bars subscription (existing behavior)
+                print("WebSocket opened, subscribing to TimeBars and Trades...")
                 try:
-                    info_tb = subscribe_time_bars(token, stream_id, es_symbol)
-                    print("[WS] TimeBars subscribe:", info_tb)
+                    tb_info = subscribe_time_bars(token, stream_id, es_symbol)
+                    print("[SUBSCRIBE] TimeBars response:", tb_info)
                 except Exception as e:
-                    print("[WS] Subscribe TimeBars error:", e)
+                    print("[SUBSCRIBE] TimeBars error in on_open:", e)
 
-                # Trades subscription (new)
                 try:
-                    info_tr = subscribe_trades(token, stream_id, es_symbol)
-                    print("[WS] Trades subscribe:", info_tr)
+                    tr_info = subscribe_trades(token, stream_id, es_symbol)
+                    print("[SUBSCRIBE] Trades response:", tr_info)
                 except Exception as e:
-                    print("[WS] Subscribe Trades error:", e)
+                    print("[SUBSCRIBE] Trades error in on_open:", e)
 
             def on_message(ws, message: str):
                 if DEBUG_WS_RAW:
@@ -502,13 +487,13 @@ def run_worker():
                 if "p" in msg:
                     return
 
-                # 1m bars
+                # Time bars
                 new_bars = parse_time_bars_from_message(msg)
                 if new_bars:
                     print(f"[WS] Got {len(new_bars)} new time bars.")
                     write_bars_to_db(new_bars, engine)
 
-                # tick trades
+                # Trades
                 new_trades = parse_trades_from_message(msg)
                 if new_trades:
                     print(f"[WS] Got {len(new_trades)} new trades.")
@@ -541,7 +526,7 @@ def run_worker():
         except Exception as e:
             print("[TOP-LEVEL] worker error:", e)
 
-        print("[TOP-LEVEL] WebSocket disconnected or error; reconnecting in 5 seconds...")
+        print("WebSocket disconnected or error; reconnecting in 5 seconds...")
         time.sleep(5)
 
 
