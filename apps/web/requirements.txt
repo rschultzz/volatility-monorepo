@@ -8,3 +8,4 @@ SQLAlchemy>=2.0
 psycopg[binary,pool]>=3.2
 dash-auth
 dash-bootstrap-components>=1.6.0
+psycopg2
