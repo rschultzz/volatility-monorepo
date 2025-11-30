@@ -28,28 +28,53 @@ engine = create_engine(db_url, pool_pre_ping=True)
 def register_ironbeam_callbacks(app):
     @app.callback(
         Output("ironbeam-chart", "figure"),
-        Input("ironbeam-interval", "n_intervals"),
+        [Input("trade-date", "date"), Input("ironbeam-interval", "n_intervals")],
         State("ironbeam-chart", "relayoutData"),  # Read the current zoom/pan state
     )
-    def update_chart(n, relayout_data):
-        # Fetch the last 24 hours of data
+    def update_chart(trade_date, n, relayout_data):
+        if not trade_date:
+            # Initially, no date might be selected
+            return go.Figure(layout_title_text="Select a trade date to view chart.")
+
+        # Parse the date and define the full day in Pacific Time
+        try:
+            selected_date = dt.datetime.strptime(trade_date, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return go.Figure(layout_title_text="Invalid date format.")
+
+        pt_tz = ZoneInfo("America/Los_Angeles")
+        start_of_day_pt = dt.datetime.combine(selected_date, dt.time.min, tzinfo=pt_tz)
+        # End of day is start of next day, for a non-inclusive upper bound
+        end_of_day_pt = dt.datetime.combine(
+            selected_date + dt.timedelta(days=1), dt.time.min, tzinfo=pt_tz
+        )
+
+        # Convert to UTC for the database query
+        start_utc = start_of_day_pt.astimezone(ZoneInfo("UTC"))
+        end_utc = end_of_day_pt.astimezone(ZoneInfo("UTC"))
+
+        # Fetch data for the selected date
         query = text(
             f"""
             SELECT * FROM {DB_TABLE_NAME}
-            WHERE datetime >= (NOW() AT TIME ZONE 'utc') - INTERVAL '24 hours'
+            WHERE datetime >= :start_date AND datetime < :end_date
             ORDER BY datetime ASC
         """
         )
+        params = {"start_date": start_utc, "end_date": end_utc}
+
         try:
             with engine.connect() as connection:
-                df = pd.read_sql(query, connection, parse_dates=["datetime"])
+                df = pd.read_sql(
+                    query, connection, params=params, parse_dates=["datetime"]
+                )
         except Exception as e:
             print(f"Error fetching data: {e}")
             return go.Figure(layout_title_text="Database error.")
 
         if df.empty:
             return go.Figure(
-                layout_title_text="No data available for the last 24 hours."
+                layout_title_text=f"No data available for {selected_date.strftime('%Y-%m-%d')}."
             )
 
         df["datetime_pt"] = (
@@ -71,7 +96,7 @@ def register_ironbeam_callbacks(app):
             ]
         )
         fig.update_layout(
-            title="ES Front Month - 1m OHLC (Last 24 Hours)",
+            title=f"ES Front Month - 1m OHLC ({selected_date.strftime('%Y-%m-%d')})",
             xaxis_title="Time (Pacific Time)",
             yaxis_title="Price",
             xaxis_rangeslider_visible=False,
