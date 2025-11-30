@@ -26,44 +26,6 @@ db_url = _get_db_url()
 engine = create_engine(db_url, pool_pre_ping=True)
 
 
-def _fetch_gex_for_heatmap(trade_date: dt.date) -> pd.Series:
-    """
-    Returns a pandas Series with level as the index and total_gamma as the values.
-
-    Source table:
-      orats_oi_gamma with columns: trade_date, ticker, discounted_level, gex_call, gex_put
-    """
-    dialect = engine.dialect.name
-    level_expr = (
-        "ROUND(discounted_level)::INT"
-        if dialect == "postgresql"
-        else "CAST(ROUND(discounted_level) AS INTEGER)"
-    )
-
-    where = ["trade_date = :d", "discounted_level IS NOT NULL"]
-    params: dict[str, object] = {"d": trade_date.isoformat()}
-    if TICKER:
-        where.append("ticker = :tkr")
-        params["tkr"] = TICKER
-
-    sql = f"""
-        SELECT
-            {level_expr} AS level,
-            COALESCE(SUM(gex_call), 0) + COALESCE(SUM(gex_put), 0) AS total_gamma
-        FROM orats_oi_gamma
-        WHERE {" AND ".join(where)}
-        GROUP BY {level_expr}
-        ORDER BY {level_expr}
-    """
-
-    with engine.connect() as con:
-        df = pd.read_sql(text(sql), con, params=params, index_col="level")
-
-    if df.empty:
-        return pd.Series(dtype="float64", name="total_gamma")
-    return df["total_gamma"]
-
-
 def register_ironbeam_callbacks(app):
     @app.callback(
         Output("ironbeam-chart", "figure"),
@@ -79,6 +41,7 @@ def register_ironbeam_callbacks(app):
         except (ValueError, TypeError):
             return go.Figure(layout_title_text="Invalid date format.")
 
+        # --- Data Fetching ---
         try:
             pt_tz = ZoneInfo("America/Los_Angeles")
             start_of_day_pt = dt.datetime.combine(
@@ -90,29 +53,54 @@ def register_ironbeam_callbacks(app):
             start_utc = start_of_day_pt.astimezone(ZoneInfo("UTC"))
             end_utc = end_of_day_pt.astimezone(ZoneInfo("UTC"))
 
-            query = text(
-                f"""
-                SELECT * FROM {DB_TABLE_NAME}
-                WHERE datetime >= :start_date AND datetime < :end_date
-                ORDER BY datetime ASC
-            """
-            )
-            params = {"start_date": start_utc, "end_date": end_utc}
-
+            # Use a single connection for both queries
             with engine.connect() as connection:
+                # Fetch OHLC data
+                query_ohlc = text(
+                    f"SELECT * FROM {DB_TABLE_NAME} WHERE datetime >= :start_date AND datetime < :end_date ORDER BY datetime ASC"
+                )
+                params_ohlc = {"start_date": start_utc, "end_date": end_utc}
                 df = pd.read_sql(
-                    query, connection, params=params, parse_dates=["datetime"]
+                    query_ohlc, connection, params=params_ohlc, parse_dates=["datetime"]
                 )
 
-            gex_series = _fetch_gex_for_heatmap(selected_date)
+                # Fetch Gamma data
+                dialect = connection.dialect.name
+                level_expr = (
+                    "ROUND(discounted_level)::INT"
+                    if dialect == "postgresql"
+                    else "CAST(ROUND(discounted_level) AS INTEGER)"
+                )
+                where = ["trade_date = :d", "discounted_level IS NOT NULL"]
+                params_gex: dict[str, object] = {"d": selected_date.isoformat()}
+                if TICKER:
+                    where.append("ticker = :tkr")
+                    params_gex["tkr"] = TICKER
+
+                query_gex = text(
+                    f"""
+                    SELECT {level_expr} AS level, COALESCE(SUM(gex_call), 0) + COALESCE(SUM(gex_put), 0) AS total_gamma
+                    FROM orats_oi_gamma WHERE {" AND ".join(where)}
+                    GROUP BY {level_expr} ORDER BY {level_expr}
+                """
+                )
+                gex_df = pd.read_sql(
+                    query_gex, connection, params=params_gex, index_col="level"
+                )
+                gex_series = (
+                    gex_df["total_gamma"]
+                    if not gex_df.empty
+                    else pd.Series(dtype="float64")
+                )
 
         except Exception as e:
-            print(f"Error fetching data: {e}")
+            print(f"Error fetching data for {trade_date}: {e}")
             return go.Figure(layout_title_text="Database error.")
 
+        # --- Figure Creation ---
         if df.empty:
             return go.Figure(
-                layout_title_text=f"No data available for {selected_date.strftime('%Y-%m-%d')}."
+                layout_title_text=f"No OHLC data for {selected_date.strftime('%Y-%m-%d')}."
             )
 
         df["datetime_pt"] = (
@@ -121,7 +109,7 @@ def register_ironbeam_callbacks(app):
 
         fig = go.Figure()
 
-        # Add Candlestick chart
+        # Add Candlestick trace
         fig.add_trace(
             go.Candlestick(
                 x=df["datetime_pt"],
@@ -135,12 +123,12 @@ def register_ironbeam_callbacks(app):
             )
         )
 
-        # Add Gamma Heatmap
+        # Add Gamma Heatmap trace
         if not gex_series.empty:
-            z_data = [
-                [gamma_val] * len(df["datetime_pt"])
-                for gamma_val in gex_series.values
-            ]
+            z_data = []
+            for gamma_value in gex_series.values:
+                z_data.append([gamma_value] * len(df["datetime_pt"]))
+
             fig.add_trace(
                 go.Heatmap(
                     x=df["datetime_pt"],
@@ -154,6 +142,7 @@ def register_ironbeam_callbacks(app):
                 )
             )
 
+        # --- Layout and Axes ---
         fig.update_layout(
             title=f"ES Front Month - 1m OHLC with Gamma Overlay ({selected_date.strftime('%Y-%m-%d')})",
             xaxis_title="Time (Pacific Time)",
