@@ -14,7 +14,7 @@ DB_TABLE_NAME = os.environ.get("IRONBEAM_BARS_TABLE", "ironbeam_es_1m_bars")
 
 # Candle colors (reuse GEX colors so it all feels consistent)
 PUT_COLOR = os.getenv("GEX_PUT_COLOR", "#E5E7EB")   # down candles
-CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#334155") # up candles
+CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#60a5fa") # up candles
 
 # Ticker for the GEX table
 TICKER = os.getenv("GEX_TICKER", "SPX")
@@ -22,11 +22,12 @@ TICKER = os.getenv("GEX_TICKER", "SPX")
 # How far above/below price we keep GEX levels (index points)
 GEX_LEVEL_PADDING = float(os.getenv("GEX_LEVEL_PADDING", "150"))
 
-# Only show heatmap where |net_gamma| >= this threshold (default: 10B)
-GEX_ABS_THRESHOLD = float(os.getenv("GEX_ABS_THRESHOLD", "1e10"))
+# Default minimum |GEX| for plotting (in raw units, not billions).
+# Slider overrides this.
+GEX_ABS_THRESHOLD_DEFAULT = float(os.getenv("GEX_ABS_THRESHOLD", "1e10"))
 
 # Color span logic:
-# - If GEX_COLOR_ABS_MAX > 0, we clamp colors to ±that value (e.g. 2e11 for ±200B)
+# - If GEX_COLOR_ABS_MAX > 0, we clamp colors to ±that value
 # - Else we use the given percentile of |net_gamma| (default: 95)
 GEX_COLOR_ABS_MAX = float(os.getenv("GEX_COLOR_ABS_MAX", "0"))
 GEX_COLOR_PERCENTILE = float(os.getenv("GEX_COLOR_PERCENTILE", "95"))
@@ -40,10 +41,8 @@ GEX_HEATMAP_COLORSCALE = [
     [0.25, "#60a5fa"],  # medium negative (lighter blue)
     [0.5,  "#020617"],  # near zero (very dark slate / bg)
     [0.75, "#22c55e"],  # medium positive (green)
-    [1.0,  "#bbf7d0"],  # strong positive (bright pale green)
+    [1.0,  "#bbf7d0"],  # strong positive (pale green)
 ]
-
-
 
 
 # ---------- DB engine ----------
@@ -61,23 +60,19 @@ engine = create_engine(db_url, pool_pre_ping=True)
 # ---------- GEX helper ----------
 def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
     """
-    Mirror of gamma/callbacks logic:
-
     Returns columns:
-      level (float), net_gamma (float)
+      level, call_gamma, put_gamma, net_gamma
 
     Source table:
       orats_oi_gamma with columns: trade_date, ticker,
       discounted_level, gex_call, gex_put
 
     Convention:
-      - Sum gex_call and gex_put by rounded discounted_level
-      - Puts are treated as negative (to match your gamma chart)
+      - puts are negative
       - net_gamma = call_gamma + put_gamma
     """
     dialect = engine.dialect.name
 
-    # Postgres vs SQLite rounding syntax
     level_expr = (
         "ROUND(discounted_level)::INT"
         if dialect == "postgresql"
@@ -106,30 +101,45 @@ def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
 
     if df.empty:
         return pd.DataFrame(
-            columns=["level", "net_gamma"]
-        ).astype({"level": "float64", "net_gamma": "float64"})
+            columns=["level", "call_gamma", "put_gamma", "net_gamma"]
+        ).astype(
+            {
+                "level": "float64",
+                "call_gamma": "float64",
+                "put_gamma": "float64",
+                "net_gamma": "float64",
+            }
+        )
 
-    # Match gamma/callbacks convention: puts negative, calls positive
     df["call_gamma"] = df["call_gamma_raw"].astype(float)
-    df["put_gamma"] = -df["put_gamma_raw"].abs().astype(float)
+    df["put_gamma"] = -df["put_gamma_raw"].abs().astype(float)  # puts negative
     df["net_gamma"] = df["call_gamma"] + df["put_gamma"]
-
     df["level"] = df["level"].astype(float)
 
-    return df[["level", "net_gamma"]]
+    return df[["level", "call_gamma", "put_gamma", "net_gamma"]]
 
 
 # ---------- Dash callback registration ----------
 def register_ironbeam_callbacks(app):
     @app.callback(
         Output("ironbeam-chart", "figure"),
-        [Input("trade-date", "date"), Input("ironbeam-interval", "n_intervals")],
+        [
+            Input("trade-date", "date"),
+            Input("ironbeam-interval", "n_intervals"),
+            Input("gex-threshold-billions", "value"),  # slider value in billions
+        ],
     )
-    def update_chart(trade_date, n):
+    def update_chart(trade_date, n, threshold_billions):
         if not trade_date:
             return go.Figure(layout_title_text="Select a trade date to view chart.")
 
-        # ----- Parse selected trade date (this is the SPX/ORATS trade_date) -----
+        # Convert slider value (billions) to raw units
+        if threshold_billions is None:
+            current_threshold = GEX_ABS_THRESHOLD_DEFAULT
+        else:
+            current_threshold = float(threshold_billions) * 1e9
+
+        # ----- Parse selected trade date -----
         try:
             selected_date = dt.datetime.strptime(trade_date, "%Y-%m-%d").date()
         except (ValueError, TypeError):
@@ -137,9 +147,7 @@ def register_ironbeam_callbacks(app):
 
         pt_tz = ZoneInfo("America/Los_Angeles")
 
-        # Time window in PT:
-        # For trade_date D, show ES from: D-1 15:00 PT  ->  D 13:00 PT
-        # and plot GEX for trade_date = D across that whole window.
+        # Time window in PT: D-1 15:00 → D 13:00
         start_pt = dt.datetime.combine(
             selected_date - dt.timedelta(days=1),
             dt.time(15, 0),
@@ -198,7 +206,7 @@ def register_ironbeam_callbacks(app):
             df_gex = _fetch_gex_grouped_by_level(selected_date)
         except Exception as e:
             print(f"Error fetching GEX data: {e}")
-            df_gex = pd.DataFrame(columns=["level", "net_gamma"])
+            df_gex = pd.DataFrame(columns=["level", "call_gamma", "put_gamma", "net_gamma"])
 
         # ----- Filter GEX to a band around price to avoid clutter -----
         if not df_gex.empty:
@@ -209,9 +217,8 @@ def register_ironbeam_callbacks(app):
         # ---------- Build figure ----------
         fig = go.Figure()
 
-        # 1) GEX heatmap (GEX for D, from 15:00 prev day → 13:00 on D)
+        # 1) GEX heatmap
         if not df_gex.empty:
-            # time grid for the heatmap: full window at 1-minute resolution
             time_index = pd.date_range(
                 start=start_pt,
                 end=end_pt,
@@ -221,32 +228,35 @@ def register_ironbeam_callbacks(app):
             times = time_index.to_pydatetime()
 
             levels = df_gex["level"].values
+            call_gex = df_gex["call_gamma"].values
+            put_gex = df_gex["put_gamma"].values
             net_gex = df_gex["net_gamma"].values
 
-            # Tile net GEX horizontally across all timestamps
+            # Tile net GEX horizontally across all timestamps (what we color by)
             z = np.tile(net_gex.reshape(-1, 1), (1, len(times)))
 
-            # Apply magnitude threshold: values below |threshold| become NaN (transparent)
-            if GEX_ABS_THRESHOLD > 0:
-                mask = np.abs(z) < GEX_ABS_THRESHOLD
+            # ---- Threshold: keep rows where either side is big ----
+            # magnitude_for_threshold ~ total size of calls+puts at that level
+            mag = np.abs(call_gex) + np.abs(put_gex)
+            if current_threshold > 0:
+                mag_z = np.tile(mag.reshape(-1, 1), (1, len(times)))
+                mask = mag_z < current_threshold
                 z = np.where(mask, np.nan, z)
-                color_base = net_gex[np.abs(net_gex) >= GEX_ABS_THRESHOLD]
+                color_base = net_gex[mag >= current_threshold]
             else:
                 color_base = net_gex
 
-            # ---- Choose color span ----
             if color_base.size == 0:
                 color_base = net_gex
 
+            # ---- Color span: cater to the cluster, not monsters ----
             if color_base.size:
                 if GEX_COLOR_ABS_MAX > 0:
                     color_span = GEX_COLOR_ABS_MAX
                 else:
-                    # Percentile of |GEX| (e.g. 95th), so most levels use full color range
                     color_span = float(
                         np.nanpercentile(np.abs(color_base), GEX_COLOR_PERCENTILE)
                     )
-                    # Fallback if something weird happens
                     if not np.isfinite(color_span) or color_span <= 0:
                         color_span = float(np.nanmax(np.abs(color_base))) or 1.0
             else:
@@ -258,7 +268,7 @@ def register_ironbeam_callbacks(app):
                     y=levels,
                     z=z,
                     coloraxis="coloraxis",
-                    opacity=0.45,  # colors visible but candles still readable
+                    opacity=0.45,
                     hovertemplate=(
                         "Time=%{x|%H:%M}<br>"
                         "Level=%{y}<br>"

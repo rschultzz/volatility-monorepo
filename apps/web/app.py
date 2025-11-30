@@ -268,7 +268,48 @@ app.layout = html.Div(
             },
         ),
         html.Hr(style={"borderColor": "#333"}),
-        ironbeam_layout(),
+        # ===== Ironbeam section + GEX threshold slider =====
+        html.Div(
+            [
+                html.Div(
+                    [
+                        html.Label(
+                            "Min |Net GEX| (Billions)",
+                            style={
+                                "color": "white",
+                                "marginBottom": "4px",
+                                "fontSize": "12px",
+                            },
+                        ),
+                        dcc.Slider(
+                            id="gex-threshold-billions",
+                            min=0,
+                            max=300,    # 0–800B
+                            step=10,    # 10B steps
+                            value=100,  # default 100B
+                            marks={
+                                0: "0",
+                                50: "50",
+                                100: "100",
+                                150: "150",
+                                200: "200",
+                                250: "250",
+                            },
+                            tooltip={
+                                "placement": "bottom",
+                                "always_visible": False,
+                            },
+                        ),
+                    ],
+                    style={
+                        "maxWidth": "480px",
+                        "margin": "0 0 12px 0",
+                    },
+                ),
+                ironbeam_layout(),
+            ],
+            style={"marginTop": "8px"},
+        ),
     ],
     style={
         "backgroundColor": "black",
