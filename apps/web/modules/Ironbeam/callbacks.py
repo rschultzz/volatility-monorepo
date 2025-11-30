@@ -133,16 +133,15 @@ def register_ironbeam_callbacks(app):
             Input("ironbeam-interval", "n_intervals"),
             Input("gex-threshold-billions", "value"),  # slider value in billions
             Input("smile-time-input", "value"),        # selected PT slices
-            Input("ironbeam-y-zoom", "value"),         # vertical zoom factor
         ],
     )
-    def update_chart(trade_date, n, threshold_billions, selected_times_pt, y_zoom):
+    def update_chart(trade_date, n, threshold_billions, selected_times_pt):
         if not trade_date:
             return go.Figure(layout_title_text="Select a trade date to view chart.")
 
         # Normalize selected times to a list of strings like ["06:31", "10:15"]
         if selected_times_pt is None:
-            selected_times = []
+            selected_times: list[str] = []
         elif isinstance(selected_times_pt, list):
             selected_times = [str(t) for t in selected_times_pt]
         else:
@@ -153,11 +152,6 @@ def register_ironbeam_callbacks(app):
             current_threshold = GEX_ABS_THRESHOLD_DEFAULT
         else:
             current_threshold = float(threshold_billions) * 1e9
-
-        # Y-zoom factor: <1 = zoom in (more stretched), >1 = zoom out
-        zoom_factor = float(y_zoom) if y_zoom is not None else 1.0
-        if zoom_factor <= 0:
-            zoom_factor = 1.0
 
         # ----- Parse selected trade date -----
         try:
@@ -233,7 +227,7 @@ def register_ironbeam_callbacks(app):
         underlying_low = float(df_bars["low"].min())
         underlying_high = float(df_bars["high"].max())
 
-        # --- Session for y-range: previous day 15:00 → trade date 13:00 PT ---
+        # --- Session for default y-envelope: previous day 15:00 → trade date 13:00 PT ---
         dt_pt = df_bars["datetime_pt"]
         session_start_pt = start_pt
         session_end_pt = end_pt
@@ -246,20 +240,13 @@ def register_ironbeam_callbacks(app):
         day_high = float(ref_df["high"].max())
 
         if day_high > 0 and day_high > day_low:
-            base_low = day_low * 0.99
-            base_high = day_high * 1.01
-            center = 0.5 * (base_low + base_high)
-            half_span = 0.5 * (base_high - base_low)
-            half_span *= zoom_factor
-            y_min_price = center - half_span
-            y_max_price = center + half_span
+            y_min_price = day_low * 0.99
+            y_max_price = day_high * 1.01
         else:
             # Safety fallback if prices are weird
             y_pad = 0.01 * (day_high - day_low) if day_high > day_low else 1.0
             y_min_price = day_low - y_pad
             y_max_price = day_high + y_pad
-
-        y_range = [y_min_price, y_max_price]
 
         # ----- Fetch GEX levels for the same trade_date (D) -----
         try:
@@ -393,7 +380,25 @@ def register_ironbeam_callbacks(app):
                     )
                 )
 
-        # 4) Layout + RTH shading
+        # 4) Invisible anchors so *default* autorange sees the 1% envelope as extremes
+        fig.add_trace(
+            go.Scatter(
+                x=[
+                    df_bars["datetime_pt"].min(),
+                    df_bars["datetime_pt"].max(),
+                ],
+                y=[
+                    y_min_price,
+                    y_max_price,
+                ],
+                mode="markers",
+                marker=dict(size=0, opacity=0),
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+
+        # 5) Layout + RTH shading (NO yaxis.range / autorange here)
         fig.update_layout(
             title=(
                 "ES Front Month - 1m OHLC with Net GEX Heatmap "
@@ -404,24 +409,18 @@ def register_ironbeam_callbacks(app):
             yaxis_title="Price / Discounted Level",
             template="plotly_dark",
             hovermode="closest",
+            dragmode="pan",
             uirevision="ironbeam-gex",  # keeps zoom / rangeslider state
             clickmode="event",          # click events only; no selection/fade
             xaxis=dict(
-                rangeslider=dict(visible=True),
+                rangeslider=dict(visible=False),
                 showspikes=True,
                 spikedash="dot",
                 spikemode="across",
                 spikesnap="cursor",
                 hoverformat="%H:%M:%S",
             ),
-            yaxis=dict(
-                range=y_range,
-                showspikes=True,
-                spikedash="dot",
-                spikemode="across",
-                spikesnap="cursor",
-                hoverformat="%.2f",
-            ),
+            # IMPORTANT: do NOT set yaxis.range or yaxis.autorange here
             shapes=[
                 dict(
                     type="rect",
@@ -439,7 +438,18 @@ def register_ironbeam_callbacks(app):
             ],
         )
 
+        # Style-only tweaks for Y (no range/autorange), and explicitly unlock zoom
+        fig.update_yaxes(
+            fixedrange=False,          # <-- this is the key line
+            showspikes=True,
+            spikedash="dot",
+            spikemode="across",
+            spikesnap="cursor",
+            hoverformat="%.2f",
+        )
+
         return fig
+
 
     # ---- Click on ES bar -> toggle PT time in Smile/Skew time slices ----
     @app.callback(
