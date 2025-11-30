@@ -19,8 +19,8 @@ Environment variables expected:
   DATABASE_URL             (required – Postgres URL)
   IRONBEAM_BARS_TABLE      (optional – default "ironbeam_es_1m_bars")
   IRONBEAM_TRADES_TABLE    (optional – default "ironbeam_es_trades")
-  IRONBEAM_API_BASE        (optional – overrides demo/live base URL)
-  IRONBEAM_WS_BASE         (optional – overrides WS base URL)
+  IRONBEAM_API_BASE        (optional – defaults to demo: https://demo.ironbeamapi.com/v2)
+  IRONBEAM_WS_BASE         (optional – defaults to demo: wss://demo.ironbeamapi.com/v2/stream)
 """
 
 import json
@@ -53,16 +53,16 @@ DB_TRADES_TABLE = os.environ.get("IRONBEAM_TRADES_TABLE", "ironbeam_es_trades")
 # How many 1-minute bars to initially load
 LOAD_SIZE = int(os.environ.get("IRONBEAM_LOAD_SIZE", "2000"))
 
-# Debug toggles
-DEBUG_HTTP = True
-DEBUG_WS_RAW = False   # set True temporarily if you want to see raw WS messages
-DEBUG_WS_KEYS = True   # log top-level keys of each WS payload
+# Debug toggles (can override via env if you want)
+DEBUG_HTTP = os.environ.get("IRONBEAM_DEBUG_HTTP", "true").lower() == "true"
+DEBUG_WS_RAW = os.environ.get("IRONBEAM_DEBUG_WS_RAW", "false").lower() == "true"
 
 MONTH_MAP = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
     "MAY": 5, "JUN": 6, "JUL": 7, "AUG": 8,
-    "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+    "SEP": 9, "OCT": 10, "NOV": 12, "DEC": 12,
 }
+MONTH_MAP["NOV"] = 11  # typo fix
 
 # ---------------------------------------------------------------------------
 # DB HELPERS
@@ -108,7 +108,7 @@ def authenticate() -> str:
     resp = requests.post(url, json=payload)
     if DEBUG_HTTP:
         print("AUTH status:", resp.status_code)
-        print("AUTH body:", resp.text[:500])
+        print("AUTH body:", resp.text[:300])
     resp.raise_for_status()
     data = resp.json()
 
@@ -129,7 +129,7 @@ def discover_es_front_month(token: str) -> str:
     resp = requests.get(url, headers=headers)
     if DEBUG_HTTP:
         print("SYMBOL FUTURES status:", resp.status_code)
-        print("SYMBOL FUTURES body:", resp.text[:500])
+        print("SYMBOL FUTURES body:", resp.text[:300])
     resp.raise_for_status()
     data = resp.json()
 
@@ -172,7 +172,7 @@ def create_stream(token: str) -> str:
     resp = requests.get(url, headers=headers)
     if DEBUG_HTTP:
         print("STREAM CREATE status:", resp.status_code)
-        print("STREAM CREATE body:", resp.text[:500])
+        print("STREAM CREATE body:", resp.text[:300])
     resp.raise_for_status()
     data = resp.json()
     if data.get("status") != "OK":
@@ -204,7 +204,7 @@ def subscribe_time_bars(token: str, stream_id: str, symbol: str) -> Dict[str, An
     resp = requests.post(url, headers=headers, json=payload)
     print("TIME BARS SUBSCRIBE status:", resp.status_code)
     if DEBUG_HTTP:
-        print("TIME BARS SUBSCRIBE body:", resp.text[:500])
+        print("TIME BARS SUBSCRIBE body:", resp.text[:300])
 
     # Known quirk: 400/"Can't subscribe to time bars" but data still flows.
     if resp.status_code == 400 and "Can't subscribe to time bars" in resp.text:
@@ -232,7 +232,7 @@ def subscribe_trades(token: str, stream_id: str, symbol: str) -> Dict[str, Any]:
     resp = requests.get(url, headers=headers, params=params)
     print("TRADES SUBSCRIBE status:", resp.status_code)
     if DEBUG_HTTP:
-        print("TRADES SUBSCRIBE body:", resp.text[:500])
+        print("TRADES SUBSCRIBE body:", resp.text[:300])
 
     resp.raise_for_status()
     try:
@@ -311,9 +311,12 @@ def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Parse trades from a WebSocket message. Looks for 'tr' entries.
 
-    We now:
-      - Accept both long and short field names (symbol vs s, price vs p, etc.)
-      - Fall back to "now" if we can't parse a timestamp so we don't silently drop trades.
+    Example trade payload we saw:
+
+      {'s': 'XCME:ES.Z25', 'p': 6851.5, 'ch': -8, 'sz': 5,
+       'sq': 170785, 'st': 1764546684118, 'td': 1, 'as': 1,
+       'tdt': '20251130', 'is': False, 'clx': False, 'spt': 0,
+       'ist': 0, 'bt': 0}
     """
     trades: List[Dict[str, Any]] = []
 
@@ -328,43 +331,20 @@ def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not isinstance(tr, dict):
             continue
 
-        # ---- Timestamp: be forgiving ----
-        ts_raw = (
-            tr.get("sendTime")
-            or tr.get("t")
-            or tr.get("tt")
-            or tr.get("tc")
-        )
+        # Timestamp: Ironbeam uses 'st' (sendTime ms)
+        ts_raw = tr.get("st") or tr.get("sendTime") or tr.get("t")
         ts_utc = _to_utc_from_epoch(ts_raw)
         if ts_utc is None:
-            # Don't silently discard the trade if the timestamp format is weird;
-            # fallback to "now" so we at least capture the tick.
             ts_utc = dt.datetime.now(dt.timezone.utc)
 
-        # ---- Core fields (support both compact and verbose keys) ----
         symbol = tr.get("s") or tr.get("symbol")
-
-        price = (
-            tr.get("p")      # compact form
-            or tr.get("price")
-            or tr.get("la")  # some feeds use la = last
-            or tr.get("l")
-        )
-        size = (
-            tr.get("sz")
-            or tr.get("size")
-            or tr.get("q")
-            or tr.get("qty")
-        )
-        total_volume = (
-            tr.get("tv")
-            or tr.get("totalVolume")
-        )
+        price = tr.get("p") or tr.get("price") or tr.get("la") or tr.get("l")
+        size = tr.get("sz") or tr.get("size") or tr.get("q") or tr.get("qty")
+        total_volume = tr.get("tv") or tr.get("totalVolume")
 
         try:
             price = float(price)
         except (TypeError, ValueError):
-            # If we can't even get a price, skip this trade
             continue
 
         try:
@@ -377,11 +357,11 @@ def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
         except (TypeError, ValueError):
             total_volume = None
 
-        trade_id = tr.get("tradeId")
-        seq = tr.get("sequenceNumber")
-        aggr = tr.get("aggressorSide")
-        tick_dir = tr.get("tickDirection")
-        trade_date = tr.get("tradeDate")
+        trade_id = tr.get("tradeId")  # not present in sample, so stays None
+        seq = tr.get("sq") or tr.get("sequenceNumber")
+        aggr = tr.get("as") or tr.get("aggressorSide")
+        tick_dir = tr.get("td") or tr.get("tickDirection")
+        trade_date = tr.get("tdt") or tr.get("tradeDate")
 
         trades.append(
             {
@@ -399,7 +379,6 @@ def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
         )
 
     return trades
-
 
 # ---------------------------------------------------------------------------
 # DB WRITERS
@@ -459,6 +438,7 @@ def run_worker():
     db_url = _get_db_url()
     engine = create_engine(db_url, pool_pre_ping=True)
     print(f"[INIT] Using DB tables bars='{DB_BARS_TABLE}', trades='{DB_TRADES_TABLE}'")
+    print(f"[INIT] API_BASE={API_BASE}, WS_BASE={WS_BASE}")
 
     # if DEBUG_WS_RAW:
     #     websocket.enableTrace(True)
@@ -488,7 +468,6 @@ def run_worker():
                     print("[SUBSCRIBE] Trades error in on_open:", e)
 
             def on_message(ws, message: str):
-                # Optional: raw dump
                 if DEBUG_WS_RAW:
                     print("WS RAW:", message)
 
@@ -498,29 +477,21 @@ def run_worker():
                     print("[WS] bad JSON message")
                     return
 
-                keys = list(msg.keys())
-                print("[WS] Message keys:", keys)
+                # Ignore pure ping messages (Ironbeam sends "p" occasionally)
+                if list(msg.keys()) == ["p"]:
+                    return
 
-                # ---- Time bars ----
+                # Time bars
                 new_bars = parse_time_bars_from_message(msg)
                 if new_bars:
-                    print(f"[WS] Parsed {len(new_bars)} time bars. First bar: {new_bars[0]}")
+                    print(f"[WS] Got {len(new_bars)} time bars.")
                     write_bars_to_db(new_bars, engine)
 
-                # ---- Trades ----
-                if "tr" in msg:
-                    raw_tr = msg["tr"]
-                    # Quick peek at schema so we can see what Ironbeam is sending
-                    if isinstance(raw_tr, list) and raw_tr:
-                        print(f"[WS] Sample tr[0]: {raw_tr[0]}")
-                    elif isinstance(raw_tr, dict):
-                        print(f"[WS] Sample tr dict: {raw_tr}")
-                    else:
-                        print(f"[WS] tr field type={type(raw_tr)} value={raw_tr}")
-
+                # Trades
                 new_trades = parse_trades_from_message(msg)
                 if new_trades:
-                    print(f"[WS] Parsed {len(new_trades)} trades. First trade: {new_trades[0]}")
+                    # Log just the first one for sanity
+                    print(f"[WS] Got {len(new_trades)} trades. First trade: {new_trades[0]}")
                     write_trades_to_db(new_trades, engine)
 
             def on_error(ws, error):
@@ -551,7 +522,6 @@ def run_worker():
 
         print("WebSocket disconnected or error; reconnecting in 5 seconds...")
         time.sleep(5)
-
 
 
 if __name__ == "__main__":
