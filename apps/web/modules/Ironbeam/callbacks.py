@@ -173,6 +173,19 @@ def register_ironbeam_callbacks(app):
             tzinfo=pt_tz,
         )
 
+        # RTH window for background shading: 06:30–13:00 PT on the trade date
+        rth_start_pt = dt.datetime.combine(
+            selected_date,
+            dt.time(6, 30),
+            tzinfo=pt_tz,
+        )
+        rth_end_pt = dt.datetime.combine(
+            selected_date,
+            dt.time(13, 0),
+            tzinfo=pt_tz,
+        )
+
+
         # Convert to UTC for DB query
         start_utc = start_pt.astimezone(ZoneInfo("UTC"))
         end_utc = end_pt.astimezone(ZoneInfo("UTC"))
@@ -211,11 +224,42 @@ def register_ironbeam_callbacks(app):
         # Convenient HH:MM PT string for matching against Smile/Skew time slices
         df_bars["time_hhmm_pt"] = df_bars["datetime_pt"].dt.strftime("%H:%M")
 
-        # Price-based y-range so price fills chart (initially)
-        y_min_price = float(df_bars["low"].min())
-        y_max_price = float(df_bars["high"].max())
-        y_pad = 0.01 * (y_max_price - y_min_price) if y_max_price > y_min_price else 1.0
-        y_range = [y_min_price - y_pad, y_max_price + y_pad]
+        # --- Y-axis range: 1% below session low, 1% above session high ---
+        # Session = previous day 15:00 PT -> selected_date 13:00 PT
+        dt_pt = df_bars["datetime_pt"]
+
+        session_start_pt = dt.datetime.combine(
+            selected_date - dt.timedelta(days=1),
+            dt.time(15, 0),
+        ).replace(tzinfo=pt_tz)
+
+        session_end_pt = dt.datetime.combine(
+            selected_date,
+            dt.time(13, 0),
+        ).replace(tzinfo=pt_tz)
+
+        mask_session = (dt_pt >= session_start_pt) & (dt_pt <= session_end_pt)
+
+        df_session = df_bars[mask_session]
+        # Fallback to all bars if, for some reason, there are no session bars yet
+        ref_df = df_session if not df_session.empty else df_bars
+
+        day_low = float(ref_df["low"].min())
+        day_high = float(ref_df["high"].max())
+
+
+        if day_high > 0:
+            # 1% padding around the day's true high/low
+            y_min_price = day_low * 0.99
+            y_max_price = day_high * 1.01
+        else:
+            # Safety fallback if prices are weird
+            y_pad = 0.01 * (day_high - day_low) if day_high > day_low else 1.0
+            y_min_price = day_low - y_pad
+            y_max_price = day_high + y_pad
+
+        y_range = [y_min_price, y_max_price]
+
 
         # ----- Fetch GEX levels for the same trade_date (D) -----
         try:
@@ -378,7 +422,24 @@ def register_ironbeam_callbacks(app):
                 spikesnap="cursor",
                 hoverformat="%.2f",
             ),
+            # Shaded RTH band (06:30–13:00 PT) on every trade date
+            shapes=[
+                dict(
+                    type="rect",
+                    xref="x",
+                    yref="paper",
+                    x0=rth_start_pt,
+                    x1=rth_end_pt,
+                    y0=0,
+                    y1=1,
+                    fillcolor="#020617",  # slightly lighter than pure black
+                    opacity=1.0,
+                    layer="below",
+                    line=dict(width=0),
+                )
+            ],
         )
+
 
         return fig
 
