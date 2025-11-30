@@ -28,7 +28,7 @@ import dash_auth
 from modules.Skew.components import make_skew_block
 from modules.Skew.callbacks import register_callbacks as register_skew
 from modules.gamma.components import gex_block
-from modules.gamma import callbacks as _gex_callbacks
+from modules.gamma import callbacks as _gex_callbacks  # noqa: F401
 from modules.Smile.callbacks import register_callbacks as register_smile
 from modules.TermStructure.components import make_term_structure_block
 from modules.TermStructure.callbacks import register_callbacks as register_term_structure
@@ -102,6 +102,8 @@ app.layout = html.Div(
     [
         dcc.Store(id=LIVE_DATA_STORE_ID),
         dcc.Interval(id=LIVE_UPDATE_TIMER_ID, interval=15 * 1000, n_intervals=0),
+
+        # ===== Top bar =====
         html.Div(
             [
                 html.Div(
@@ -138,7 +140,10 @@ app.layout = html.Div(
                 "marginBottom": "8px",
             },
         ),
+
         dcc.Interval(id=CLOCK_ID, interval=60_000, n_intervals=0),
+
+        # ===== Global controls (date / expiration / time slices / expected) =====
         html.Div(
             [
                 html.Div(
@@ -233,7 +238,10 @@ app.layout = html.Div(
                 "flexWrap": "wrap",
             },
         ),
+
         html.Hr(style={"borderColor": "#444"}),
+
+        # ===== Smile + GEX block =====
         html.Div(
             [
                 html.Div(
@@ -249,12 +257,15 @@ app.layout = html.Div(
                 "alignItems": "stretch",
             },
         ),
+
         html.Hr(style={"borderColor": "#333"}),
+
+        # ===== Term structure / Skew / Term metrics =====
         html.Div(
             [
                 make_term_structure_block(),
                 html.Div(
-                    [  # This will be the second column
+                    [
                         make_skew_block(),
                         make_term_metrics_block(),
                     ]
@@ -267,52 +278,108 @@ app.layout = html.Div(
                 "alignItems": "stretch",
             },
         ),
+
         html.Hr(style={"borderColor": "#333"}),
-        # ===== Ironbeam section + GEX threshold slider =====
-        html.Hr(style={"borderColor": "#333"}),
-        # ===== Ironbeam section + GEX threshold slider =====
+
+        # ===== Ironbeam section + GEX threshold + Bar Interval toggle =====
         html.Div(
             [
+                # Top row: GEX slider + Bar Interval toggle side-by-side
                 html.Div(
                     [
-                        html.Label(
-                            "Min |Net GEX| (Billions)",
+                        # GEX threshold slider
+                        html.Div(
+                            [
+                                html.Label(
+                                    "Min |Net GEX| (Billions)",
+                                    style={
+                                        "color": "white",
+                                        "marginBottom": "6px",
+                                        "fontSize": "13px",
+                                        "fontWeight": "500",
+                                    },
+                                ),
+                                dcc.Slider(
+                                    id="gex-threshold-billions",
+                                    min=0,
+                                    max=300,  # 0–300B
+                                    step=10,
+                                    value=100,
+                                    marks={
+                                        0: {"label": "0", "style": {"fontSize": "11px"}},
+                                        50: {"label": "50", "style": {"fontSize": "11px"}},
+                                        100: {"label": "100", "style": {"fontSize": "11px"}},
+                                        150: {"label": "150", "style": {"fontSize": "11px"}},
+                                        200: {"label": "200", "style": {"fontSize": "11px"}},
+                                        250: {"label": "250", "style": {"fontSize": "11px"}},
+                                    },
+                                    tooltip={
+                                        "placement": "bottom",
+                                        "always_visible": False,
+                                    },
+                                ),
+                            ],
                             style={
-                                "color": "white",
-                                "marginBottom": "4px",
-                                "fontSize": "12px",
+                                "minWidth": "260px",
+                                "flex": "0 0 33%",
+                                "maxWidth": "33%",
                             },
+
                         ),
-                        dcc.Slider(
-                            id="gex-threshold-billions",
-                            min=0,
-                            max=300,  # 0–300B
-                            step=10,  # 10B steps
-                            value=100,  # default 100B
-                            marks={
-                                0: "0",
-                                50: "50",
-                                100: "100",
-                                150: "150",
-                                200: "200",
-                                250: "250",
-                            },
-                            tooltip={
-                                "placement": "bottom",
-                                "always_visible": False,
+
+                        # Bar interval toggle
+                        html.Div(
+                            [
+                                html.Label(
+                                    "Bar Interval",
+                                    style={
+                                        "color": "white",
+                                        "marginBottom": "6px",
+                                        "fontSize": "13px",
+                                        "fontWeight": "500",
+                                    },
+                                ),
+                                dcc.RadioItems(
+                                    id="ironbeam-bar-interval",
+                                    options=[
+                                        {"label": "1 min", "value": "1min"},
+                                        {"label": "5 min", "value": "5min"},
+                                    ],
+                                    value="1min",
+                                    inline=True,
+                                    labelStyle={
+                                        "marginRight": "16px",
+                                        "color": "white",
+                                        "fontSize": "13px",
+                                    },
+                                    inputStyle={"marginRight": "6px"},
+                                    style={
+                                        "paddingTop": "4px",
+                                    },
+                                ),
+                            ],
+                            style={
+                                "minWidth": "180px",
+                                "flex": "0 0 auto",
+                                "display": "flex",
+                                "flexDirection": "column",
                             },
                         ),
                     ],
                     style={
-                        "maxWidth": "480px",
-                        "margin": "0 0 12px 0",
+                        "display": "flex",
+                        "flexWrap": "wrap",
+                        "alignItems": "center",
+                        "gap": "24px",
+                        "marginBottom": "8px",
                     },
                 ),
+
+                # Ironbeam chart block (interval + graph)
                 ironbeam_layout(),
             ],
             style={"marginTop": "8px"},
         ),
-
     ],
     style={
         "backgroundColor": "black",

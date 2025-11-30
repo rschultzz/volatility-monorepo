@@ -476,7 +476,6 @@ def register_ironbeam_callbacks(app):
                 spikesnap="cursor",
                 hoverformat="%H:%M:%S",
             ),
-            # IMPORTANT: do NOT set yaxis.range or yaxis.autorange here
             shapes=[
                 dict(
                     type="rect",
