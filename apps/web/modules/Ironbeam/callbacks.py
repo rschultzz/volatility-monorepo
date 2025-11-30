@@ -1,4 +1,5 @@
 # apps/web/modules/Ironbeam/callbacks.py
+
 import os
 import datetime as dt
 from zoneinfo import ZoneInfo
@@ -123,6 +124,38 @@ def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
     return df[["level", "call_gamma", "put_gamma", "net_gamma"]]
 
 
+# ---------- Bar resampling helper ----------
+def _resample_ohlc(df: pd.DataFrame, freq: str) -> pd.DataFrame:
+    """
+    Resample a 1-minute OHLC dataframe to a coarser frequency (e.g. '5T' for 5 minutes).
+
+    Expects columns: datetime, open, high, low, close (and optionally volume).
+    """
+    if df.empty or "datetime" not in df.columns:
+        return pd.DataFrame(columns=df.columns)
+
+    df = df.sort_values("datetime").copy()
+    df = df.set_index("datetime")
+
+    agg = {
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+    }
+    # Carry volume if present
+    for vol_col in ["volume", "vol", "size"]:
+        if vol_col in df.columns:
+            agg[vol_col] = "sum"
+
+    df_resampled = df.resample(freq, label="right", closed="right").agg(agg)
+    # Drop bars that are completely empty
+    df_resampled = df_resampled.dropna(subset=["open", "high", "low", "close"])
+
+    df_resampled = df_resampled.reset_index()
+    return df_resampled
+
+
 # ---------- Dash callback registration ----------
 def register_ironbeam_callbacks(app):
     # ---- Main ES + GEX chart ----
@@ -131,11 +164,12 @@ def register_ironbeam_callbacks(app):
         [
             Input("trade-date", "date"),
             Input("ironbeam-interval", "n_intervals"),
-            Input("gex-threshold-billions", "value"),  # slider value in billions
-            Input("smile-time-input", "value"),        # selected PT slices
+            Input("gex-threshold-billions", "value"),   # slider value in billions
+            Input("smile-time-input", "value"),         # selected PT slices
+            Input("ironbeam-bar-interval", "value"),    # '1min' or '5min'
         ],
     )
-    def update_chart(trade_date, n, threshold_billions, selected_times_pt):
+    def update_chart(trade_date, n, threshold_billions, selected_times_pt, bar_interval):
         if not trade_date:
             return go.Figure(layout_title_text="Select a trade date to view chart.")
 
@@ -146,6 +180,9 @@ def register_ironbeam_callbacks(app):
             selected_times = [str(t) for t in selected_times_pt]
         else:
             selected_times = [str(selected_times_pt)]
+
+        # Normalize bar interval
+        interval = bar_interval or "1min"
 
         # Convert slider value (billions) to raw units
         if threshold_billions is None:
@@ -189,7 +226,7 @@ def register_ironbeam_callbacks(app):
         start_utc = start_pt.astimezone(ZoneInfo("UTC"))
         end_utc = end_pt.astimezone(ZoneInfo("UTC"))
 
-        # ----- Fetch 1m ES bars -----
+        # ----- Fetch 1m ES bars (raw) -----
         bars_query = text(
             f"""
             SELECT * FROM {DB_TABLE_NAME}
@@ -201,14 +238,14 @@ def register_ironbeam_callbacks(app):
 
         try:
             with engine.connect() as connection:
-                df_bars = pd.read_sql(
+                df_raw = pd.read_sql(
                     bars_query, connection, params=bars_params, parse_dates=["datetime"]
                 )
         except Exception as e:
             print(f"Error fetching bar data: {e}")
             return go.Figure(layout_title_text="Database error (bars).")
 
-        if df_bars.empty:
+        if df_raw.empty:
             return go.Figure(
                 layout_title_text=(
                     f"No bar data available for window "
@@ -216,25 +253,22 @@ def register_ironbeam_callbacks(app):
                 )
             )
 
-        # Convert to PT for display on x-axis
-        df_bars["datetime_pt"] = (
-            df_bars["datetime"].dt.tz_localize("UTC").dt.tz_convert("America/Los_Angeles")
+        # ----- Compute envelope and GEX band from raw 1m data -----
+        # Convert raw to PT for envelope calc
+        df_raw_pt = df_raw.copy()
+        df_raw_pt["datetime_pt"] = (
+            df_raw_pt["datetime"].dt.tz_localize("UTC").dt.tz_convert("America/Los_Angeles")
         )
-        # Convenient HH:MM PT string for matching against Smile/Skew time slices
-        df_bars["time_hhmm_pt"] = df_bars["datetime_pt"].dt.strftime("%H:%M")
 
         # Underlying full-session low/high (for GEX band)
-        underlying_low = float(df_bars["low"].min())
-        underlying_high = float(df_bars["high"].max())
+        underlying_low = float(df_raw["low"].min())
+        underlying_high = float(df_raw["high"].max())
 
-        # --- Session for default y-envelope: previous day 15:00 → trade date 13:00 PT ---
-        dt_pt = df_bars["datetime_pt"]
-        session_start_pt = start_pt
-        session_end_pt = end_pt
-
-        mask_session = (dt_pt >= session_start_pt) & (dt_pt <= session_end_pt)
-        df_session = df_bars[mask_session]
-        ref_df = df_session if not df_session.empty else df_bars
+        # Session for default y-envelope: previous day 15:00 → trade date 13:00 PT
+        dt_pt_all = df_raw_pt["datetime_pt"]
+        mask_session = (dt_pt_all >= start_pt) & (dt_pt_all <= end_pt)
+        df_session = df_raw_pt[mask_session]
+        ref_df = df_session if not df_session.empty else df_raw_pt
 
         day_low = float(ref_df["low"].min())
         day_high = float(ref_df["high"].max())
@@ -247,6 +281,27 @@ def register_ironbeam_callbacks(app):
             y_pad = 0.01 * (day_high - day_low) if day_high > day_low else 1.0
             y_min_price = day_low - y_pad
             y_max_price = day_high + y_pad
+
+        # ----- Apply bar-interval resampling for plotting (with fallback) -----
+        df_bars = df_raw.copy()
+        if interval == "5min":
+            df_resampled = _resample_ohlc(df_raw, "5T")
+            if df_resampled is not None and not df_resampled.empty:
+                df_bars = df_resampled
+            else:
+                # Fallback: keep 1m bars if resample failed
+                print(f"[Ironbeam] Resample to 5min returned empty for {trade_date}; using 1min bars.")
+
+        # If for some reason df_bars ended up empty, fall back again
+        if df_bars.empty:
+            df_bars = df_raw.copy()
+
+        # Convert df_bars to PT for display on x-axis
+        df_bars["datetime_pt"] = (
+            df_bars["datetime"].dt.tz_localize("UTC").dt.tz_convert("America/Los_Angeles")
+        )
+        # Convenient HH:MM PT string for matching against Smile/Skew time slices
+        df_bars["time_hhmm_pt"] = df_bars["datetime_pt"].dt.strftime("%H:%M")
 
         # ----- Fetch GEX levels for the same trade_date (D) -----
         try:
@@ -264,7 +319,7 @@ def register_ironbeam_callbacks(app):
         # ---------- Build figure ----------
         fig = go.Figure()
 
-        # 1) GEX heatmap
+        # 1) GEX heatmap (stays on 1m time grid)
         if not df_gex.empty:
             time_index = pd.date_range(
                 start=start_pt,
@@ -346,7 +401,7 @@ def register_ironbeam_callbacks(app):
                 font=dict(size=10),
             )
 
-        # 2) ES candlesticks (base layer)
+        # 2) ES candlesticks (base layer, 1m or 5m depending on interval)
         fig.add_trace(
             go.Candlestick(
                 x=df_bars["datetime_pt"],
@@ -354,7 +409,7 @@ def register_ironbeam_callbacks(app):
                 high=df_bars["high"],
                 low=df_bars["low"],
                 close=df_bars["close"],
-                name="ES",
+                name=f"ES ({interval})",
                 increasing=dict(line=dict(color=CALL_COLOR, width=1.0)),
                 decreasing=dict(line=dict(color=PUT_COLOR, width=1.0)),
                 showlegend=True,
@@ -401,7 +456,8 @@ def register_ironbeam_callbacks(app):
         # 5) Layout + RTH shading (NO yaxis.range / autorange here)
         fig.update_layout(
             title=(
-                "ES Front Month - 1m OHLC with Net GEX Heatmap "
+                "ES Front Month "
+                f"({interval}) - OHLC with Net GEX Heatmap "
                 f"(GEX for {selected_date.isoformat()}, "
                 f"window {start_pt.strftime('%Y-%m-%d %H:%M')}–{end_pt.strftime('%Y-%m-%d %H:%M')} PT)"
             ),
@@ -409,8 +465,8 @@ def register_ironbeam_callbacks(app):
             yaxis_title="Price / Discounted Level",
             template="plotly_dark",
             hovermode="closest",
-            dragmode="pan",
-            uirevision="ironbeam-gex",  # keeps zoom / rangeslider state
+            dragmode="pan",             # default tool = Pan
+            uirevision="ironbeam-gex",
             clickmode="event",          # click events only; no selection/fade
             xaxis=dict(
                 rangeslider=dict(visible=False),
@@ -440,7 +496,7 @@ def register_ironbeam_callbacks(app):
 
         # Style-only tweaks for Y (no range/autorange), and explicitly unlock zoom
         fig.update_yaxes(
-            fixedrange=False,          # <-- this is the key line
+            fixedrange=False,
             showspikes=True,
             spikedash="dot",
             spikemode="across",
@@ -449,7 +505,6 @@ def register_ironbeam_callbacks(app):
         )
 
         return fig
-
 
     # ---- Click on ES bar -> toggle PT time in Smile/Skew time slices ----
     @app.callback(
