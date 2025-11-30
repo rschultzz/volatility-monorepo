@@ -171,7 +171,7 @@ def register_ironbeam_callbacks(app):
     )
     def update_chart(trade_date, n, threshold_billions, selected_times_pt, bar_interval):
         if not trade_date:
-            return go.Figure(layout_title_text="Select a trade date to view chart.")
+            return go.Figure(layout_title_text="Select a trade to view chart.")
 
         # Normalize selected times to a list of strings like ["06:31", "10:15"]
         if selected_times_pt is None:
@@ -410,8 +410,8 @@ def register_ironbeam_callbacks(app):
                 low=df_bars["low"],
                 close=df_bars["close"],
                 name=f"ES ({interval})",
-                increasing=dict(line=dict(color=CALL_COLOR, width=1.0)),
-                decreasing=dict(line=dict(color=PUT_COLOR, width=1.0)),
+                increasing=dict(line=dict(color=CALL_COLOR, width=1.0), fillcolor=CALL_COLOR),
+                decreasing=dict(line=dict(color=PUT_COLOR, width=1.0), fillcolor=PUT_COLOR),
                 showlegend=True,
             )
         )
@@ -429,8 +429,8 @@ def register_ironbeam_callbacks(app):
                         low=df_sel["low"],
                         close=df_sel["close"],
                         name="Selected slices",
-                        increasing=dict(line=dict(color=HIGHLIGHT_COLOR, width=2.0)),
-                        decreasing=dict(line=dict(color=HIGHLIGHT_COLOR, width=2.0)),
+                        increasing=dict(line=dict(color=HIGHLIGHT_COLOR, width=2.0), fillcolor=HIGHLIGHT_COLOR),
+                        decreasing=dict(line=dict(color=HIGHLIGHT_COLOR, width=2.0), fillcolor=HIGHLIGHT_COLOR),
                         showlegend=False,
                     )
                 )
@@ -495,6 +495,7 @@ def register_ironbeam_callbacks(app):
 
         # Style-only tweaks for Y (no range/autorange), and explicitly unlock zoom
         fig.update_yaxes(
+            showgrid=False,
             fixedrange=False,
             showspikes=True,
             spikedash="dot",
