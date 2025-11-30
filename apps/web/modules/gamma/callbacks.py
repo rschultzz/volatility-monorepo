@@ -14,9 +14,9 @@ from sqlalchemy.engine.url import make_url
 # Leave 0 (default) to show the full width with a 5% padding.
 ZOOM_PCT = float(os.getenv("GEX_ZOOM_PCT", "0"))
 
-# Colors (old dash look)
-PUT_COLOR  = os.getenv("GEX_PUT_COLOR",  "#E5E7EB")  # light gray
-CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#334155")  # slate/dark blue
+# Colors
+PUT_COLOR  = os.getenv("GEX_PUT_COLOR",  "#E5E7EB")  # down candles
+CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#60a5fa") # up candles
 
 # Filter by symbol if your table contains more than SPX
 TICKER = os.getenv("GEX_TICKER", "SPX")
