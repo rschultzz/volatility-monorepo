@@ -5,7 +5,7 @@ Ironbeam ES 1m bars + trades ingest worker for Render.
 - Auth with /auth
 - Discover front-month ES via /info/symbol/search/futures/XCME/ES
 - Create streamId (GET /stream/create)
-- Open WebSocket stream (wss://demo.ironbeamapi.com/v2/stream/{streamId}?token=...)
+- Open WebSocket stream (wss://.../stream/{streamId}?token=...)
 - Subscribe to:
     * 1-minute Time Bars indicator for ES
     * Trades stream for ES
@@ -19,6 +19,8 @@ Environment variables expected:
   DATABASE_URL             (required – Postgres URL)
   IRONBEAM_BARS_TABLE      (optional – default "ironbeam_es_1m_bars")
   IRONBEAM_TRADES_TABLE    (optional – default "ironbeam_es_trades")
+  IRONBEAM_API_BASE        (optional – overrides demo/live base URL)
+  IRONBEAM_WS_BASE         (optional – overrides WS base URL)
 """
 
 import json
@@ -26,11 +28,11 @@ import datetime as dt
 from typing import List, Dict, Any
 import os
 import time
+import ssl
 
 import requests
 import websocket  # websocket-client
 import pandas as pd
-import ssl
 import certifi
 from sqlalchemy import create_engine
 
@@ -54,6 +56,7 @@ LOAD_SIZE = int(os.environ.get("IRONBEAM_LOAD_SIZE", "2000"))
 # Debug toggles
 DEBUG_HTTP = True
 DEBUG_WS_RAW = False   # set True temporarily if you want to see raw WS messages
+DEBUG_WS_KEYS = True   # log top-level keys of each WS payload
 
 MONTH_MAP = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
@@ -185,8 +188,6 @@ def create_stream(token: str) -> str:
 def subscribe_time_bars(token: str, stream_id: str, symbol: str) -> Dict[str, Any]:
     """
     POST /indicator/{streamId}/timeBars/subscribe for 1-minute bars.
-
-    NOTE: symbol must be like "XCME:ES.Z25" (exchange-prefixed).
     """
     if ":" not in symbol:
         symbol = f"XCME:{symbol}"
@@ -205,7 +206,7 @@ def subscribe_time_bars(token: str, stream_id: str, symbol: str) -> Dict[str, An
     if DEBUG_HTTP:
         print("TIME BARS SUBSCRIBE body:", resp.text[:500])
 
-    # Quirk: 400/"Can't subscribe to time bars" can still mean the stream is alive.
+    # Known quirk: 400/"Can't subscribe to time bars" but data still flows.
     if resp.status_code == 400 and "Can't subscribe to time bars" in resp.text:
         print("Got 'Can't subscribe to time bars' 400; continuing anyway (known Ironbeam quirk).")
         try:
@@ -220,16 +221,13 @@ def subscribe_time_bars(token: str, stream_id: str, symbol: str) -> Dict[str, An
 def subscribe_trades(token: str, stream_id: str, symbol: str) -> Dict[str, Any]:
     """
     GET /market/trades/subscribe/{streamId}?symbols=XCME:ES.Z25
-
-    This is the low-latency trades stream. Data arrives in the 'tr' field
-    on the WebSocket payload.
     """
     if ":" not in symbol:
         symbol = f"XCME:{symbol}"
 
     url = f"{API_BASE}/market/trades/subscribe/{stream_id}"
     headers = {"Authorization": f"Bearer {token}"}
-    params = {"symbols": symbol}  # single symbol; API expects comma-separated list
+    params = {"symbols": symbol}
     print(f"[SUBSCRIBE] Trades GET {url} params={params}")
     resp = requests.get(url, headers=headers, params=params)
     print("TRADES SUBSCRIBE status:", resp.status_code)
@@ -312,20 +310,6 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
 def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Parse trades from a WebSocket message. Looks for 'tr' entries.
-
-    The docs don't fully spell out the streaming trade object schema, but
-    it should be consistent with /market/trades and quotes:
-
-      symbol: "XCME:ES.U16"      -> s or symbol
-      price:  1.13535            -> p or price or la (last)
-      size:   1                  -> sz or size or q
-      totalVolume: 1             -> tv or totalVolume
-      sendTime: 1234567890       -> sendTime or t (epoch)
-      tickDirection: "INVALID"   -> tickDirection
-      aggressorSide: 0           -> aggressorSide
-      tradeId: 2131220200101     -> tradeId
-      sequenceNumber: 12132123   -> sequenceNumber
-      tradeDate: "20200101"      -> tradeDate
     """
     trades: List[Dict[str, Any]] = []
 
@@ -445,6 +429,7 @@ def run_worker():
     db_url = _get_db_url()
     engine = create_engine(db_url, pool_pre_ping=True)
     print(f"[INIT] Using DB tables bars='{DB_BARS_TABLE}', trades='{DB_TRADES_TABLE}'")
+    print(f"[INIT] API_BASE={API_BASE}, WS_BASE={WS_BASE}")
 
     # Optional: enable full websocket trace logs
     # if DEBUG_WS_RAW:
@@ -483,8 +468,12 @@ def run_worker():
                 except json.JSONDecodeError:
                     return
 
+                # Log message keys for debugging
+                if DEBUG_WS_KEYS:
+                    print(f"[WS] Message keys: {list(msg.keys())}")
+
                 # Ignore ping messages
-                if "p" in msg:
+                if "p" in msg and len(msg) == 1:
                     return
 
                 # Time bars
@@ -513,7 +502,6 @@ def run_worker():
                 on_close=on_close,
             )
 
-            # Blocks until close/error
             ws_app.run_forever(
                 sslopt={
                     "ca_certs": certifi.where(),
