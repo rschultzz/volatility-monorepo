@@ -6,7 +6,8 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output
+from dash import Input, Output, State
+from dash.exceptions import PreventUpdate
 from sqlalchemy import create_engine, text
 
 # ---------- Config ----------
@@ -15,6 +16,9 @@ DB_TABLE_NAME = os.environ.get("IRONBEAM_BARS_TABLE", "ironbeam_es_1m_bars")
 # Candle colors (reuse GEX colors so it all feels consistent)
 PUT_COLOR = os.getenv("GEX_PUT_COLOR", "#E5E7EB")   # down candles
 CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#60a5fa") # up candles
+
+# Highlight color for selected slices
+HIGHLIGHT_COLOR = os.getenv("IRONBEAM_HIGHLIGHT_COLOR", "#ef4444")  # red
 
 # Ticker for the GEX table
 TICKER = os.getenv("GEX_TICKER", "SPX")
@@ -121,17 +125,27 @@ def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
 
 # ---------- Dash callback registration ----------
 def register_ironbeam_callbacks(app):
+    # ---- Main ES + GEX chart ----
     @app.callback(
         Output("ironbeam-chart", "figure"),
         [
             Input("trade-date", "date"),
             Input("ironbeam-interval", "n_intervals"),
             Input("gex-threshold-billions", "value"),  # slider value in billions
+            Input("smile-time-input", "value"),        # selected PT slices
         ],
     )
-    def update_chart(trade_date, n, threshold_billions):
+    def update_chart(trade_date, n, threshold_billions, selected_times_pt):
         if not trade_date:
             return go.Figure(layout_title_text="Select a trade date to view chart.")
+
+        # Normalize selected times to a list of strings like ["06:31", "10:15"]
+        if selected_times_pt is None:
+            selected_times: list[str] = []
+        elif isinstance(selected_times_pt, list):
+            selected_times = [str(t) for t in selected_times_pt]
+        else:
+            selected_times = [str(selected_times_pt)]
 
         # Convert slider value (billions) to raw units
         if threshold_billions is None:
@@ -194,6 +208,8 @@ def register_ironbeam_callbacks(app):
         df_bars["datetime_pt"] = (
             df_bars["datetime"].dt.tz_localize("UTC").dt.tz_convert("America/Los_Angeles")
         )
+        # Convenient HH:MM PT string for matching against Smile/Skew time slices
+        df_bars["time_hhmm_pt"] = df_bars["datetime_pt"].dt.strftime("%H:%M")
 
         # Price-based y-range so price fills chart (initially)
         y_min_price = float(df_bars["low"].min())
@@ -268,7 +284,8 @@ def register_ironbeam_callbacks(app):
                     y=levels,
                     z=z,
                     coloraxis="coloraxis",
-                    opacity=0.45,
+                    opacity=0.35,
+                    zsmooth="best",
                     hovertemplate=(
                         "Time=%{x|%H:%M}<br>"
                         "Level=%{y}<br>"
@@ -299,7 +316,7 @@ def register_ironbeam_callbacks(app):
                 font=dict(size=10),
             )
 
-        # 2) ES candlesticks on top
+        # 2) ES candlesticks (base layer)
         fig.add_trace(
             go.Candlestick(
                 x=df_bars["datetime_pt"],
@@ -310,8 +327,28 @@ def register_ironbeam_callbacks(app):
                 name="ES",
                 increasing=dict(line=dict(color=CALL_COLOR, width=1.2)),
                 decreasing=dict(line=dict(color=PUT_COLOR, width=1.2)),
+                showlegend=True,
             )
         )
+
+        # 3) Overlay highlighted candles for selected time slices
+        if selected_times:
+            mask_selected = df_bars["time_hhmm_pt"].isin(selected_times)
+            df_sel = df_bars[mask_selected]
+            if not df_sel.empty:
+                fig.add_trace(
+                    go.Candlestick(
+                        x=df_sel["datetime_pt"],
+                        open=df_sel["open"],
+                        high=df_sel["high"],
+                        low=df_sel["low"],
+                        close=df_sel["close"],
+                        name="Selected slices",
+                        increasing=dict(line=dict(color=HIGHLIGHT_COLOR, width=2.0)),
+                        decreasing=dict(line=dict(color=HIGHLIGHT_COLOR, width=2.0)),
+                        showlegend=False,
+                    )
+                )
 
         fig.update_layout(
             title=(
@@ -324,6 +361,7 @@ def register_ironbeam_callbacks(app):
             template="plotly_dark",
             hovermode="closest",
             uirevision="ironbeam-gex",  # keeps zoom / rangeslider state
+            clickmode="event",          # click events only; no selection/fade
             xaxis=dict(
                 rangeslider=dict(visible=True),
                 showspikes=True,
@@ -343,3 +381,51 @@ def register_ironbeam_callbacks(app):
         )
 
         return fig
+
+    # ---- Click on ES bar -> add PT time to Smile/Skew time slices ----
+
+    @app.callback(
+        Output("smile-time-input", "value"),
+        Input("ironbeam-chart", "clickData"),
+        State("smile-time-input", "value"),
+        prevent_initial_call=True,
+    )
+    def add_smile_time_from_price_click(click_data, current_values):
+        """
+        Click a bar to toggle its PT minute in the Smile/Skew time-slice list.
+        - If not present: add it
+        - If already present: remove it
+        """
+        if not click_data or not click_data.get("points"):
+            raise PreventUpdate
+
+        point = click_data["points"][0]
+        x_val = point.get("x")
+        if x_val is None:
+            raise PreventUpdate
+
+        # x_val is typically an ISO timestamp string; let pandas parse it
+        ts = pd.to_datetime(x_val)
+
+        # Treat as PT; the figure x-axis is in PT
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("America/Los_Angeles")
+        ts_pt = ts.tz_convert("America/Los_Angeles")
+
+        hhmm = ts_pt.strftime("%H:%M")  # e.g. "06:31"
+
+        # Normalize existing value into a list
+        if current_values is None:
+            current_values = []
+        elif not isinstance(current_values, list):
+            current_values = [current_values]
+
+        # Toggle behavior
+        if hhmm in current_values:
+            # remove this time slice
+            new_values = [t for t in current_values if t != hhmm]
+        else:
+            # add this time slice
+            new_values = current_values + [hhmm]
+
+        return new_values
