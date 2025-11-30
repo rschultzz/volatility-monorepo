@@ -310,6 +310,10 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
 def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Parse trades from a WebSocket message. Looks for 'tr' entries.
+
+    We now:
+      - Accept both long and short field names (symbol vs s, price vs p, etc.)
+      - Fall back to "now" if we can't parse a timestamp so we don't silently drop trades.
     """
     trades: List[Dict[str, Any]] = []
 
@@ -324,18 +328,43 @@ def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not isinstance(tr, dict):
             continue
 
-        ts_utc = _to_utc_from_epoch(tr.get("sendTime") or tr.get("t"))
+        # ---- Timestamp: be forgiving ----
+        ts_raw = (
+            tr.get("sendTime")
+            or tr.get("t")
+            or tr.get("tt")
+            or tr.get("tc")
+        )
+        ts_utc = _to_utc_from_epoch(ts_raw)
         if ts_utc is None:
-            continue
+            # Don't silently discard the trade if the timestamp format is weird;
+            # fallback to "now" so we at least capture the tick.
+            ts_utc = dt.datetime.now(dt.timezone.utc)
 
+        # ---- Core fields (support both compact and verbose keys) ----
         symbol = tr.get("s") or tr.get("symbol")
-        price = tr.get("p") or tr.get("price") or tr.get("la")
-        size = tr.get("sz") or tr.get("size") or tr.get("q")
-        total_volume = tr.get("tv") or tr.get("totalVolume")
+
+        price = (
+            tr.get("p")      # compact form
+            or tr.get("price")
+            or tr.get("la")  # some feeds use la = last
+            or tr.get("l")
+        )
+        size = (
+            tr.get("sz")
+            or tr.get("size")
+            or tr.get("q")
+            or tr.get("qty")
+        )
+        total_volume = (
+            tr.get("tv")
+            or tr.get("totalVolume")
+        )
 
         try:
             price = float(price)
         except (TypeError, ValueError):
+            # If we can't even get a price, skip this trade
             continue
 
         try:
@@ -370,6 +399,7 @@ def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
         )
 
     return trades
+
 
 # ---------------------------------------------------------------------------
 # DB WRITERS
@@ -429,9 +459,7 @@ def run_worker():
     db_url = _get_db_url()
     engine = create_engine(db_url, pool_pre_ping=True)
     print(f"[INIT] Using DB tables bars='{DB_BARS_TABLE}', trades='{DB_TRADES_TABLE}'")
-    print(f"[INIT] API_BASE={API_BASE}, WS_BASE={WS_BASE}")
 
-    # Optional: enable full websocket trace logs
     # if DEBUG_WS_RAW:
     #     websocket.enableTrace(True)
 
@@ -460,32 +488,39 @@ def run_worker():
                     print("[SUBSCRIBE] Trades error in on_open:", e)
 
             def on_message(ws, message: str):
+                # Optional: raw dump
                 if DEBUG_WS_RAW:
                     print("WS RAW:", message)
 
                 try:
                     msg = json.loads(message)
                 except json.JSONDecodeError:
+                    print("[WS] bad JSON message")
                     return
 
-                # Log message keys for debugging
-                if DEBUG_WS_KEYS:
-                    print(f"[WS] Message keys: {list(msg.keys())}")
+                keys = list(msg.keys())
+                print("[WS] Message keys:", keys)
 
-                # Ignore ping messages
-                if "p" in msg and len(msg) == 1:
-                    return
-
-                # Time bars
+                # ---- Time bars ----
                 new_bars = parse_time_bars_from_message(msg)
                 if new_bars:
-                    print(f"[WS] Got {len(new_bars)} new time bars.")
+                    print(f"[WS] Parsed {len(new_bars)} time bars. First bar: {new_bars[0]}")
                     write_bars_to_db(new_bars, engine)
 
-                # Trades
+                # ---- Trades ----
+                if "tr" in msg:
+                    raw_tr = msg["tr"]
+                    # Quick peek at schema so we can see what Ironbeam is sending
+                    if isinstance(raw_tr, list) and raw_tr:
+                        print(f"[WS] Sample tr[0]: {raw_tr[0]}")
+                    elif isinstance(raw_tr, dict):
+                        print(f"[WS] Sample tr dict: {raw_tr}")
+                    else:
+                        print(f"[WS] tr field type={type(raw_tr)} value={raw_tr}")
+
                 new_trades = parse_trades_from_message(msg)
                 if new_trades:
-                    print(f"[WS] Got {len(new_trades)} new trades.")
+                    print(f"[WS] Parsed {len(new_trades)} trades. First trade: {new_trades[0]}")
                     write_trades_to_db(new_trades, engine)
 
             def on_error(ws, error):
@@ -516,6 +551,7 @@ def run_worker():
 
         print("WebSocket disconnected or error; reconnecting in 5 seconds...")
         time.sleep(5)
+
 
 
 if __name__ == "__main__":
