@@ -6,15 +6,15 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output, State
+from dash import Input, Output
 from sqlalchemy import create_engine, text
 
 # ---------- Config ----------
 DB_TABLE_NAME = os.environ.get("IRONBEAM_BARS_TABLE", "ironbeam_es_1m_bars")
 
 # Candle colors (reuse GEX colors so it all feels consistent)
-PUT_COLOR = os.getenv("GEX_PUT_COLOR", "#E5E7EB")   # used for down candles
-CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#334155") # used for up candles
+PUT_COLOR = os.getenv("GEX_PUT_COLOR", "#E5E7EB")   # down candles
+CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#334155") # up candles
 
 # Ticker for the GEX table
 TICKER = os.getenv("GEX_TICKER", "SPX")
@@ -25,17 +25,25 @@ GEX_LEVEL_PADDING = float(os.getenv("GEX_LEVEL_PADDING", "150"))
 # Only show heatmap where |net_gamma| >= this threshold (default: 10B)
 GEX_ABS_THRESHOLD = float(os.getenv("GEX_ABS_THRESHOLD", "1e10"))
 
+# Color span logic:
+# - If GEX_COLOR_ABS_MAX > 0, we clamp colors to ±that value (e.g. 2e11 for ±200B)
+# - Else we use the given percentile of |net_gamma| (default: 95)
+GEX_COLOR_ABS_MAX = float(os.getenv("GEX_COLOR_ABS_MAX", "0"))
+GEX_COLOR_PERCENTILE = float(os.getenv("GEX_COLOR_PERCENTILE", "95"))
+
 # Colorscale tuned for dark background:
-# - strong negatives: bright cyan/blue
-# - near zero: black (so background stays dark)
-# - strong positives: bright orange/yellow
+#   - strong negatives: blue
+#   - near zero: dark slate (almost invisible)
+#   - strong positives: green
 GEX_HEATMAP_COLORSCALE = [
-    [0.0,  "#00f5ff"],  # strong negative
-    [0.25, "#0099ff"],
-    [0.5,  "#000000"],  # near zero
-    [0.75, "#ff9b00"],
-    [1.0,  "#ffe600"],  # strong positive
+    [0.0,  "#1d4ed8"],  # strong negative (deep blue)
+    [0.25, "#60a5fa"],  # medium negative (lighter blue)
+    [0.5,  "#020617"],  # near zero (very dark slate / bg)
+    [0.75, "#22c55e"],  # medium positive (green)
+    [1.0,  "#bbf7d0"],  # strong positive (bright pale green)
 ]
+
+
 
 
 # ---------- DB engine ----------
@@ -116,9 +124,8 @@ def register_ironbeam_callbacks(app):
     @app.callback(
         Output("ironbeam-chart", "figure"),
         [Input("trade-date", "date"), Input("ironbeam-interval", "n_intervals")],
-        State("ironbeam-chart", "relayoutData"),
     )
-    def update_chart(trade_date, n, relayout_data):
+    def update_chart(trade_date, n):
         if not trade_date:
             return go.Figure(layout_title_text="Select a trade date to view chart.")
 
@@ -130,9 +137,8 @@ def register_ironbeam_callbacks(app):
 
         pt_tz = ZoneInfo("America/Los_Angeles")
 
-        # ----- Time window in PT:
-        # For trade_date D, show ES from:
-        #   D-1 15:00 PT  -->  D 13:00 PT
+        # Time window in PT:
+        # For trade_date D, show ES from: D-1 15:00 PT  ->  D 13:00 PT
         # and plot GEX for trade_date = D across that whole window.
         start_pt = dt.datetime.combine(
             selected_date - dt.timedelta(days=1),
@@ -181,48 +187,11 @@ def register_ironbeam_callbacks(app):
             df_bars["datetime"].dt.tz_localize("UTC").dt.tz_convert("America/Los_Angeles")
         )
 
-        # ----- Default axis ranges from price only -----
+        # Price-based y-range so price fills chart (initially)
         y_min_price = float(df_bars["low"].min())
         y_max_price = float(df_bars["high"].max())
         y_pad = 0.01 * (y_max_price - y_min_price) if y_max_price > y_min_price else 1.0
-        default_y_range = [y_min_price - y_pad, y_max_price + y_pad]
-
-        x_min_time = df_bars["datetime_pt"].min()
-        x_max_time = df_bars["datetime_pt"].max()
-        default_x_range = [x_min_time, x_max_time]
-
-        # ----- Persist zoom / pan from relayoutData -----
-        x_range = None
-        y_range = None
-
-        if relayout_data:
-            x_auto = relayout_data.get("xaxis.autorange", False)
-            y_auto = relayout_data.get("yaxis.autorange", False)
-
-            if (
-                not x_auto
-                and "xaxis.range[0]" in relayout_data
-                and "xaxis.range[1]" in relayout_data
-            ):
-                x_range = [
-                    relayout_data["xaxis.range[0]"],
-                    relayout_data["xaxis.range[1]"],
-                ]
-
-            if (
-                not y_auto
-                and "yaxis.range[0]" in relayout_data
-                and "yaxis.range[1]" in relayout_data
-            ):
-                y_range = [
-                    relayout_data["yaxis.range[0]"],
-                    relayout_data["yaxis.range[1]"],
-                ]
-
-        if x_range is None:
-            x_range = default_x_range
-        if y_range is None:
-            y_range = default_y_range
+        y_range = [y_min_price - y_pad, y_max_price + y_pad]
 
         # ----- Fetch GEX levels for the same trade_date (D) -----
         try:
@@ -240,9 +209,17 @@ def register_ironbeam_callbacks(app):
         # ---------- Build figure ----------
         fig = go.Figure()
 
-        # 1) GEX heatmap (tomorrow's GEX, applied from 15:00 prev day to 13:00 today)
+        # 1) GEX heatmap (GEX for D, from 15:00 prev day → 13:00 on D)
         if not df_gex.empty:
-            times = df_bars["datetime_pt"].values
+            # time grid for the heatmap: full window at 1-minute resolution
+            time_index = pd.date_range(
+                start=start_pt,
+                end=end_pt,
+                freq="1min",
+                inclusive="left",
+            )
+            times = time_index.to_pydatetime()
+
             levels = df_gex["level"].values
             net_gex = df_gex["net_gamma"].values
 
@@ -253,15 +230,27 @@ def register_ironbeam_callbacks(app):
             if GEX_ABS_THRESHOLD > 0:
                 mask = np.abs(z) < GEX_ABS_THRESHOLD
                 z = np.where(mask, np.nan, z)
-                strong = net_gex[np.abs(net_gex) >= GEX_ABS_THRESHOLD]
+                color_base = net_gex[np.abs(net_gex) >= GEX_ABS_THRESHOLD]
             else:
-                strong = net_gex
+                color_base = net_gex
 
-            # Use strongest values for cmin/cmax so big walls pop
-            if strong.size:
-                max_abs_gamma = float(np.nanmax(np.abs(strong)))
+            # ---- Choose color span ----
+            if color_base.size == 0:
+                color_base = net_gex
+
+            if color_base.size:
+                if GEX_COLOR_ABS_MAX > 0:
+                    color_span = GEX_COLOR_ABS_MAX
+                else:
+                    # Percentile of |GEX| (e.g. 95th), so most levels use full color range
+                    color_span = float(
+                        np.nanpercentile(np.abs(color_base), GEX_COLOR_PERCENTILE)
+                    )
+                    # Fallback if something weird happens
+                    if not np.isfinite(color_span) or color_span <= 0:
+                        color_span = float(np.nanmax(np.abs(color_base))) or 1.0
             else:
-                max_abs_gamma = float(np.nanmax(np.abs(net_gex))) if net_gex.size else 0.0
+                color_span = 1.0
 
             fig.add_trace(
                 go.Heatmap(
@@ -279,22 +268,14 @@ def register_ironbeam_callbacks(app):
                 )
             )
 
-            if max_abs_gamma > 0:
-                fig.update_layout(
-                    coloraxis=dict(
-                        colorscale=GEX_HEATMAP_COLORSCALE,
-                        cmin=-max_abs_gamma,
-                        cmax=max_abs_gamma,
-                        colorbar_title="Net GEX",
-                    )
+            fig.update_layout(
+                coloraxis=dict(
+                    colorscale=GEX_HEATMAP_COLORSCALE,
+                    cmin=-color_span,
+                    cmax=color_span,
+                    colorbar_title="Net GEX",
                 )
-            else:
-                fig.update_layout(
-                    coloraxis=dict(
-                        colorscale=GEX_HEATMAP_COLORSCALE,
-                        colorbar_title="Net GEX",
-                    )
-                )
+            )
         else:
             fig.add_annotation(
                 text="No GEX data for this trade date",
@@ -332,9 +313,8 @@ def register_ironbeam_callbacks(app):
             yaxis_title="Price / Discounted Level",
             template="plotly_dark",
             hovermode="closest",
-            # X-axis rangeslider: Zoom slider (only exists for x in Plotly)
+            uirevision="ironbeam-gex",  # keeps zoom / rangeslider state
             xaxis=dict(
-                range=x_range,
                 rangeslider=dict(visible=True),
                 showspikes=True,
                 spikedash="dot",
