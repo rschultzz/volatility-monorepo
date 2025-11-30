@@ -385,7 +385,7 @@ app.layout = html.Div(
         "backgroundColor": "black",
         "color": "white",
         "minHeight": "100vh",
-        "padding": "0 16px 16px",
+        "padding": "0 80px 30px",
     },
 )
 
