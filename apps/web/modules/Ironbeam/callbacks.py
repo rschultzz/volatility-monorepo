@@ -133,15 +133,16 @@ def register_ironbeam_callbacks(app):
             Input("ironbeam-interval", "n_intervals"),
             Input("gex-threshold-billions", "value"),  # slider value in billions
             Input("smile-time-input", "value"),        # selected PT slices
+            Input("ironbeam-y-zoom", "value"),         # vertical zoom factor
         ],
     )
-    def update_chart(trade_date, n, threshold_billions, selected_times_pt):
+    def update_chart(trade_date, n, threshold_billions, selected_times_pt, y_zoom):
         if not trade_date:
             return go.Figure(layout_title_text="Select a trade date to view chart.")
 
         # Normalize selected times to a list of strings like ["06:31", "10:15"]
         if selected_times_pt is None:
-            selected_times: list[str] = []
+            selected_times = []
         elif isinstance(selected_times_pt, list):
             selected_times = [str(t) for t in selected_times_pt]
         else:
@@ -152,6 +153,11 @@ def register_ironbeam_callbacks(app):
             current_threshold = GEX_ABS_THRESHOLD_DEFAULT
         else:
             current_threshold = float(threshold_billions) * 1e9
+
+        # Y-zoom factor: <1 = zoom in (more stretched), >1 = zoom out
+        zoom_factor = float(y_zoom) if y_zoom is not None else 1.0
+        if zoom_factor <= 0:
+            zoom_factor = 1.0
 
         # ----- Parse selected trade date -----
         try:
@@ -184,7 +190,6 @@ def register_ironbeam_callbacks(app):
             dt.time(13, 0),
             tzinfo=pt_tz,
         )
-
 
         # Convert to UTC for DB query
         start_utc = start_pt.astimezone(ZoneInfo("UTC"))
@@ -224,34 +229,30 @@ def register_ironbeam_callbacks(app):
         # Convenient HH:MM PT string for matching against Smile/Skew time slices
         df_bars["time_hhmm_pt"] = df_bars["datetime_pt"].dt.strftime("%H:%M")
 
-        # --- Y-axis range: 1% below session low, 1% above session high ---
-        # Session = previous day 15:00 PT -> selected_date 13:00 PT
+        # Underlying full-session low/high (for GEX band)
+        underlying_low = float(df_bars["low"].min())
+        underlying_high = float(df_bars["high"].max())
+
+        # --- Session for y-range: previous day 15:00 → trade date 13:00 PT ---
         dt_pt = df_bars["datetime_pt"]
-
-        session_start_pt = dt.datetime.combine(
-            selected_date - dt.timedelta(days=1),
-            dt.time(15, 0),
-        ).replace(tzinfo=pt_tz)
-
-        session_end_pt = dt.datetime.combine(
-            selected_date,
-            dt.time(13, 0),
-        ).replace(tzinfo=pt_tz)
+        session_start_pt = start_pt
+        session_end_pt = end_pt
 
         mask_session = (dt_pt >= session_start_pt) & (dt_pt <= session_end_pt)
-
         df_session = df_bars[mask_session]
-        # Fallback to all bars if, for some reason, there are no session bars yet
         ref_df = df_session if not df_session.empty else df_bars
 
         day_low = float(ref_df["low"].min())
         day_high = float(ref_df["high"].max())
 
-
-        if day_high > 0:
-            # 1% padding around the day's true high/low
-            y_min_price = day_low * 0.99
-            y_max_price = day_high * 1.01
+        if day_high > 0 and day_high > day_low:
+            base_low = day_low * 0.99
+            base_high = day_high * 1.01
+            center = 0.5 * (base_low + base_high)
+            half_span = 0.5 * (base_high - base_low)
+            half_span *= zoom_factor
+            y_min_price = center - half_span
+            y_max_price = center + half_span
         else:
             # Safety fallback if prices are weird
             y_pad = 0.01 * (day_high - day_low) if day_high > day_low else 1.0
@@ -259,7 +260,6 @@ def register_ironbeam_callbacks(app):
             y_max_price = day_high + y_pad
 
         y_range = [y_min_price, y_max_price]
-
 
         # ----- Fetch GEX levels for the same trade_date (D) -----
         try:
@@ -270,8 +270,8 @@ def register_ironbeam_callbacks(app):
 
         # ----- Filter GEX to a band around price to avoid clutter -----
         if not df_gex.empty:
-            band_min = y_min_price - GEX_LEVEL_PADDING
-            band_max = y_max_price + GEX_LEVEL_PADDING
+            band_min = underlying_low - GEX_LEVEL_PADDING
+            band_max = underlying_high + GEX_LEVEL_PADDING
             df_gex = df_gex[(df_gex["level"] >= band_min) & (df_gex["level"] <= band_max)]
 
         # ---------- Build figure ----------
@@ -296,7 +296,6 @@ def register_ironbeam_callbacks(app):
             z = np.tile(net_gex.reshape(-1, 1), (1, len(times)))
 
             # ---- Threshold: keep rows where either side is big ----
-            # magnitude_for_threshold ~ total size of calls+puts at that level
             mag = np.abs(call_gex) + np.abs(put_gex)
             if current_threshold > 0:
                 mag_z = np.tile(mag.reshape(-1, 1), (1, len(times)))
@@ -369,8 +368,8 @@ def register_ironbeam_callbacks(app):
                 low=df_bars["low"],
                 close=df_bars["close"],
                 name="ES",
-                increasing=dict(line=dict(color=CALL_COLOR, width=1.2)),
-                decreasing=dict(line=dict(color=PUT_COLOR, width=1.2)),
+                increasing=dict(line=dict(color=CALL_COLOR, width=1.0)),
+                decreasing=dict(line=dict(color=PUT_COLOR, width=1.0)),
                 showlegend=True,
             )
         )
@@ -394,6 +393,7 @@ def register_ironbeam_callbacks(app):
                     )
                 )
 
+        # 4) Layout + RTH shading
         fig.update_layout(
             title=(
                 "ES Front Month - 1m OHLC with Net GEX Heatmap "
@@ -422,7 +422,6 @@ def register_ironbeam_callbacks(app):
                 spikesnap="cursor",
                 hoverformat="%.2f",
             ),
-            # Shaded RTH band (06:30–13:00 PT) on every trade date
             shapes=[
                 dict(
                     type="rect",
@@ -432,21 +431,19 @@ def register_ironbeam_callbacks(app):
                     x1=rth_end_pt,
                     y0=0,
                     y1=1,
-                    fillcolor="#020617",  # slightly lighter than pure black
-                    opacity=1.0,
+                    fillcolor="#020617",
+                    opacity=0.85,
                     layer="below",
                     line=dict(width=0),
                 )
             ],
         )
 
-
         return fig
 
-    # ---- Click on ES bar -> add PT time to Smile/Skew time slices ----
-
+    # ---- Click on ES bar -> toggle PT time in Smile/Skew time slices ----
     @app.callback(
-        Output("smile-time-input", "value"),
+        Output("smile-time-input", "value", allow_duplicate=True),
         Input("ironbeam-chart", "clickData"),
         State("smile-time-input", "value"),
         prevent_initial_call=True,
@@ -483,10 +480,8 @@ def register_ironbeam_callbacks(app):
 
         # Toggle behavior
         if hhmm in current_values:
-            # remove this time slice
             new_values = [t for t in current_values if t != hhmm]
         else:
-            # add this time slice
             new_values = current_values + [hhmm]
 
         return new_values

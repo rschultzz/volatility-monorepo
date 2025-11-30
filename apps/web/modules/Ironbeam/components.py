@@ -6,7 +6,11 @@ def ironbeam_layout():
         html.H2("Ironbeam ES 1-Minute Bars"),
         dcc.Graph(
             id='ironbeam-chart',
-            style={'height': '1440px'}
+            style={'height': '1440px'},
+            config={
+                "scrollZoom": True,  # mouse wheel zooms in/out
+                "doubleClick": "autosize",  # double-click to reset axes
+            },
         ),
         dcc.Interval(
             id='ironbeam-interval',

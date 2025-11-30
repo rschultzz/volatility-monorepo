@@ -269,6 +269,8 @@ app.layout = html.Div(
         ),
         html.Hr(style={"borderColor": "#333"}),
         # ===== Ironbeam section + GEX threshold slider =====
+        html.Hr(style={"borderColor": "#333"}),
+        # ===== Ironbeam section + GEX threshold + Y zoom =====
         html.Div(
             [
                 html.Div(
@@ -284,8 +286,8 @@ app.layout = html.Div(
                         dcc.Slider(
                             id="gex-threshold-billions",
                             min=0,
-                            max=300,    # 0–800B
-                            step=10,    # 10B steps
+                            max=300,  # 0–300B
+                            step=10,  # 10B steps
                             value=100,  # default 100B
                             marks={
                                 0: "0",
@@ -294,6 +296,33 @@ app.layout = html.Div(
                                 150: "150",
                                 200: "200",
                                 250: "250",
+                            },
+                            tooltip={
+                                "placement": "bottom",
+                                "always_visible": False,
+                            },
+                        ),
+                        html.Br(),
+                        html.Label(
+                            "Y Zoom (session range)",
+                            style={
+                                "color": "white",
+                                "marginBottom": "4px",
+                                "fontSize": "12px",
+                            },
+                        ),
+                        dcc.Slider(
+                            id="ironbeam-y-zoom",
+                            min=0.25,
+                            max=2.0,
+                            step=0.25,
+                            value=1.0,  # 1.0 = base 1% below/above session
+                            marks={
+                                0.25: "0.25x",
+                                0.5: "0.5x",
+                                1.0: "1x",
+                                1.5: "1.5x",
+                                2.0: "2x",
                             },
                             tooltip={
                                 "placement": "bottom",
@@ -310,6 +339,7 @@ app.layout = html.Div(
             ],
             style={"marginTop": "8px"},
         ),
+
     ],
     style={
         "backgroundColor": "black",
