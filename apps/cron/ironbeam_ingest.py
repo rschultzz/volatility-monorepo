@@ -34,7 +34,7 @@ import requests
 import websocket  # websocket-client
 import pandas as pd
 import certifi
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 # ---------------------------------------------------------------------------
 # BASIC CONFIG
@@ -60,9 +60,8 @@ DEBUG_WS_RAW = os.environ.get("IRONBEAM_DEBUG_WS_RAW", "false").lower() == "true
 MONTH_MAP = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
     "MAY": 5, "JUN": 6, "JUL": 7, "AUG": 8,
-    "SEP": 9, "OCT": 10, "NOV": 12, "DEC": 12,
+    "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
 }
-MONTH_MAP["NOV"] = 11  # typo fix
 
 # ---------------------------------------------------------------------------
 # DB HELPERS
@@ -310,13 +309,6 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
 def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Parse trades from a WebSocket message. Looks for 'tr' entries.
-
-    Example trade payload we saw:
-
-      {'s': 'XCME:ES.Z25', 'p': 6851.5, 'ch': -8, 'sz': 5,
-       'sq': 170785, 'st': 1764546684118, 'td': 1, 'as': 1,
-       'tdt': '20251130', 'is': False, 'clx': False, 'spt': 0,
-       'ist': 0, 'bt': 0}
     """
     trades: List[Dict[str, Any]] = []
 
@@ -381,31 +373,67 @@ def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
     return trades
 
 # ---------------------------------------------------------------------------
-# DB WRITERS
+# DB WRITERS (with cross-check against existing rows)
 # ---------------------------------------------------------------------------
 
 def write_bars_to_db(bars: List[Dict[str, Any]], engine):
     """
-    Append time bars to Postgres using SQLAlchemy.
-    Drops duplicate datetimes inside the batch.
+    Append time bars to Postgres, skipping any datetimes already present.
+
+    This is defensive against:
+      - snapshot bars on initial subscribe
+      - any replayed bars after reconnect
     """
     if not bars:
         return
 
-    df = pd.DataFrame(bars).drop_duplicates(subset=["datetime"])
+    df = pd.DataFrame(bars)
+    if df.empty or "datetime" not in df.columns:
+        return
+
+    # Normalize datetimes to timezone-aware UTC
+    df["datetime"] = pd.to_datetime(df["datetime"], utc=True)
+
+    # Drop dupes inside this batch
+    df = df.drop_duplicates(subset=["datetime"])
     if df.empty:
         return
 
+    min_dt = df["datetime"].min()
+    max_dt = df["datetime"].max()
+
     try:
         with engine.begin() as connection:
+            # Check what we already have for this time range
+            existing = pd.read_sql(
+                text(f"""
+                    SELECT datetime
+                    FROM {DB_BARS_TABLE}
+                    WHERE datetime >= :min_dt AND datetime <= :max_dt
+                """),
+                connection,
+                params={"min_dt": min_dt, "max_dt": max_dt},
+                parse_dates=["datetime"],
+            )
+
+            if not existing.empty:
+                existing["datetime"] = pd.to_datetime(existing["datetime"], utc=True)
+                existing_set = set(existing["datetime"].tolist())
+                before = len(df)
+                df = df[~df["datetime"].isin(existing_set)]
+                skipped = before - len(df)
+                if skipped:
+                    print(f"[DB] Skipping {skipped} existing bars out of {before} in {DB_BARS_TABLE}.")
+
+            if df.empty:
+                print("[DB] No new bars to insert (all already present in DB).")
+                return
+
             df.to_sql(DB_BARS_TABLE, connection, if_exists="append", index=False)
-        print(f"[DB] Wrote {len(df)} rows to {DB_BARS_TABLE}.")
+            print(f"[DB] Wrote {len(df)} new bars to {DB_BARS_TABLE}.")
+
     except Exception as e:
-        msg = str(e)
-        if "violates unique constraint" in msg or "duplicate key value" in msg:
-            print(f"[DB] Bars duplicates found, skipping batch of {len(df)}.")
-        else:
-            print(f"[DB] Bars write error: {e}")
+        print(f"[DB] Bars write error: {e}")
 
 
 def write_trades_to_db(trades: List[Dict[str, Any]], engine):
