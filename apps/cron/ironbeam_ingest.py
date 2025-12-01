@@ -263,6 +263,10 @@ def _to_utc_from_epoch(ts_raw: Any) -> dt.datetime | None:
 def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Parse time bars from a WebSocket message. Looks for 'ti' entries.
+
+    NOTE: Ironbeam's 't' for timeBars appears to be the bar *end* timestamp
+    (end of the 1-minute interval). For plotting and alignment with
+    TradingView we want the bar *start* time, so we subtract 1 minute.
     """
     bars: List[Dict[str, Any]] = []
 
@@ -277,9 +281,13 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not isinstance(bar, dict):
             continue
 
-        t_utc = _to_utc_from_epoch(bar.get("t"))
-        if t_utc is None:
+        t_utc_end = _to_utc_from_epoch(bar.get("t"))
+        if t_utc_end is None:
             continue
+
+        # Store bar START time (1 minute earlier) so that the first RTH bar
+        # shows up at 15:00 PT instead of 15:01, etc.
+        t_utc_start = t_utc_end - dt.timedelta(minutes=1)
 
         try:
             o = float(bar.get("o"))
@@ -294,7 +302,7 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
 
         bars.append(
             {
-                "datetime": t_utc,
+                "datetime": t_utc_start,
                 "open": o,
                 "high": h,
                 "low": l,
@@ -304,6 +312,7 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
         )
 
     return bars
+
 
 
 def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
