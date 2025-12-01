@@ -13,6 +13,7 @@ from sqlalchemy import create_engine, text
 
 # ---------- Config ----------
 DB_TABLE_NAME = os.environ.get("IRONBEAM_BARS_TABLE", "ironbeam_es_1m_bars")
+DB_TRADES_TABLE = os.environ.get("IRONBEAM_TRADES_TABLE", "ironbeam_es_trades")
 
 # Candle colors (reuse GEX colors so it all feels consistent)
 PUT_COLOR = os.getenv("GEX_PUT_COLOR", "#E5E7EB")   # down candles
@@ -127,7 +128,7 @@ def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
 # ---------- Bar resampling helper ----------
 def _resample_ohlc(df: pd.DataFrame, freq: str) -> pd.DataFrame:
     """
-    Resample a 1-minute OHLC dataframe to a coarser frequency (e.g. '5T' for 5 minutes).
+    Resample a 1-minute OHLC dataframe to a coarser frequency (e.g. '5min').
 
     Expects columns: datetime, open, high, low, close (and optionally volume).
     """
@@ -159,6 +160,7 @@ def _resample_ohlc(df: pd.DataFrame, freq: str) -> pd.DataFrame:
 # ---------- Dash callback registration ----------
 def register_ironbeam_callbacks(app):
     # ---- Main ES + GEX chart ----
+
     @app.callback(
         Output("ironbeam-chart", "figure"),
         [
@@ -226,7 +228,7 @@ def register_ironbeam_callbacks(app):
         start_utc = start_pt.astimezone(ZoneInfo("UTC"))
         end_utc = end_pt.astimezone(ZoneInfo("UTC"))
 
-        # ----- Fetch 1m ES bars (raw) -----
+        # ----- Fetch 1m ES bars plus trades over the same window -----
         bars_query = text(
             f"""
             SELECT * FROM {DB_TABLE_NAME}
@@ -234,41 +236,156 @@ def register_ironbeam_callbacks(app):
             ORDER BY datetime ASC
         """
         )
-        bars_params = {"start_date": start_utc, "end_date": end_utc}
+        trades_query = text(
+            f"""
+            SELECT ts_utc, price, size
+            FROM {DB_TRADES_TABLE}
+            WHERE ts_utc >= :start_date AND ts_utc < :end_date
+            ORDER BY ts_utc ASC
+        """
+        )
+        params = {"start_date": start_utc, "end_date": end_utc}
 
         try:
             with engine.connect() as connection:
-                df_raw = pd.read_sql(
-                    bars_query, connection, params=bars_params, parse_dates=["datetime"]
+                df_bars_1m = pd.read_sql(
+                    bars_query, connection, params=params, parse_dates=["datetime"]
                 )
+                try:
+                    df_trades = pd.read_sql(
+                        trades_query,
+                        connection,
+                        params=params,
+                        parse_dates=["ts_utc"],
+                    )
+                except Exception as e:
+                    print(f"[Ironbeam] Error fetching trades data: {e}")
+                    df_trades = pd.DataFrame()
         except Exception as e:
-            print(f"Error fetching bar data: {e}")
-            return go.Figure(layout_title_text="Database error (bars).")
+            print(f"[Ironbeam] Error fetching bar data: {e}")
+            return go.Figure(layout_title_text="Database error (bars/trades).")
 
-        if df_raw.empty:
+        print(
+            f"[Ironbeam] update_chart: {len(df_bars_1m)} bars, "
+            f"{len(df_trades)} trades in window {start_utc} → {end_utc}"
+        )
+
+        # ---------- Build canonical 1m series: bars for history, trades for current minute ----------
+        df_all_1m = df_bars_1m.copy()
+
+        if not df_trades.empty and not df_bars_1m.empty:
+            # Force ts_utc to be naive UTC to match bar datetimes
+            df_trades = df_trades.copy()
+            df_trades["ts_utc"] = pd.to_datetime(df_trades["ts_utc"], utc=True)
+            # drop tz info: treat as naive UTC
+            try:
+                df_trades["ts_utc"] = df_trades["ts_utc"].dt.tz_localize(None)
+            except TypeError:
+                # Already naive; nothing to do
+                pass
+
+            # Last completed bar from Ironbeam
+            last_bar_dt = df_bars_1m["datetime"].max()
+            last_bar = df_bars_1m[df_bars_1m["datetime"] == last_bar_dt].iloc[0]
+            last_close = float(last_bar["close"])
+
+            # Use only trades AFTER the last completed bar (i.e. current live minute)
+            trades_live = df_trades[df_trades["ts_utc"] > last_bar_dt].copy()
+
+            if not trades_live.empty:
+                # Floor to minute in naive UTC
+                trades_live["minute"] = trades_live["ts_utc"].dt.floor("min")
+
+                live_agg = (
+                    trades_live
+                    .groupby("minute")
+                    .agg(
+                        t_open=("price", "first"),
+                        t_high=("price", "max"),
+                        t_low=("price", "min"),
+                        t_close=("price", "last"),
+                        volume=("size", "sum"),
+                    )
+                    .reset_index()
+                    .rename(columns={"minute": "datetime"})
+                )
+
+                # Ensure dtype is plain datetime64[ns] (naive UTC)
+                live_agg["datetime"] = pd.to_datetime(live_agg["datetime"])
+
+                # For each live minute, anchor the open at the last official close.
+                live_rows = []
+                for _, row in live_agg.iterrows():
+                    trade_high = float(row["t_high"])
+                    trade_low = float(row["t_low"])
+                    trade_close = float(row["t_close"])
+
+                    live_open = last_close
+                    live_high = max(last_close, trade_high)
+                    live_low = min(last_close, trade_low)
+                    live_close = trade_close
+
+                    live_rows.append(
+                        {
+                            "datetime": row["datetime"],
+                            "open": live_open,
+                            "high": live_high,
+                            "low": live_low,
+                            "close": live_close,
+                            "volume": row["volume"],
+                        }
+                    )
+
+                live_df = pd.DataFrame(live_rows)
+
+                print(
+                    f"[Ironbeam] live anchored bar(s): "
+                    f"{live_df[['datetime','open','high','low','close']].to_dict('records')}"
+                )
+
+                # Keep historical bars up to the last completed bar
+                older_bars = df_bars_1m[df_bars_1m["datetime"] <= last_bar_dt].copy()
+
+                # Append anchored live bar(s)
+                df_all_1m = (
+                    pd.concat([older_bars, live_df], ignore_index=True)
+                    .sort_values("datetime")
+                )
+
+        # If for some reason we still have nothing, bail
+        if df_all_1m.empty:
             return go.Figure(
                 layout_title_text=(
-                    f"No bar data available for window "
+                    f"No bar or trade data available for window "
                     f"{start_pt.strftime('%Y-%m-%d %H:%M')} – {end_pt.strftime('%Y-%m-%d %H:%M')} PT."
                 )
             )
 
-        # ----- Compute envelope and GEX band from raw 1m data -----
-        # Convert raw to PT for envelope calc
-        df_raw_pt = df_raw.copy()
-        df_raw_pt["datetime_pt"] = (
-            df_raw_pt["datetime"].dt.tz_localize("UTC").dt.tz_convert("America/Los_Angeles")
+        # Optional debug: what is the last bar we are actually plotting?
+        last_bar = df_all_1m.sort_values("datetime").tail(1)
+        print(
+            "[Ironbeam] final last bar:",
+            last_bar[["datetime", "open", "high", "low", "close"]].to_dict("records")[0]
+        )
+
+        # ----- Compute envelope and GEX band from combined 1m data -----
+        # Convert combined to PT for envelope calc
+        df_all_1m_pt = df_all_1m.copy()
+        df_all_1m_pt["datetime_pt"] = (
+            df_all_1m_pt["datetime"]
+            .dt.tz_localize("UTC")
+            .dt.tz_convert("America/Los_Angeles")
         )
 
         # Underlying full-session low/high (for GEX band)
-        underlying_low = float(df_raw["low"].min())
-        underlying_high = float(df_raw["high"].max())
+        underlying_low = float(df_all_1m["low"].min())
+        underlying_high = float(df_all_1m["high"].max())
 
         # Session for default y-envelope: previous day 15:00 → trade date 13:00 PT
-        dt_pt_all = df_raw_pt["datetime_pt"]
+        dt_pt_all = df_all_1m_pt["datetime_pt"]
         mask_session = (dt_pt_all >= start_pt) & (dt_pt_all <= end_pt)
-        df_session = df_raw_pt[mask_session]
-        ref_df = df_session if not df_session.empty else df_raw_pt
+        df_session = df_all_1m_pt[mask_session]
+        ref_df = df_session if not df_session.empty else df_all_1m_pt
 
         day_low = float(ref_df["low"].min())
         day_high = float(ref_df["high"].max())
@@ -283,9 +400,9 @@ def register_ironbeam_callbacks(app):
             y_max_price = day_high + y_pad
 
         # ----- Apply bar-interval resampling for plotting (with fallback) -----
-        df_bars = df_raw.copy()
+        df_bars = df_all_1m.copy()
         if interval == "5min":
-            df_resampled = _resample_ohlc(df_raw, "5T")
+            df_resampled = _resample_ohlc(df_all_1m, "5min")
             if df_resampled is not None and not df_resampled.empty:
                 df_bars = df_resampled
             else:
@@ -294,11 +411,13 @@ def register_ironbeam_callbacks(app):
 
         # If for some reason df_bars ended up empty, fall back again
         if df_bars.empty:
-            df_bars = df_raw.copy()
+            df_bars = df_all_1m.copy()
 
         # Convert df_bars to PT for display on x-axis
         df_bars["datetime_pt"] = (
-            df_bars["datetime"].dt.tz_localize("UTC").dt.tz_convert("America/Los_Angeles")
+            df_bars["datetime"]
+            .dt.tz_localize("UTC")
+            .dt.tz_convert("America/Los_Angeles")
         )
         # Convenient HH:MM PT string for matching against Smile/Skew time slices
         df_bars["time_hhmm_pt"] = df_bars["datetime_pt"].dt.strftime("%H:%M")
@@ -401,7 +520,7 @@ def register_ironbeam_callbacks(app):
                 font=dict(size=10),
             )
 
-        # 2) ES candlesticks (base layer, 1m or 5m depending on interval)
+        # 2) ES candlesticks (base layer, 1m or 5min depending on interval)
         fig.add_trace(
             go.Candlestick(
                 x=df_bars["datetime_pt"],

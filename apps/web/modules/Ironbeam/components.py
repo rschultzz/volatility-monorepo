@@ -13,7 +13,7 @@ def ironbeam_layout():
             # Auto-refresh timer for live bars
             dcc.Interval(
                 id="ironbeam-interval",
-                interval=60 * 1000,  # 1 minute refresh
+                interval=2000,
                 n_intervals=0,
             ),
 
