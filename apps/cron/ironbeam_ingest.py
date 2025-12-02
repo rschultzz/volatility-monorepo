@@ -133,8 +133,10 @@ def authenticate() -> str:
 
 def discover_es_front_month(token: str) -> str:
     """
-    Use GET /info/symbol/search/futures/XCME/ES to get ES futures, then pick
-    the front-month whose maturity >= today.
+    Use GET /info/symbol/search/futures/XCME/ES to get ES futures,
+    then pick the nearest contract whose (year, month) is >= today's
+    (year, month). This keeps DEC as front month for the whole of December,
+    instead of rolling on the 1st of the month.
     """
     url = f"{API_BASE}/info/symbol/search/futures/XCME/ES"
     headers = {"Authorization": f"Bearer {token}"}
@@ -154,27 +156,32 @@ def discover_es_front_month(token: str) -> str:
         raise RuntimeError("No ES futures returned – check entitlements.")
 
     today = dt.date.today()
+    curr_year, curr_month = today.year, today.month
 
-    def maturity(rec: Dict[str, Any]) -> dt.date:
+    def ym(rec: Dict[str, Any]) -> tuple[int, int]:
         month_str = str(rec.get("maturityMonth", "")).upper()
         year = int(rec.get("maturityYear"))
         month = MONTH_MAP.get(month_str, 1)
-        return dt.date(year, month, 1)
+        return year, month
 
-    symbols_sorted = sorted(symbols, key=maturity)
+    # sort by (year, month)
+    symbols_sorted = sorted(symbols, key=ym)
 
-    chosen = None
+    # pick first contract whose (year, month) >= current (year, month)
     for rec in symbols_sorted:
-        if maturity(rec) >= today:
-            chosen = rec
-            break
-    if chosen is None:
-        chosen = symbols_sorted[-1]
+        y, m = ym(rec)
+        if (y > curr_year) or (y == curr_year and m >= curr_month):
+            print(f"Using ES symbol (front month): {rec['symbol']} "
+                  f"(maturityYear={y}, maturityMonth={rec.get('maturityMonth')})")
+            return rec["symbol"]
 
-    mat = maturity(chosen)
-    symbol = chosen["symbol"]
-    print(f"[SYMBOL] Using ES front month: {symbol} (maturity {mat})")
-    return symbol
+    # fallback (shouldn't happen often): last available symbol
+    last = symbols_sorted[-1]
+    y, m = ym(last)
+    print("All contract months < current month, using last symbol:",
+          last["symbol"], f"(maturityYear={y}, maturityMonth={last.get('maturityMonth')})")
+    return last["symbol"]
+
 
 
 def create_stream(token: str) -> str:
