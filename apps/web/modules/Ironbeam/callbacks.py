@@ -44,26 +44,26 @@ GEX_COLOR_PERCENTILE = float(os.getenv("GEX_COLOR_PERCENTILE", "95"))
 #   - near zero: bright yellow band
 #   - strong positives (calls dominating): green
 
-GEX_HEATMAP_COLORSCALE = [
-    [0.0,  "#ea580c"],  # strong negative (deep orange)
-    [0.25, "#fb923c"],  # medium negative (lighter orange)
-    [0.5,  "#facc15"],  # near zero (bright yellow)
-    [0.75, "#22c55e"],  # medium positive (green)
-    [1.0,  "#bbf7d0"],  # strong positive (pale green)
-]
+# GEX_HEATMAP_COLORSCALE = [
+#     [0.0,  "#ea580c"],  # strong negative (deep orange)
+#     [0.25, "#fb923c"],  # medium negative (lighter orange)
+#     [0.5,  "#facc15"],  # near zero (bright yellow)
+#     [0.75, "#22c55e"],  # medium positive (green)
+#     [1.0,  "#bbf7d0"],  # strong positive (pale green)
+# ]
 
 # Colorscale tuned for dark background:
 #   - strong negatives: blue
 #   - near zero: dark slate (almost invisible)
 #   - strong positives: green
 
-# GEX_HEATMAP_COLORSCALE = [
-#     [0.0,  "#1d4ed8"],  # strong negative (deep blue)
-#     [0.25, "#60a5fa"],  # medium negative (lighter blue)
-#     [0.5,  "#020617"],  # near zero (very dark slate / bg)
-#     [0.75, "#22c55e"],  # medium positive (green)
-#     [1.0,  "#bbf7d0"],  # strong positive (pale green)
-# ]
+GEX_HEATMAP_COLORSCALE = [
+    [0.0,  "#1d4ed8"],  # strong negative (deep blue)
+    [0.25, "#60a5fa"],  # medium negative (lighter blue)
+    [0.5,  "#020617"],  # near zero (very dark slate / bg)
+    [0.75, "#22c55e"],  # medium positive (green)
+    [1.0,  "#bbf7d0"],  # strong positive (pale green)
+]
 
 
 
