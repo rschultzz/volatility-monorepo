@@ -38,17 +38,33 @@ GEX_ABS_THRESHOLD_DEFAULT = float(os.getenv("GEX_ABS_THRESHOLD", "1e10"))
 GEX_COLOR_ABS_MAX = float(os.getenv("GEX_COLOR_ABS_MAX", "0"))
 GEX_COLOR_PERCENTILE = float(os.getenv("GEX_COLOR_PERCENTILE", "95"))
 
+
+# Colorscale tuned for dark background:
+#   - strong negatives (puts dominating): bright orange
+#   - near zero: bright yellow band
+#   - strong positives (calls dominating): green
+
+GEX_HEATMAP_COLORSCALE = [
+    [0.0,  "#ea580c"],  # strong negative (deep orange)
+    [0.25, "#fb923c"],  # medium negative (lighter orange)
+    [0.5,  "#facc15"],  # near zero (bright yellow)
+    [0.75, "#22c55e"],  # medium positive (green)
+    [1.0,  "#bbf7d0"],  # strong positive (pale green)
+]
+
 # Colorscale tuned for dark background:
 #   - strong negatives: blue
 #   - near zero: dark slate (almost invisible)
 #   - strong positives: green
-GEX_HEATMAP_COLORSCALE = [
-    [0.0,  "#1d4ed8"],  # strong negative (deep blue)
-    [0.25, "#60a5fa"],  # medium negative (lighter blue)
-    [0.5,  "#020617"],  # near zero (very dark slate / bg)
-    [0.75, "#22c55e"],  # medium positive (green)
-    [1.0,  "#bbf7d0"],  # strong positive (pale green)
-]
+
+# GEX_HEATMAP_COLORSCALE = [
+#     [0.0,  "#1d4ed8"],  # strong negative (deep blue)
+#     [0.25, "#60a5fa"],  # medium negative (lighter blue)
+#     [0.5,  "#020617"],  # near zero (very dark slate / bg)
+#     [0.75, "#22c55e"],  # medium positive (green)
+#     [1.0,  "#bbf7d0"],  # strong positive (pale green)
+# ]
+
 
 
 # ---------- DB engine ----------
@@ -270,87 +286,76 @@ def register_ironbeam_callbacks(app):
             f"{len(df_trades)} trades in window {start_utc} → {end_utc}"
         )
 
-        # ---------- Build canonical 1m series: bars for history, trades for current minute ----------
+        # ---------- Build canonical 1m series: DB bars + at most ONE live minute ----------
         df_all_1m = df_bars_1m.copy()
 
         if not df_trades.empty and not df_bars_1m.empty:
-            # Force ts_utc to be naive UTC to match bar datetimes
-            df_trades = df_trades.copy()
+            # ts_utc from DB is UTC; keep it tz-aware, then floor to minute and strip tz
             df_trades["ts_utc"] = pd.to_datetime(df_trades["ts_utc"], utc=True)
-            # drop tz info: treat as naive UTC
-            try:
-                df_trades["ts_utc"] = df_trades["ts_utc"].dt.tz_localize(None)
-            except TypeError:
-                # Already naive; nothing to do
-                pass
+            df_trades["minute"] = df_trades["ts_utc"].dt.floor("min")
+            df_trades["minute"] = df_trades["minute"].dt.tz_localize(None)
 
-            # Last completed bar from Ironbeam
+            # Last completed bar from Ironbeam (naive UTC)
             last_bar_dt = df_bars_1m["datetime"].max()
             last_bar = df_bars_1m[df_bars_1m["datetime"] == last_bar_dt].iloc[0]
             last_close = float(last_bar["close"])
 
-            # Use only trades AFTER the last completed bar (i.e. current live minute)
-            trades_live = df_trades[df_trades["ts_utc"] > last_bar_dt].copy()
+            latest_trade_minute = df_trades["minute"].max()
 
-            if not trades_live.empty:
-                # Floor to minute in naive UTC
-                trades_live["minute"] = trades_live["ts_utc"].dt.floor("min")
+            print(
+                f"[Ironbeam] last_bar_dt={last_bar_dt}, "
+                f"latest_trade_minute={latest_trade_minute}"
+            )
 
-                live_agg = (
-                    trades_live
-                    .groupby("minute")
-                    .agg(
-                        t_open=("price", "first"),
-                        t_high=("price", "max"),
-                        t_low=("price", "min"),
-                        t_close=("price", "last"),
-                        volume=("size", "sum"),
-                    )
-                    .reset_index()
-                    .rename(columns={"minute": "datetime"})
-                )
+            # Only build a live bar if trades exist in a *new* minute beyond DB bars
+            if latest_trade_minute is not None and latest_trade_minute > last_bar_dt:
+                trades_live = df_trades[df_trades["minute"] == latest_trade_minute].copy()
 
-                # Ensure dtype is plain datetime64[ns] (naive UTC)
-                live_agg["datetime"] = pd.to_datetime(live_agg["datetime"])
+                if not trades_live.empty:
+                    # Aggregate trades in that latest minute
+                    prices = trades_live["price"].astype(float)
+                    sizes = trades_live["size"].fillna(0).astype(float)
 
-                # For each live minute, anchor the open at the last official close.
-                live_rows = []
-                for _, row in live_agg.iterrows():
-                    trade_high = float(row["t_high"])
-                    trade_low = float(row["t_low"])
-                    trade_close = float(row["t_close"])
+                    t_high = float(prices.max())
+                    t_low = float(prices.min())
+                    t_close = float(prices.iloc[-1])
+                    volume = float(sizes.sum())
 
+                    # Anchor open at last official close to keep continuity
                     live_open = last_close
-                    live_high = max(last_close, trade_high)
-                    live_low = min(last_close, trade_low)
-                    live_close = trade_close
+                    live_high = max(live_open, t_high)
+                    live_low = min(live_open, t_low)
+                    live_close = t_close
 
-                    live_rows.append(
-                        {
-                            "datetime": row["datetime"],
-                            "open": live_open,
-                            "high": live_high,
-                            "low": live_low,
-                            "close": live_close,
-                            "volume": row["volume"],
-                        }
+                    live_df = pd.DataFrame(
+                        [
+                            {
+                                "datetime": latest_trade_minute,  # naive UTC
+                                "open": live_open,
+                                "high": live_high,
+                                "low": live_low,
+                                "close": live_close,
+                                "volume": volume,
+                            }
+                        ]
                     )
 
-                live_df = pd.DataFrame(live_rows)
+                    print(
+                        "[Ironbeam] live anchored bar:",
+                        live_df[["datetime", "open", "high", "low", "close"]]
+                        .to_dict("records")[0],
+                    )
 
-                print(
-                    f"[Ironbeam] live anchored bar(s): "
-                    f"{live_df[['datetime','open','high','low','close']].to_dict('records')}"
-                )
+                    older_bars = df_bars_1m[
+                        df_bars_1m["datetime"] <= last_bar_dt
+                    ].copy()
 
-                # Keep historical bars up to the last completed bar
-                older_bars = df_bars_1m[df_bars_1m["datetime"] <= last_bar_dt].copy()
-
-                # Append anchored live bar(s)
-                df_all_1m = (
-                    pd.concat([older_bars, live_df], ignore_index=True)
-                    .sort_values("datetime")
-                )
+                    df_all_1m = (
+                        pd.concat([older_bars, live_df], ignore_index=True)
+                        .sort_values("datetime")
+                    )
+            else:
+                print("[Ironbeam] DB already has latest minute; no live bar appended.")
 
         # If for some reason we still have nothing, bail
         if df_all_1m.empty:
@@ -362,10 +367,11 @@ def register_ironbeam_callbacks(app):
             )
 
         # Optional debug: what is the last bar we are actually plotting?
-        last_bar = df_all_1m.sort_values("datetime").tail(1)
+        last_bar_dbg = df_all_1m.sort_values("datetime").tail(1)
         print(
             "[Ironbeam] final last bar:",
-            last_bar[["datetime", "open", "high", "low", "close"]].to_dict("records")[0]
+            last_bar_dbg[["datetime", "open", "high", "low", "close"]]
+            .to_dict("records")[0],
         )
 
         # ----- Compute envelope and GEX band from combined 1m data -----
@@ -407,7 +413,10 @@ def register_ironbeam_callbacks(app):
                 df_bars = df_resampled
             else:
                 # Fallback: keep 1m bars if resample failed
-                print(f"[Ironbeam] Resample to 5min returned empty for {trade_date}; using 1min bars.")
+                print(
+                    f"[Ironbeam] Resample to 5min returned empty for {trade_date}; "
+                    "using 1min bars."
+                )
 
         # If for some reason df_bars ended up empty, fall back again
         if df_bars.empty:
@@ -427,13 +436,17 @@ def register_ironbeam_callbacks(app):
             df_gex = _fetch_gex_grouped_by_level(selected_date)
         except Exception as e:
             print(f"Error fetching GEX data: {e}")
-            df_gex = pd.DataFrame(columns=["level", "call_gamma", "put_gamma", "net_gamma"])
+            df_gex = pd.DataFrame(
+                columns=["level", "call_gamma", "put_gamma", "net_gamma"]
+            )
 
         # ----- Filter GEX to a band around price to avoid clutter -----
         if not df_gex.empty:
             band_min = underlying_low - GEX_LEVEL_PADDING
             band_max = underlying_high + GEX_LEVEL_PADDING
-            df_gex = df_gex[(df_gex["level"] >= band_min) & (df_gex["level"] <= band_max)]
+            df_gex = df_gex[
+                (df_gex["level"] >= band_min) & (df_gex["level"] <= band_max)
+            ]
 
         # ---------- Build figure ----------
         fig = go.Figure()
@@ -529,8 +542,14 @@ def register_ironbeam_callbacks(app):
                 low=df_bars["low"],
                 close=df_bars["close"],
                 name=f"ES ({interval})",
-                increasing=dict(line=dict(color=CALL_COLOR, width=1.0), fillcolor=CALL_COLOR),
-                decreasing=dict(line=dict(color=PUT_COLOR, width=1.0), fillcolor=PUT_COLOR),
+                increasing=dict(
+                    line=dict(color=CALL_COLOR, width=1.0),
+                    fillcolor=CALL_COLOR,
+                ),
+                decreasing=dict(
+                    line=dict(color=PUT_COLOR, width=1.0),
+                    fillcolor=PUT_COLOR,
+                ),
                 showlegend=True,
             )
         )
@@ -548,8 +567,14 @@ def register_ironbeam_callbacks(app):
                         low=df_sel["low"],
                         close=df_sel["close"],
                         name="Selected slices",
-                        increasing=dict(line=dict(color=HIGHLIGHT_COLOR, width=2.0), fillcolor=HIGHLIGHT_COLOR),
-                        decreasing=dict(line=dict(color=HIGHLIGHT_COLOR, width=2.0), fillcolor=HIGHLIGHT_COLOR),
+                        increasing=dict(
+                            line=dict(color=HIGHLIGHT_COLOR, width=2.0),
+                            fillcolor=HIGHLIGHT_COLOR,
+                        ),
+                        decreasing=dict(
+                            line=dict(color=HIGHLIGHT_COLOR, width=2.0),
+                            fillcolor=HIGHLIGHT_COLOR,
+                        ),
                         showlegend=False,
                     )
                 )
@@ -578,7 +603,8 @@ def register_ironbeam_callbacks(app):
                 "ES Front Month "
                 f"({interval}) - OHLC with Net GEX Heatmap "
                 f"(GEX for {selected_date.isoformat()}, "
-                f"window {start_pt.strftime('%Y-%m-%d %H:%M')}–{end_pt.strftime('%Y-%m-%d %H:%M')} PT)"
+                f"window {start_pt.strftime('%Y-%m-%d %H:%M')}–"
+                f"{end_pt.strftime('%Y-%m-%d %H:%M')} PT)"
             ),
             xaxis_title="Time (Pacific Time)",
             yaxis_title="Price / Discounted Level",

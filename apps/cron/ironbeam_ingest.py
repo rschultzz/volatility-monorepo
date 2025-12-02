@@ -11,16 +11,20 @@ Ironbeam ES 1m bars + trades ingest worker for Render.
     * Trades stream for ES
 - Parse 'ti' (time bars) and 'tr' (trades) messages and write to Postgres tables.
 
-Environment variables expected:
+Environment variables:
 
-  IRONBEAM_USERNAME        (required)
-  IRONBEAM_PASSWORD        (required – password or API key)
-  IRONBEAM_TENANT_API_KEY  (optional)
-  DATABASE_URL             (required – Postgres URL)
-  IRONBEAM_BARS_TABLE      (optional – default "ironbeam_es_1m_bars")
-  IRONBEAM_TRADES_TABLE    (optional – default "ironbeam_es_trades")
-  IRONBEAM_API_BASE        (optional – defaults to demo: https://demo.ironbeamapi.com/v2)
-  IRONBEAM_WS_BASE         (optional – defaults to demo: wss://demo.ironbeamapi.com/v2/stream)
+  IRONBEAM_ENV            ("live" or "demo"; default "live")
+  IRONBEAM_USERNAME       (required)
+  IRONBEAM_PASSWORD       (required – password or API key)
+  IRONBEAM_TENANT_API_KEY (optional)
+  DATABASE_URL            (required – Postgres URL)
+  IRONBEAM_BARS_TABLE     (optional – default "ironbeam_es_1m_bars")
+  IRONBEAM_TRADES_TABLE   (optional – default "ironbeam_es_trades")
+  IRONBEAM_API_BASE       (optional – overrides env-based default)
+  IRONBEAM_WS_BASE        (optional – overrides env-based default)
+  IRONBEAM_LOAD_SIZE      (optional – default "2000")
+  IRONBEAM_DEBUG_HTTP     (optional – "true"/"false", default "true")
+  IRONBEAM_DEBUG_WS_RAW   (optional – "true"/"false", default "false")
 """
 
 import json
@@ -37,11 +41,21 @@ import certifi
 from sqlalchemy import create_engine, text
 
 # ---------------------------------------------------------------------------
-# BASIC CONFIG
+# BASIC CONFIG – LIVE vs DEMO
 # ---------------------------------------------------------------------------
 
-API_BASE = os.environ.get("IRONBEAM_API_BASE", "https://demo.ironbeamapi.com/v2")
-WS_BASE = os.environ.get("IRONBEAM_WS_BASE", "wss://demo.ironbeamapi.com/v2/stream")
+IRONBEAM_ENV = os.environ.get("IRONBEAM_ENV", "live").lower().strip()
+
+if IRONBEAM_ENV == "demo":
+    _DEFAULT_API_BASE = "https://demo.ironbeamapi.com/v2"
+    _DEFAULT_WS_BASE = "wss://demo.ironbeamapi.com/v2/stream"
+else:
+    # Production / live
+    _DEFAULT_API_BASE = "https://live.ironbeamapi.com/v2"
+    _DEFAULT_WS_BASE = "wss://live.ironbeamapi.com/v2/stream"
+
+API_BASE = os.environ.get("IRONBEAM_API_BASE", _DEFAULT_API_BASE)
+WS_BASE = os.environ.get("IRONBEAM_WS_BASE", _DEFAULT_WS_BASE)
 
 USERNAME = os.environ.get("IRONBEAM_USERNAME")
 PASSWORD_OR_APIKEY = os.environ.get("IRONBEAM_PASSWORD")
@@ -50,10 +64,10 @@ TENANT_API_KEY = os.environ.get("IRONBEAM_TENANT_API_KEY", "")
 DB_BARS_TABLE = os.environ.get("IRONBEAM_BARS_TABLE", "ironbeam_es_1m_bars")
 DB_TRADES_TABLE = os.environ.get("IRONBEAM_TRADES_TABLE", "ironbeam_es_trades")
 
-# How many 1-minute bars to initially load
+# How many 1-minute bars to initially load on subscribe (snapshot)
 LOAD_SIZE = int(os.environ.get("IRONBEAM_LOAD_SIZE", "2000"))
 
-# Debug toggles (can override via env if you want)
+# Debug toggles
 DEBUG_HTTP = os.environ.get("IRONBEAM_DEBUG_HTTP", "true").lower() == "true"
 DEBUG_WS_RAW = os.environ.get("IRONBEAM_DEBUG_WS_RAW", "false").lower() == "true"
 
@@ -66,6 +80,7 @@ MONTH_MAP = {
 # ---------------------------------------------------------------------------
 # DB HELPERS
 # ---------------------------------------------------------------------------
+
 
 def _normalize_db_url(url: str) -> str:
     """
@@ -88,6 +103,7 @@ def _get_db_url() -> str:
 # AUTH / SYMBOL DISCOVERY
 # ---------------------------------------------------------------------------
 
+
 def authenticate() -> str:
     """
     POST /auth to obtain a bearer token.
@@ -96,10 +112,7 @@ def authenticate() -> str:
         raise RuntimeError("IRONBEAM_USERNAME and IRONBEAM_PASSWORD must be set")
 
     url = f"{API_BASE}/auth"
-    payload = {
-        "username": USERNAME,
-        "password": PASSWORD_OR_APIKEY,
-    }
+    payload = {"username": USERNAME, "password": PASSWORD_OR_APIKEY}
     if TENANT_API_KEY:
         payload["apikey"] = TENANT_API_KEY
 
@@ -114,13 +127,14 @@ def authenticate() -> str:
     token = data.get("token")
     if not token:
         raise RuntimeError(f"Auth failed, no token in response: {data}")
-    print("Authenticated OK.")
+    print("[AUTH] Authenticated OK.")
     return token
 
 
 def discover_es_front_month(token: str) -> str:
     """
-    Use GET /info/symbol/search/futures/XCME/ES to get ES futures, then pick front month.
+    Use GET /info/symbol/search/futures/XCME/ES to get ES futures, then pick
+    the front-month whose maturity >= today.
     """
     url = f"{API_BASE}/info/symbol/search/futures/XCME/ES"
     headers = {"Authorization": f"Bearer {token}"}
@@ -149,14 +163,18 @@ def discover_es_front_month(token: str) -> str:
 
     symbols_sorted = sorted(symbols, key=maturity)
 
+    chosen = None
     for rec in symbols_sorted:
         if maturity(rec) >= today:
-            print(f"Using ES symbol (front month): {rec['symbol']} (maturity {maturity(rec)})")
-            return rec["symbol"]
+            chosen = rec
+            break
+    if chosen is None:
+        chosen = symbols_sorted[-1]
 
-    last = symbols_sorted[-1]
-    print("All maturities < today, using last symbol:", last["symbol"])
-    return last["symbol"]
+    mat = maturity(chosen)
+    symbol = chosen["symbol"]
+    print(f"[SYMBOL] Using ES front month: {symbol} (maturity {mat})")
+    return symbol
 
 
 def create_stream(token: str) -> str:
@@ -177,12 +195,13 @@ def create_stream(token: str) -> str:
     if data.get("status") != "OK":
         raise RuntimeError(f"stream/create failed: {data}")
     stream_id = data["streamId"]
-    print("Stream created:", stream_id)
+    print("[STREAM] Stream created:", stream_id)
     return stream_id
 
 # ---------------------------------------------------------------------------
 # SUBSCRIPTIONS
 # ---------------------------------------------------------------------------
+
 
 def subscribe_time_bars(token: str, stream_id: str, symbol: str) -> Dict[str, Any]:
     """
@@ -201,13 +220,13 @@ def subscribe_time_bars(token: str, stream_id: str, symbol: str) -> Dict[str, An
     }
     print(f"[SUBSCRIBE] TimeBars POST {url} {payload}")
     resp = requests.post(url, headers=headers, json=payload)
-    print("TIME BARS SUBSCRIBE status:", resp.status_code)
+    print("[SUBSCRIBE] TimeBars status:", resp.status_code)
     if DEBUG_HTTP:
         print("TIME BARS SUBSCRIBE body:", resp.text[:300])
 
     # Known quirk: 400/"Can't subscribe to time bars" but data still flows.
     if resp.status_code == 400 and "Can't subscribe to time bars" in resp.text:
-        print("Got 'Can't subscribe to time bars' 400; continuing anyway (known Ironbeam quirk).")
+        print("[SUBSCRIBE] Got 'Can't subscribe to time bars' 400; continuing anyway.")
         try:
             return resp.json()
         except Exception:
@@ -229,7 +248,7 @@ def subscribe_trades(token: str, stream_id: str, symbol: str) -> Dict[str, Any]:
     params = {"symbols": symbol}
     print(f"[SUBSCRIBE] Trades GET {url} params={params}")
     resp = requests.get(url, headers=headers, params=params)
-    print("TRADES SUBSCRIBE status:", resp.status_code)
+    print("[SUBSCRIBE] Trades status:", resp.status_code)
     if DEBUG_HTTP:
         print("TRADES SUBSCRIBE body:", resp.text[:300])
 
@@ -243,6 +262,7 @@ def subscribe_trades(token: str, stream_id: str, symbol: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # PARSERS
 # ---------------------------------------------------------------------------
+
 
 def _to_utc_from_epoch(ts_raw: Any) -> dt.datetime | None:
     if ts_raw is None:
@@ -264,9 +284,9 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Parse time bars from a WebSocket message. Looks for 'ti' entries.
 
-    NOTE: Ironbeam's 't' for timeBars appears to be the bar *end* timestamp
-    (end of the 1-minute interval). For plotting and alignment with
-    TradingView we want the bar *start* time, so we subtract 1 minute.
+    Ironbeam's 't' for timeBars appears to be the bar *end* timestamp.
+    For plotting & alignment with TradingView we store the bar *start* time,
+    so we subtract 1 minute.
     """
     bars: List[Dict[str, Any]] = []
 
@@ -285,8 +305,7 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
         if t_utc_end is None:
             continue
 
-        # Store bar START time (1 minute earlier) so that the first RTH bar
-        # shows up at 15:00 PT instead of 15:01, etc.
+        # Convert to bar start time
         t_utc_start = t_utc_end - dt.timedelta(minutes=1)
 
         try:
@@ -312,7 +331,6 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
         )
 
     return bars
-
 
 
 def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -358,7 +376,7 @@ def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
         except (TypeError, ValueError):
             total_volume = None
 
-        trade_id = tr.get("tradeId")  # not present in sample, so stays None
+        trade_id = tr.get("tradeId")
         seq = tr.get("sq") or tr.get("sequenceNumber")
         aggr = tr.get("as") or tr.get("aggressorSide")
         tick_dir = tr.get("td") or tr.get("tickDirection")
@@ -382,16 +400,14 @@ def parse_trades_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
     return trades
 
 # ---------------------------------------------------------------------------
-# DB WRITERS (with cross-check against existing rows)
+# DB WRITERS
 # ---------------------------------------------------------------------------
+
 
 def write_bars_to_db(bars: List[Dict[str, Any]], engine):
     """
     Append time bars to Postgres, skipping any datetimes already present.
-
-    This is defensive against:
-      - snapshot bars on initial subscribe
-      - any replayed bars after reconnect
+    Defensive against snapshot bars + reconnects.
     """
     if not bars:
         return
@@ -415,11 +431,13 @@ def write_bars_to_db(bars: List[Dict[str, Any]], engine):
         with engine.begin() as connection:
             # Check what we already have for this time range
             existing = pd.read_sql(
-                text(f"""
+                text(
+                    f"""
                     SELECT datetime
                     FROM {DB_BARS_TABLE}
                     WHERE datetime >= :min_dt AND datetime <= :max_dt
-                """),
+                    """
+                ),
                 connection,
                 params={"min_dt": min_dt, "max_dt": max_dt},
                 parse_dates=["datetime"],
@@ -432,10 +450,13 @@ def write_bars_to_db(bars: List[Dict[str, Any]], engine):
                 df = df[~df["datetime"].isin(existing_set)]
                 skipped = before - len(df)
                 if skipped:
-                    print(f"[DB] Skipping {skipped} existing bars out of {before} in {DB_BARS_TABLE}.")
+                    print(
+                        f"[DB] Skipping {skipped} existing bars out of "
+                        f"{before} in {DB_BARS_TABLE}."
+                    )
 
             if df.empty:
-                print("[DB] No new bars to insert (all already present in DB).")
+                print("[DB] No new bars to insert (already in DB).")
                 return
 
             df.to_sql(DB_BARS_TABLE, connection, if_exists="append", index=False)
@@ -447,7 +468,7 @@ def write_bars_to_db(bars: List[Dict[str, Any]], engine):
 
 def write_trades_to_db(trades: List[Dict[str, Any]], engine):
     """
-    Append trades to Postgres.
+    Append trades to Postgres (simple de-dupe on [ts_utc, price, size]).
     """
     if not trades:
         return
@@ -471,14 +492,21 @@ def write_trades_to_db(trades: List[Dict[str, Any]], engine):
 # MAIN LOOP – RUN FOREVER, RECONNECT ON DISCONNECT
 # ---------------------------------------------------------------------------
 
+
 def run_worker():
     db_url = _get_db_url()
     engine = create_engine(db_url, pool_pre_ping=True)
-    print(f"[INIT] Using DB tables bars='{DB_BARS_TABLE}', trades='{DB_TRADES_TABLE}'")
-    print(f"[INIT] API_BASE={API_BASE}, WS_BASE={WS_BASE}")
+    print(
+        f"[INIT] IRONBEAM_ENV={IRONBEAM_ENV}, "
+        f"API_BASE={API_BASE}, WS_BASE={WS_BASE}"
+    )
+    print(
+        f"[INIT] Using DB tables bars='{DB_BARS_TABLE}', "
+        f"trades='{DB_TRADES_TABLE}'"
+    )
 
-    # if DEBUG_WS_RAW:
-    #     websocket.enableTrace(True)
+    if DEBUG_WS_RAW:
+        websocket.enableTrace(True)
 
     while True:
         try:
@@ -488,10 +516,10 @@ def run_worker():
             stream_id = create_stream(token)
 
             ws_url = f"{WS_BASE}/{stream_id}?token={token}"
-            print("Opening WebSocket:", ws_url)
+            print("[WS] Opening WebSocket:", ws_url)
 
             def on_open(ws):
-                print("WebSocket opened, subscribing to TimeBars and Trades...")
+                print("[WS] WebSocket opened, subscribing to TimeBars and Trades...")
                 try:
                     tb_info = subscribe_time_bars(token, stream_id, es_symbol)
                     print("[SUBSCRIBE] TimeBars response:", tb_info)
@@ -527,8 +555,10 @@ def run_worker():
                 # Trades
                 new_trades = parse_trades_from_message(msg)
                 if new_trades:
-                    # Log just the first one for sanity
-                    print(f"[WS] Got {len(new_trades)} trades. First trade: {new_trades[0]}")
+                    print(
+                        f"[WS] Got {len(new_trades)} trades. "
+                        f"First trade: {new_trades[0]}"
+                    )
                     write_trades_to_db(new_trades, engine)
 
             def on_error(ws, error):
@@ -557,7 +587,7 @@ def run_worker():
         except Exception as e:
             print("[TOP-LEVEL] worker error:", e)
 
-        print("WebSocket disconnected or error; reconnecting in 5 seconds...")
+        print("[TOP-LEVEL] WebSocket disconnected; reconnecting in 5 seconds...")
         time.sleep(5)
 
 
