@@ -38,6 +38,15 @@ GEX_ABS_THRESHOLD_DEFAULT = float(os.getenv("GEX_ABS_THRESHOLD", "1e10"))
 GEX_COLOR_ABS_MAX = float(os.getenv("GEX_COLOR_ABS_MAX", "0"))
 GEX_COLOR_PERCENTILE = float(os.getenv("GEX_COLOR_PERCENTILE", "95"))
 
+# Background colors for ETH vs RTH (keep dark theme, but lighter so GEX pops)
+# ETH_BG_COLOR = os.getenv("IRONBEAM_ETH_BG_COLOR", "#111827")  # base dark gray/navy
+# RTH_BG_COLOR = os.getenv("IRONBEAM_RTH_BG_COLOR", "#1f2937")  # slightly lighter gray
+
+# Background colors for ETH vs RTH (more contrast, still dark theme)
+ETH_BG_COLOR = os.getenv("IRONBEAM_ETH_BG_COLOR", "#1f2937")  # dark gray (outside RTH)
+RTH_BG_COLOR = os.getenv("IRONBEAM_RTH_BG_COLOR", "#4b5563")  # medium gray (RTH)
+
+
 
 # Colorscale tuned for dark background:
 #   - strong negatives (puts dominating): bright orange
@@ -64,7 +73,6 @@ GEX_HEATMAP_COLORSCALE = [
     [0.75, "#22c55e"],  # medium positive (green)
     [1.0,  "#bbf7d0"],  # strong positive (pale green)
 ]
-
 
 
 # ---------- DB engine ----------
@@ -621,6 +629,9 @@ def register_ironbeam_callbacks(app):
                 spikesnap="cursor",
                 hoverformat="%H:%M:%S",
             ),
+            plot_bgcolor=ETH_BG_COLOR,
+            paper_bgcolor=ETH_BG_COLOR,
+            height=1200,  # ~75% of a tall default chart
             shapes=[
                 dict(
                     type="rect",
@@ -630,8 +641,8 @@ def register_ironbeam_callbacks(app):
                     x1=rth_end_pt,
                     y0=0,
                     y1=1,
-                    fillcolor="#020617",
-                    opacity=0.85,
+                    fillcolor=RTH_BG_COLOR,
+                    opacity=0.5,
                     layer="below",
                     line=dict(width=0),
                 )
