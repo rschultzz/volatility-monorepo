@@ -1,68 +1,71 @@
 #!/usr/bin/env python
 """
-Pulse intraday ingest for SPX (or any ticker) using ORATS snapshot/monies/implied.
+ORATS one-minute intraday ingest (improved DB handling).
 
-- Runs once per minute (Render Cron).
-- Computes the current ET minute and calls:
-    https://api.orats.io/datav2/snapshot/monies/implied
-  with tradeDate=YYYYMMDDHHMM in ET.
+- Runs once per minute as a Render cron job.
+- Uses the SAME ORATS endpoint & params as your old script:
 
-- Filters to the configured ticker (PULSE_TICKER, default: SPX).
-- Renames ORATS columns to match existing DB schema:
-    tradeDate        -> trade_date
-    expirDate        -> expir_date
-    snapShotEstTime  -> snap_shot_est_time
-    snapShotDate     -> snap_shot_date
-- Uses (ticker, snap_shot_date) as the per-minute key:
-    DELETE existing rows for that ticker+minute,
-    then INSERT the fresh rows.
+    https://api.orats.io/datav2/hist/live/one-minute/monies/implied.csv
+      params: ticker=..., tradeDate=YYYYMMDDHHMM, token=...
 
-Environment variables expected:
+- Targets the **previous** ET minute (to avoid partial bars) and only runs in RTH:
 
-    ORATS_API_KEY          (required)  - ORATS Intraday API token
-    CURVE_DB_URL           (preferred) - Postgres URL for curve_trading
-    DATABASE_URL           (fallback)  - alternative env var name
-    ORATS_MONIES_TABLE     (optional)  - default: "orats_monies_minute"
-    PULSE_TICKER           (optional)  - default: "SPX"
+    RTH: 09:30–16:00 ET, Monday–Friday
 
+- Transforms the CSV exactly like your gap-fill script:
+    * adds snapshot_pt (PT-local timestamp)
+    * converts camelCase columns to snake_case
+      (snapShotDate -> snap_shot_date, quoteDate -> quote_date, expirDate -> expir_date, etc.)
+
+- Writes into Postgres using PostgreSQL `INSERT ... ON CONFLICT DO NOTHING`,
+  so:
+    * duplicates by PRIMARY KEY (ticker, expir_date, quote_date) are ignored
+    * missing rows for that minute are inserted
+
+Environment variables:
+
+    ORATS_API_KEY      (required)
+    DATABASE_URL       (required)  - or CURVE_DB_URL as an alternative name
+    ORATS_TICKER       (optional)  - default "SPX"
+    ORATS_MONIES_TABLE (optional)  - default "orats_monies_minute"
 """
 
-import io
 import os
-import sys
+import re
+import io
 import datetime as dt
 from zoneinfo import ZoneInfo
 
 import requests
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, MetaData, Table
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+# ----- ORATS config (same as old script) -----
+
+BASE_URL = "https://api.orats.io"
+ENDPOINT = "/datav2/hist/live/one-minute/monies/implied.csv"
+
+TICKER = os.environ.get("ORATS_TICKER", "SPX")
+DB_TABLE_NAME = os.environ.get("ORATS_MONIES_TABLE", "orats_monies_minute")
+
+ET = ZoneInfo("America/New_York")
 
 
-# ---------- Config ----------
+# ---------- Helpers ----------
 
-ORATS_API_KEY = os.getenv("ORATS_API_KEY")
-if not ORATS_API_KEY:
-    print("[cron] ERROR: ORATS_API_KEY env var is not set", file=sys.stderr)
-    sys.exit(1)
-
-DB_URL = os.getenv("CURVE_DB_URL") or os.getenv("DATABASE_URL")
-if not DB_URL:
-    print("[cron] ERROR: CURVE_DB_URL or DATABASE_URL env var is not set", file=sys.stderr)
-    sys.exit(1)
-
-DB_TABLE_NAME = os.getenv("ORATS_MONIES_TABLE", "orats_monies_minute")
-TICKER = os.getenv("PULSE_TICKER", "SPX")
-
-ORATS_SNAPSHOT_URL = "https://api.orats.io/datav2/snapshot/monies/implied"
-NY_TZ = ZoneInfo("America/New_York")
+def camel_to_snake(name: str) -> str:
+    """Converts a camelCase string to snake_case."""
+    name = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).lower()
 
 
 def _normalize_db_url(url: str) -> str:
     """
     Ensure SQLAlchemy-friendly driver.
     Examples:
-      postgres://...        -> postgresql+psycopg://...
-      postgresql://...      -> postgresql+psycopg://...
+        postgres://...     -> postgresql+psycopg://...
+        postgresql://...   -> postgresql+psycopg://...
     """
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
@@ -71,162 +74,151 @@ def _normalize_db_url(url: str) -> str:
     return url
 
 
-def get_engine() -> "Engine":
-    url = _normalize_db_url(DB_URL)
-    return create_engine(url, future=True)
+def _get_env() -> tuple[str, str]:
+    """Load ORATS_API_KEY and DB URL from env."""
+    api_key = os.environ.get("ORATS_API_KEY")
+    db_url = os.environ.get("CURVE_DB_URL") or os.environ.get("DATABASE_URL")
+
+    if not api_key:
+        raise RuntimeError("ORATS_API_KEY is not set in the environment")
+    if not db_url:
+        raise RuntimeError("CURVE_DB_URL or DATABASE_URL is not set in the environment")
+
+    return api_key, _normalize_db_url(db_url)
 
 
-def compute_trade_date_key(now_et: dt.datetime) -> str:
+def _previous_minute_et(now_utc: dt.datetime | None = None) -> dt.datetime:
+    """Return previous minute in America/New_York (handles DST)."""
+    if now_utc is None:
+        now_utc = dt.datetime.now(dt.timezone.utc)
+    now_et = now_utc.astimezone(ET)
+    return now_et - dt.timedelta(minutes=1)
+
+
+def _is_rth(et_dt: dt.datetime) -> bool:
+    """RTH: 09:30–16:00 ET, Mon–Fri."""
+    if et_dt.weekday() >= 5:  # 5 = Sat, 6 = Sun
+        return False
+    t = et_dt.time()
+    return dt.time(9, 30) <= t <= dt.time(16, 0)
+
+
+def transform_orats_df(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Return ORATS tradeDate string in ET in format YYYYMMDDHHMM.
+    Transform ORATS dataframe:
 
-    We floor to the current minute (no offset) – ORATS snapshot API
-    will return the latest completed snapshot for that minute.
+    - Add snapshot_pt (PT-local naive timestamp).
+    - Convert all columns to snake_case to match DB schema
+      (snapShotDate -> snap_shot_date, quoteDate -> quote_date, etc.).
     """
-    floored = now_et.replace(second=0, microsecond=0)
-    return floored.strftime("%Y%m%d%H%M")
-
-
-def fetch_orats_snapshot(trade_date_key: str) -> pd.DataFrame:
-    """
-    Call ORATS snapshot/monies/implied for the given tradeDate minute.
-
-    Returns a pandas DataFrame (can be empty on errors or no data).
-    """
-    params = {
-        "token": ORATS_API_KEY,
-        "tradeDate": trade_date_key,
-    }
-
-    print(f"[cron] GET {ORATS_SNAPSHOT_URL} tradeDate={trade_date_key}")
-    try:
-        resp = requests.get(ORATS_SNAPSHOT_URL, params=params, timeout=30)
-    except Exception as e:
-        print(f"[cron] ERROR: request failed: {e}", file=sys.stderr)
-        return pd.DataFrame()
-
-    print(f"[cron] ORATS response status={resp.status_code}")
-    if resp.status_code != 200:
-        # Log a small slice of body for debugging but avoid flooding logs
-        body_preview = resp.text[:300].replace("\n", "\\n")
-        print(f"[cron] ERROR: non-200 response: {body_preview}", file=sys.stderr)
-        return pd.DataFrame()
-
-    text_data = resp.text.strip()
-    if not text_data:
-        print("[cron] WARNING: empty CSV body from ORATS")
-        return pd.DataFrame()
-
-    try:
-        df = pd.read_csv(io.StringIO(text_data))
-    except Exception as e:
-        print(f"[cron] ERROR parsing CSV: {e}", file=sys.stderr)
-        return pd.DataFrame()
-
-    return df
-
-
-def prepare_dataframe(df_raw: pd.DataFrame) -> pd.DataFrame:
-    """
-    Filter to our ticker and rename/convert columns to match DB schema.
-    """
-    # Filter to our ticker (snapshot endpoint can contain many tickers)
-    if "ticker" not in df_raw.columns:
-        print("[cron] ERROR: 'ticker' column missing from ORATS CSV", file=sys.stderr)
-        return pd.DataFrame()
-
-    df = df_raw[df_raw["ticker"] == TICKER].copy()
     if df.empty:
-        print(f"[cron] WARNING: no rows for ticker={TICKER} in snapshot")
         return df
 
-    # Rename ORATS columns -> snake_case DB schema
-    rename_map = {
-        "tradeDate": "trade_date",
-        "expirDate": "expir_date",
-        "snapShotEstTime": "snap_shot_est_time",
-        "snapShotDate": "snap_shot_date",
-    }
-    df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
+    # ORATS snapShotDate is a UTC ISO string
+    utc_ts = pd.to_datetime(df["snapShotDate"], errors="coerce", utc=True)
+    df["snapshot_pt"] = (
+        utc_ts.dt.tz_convert("America/Los_Angeles").dt.tz_localize(None)
+    )
 
-    # Convert date/time columns
-    if "snap_shot_date" in df.columns:
-        df["snap_shot_date"] = pd.to_datetime(df["snap_shot_date"], utc=True)
-
-    if "trade_date" in df.columns:
-        # ORATS tradeDate from snapshot is just a date (YYYY-MM-DD)
-        df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
-
-    # You already have ticker column; ensure it's correct type
-    df["ticker"] = df["ticker"].astype(str)
-
+    # Rename columns to snake_case
+    df.columns = [camel_to_snake(col) for col in df.columns]
     return df
 
 
-def upsert_minute(engine, df: pd.DataFrame) -> None:
+def upsert_dataframe(df: pd.DataFrame, engine, table: Table) -> None:
     """
-    Use (ticker, snap_shot_date) as the per-minute key.
+    Upsert dataframe rows into Postgres with ON CONFLICT DO NOTHING.
 
-    - Determine the unique snap_shot_date for this batch.
-    - DELETE any existing rows for (ticker, snap_shot_date).
-    - INSERT the new rows via pandas.to_sql.
+    This means:
+      - If a row with the same PRIMARY KEY (ticker, expir_date, quote_date) already exists,
+        it is ignored.
+      - Missing rows are inserted.
+
+    We don't try to track an exact 'rows inserted' count because rowcount is
+    unreliable with ON CONFLICT; we just log how many rows we attempted.
     """
-    if "snap_shot_date" not in df.columns:
-        print("[cron] ERROR: snap_shot_date column missing after prepare_dataframe", file=sys.stderr)
+    if df.empty:
+        print("[cron] transformed dataframe is empty, nothing to upsert.")
         return
 
-    unique_snaps = df["snap_shot_date"].dropna().unique()
-    if len(unique_snaps) == 0:
-        print("[cron] ERROR: no non-null snap_shot_date values", file=sys.stderr)
-        return
-    if len(unique_snaps) > 1:
-        print(f"[cron] WARNING: multiple snap_shot_date values ({len(unique_snaps)}); "
-              f"using the first one as key", file=sys.stderr)
+    records = df.to_dict(orient="records")
+    chunk_size = 500  # keep parameter count under Postgres limit
 
-    snap_dt = pd.to_datetime(unique_snaps[0])
-    print(f"[cron] minute key snap_shot_date={snap_dt.isoformat()}")
+    attempted = len(records)
 
     with engine.begin() as conn:
-        # 1) Delete any existing snapshot for this ticker + minute
-        delete_sql = text(f"""
-            DELETE FROM {DB_TABLE_NAME}
-            WHERE ticker = :ticker
-              AND snap_shot_date = :snap_shot_date
-        """)
-        deleted = conn.execute(delete_sql, {"ticker": TICKER, "snap_shot_date": snap_dt}).rowcount
-        print(f"[cron] deleted {deleted} existing rows for ticker={TICKER} @ {snap_dt.isoformat()}")
-
-        # 2) Insert the fresh batch
-        df.to_sql(DB_TABLE_NAME, con=conn, if_exists="append", index=False, method="multi")
-        print(f"[cron] inserted {len(df)} rows for ticker={TICKER} @ {snap_dt.isoformat()}")
-
-
-def main() -> None:
-    now_et = dt.datetime.now(NY_TZ)
-    trade_date_key = compute_trade_date_key(now_et)
-    pretty_time = now_et.strftime("%Y-%m-%d %H:%M ET")
+        for i in range(0, len(records), chunk_size):
+            chunk = records[i : i + chunk_size]
+            stmt = pg_insert(table).values(chunk).on_conflict_do_nothing()
+            conn.execute(stmt)
 
     print(
-        f"[cron] Fetching {TICKER} for {pretty_time} "
-        f"(tradeDate={trade_date_key})"
+        f"[cron] upserted {attempted} rows "
+        f"(duplicates, if any, were ignored by primary key)."
     )
 
-    df_raw = fetch_orats_snapshot(trade_date_key)
-    if df_raw.empty:
-        print(f"[cron] no data from ORATS for tradeDate={trade_date_key}")
+
+# ---------- Main cron entrypoint ----------
+
+def run_ingest_for_previous_minute() -> None:
+    try:
+        api_key, db_url = _get_env()
+    except RuntimeError as e:
+        print(f"[cron] env error: {e}")
         return
 
-    print(f"[cron] fetched {len(df_raw)} raw rows from ORATS")
-    df_prepped = prepare_dataframe(df_raw)
-    if df_prepped.empty:
-        print(f"[cron] no rows for ticker={TICKER} after filtering/prep")
+    target_et = _previous_minute_et()
+    if not _is_rth(target_et):
+        print(f"[cron] {target_et:%Y-%m-%d %H:%M} ET is outside RTH, skipping.")
         return
 
-    print(f"[cron] {len(df_prepped)} rows for ticker={TICKER} after prep")
+    trade_datetime_str = target_et.strftime("%Y%m%d%H%M")
+    print(
+        f"[cron] Fetching {TICKER} for {target_et:%Y-%m-%d %H:%M} ET "
+        f"(tradeDate={trade_datetime_str})"
+    )
 
-    engine = get_engine()
-    upsert_minute(engine, df_prepped)
+    params = {
+        "ticker": TICKER,
+        "tradeDate": trade_datetime_str,
+        "token": api_key,
+    }
+    url = f"{BASE_URL}{ENDPOINT}"
+
+    # --- Fetch from ORATS (same endpoint as old script) ---
+    try:
+        r = requests.get(url, params=params, timeout=30)
+        r.raise_for_status()
+        csv_text = r.text.strip()
+        if not csv_text or csv_text.startswith("<"):
+            print("[cron] No CSV data returned from API.")
+            return
+        df = pd.read_csv(io.StringIO(csv_text))
+        if df.empty:
+            print("[cron] Empty CSV for this minute.")
+            return
+        print(f"[cron] fetched {len(df)} rows from ORATS.")
+    except Exception as e:
+        print(f"[cron] fetch error: {e}")
+        return
+
+    # --- Transform (same as gap-fill) ---
+    try:
+        df = transform_orats_df(df)
+        print(f"[cron] {len(df)} rows after transform.")
+    except Exception as e:
+        print(f"[cron] transform error: {e}")
+        return
+
+    # --- Upsert into DB with ON CONFLICT DO NOTHING ---
+    try:
+        engine = create_engine(db_url, future=True)
+        metadata = MetaData()
+        table = Table(DB_TABLE_NAME, metadata, autoload_with=engine)
+        upsert_dataframe(df, engine, table)
+    except Exception as e:
+        print(f"[cron] DB upsert error: {e}")
 
 
 if __name__ == "__main__":
-    main()
+    run_ingest_for_previous_minute()
