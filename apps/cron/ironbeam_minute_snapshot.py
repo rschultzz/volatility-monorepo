@@ -45,8 +45,11 @@ from sqlalchemy import create_engine, text
 # BASIC CONFIG FROM ENV
 # ---------------------------------------------------------------------------
 
-API_BASE = os.environ.get("IRONBEAM_API_BASE", "https://demo.ironbeamapi.com/v2")
-WS_BASE = os.environ.get("IRONBEAM_WS_BASE", "wss://demo.ironbeamapi.com/v2/stream")
+API_BASE = os.environ.get("IRONBEAM_API_BASE", "https://live.ironbeamapi.com/v2")
+WS_BASE = os.environ.get("IRONBEAM_WS_BASE", "wss://live.ironbeamapi.com/v2/stream")
+
+# API_BASE = os.environ.get("IRONBEAM_API_BASE", "https://demo.ironbeamapi.com/v2")
+# WS_BASE = os.environ.get("IRONBEAM_WS_BASE", "wss://demo.ironbeamapi.com/v2/stream")
 
 USERNAME = os.environ.get("IRONBEAM_USERNAME")
 PASSWORD_OR_APIKEY = os.environ.get("IRONBEAM_PASSWORD")
