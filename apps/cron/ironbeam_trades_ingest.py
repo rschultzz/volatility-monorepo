@@ -158,21 +158,51 @@ def epoch_to_utc(ts: int) -> Optional[dt.datetime]:
 def auth() -> str:
     """
     Call /auth and return bearer token.
+
+    If IRONBEAM_TENANT_API_KEY is set, we follow the API-key auth example
+    from the docs and send JSON with Content-Type: application/json.
+
+    Otherwise we use the simple username/password form-encoded auth
+    used in their basic Python streaming example.
     """
     if not IRONBEAM_USERNAME or not IRONBEAM_PASSWORD:
         raise RuntimeError("IRONBEAM_USERNAME and IRONBEAM_PASSWORD must be set")
 
-    payload: Dict[str, Any] = {
-        "username": IRONBEAM_USERNAME,
-        "password": IRONBEAM_PASSWORD,
-    }
-    if IRONBEAM_TENANT_API_KEY:
-        # Some tenants require apikey, some don't. If it's wrong you'll see 400.
-        payload["apikey"] = IRONBEAM_TENANT_API_KEY
-
     url = f"{API_BASE}/auth"
-    print(f"[AUTH] POST {url}")
-    resp = requests.post(url, data=payload, timeout=HTTP_TIMEOUT)
+
+    # --- API-key auth (live / enterprise style) ---
+    if IRONBEAM_TENANT_API_KEY:
+        # Docs example payload:
+        # {"username": account_id, "password": password, "apiKey": "API key"}
+        payload = {
+            "username": IRONBEAM_USERNAME,
+            "password": IRONBEAM_PASSWORD,
+            "apiKey": IRONBEAM_TENANT_API_KEY,
+        }
+        headers = {"Content-Type": "application/json"}
+
+        print(f"[AUTH] POST {url} (JSON with apiKey)")
+        resp = requests.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=HTTP_TIMEOUT,
+        )
+
+    # --- Simple username/password auth (demo style) ---
+    else:
+        payload = {
+            "username": IRONBEAM_USERNAME,
+            "password": IRONBEAM_PASSWORD,
+        }
+
+        print(f"[AUTH] POST {url} (form-encoded)")
+        resp = requests.post(
+            url,
+            data=payload,          # application/x-www-form-urlencoded
+            timeout=HTTP_TIMEOUT,
+        )
+
     print(f"[AUTH] Status: {resp.status_code}")
     try:
         body = resp.json()
@@ -181,11 +211,13 @@ def auth() -> str:
     print(f"[AUTH] Raw body: {body!r}")
 
     resp.raise_for_status()
+
     token = body.get("token")
     if not token:
         raise RuntimeError(f"No token in auth response: {body!r}")
     print("[AUTH] Got token")
     return token
+
 
 
 def resolve_front_month_es(token: str) -> str:
