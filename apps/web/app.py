@@ -21,7 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 import os
 import datetime as dt
 from typing import List
-from dash import Dash, html, dcc
+from dash import Dash, html, dcc, Input, Output
 import dash_auth
 
 # ===== Modules =====
@@ -50,6 +50,11 @@ LIVE_UPDATE_TIMER_ID = "live-update-timer"
 
 # ===== UI Helpers =====
 def get_default_trade_date() -> dt.date:
+    """
+    Return 'today' if it's Monday–Friday.
+    If it's Saturday, return Friday.
+    If it's Sunday, return Friday.
+    """
     today = dt.date.today()
     if today.weekday() == 5:
         return today - dt.timedelta(days=1)  # Sat -> Fri
@@ -98,7 +103,14 @@ VALID_USERNAME_PASSWORD_PAIRS = {
 }
 auth = dash_auth.BasicAuth(app, VALID_USERNAME_PASSWORD_PAIRS)
 
-app.layout = html.Div(
+
+def serve_layout():
+    """Layout factory so defaults are recomputed on each page load."""
+    # Weekday -> today, Weekend -> Friday
+    default_trade_date = get_default_trade_date()
+    time_options = pt_time_options()
+
+    return html.Div(
     [
         dcc.Store(id=LIVE_DATA_STORE_ID),
         dcc.Interval(id=LIVE_UPDATE_TIMER_ID, interval=15 * 1000, n_intervals=0),
@@ -156,7 +168,7 @@ app.layout = html.Div(
                             id=TRADE_DATE_PICK,
                             disabled=False,
                             display_format="YYYY-MM-DD",
-                            date=get_default_trade_date(),
+                            date=default_trade_date,
                         ),
                     ],
                     style={
@@ -175,7 +187,8 @@ app.layout = html.Div(
                             id=EXPIRATION_DATE_PICK,
                             disabled=False,
                             display_format="YYYY-MM-DD",
-                            date=third_friday_next_month(),
+                            # Default to same as trade date (0DTE)
+                            date=default_trade_date,
                         ),
                     ],
                     style={
@@ -192,7 +205,7 @@ app.layout = html.Div(
                         ),
                         dcc.Dropdown(
                             id=SMILE_TIME_INPUT,
-                            options=pt_time_options(),
+                            options=time_options,
                             value=["06:31"],
                             multi=True,
                             style={"minWidth": "320px"},
@@ -306,12 +319,30 @@ app.layout = html.Div(
                                     step=10,
                                     value=100,
                                     marks={
-                                        0: {"label": "0", "style": {"fontSize": "11px"}},
-                                        50: {"label": "50", "style": {"fontSize": "11px"}},
-                                        100: {"label": "100", "style": {"fontSize": "11px"}},
-                                        150: {"label": "150", "style": {"fontSize": "11px"}},
-                                        200: {"label": "200", "style": {"fontSize": "11px"}},
-                                        250: {"label": "250", "style": {"fontSize": "11px"}},
+                                        0: {
+                                            "label": "0",
+                                            "style": {"fontSize": "11px"},
+                                        },
+                                        50: {
+                                            "label": "50",
+                                            "style": {"fontSize": "11px"},
+                                        },
+                                        100: {
+                                            "label": "100",
+                                            "style": {"fontSize": "11px"},
+                                        },
+                                        150: {
+                                            "label": "150",
+                                            "style": {"fontSize": "11px"},
+                                        },
+                                        200: {
+                                            "label": "200",
+                                            "style": {"fontSize": "11px"},
+                                        },
+                                        250: {
+                                            "label": "250",
+                                            "style": {"fontSize": "11px"},
+                                        },
                                     },
                                     tooltip={
                                         "placement": "bottom",
@@ -324,7 +355,6 @@ app.layout = html.Div(
                                 "flex": "0 0 33%",
                                 "maxWidth": "33%",
                             },
-
                         ),
 
                         # Bar interval toggle
@@ -388,6 +418,20 @@ app.layout = html.Div(
         "padding": "0 80px 30px",
     },
 )
+
+
+# Use function-based layout so defaults aren't frozen at deploy time
+app.layout = serve_layout
+
+
+# Keep expiration in sync with trade date (0DTE default)
+@app.callback(
+    Output(EXPIRATION_DATE_PICK, "date"),
+    Input(TRADE_DATE_PICK, "date"),
+)
+def sync_expiration_with_trade(trade_date):
+    return trade_date
+
 
 # Register all module callbacks
 register_smile(app)
