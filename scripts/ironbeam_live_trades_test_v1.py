@@ -32,9 +32,9 @@ TRADES_URL_TEMPLATE = (
 
 
 def main() -> None:
-    username = os.getenv("IRONBEAM_USERNAME")
-    password = os.getenv("IRONBEAM_PASSWORD")
-    api_key = os.getenv("IRONBEAM_TENANT_API_KEY") or os.getenv("IRONBEAM_API_KEY")
+    username = "23233577"
+    password = "f20ae06eb7184cd8999321af363024ab"
+    api_key = "f20ae06eb7184cd8999321af363024ab"
     symbol = os.getenv("IRONBEAM_SYMBOL", "XCME:ES.H25")  # change to your live symbol
 
     if not (username and password and api_key):
