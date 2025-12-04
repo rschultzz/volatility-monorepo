@@ -23,7 +23,7 @@ AUTH_URL = f"{BASE_URL}/auth"
 def main() -> None:
     # username = os.getenv("IRONBEAM_USERNAME")
     # api_key = os.getenv("IRONBEAM_API_KEY")
-    username = "51395669"
+    username = "23233577"
     api_key = "f20ae06eb7184cd8999321af363024ab"
 
     if not username or not api_key:
