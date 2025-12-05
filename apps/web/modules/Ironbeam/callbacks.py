@@ -32,7 +32,7 @@ GEX_ABS_THRESHOLD_DEFAULT = float(os.getenv("GEX_ABS_THRESHOLD", "1e10"))
 
 # Color span logic:
 # - If GEX_COLOR_ABS_MAX > 0, we clamp colors to ±that value
-# - Else we use the given percentile of |net_gamma| (default: 95)
+# - Else we use a percentile of |net_gamma|
 GEX_COLOR_ABS_MAX = float(os.getenv("GEX_COLOR_ABS_MAX", "0"))
 GEX_COLOR_PERCENTILE = float(os.getenv("GEX_COLOR_PERCENTILE", "95"))
 
@@ -164,20 +164,17 @@ def _resample_ohlc(df: pd.DataFrame, freq: str) -> pd.DataFrame:
 
 # ---------- Dash callback registration ----------
 def register_ironbeam_callbacks(app):
-    # ---- Main ES + GEX chart ----
-
-
+    # ---- Main ES + single-day GEX chart ----
     @app.callback(
         Output("ironbeam-chart", "figure"),
         [
             Input("trade-date", "date"),
-            Input("ironbeam-interval", "n_intervals"),
             Input("gex-threshold-billions", "value"),   # slider value in billions
             Input("smile-time-input", "value"),         # selected PT slices
             Input("ironbeam-bar-interval", "value"),    # '1min' or '5min'
         ],
     )
-    def update_chart(trade_date, n, threshold_billions, selected_times_pt, bar_interval):
+    def update_chart(trade_date, threshold_billions, selected_times_pt, bar_interval):
         if not trade_date:
             return go.Figure(layout_title_text="Select a trade date to view chart.")
 
@@ -207,9 +204,8 @@ def register_ironbeam_callbacks(app):
         pt_tz = ZoneInfo("America/Los_Angeles")
 
         # ---- Multi-day price window: ±DAYS_EITHER_SIDE around trade date ----
-        days_either_side = int(globals().get("DAYS_EITHER_SIDE", 5))
-        days_before = days_either_side
-        days_after = days_either_side
+        days_before = DAYS_EITHER_SIDE
+        days_after = DAYS_EITHER_SIDE
 
         full_start_pt = dt.datetime.combine(
             selected_date - dt.timedelta(days=days_before),
@@ -380,6 +376,7 @@ def register_ironbeam_callbacks(app):
                             coloraxis="coloraxis",
                             opacity=0.35,
                             zsmooth="best",
+                            name=f"GEX {selected_date.isoformat()}",
                             hovertemplate=(
                                 "Time=%{x|%Y-%m-%d %H:%M}<br>"
                                 "Level=%{y}<br>"
@@ -388,6 +385,7 @@ def register_ironbeam_callbacks(app):
                             zauto=False,
                         )
                     )
+
                     fig.update_layout(
                         coloraxis=dict(
                             colorscale=GEX_HEATMAP_COLORSCALE,
@@ -501,6 +499,13 @@ def register_ironbeam_callbacks(app):
                 )
             )
 
+        # Store price band and GEX loader state in meta
+        meta = dict(
+            gex_skip_dates=[],
+            band_min=float(band_min),
+            band_max=float(band_max),
+        )
+
         fig.update_layout(
             title=(
                 "ES Front Month "
@@ -532,6 +537,7 @@ def register_ironbeam_callbacks(app):
             paper_bgcolor=ETH_BG_COLOR,
             height=1200,
             shapes=shapes,
+            meta=meta,
         )
 
         fig.update_yaxes(
@@ -546,9 +552,251 @@ def register_ironbeam_callbacks(app):
 
         return fig
 
+    # ---- Progressive multi-day GEX loader ----
+    @app.callback(
+        Output("ironbeam-chart", "figure", allow_duplicate=True),
+        Input("ironbeam-interval", "n_intervals"),
+        State("ironbeam-chart", "figure"),
+        State("trade-date", "date"),
+        State("gex-threshold-billions", "value"),
+        prevent_initial_call=True,
+    )
+    def progressively_add_gex(n_intervals, fig, trade_date, threshold_billions):
+        """
+        After the main chart is drawn, progressively add GEX stripes
+        for other days in the ±DAYS_EITHER_SIDE window around the
+        selected trade date.
 
+        Each interval tick adds at most ONE new day's GEX.
+        """
+        if fig is None or not trade_date:
+            raise PreventUpdate
 
+        print(f"[GEX loader] tick={n_intervals}, trade_date={trade_date}")
 
+        # Parse selected date
+        try:
+            selected_date = dt.datetime.strptime(trade_date, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            print("[GEX loader] invalid trade_date, abort")
+            raise PreventUpdate
+
+        pt_tz = ZoneInfo("America/Los_Angeles")
+        days_before = DAYS_EITHER_SIDE
+        days_after = DAYS_EITHER_SIDE
+
+        # Threshold from slider
+        if threshold_billions is None:
+            current_threshold = GEX_ABS_THRESHOLD_DEFAULT
+        else:
+            current_threshold = float(threshold_billions) * 1e9
+
+        # Recompute the full PT window (must match update_chart)
+        full_start_pt = dt.datetime.combine(
+            selected_date - dt.timedelta(days=days_before),
+            dt.time(0, 0),
+            tzinfo=pt_tz,
+        )
+        full_end_pt = dt.datetime.combine(
+            selected_date + dt.timedelta(days=days_after),
+            dt.time(23, 59),
+            tzinfo=pt_tz,
+        )
+
+        data = fig.get("data", [])
+        if not data:
+            print("[GEX loader] no data in figure yet, abort")
+            raise PreventUpdate
+
+        layout = fig.get("layout", {})
+        meta = layout.get("meta") or {}
+
+        # --- Use band_min / band_max from meta instead of parsing candles ---
+        band_min = meta.get("band_min")
+        band_max = meta.get("band_max")
+        if band_min is None or band_max is None:
+            print("[GEX loader] band_min/band_max missing from meta, abort")
+            raise PreventUpdate
+
+        band_min = float(band_min)
+        band_max = float(band_max)
+        print(f"[GEX loader] price band from meta: {band_min:.1f}–{band_max:.1f}")
+
+        # GEX loader state
+        skip_dates_list = meta.get("gex_skip_dates", [])
+        if not isinstance(skip_dates_list, list):
+            skip_dates_list = []
+        skip_dates = set(skip_dates_list)
+
+        # ----- Which GEX dates are already loaded? -----
+        loaded_dates = set(skip_dates)
+        for tr in data:
+            if tr.get("type") == "heatmap":
+                name = tr.get("name", "")
+                if isinstance(name, str) and name.startswith("GEX "):
+                    ds = name[4:]  # "YYYY-MM-DD"
+                    loaded_dates.add(ds)
+
+        print(f"[GEX loader] already handled dates: {sorted(loaded_dates)}")
+
+        # Build candidate dates (±N around selected), excluding selected_date
+        candidate_dates = []
+        for offset in range(-days_before, days_after + 1):
+            d = selected_date + dt.timedelta(days=offset)
+            if d == selected_date:
+                continue  # main callback already handles this one
+            candidate_dates.append(d)
+
+        print(f"[GEX loader] candidates: {[d.isoformat() for d in candidate_dates]}")
+
+        # Filter out dates we already loaded or skipped
+        remaining = [d for d in candidate_dates if d.isoformat() not in loaded_dates]
+        print(f"[GEX loader] remaining: {[d.isoformat() for d in remaining]}")
+
+        if not remaining:
+            print("[GEX loader] nothing remaining to load, abort")
+            raise PreventUpdate
+
+        # Choose the next date to load: nearest to selected_date
+        remaining.sort(key=lambda d: abs((d - selected_date).days))
+        target_date = remaining[0]
+        target_str = target_date.isoformat()
+        print(f"[GEX loader] target_date={target_str}")
+
+        # ----- Fetch GEX for target_date -----
+        try:
+            df_gex = _fetch_gex_grouped_by_level(target_date)
+        except Exception as e:
+            print(f"[GEX loader] Error fetching GEX for {target_date}: {e}")
+            skip_dates.add(target_str)
+            meta["gex_skip_dates"] = sorted(skip_dates)
+            layout["meta"] = meta
+            fig["layout"] = layout
+            return fig
+
+        if df_gex.empty:
+            print(f"[GEX loader] no GEX rows for {target_str}, skipping")
+            skip_dates.add(target_str)
+            meta["gex_skip_dates"] = sorted(skip_dates)
+            layout["meta"] = meta
+            fig["layout"] = layout
+            return fig
+
+        # Restrict to band around current price
+        df_gex = df_gex[
+            (df_gex["level"] >= band_min)
+            & (df_gex["level"] <= band_max)
+        ].copy()
+        if df_gex.empty:
+            print(f"[GEX loader] all GEX levels for {target_str} are outside band, skipping")
+            skip_dates.add(target_str)
+            meta["gex_skip_dates"] = sorted(skip_dates)
+            layout["meta"] = meta
+            fig["layout"] = layout
+            return fig
+
+        levels = df_gex["level"].to_numpy(dtype=float)
+        call_g = df_gex["call_gamma"].to_numpy(dtype=float)
+        put_g = df_gex["put_gamma"].to_numpy(dtype=float)
+        net_g = df_gex["net_gamma"].to_numpy(dtype=float)
+
+        # Time window for this target_date: D-1 15:00 → D 13:00 PT
+        day_start_pt = dt.datetime.combine(
+            target_date - dt.timedelta(days=1),
+            dt.time(15, 0),
+            tzinfo=pt_tz,
+        )
+        day_end_pt = dt.datetime.combine(
+            target_date,
+            dt.time(13, 0),
+            tzinfo=pt_tz,
+        )
+
+        # Clip to the full price window
+        if day_end_pt <= full_start_pt or day_start_pt >= full_end_pt:
+            print(f"[GEX loader] time window {day_start_pt}–{day_end_pt} outside full window, skipping")
+            skip_dates.add(target_str)
+            meta["gex_skip_dates"] = sorted(skip_dates)
+            layout["meta"] = meta
+            fig["layout"] = layout
+            return fig
+
+        day_start_clip = max(day_start_pt, full_start_pt)
+        day_end_clip = min(day_end_pt, full_end_pt)
+
+        time_index = pd.date_range(
+            start=day_start_clip,
+            end=day_end_clip,
+            freq="1min",
+            inclusive="left",
+        )
+        if time_index.empty:
+            print(f"[GEX loader] empty time_index for {target_str}, skipping")
+            skip_dates.add(target_str)
+            meta["gex_skip_dates"] = sorted(skip_dates)
+            layout["meta"] = meta
+            fig["layout"] = layout
+            return fig
+
+        times = time_index.to_pydatetime()
+
+        # Build Z matrix, thresholded by combined |call| + |put|
+        z = np.tile(net_g.reshape(-1, 1), (1, len(times)))
+        mag = np.abs(call_g) + np.abs(put_g)
+        if current_threshold > 0:
+            mag_z = np.tile(mag.reshape(-1, 1), (1, len(times)))
+            z = np.where(mag_z < current_threshold, np.nan, z)
+
+        # Use the same color range already computed by the main callback
+        coloraxis = layout.get("coloraxis", {})
+        cmin = coloraxis.get("cmin")
+        cmax = coloraxis.get("cmax")
+
+        # If not set for some reason, fall back to symmetric span from this day's net_g
+        if cmin is None or cmax is None:
+            if net_g.size:
+                max_abs = float(np.nanmax(np.abs(net_g))) or 1.0
+            else:
+                max_abs = 1.0
+            cmin = -max_abs
+            cmax = max_abs
+            layout.setdefault("coloraxis", {})
+            layout["coloraxis"]["cmin"] = cmin
+            layout["coloraxis"]["cmax"] = cmax
+            fig["layout"] = layout
+
+        print(f"[GEX loader] adding heatmap for {target_str} with {len(levels)} levels, {len(times)} times")
+
+        # Append new heatmap trace for this target_date
+        fig["data"].append(
+            dict(
+                type="heatmap",
+                x=list(times),
+                y=levels.tolist(),
+                z=z.tolist(),
+                coloraxis="coloraxis",
+                opacity=0.35,
+                zsmooth="best",
+                name=f"GEX {target_str}",
+                hovertemplate=(
+                    "Trade date="
+                    + target_str
+                    + "<br>"
+                    "Time=%{x|%Y-%m-%d %H:%M}<br>"
+                    "Level=%{y}<br>"
+                    "Net GEX=%{z:.3g}<extra></extra>"
+                ),
+                zauto=False,
+            )
+        )
+
+        # Remember that we've handled this date now (as loaded or skipped)
+        skip_dates.add(target_str)
+        meta["gex_skip_dates"] = sorted(skip_dates)
+        layout["meta"] = meta
+        fig["layout"] = layout
+
+        return fig
 
     # ---- Click on ES bar -> toggle PT time in Smile/Skew time slices ----
     @app.callback(
