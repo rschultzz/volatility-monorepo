@@ -1,5 +1,3 @@
-# apps/web/modules/Ironbeam/callbacks.py
-
 import os
 import datetime as dt
 from zoneinfo import ZoneInfo
@@ -38,34 +36,17 @@ GEX_ABS_THRESHOLD_DEFAULT = float(os.getenv("GEX_ABS_THRESHOLD", "1e10"))
 GEX_COLOR_ABS_MAX = float(os.getenv("GEX_COLOR_ABS_MAX", "0"))
 GEX_COLOR_PERCENTILE = float(os.getenv("GEX_COLOR_PERCENTILE", "95"))
 
-# Background colors for ETH vs RTH (keep dark theme, but lighter so GEX pops)
-# ETH_BG_COLOR = os.getenv("IRONBEAM_ETH_BG_COLOR", "#111827")  # base dark gray/navy
-# RTH_BG_COLOR = os.getenv("IRONBEAM_RTH_BG_COLOR", "#1f2937")  # slightly lighter gray
-
 # Background colors for ETH vs RTH (more contrast, still dark theme)
 ETH_BG_COLOR = os.getenv("IRONBEAM_ETH_BG_COLOR", "#1f2937")  # dark gray (outside RTH)
 RTH_BG_COLOR = os.getenv("IRONBEAM_RTH_BG_COLOR", "#4b5563")  # medium gray (RTH)
 
-
-
-# Colorscale tuned for dark background:
-#   - strong negatives (puts dominating): bright orange
-#   - near zero: bright yellow band
-#   - strong positives (calls dominating): green
-
-# GEX_HEATMAP_COLORSCALE = [
-#     [0.0,  "#ea580c"],  # strong negative (deep orange)
-#     [0.25, "#fb923c"],  # medium negative (lighter orange)
-#     [0.5,  "#facc15"],  # near zero (bright yellow)
-#     [0.75, "#22c55e"],  # medium positive (green)
-#     [1.0,  "#bbf7d0"],  # strong positive (pale green)
-# ]
+# How many days of ES data to show on either side of the selected trade date
+DAYS_EITHER_SIDE = int(os.getenv("IRONBEAM_DAYS_EITHER_SIDE", "5"))
 
 # Colorscale tuned for dark background:
 #   - strong negatives: blue
 #   - near zero: dark slate (almost invisible)
 #   - strong positives: green
-
 GEX_HEATMAP_COLORSCALE = [
     [0.0,  "#1d4ed8"],  # strong negative (deep blue)
     [0.25, "#60a5fa"],  # medium negative (lighter blue)
@@ -185,6 +166,7 @@ def _resample_ohlc(df: pd.DataFrame, freq: str) -> pd.DataFrame:
 def register_ironbeam_callbacks(app):
     # ---- Main ES + GEX chart ----
 
+
     @app.callback(
         Output("ironbeam-chart", "figure"),
         [
@@ -197,62 +179,65 @@ def register_ironbeam_callbacks(app):
     )
     def update_chart(trade_date, n, threshold_billions, selected_times_pt, bar_interval):
         if not trade_date:
-            return go.Figure(layout_title_text="Select a trade to view chart.")
+            return go.Figure(layout_title_text="Select a trade date to view chart.")
 
-        # Normalize selected times to a list of strings like ["06:31", "10:15"]
+        # Normalize selected times to a list of "HH:MM" strings
         if selected_times_pt is None:
-            selected_times: list[str] = []
+            selected_times = []
         elif isinstance(selected_times_pt, list):
             selected_times = [str(t) for t in selected_times_pt]
         else:
             selected_times = [str(selected_times_pt)]
 
-        # Normalize bar interval
+        # 1m or 5m bars
         interval = bar_interval or "1min"
 
-        # Convert slider value (billions) to raw units
+        # Slider is in billions → raw units
         if threshold_billions is None:
             current_threshold = GEX_ABS_THRESHOLD_DEFAULT
         else:
             current_threshold = float(threshold_billions) * 1e9
 
-        # ----- Parse selected trade date -----
+        # ---- Parse trade date ----
         try:
             selected_date = dt.datetime.strptime(trade_date, "%Y-%m-%d").date()
-        except (ValueError, TypeError):
-            return go.Figure(layout_title_text="Invalid date format.")
+        except (TypeError, ValueError):
+            return go.Figure(layout_title_text="Invalid trade date.")
 
         pt_tz = ZoneInfo("America/Los_Angeles")
 
-        # Time window in PT: D-1 15:00 → D 13:00
-        start_pt = dt.datetime.combine(
+        # ---- Multi-day price window: ±DAYS_EITHER_SIDE around trade date ----
+        days_either_side = int(globals().get("DAYS_EITHER_SIDE", 5))
+        days_before = days_either_side
+        days_after = days_either_side
+
+        full_start_pt = dt.datetime.combine(
+            selected_date - dt.timedelta(days=days_before),
+            dt.time(0, 0),
+            tzinfo=pt_tz,
+        )
+        full_end_pt = dt.datetime.combine(
+            selected_date + dt.timedelta(days=days_after),
+            dt.time(23, 59),
+            tzinfo=pt_tz,
+        )
+
+        # Default visible window: D-1 15:00 → D 13:00 PT
+        default_start_pt = dt.datetime.combine(
             selected_date - dt.timedelta(days=1),
             dt.time(15, 0),
             tzinfo=pt_tz,
         )
-        end_pt = dt.datetime.combine(
+        default_end_pt = dt.datetime.combine(
             selected_date,
             dt.time(13, 0),
             tzinfo=pt_tz,
         )
 
-        # RTH window for background shading: 06:30–13:00 PT on the trade date
-        rth_start_pt = dt.datetime.combine(
-            selected_date,
-            dt.time(6, 30),
-            tzinfo=pt_tz,
-        )
-        rth_end_pt = dt.datetime.combine(
-            selected_date,
-            dt.time(13, 0),
-            tzinfo=pt_tz,
-        )
+        # Query 1m bars in UTC for the full multi-day window
+        start_utc = full_start_pt.astimezone(ZoneInfo("UTC"))
+        end_utc = full_end_pt.astimezone(ZoneInfo("UTC"))
 
-        # Convert to UTC for DB query
-        start_utc = start_pt.astimezone(ZoneInfo("UTC"))
-        end_utc = end_pt.astimezone(ZoneInfo("UTC"))
-
-        # ----- Fetch 1m ES bars plus trades over the same window -----
         bars_query = text(
             f"""
             SELECT * FROM {DB_TABLE_NAME}
@@ -260,144 +245,39 @@ def register_ironbeam_callbacks(app):
             ORDER BY datetime ASC
         """
         )
-        trades_query = text(
-            f"""
-            SELECT ts_utc, price, size
-            FROM {DB_TRADES_TABLE}
-            WHERE ts_utc >= :start_date AND ts_utc < :end_date
-            ORDER BY ts_utc ASC
-        """
-        )
         params = {"start_date": start_utc, "end_date": end_utc}
 
         try:
-            with engine.connect() as connection:
+            with engine.connect() as conn:
                 df_bars_1m = pd.read_sql(
-                    bars_query, connection, params=params, parse_dates=["datetime"]
+                    bars_query, conn, params=params, parse_dates=["datetime"]
                 )
-                try:
-                    df_trades = pd.read_sql(
-                        trades_query,
-                        connection,
-                        params=params,
-                        parse_dates=["ts_utc"],
-                    )
-                except Exception as e:
-                    print(f"[Ironbeam] Error fetching trades data: {e}")
-                    df_trades = pd.DataFrame()
         except Exception as e:
             print(f"[Ironbeam] Error fetching bar data: {e}")
-            return go.Figure(layout_title_text="Database error (bars/trades).")
+            return go.Figure(layout_title_text="Database error when loading bars.")
 
-        print(
-            f"[Ironbeam] update_chart: {len(df_bars_1m)} bars, "
-            f"{len(df_trades)} trades in window {start_utc} → {end_utc}"
-        )
-
-        # ---------- Build canonical 1m series: DB bars + at most ONE live minute ----------
-        df_all_1m = df_bars_1m.copy()
-
-        if not df_trades.empty and not df_bars_1m.empty:
-            # ts_utc from DB is UTC; keep it tz-aware, then floor to minute and strip tz
-            df_trades["ts_utc"] = pd.to_datetime(df_trades["ts_utc"], utc=True)
-            df_trades["minute"] = df_trades["ts_utc"].dt.floor("min")
-            df_trades["minute"] = df_trades["minute"].dt.tz_localize(None)
-
-            # Last completed bar from Ironbeam (naive UTC)
-            last_bar_dt = df_bars_1m["datetime"].max()
-            last_bar = df_bars_1m[df_bars_1m["datetime"] == last_bar_dt].iloc[0]
-            last_close = float(last_bar["close"])
-
-            latest_trade_minute = df_trades["minute"].max()
-
-            print(
-                f"[Ironbeam] last_bar_dt={last_bar_dt}, "
-                f"latest_trade_minute={latest_trade_minute}"
-            )
-
-            # Only build a live bar if trades exist in a *new* minute beyond DB bars
-            if latest_trade_minute is not None and latest_trade_minute > last_bar_dt:
-                trades_live = df_trades[df_trades["minute"] == latest_trade_minute].copy()
-
-                if not trades_live.empty:
-                    # Aggregate trades in that latest minute
-                    prices = trades_live["price"].astype(float)
-                    sizes = trades_live["size"].fillna(0).astype(float)
-
-                    t_high = float(prices.max())
-                    t_low = float(prices.min())
-                    t_close = float(prices.iloc[-1])
-                    volume = float(sizes.sum())
-
-                    # Anchor open at last official close to keep continuity
-                    live_open = last_close
-                    live_high = max(live_open, t_high)
-                    live_low = min(live_open, t_low)
-                    live_close = t_close
-
-                    live_df = pd.DataFrame(
-                        [
-                            {
-                                "datetime": latest_trade_minute,  # naive UTC
-                                "open": live_open,
-                                "high": live_high,
-                                "low": live_low,
-                                "close": live_close,
-                                "volume": volume,
-                            }
-                        ]
-                    )
-
-                    print(
-                        "[Ironbeam] live anchored bar:",
-                        live_df[["datetime", "open", "high", "low", "close"]]
-                        .to_dict("records")[0],
-                    )
-
-                    older_bars = df_bars_1m[
-                        df_bars_1m["datetime"] <= last_bar_dt
-                    ].copy()
-
-                    df_all_1m = (
-                        pd.concat([older_bars, live_df], ignore_index=True)
-                        .sort_values("datetime")
-                    )
-            else:
-                print("[Ironbeam] DB already has latest minute; no live bar appended.")
-
-        # If for some reason we still have nothing, bail
-        if df_all_1m.empty:
+        if df_bars_1m.empty:
             return go.Figure(
                 layout_title_text=(
-                    f"No bar or trade data available for window "
-                    f"{start_pt.strftime('%Y-%m-%d %H:%M')} – {end_pt.strftime('%Y-%m-%d %H:%M')} PT."
+                    f"No ES bar data for "
+                    f"{full_start_pt.strftime('%Y-%m-%d %H:%M')} – "
+                    f"{full_end_pt.strftime('%Y-%m-%d %H:%M')} PT."
                 )
             )
 
-        # Optional debug: what is the last bar we are actually plotting?
-        last_bar_dbg = df_all_1m.sort_values("datetime").tail(1)
-        print(
-            "[Ironbeam] final last bar:",
-            last_bar_dbg[["datetime", "open", "high", "low", "close"]]
-            .to_dict("records")[0],
-        )
+        df_all_1m = df_bars_1m.sort_values("datetime").copy()
 
-        # ----- Compute envelope and GEX band from combined 1m data -----
-        # Convert combined to PT for envelope calc
+        # ---- Convert all bars to PT for plotting / envelope ----
         df_all_1m_pt = df_all_1m.copy()
         df_all_1m_pt["datetime_pt"] = (
             df_all_1m_pt["datetime"]
             .dt.tz_localize("UTC")
-            .dt.tz_convert("America/Los_Angeles")
+            .dt.tz_convert(pt_tz)
         )
 
-        # Underlying full-session low/high (for GEX band)
-        underlying_low = float(df_all_1m["low"].min())
-        underlying_high = float(df_all_1m["high"].max())
-
-        # Session for default y-envelope: previous day 15:00 → trade date 13:00 PT
+        # Compute price envelope over default session (D-1 15:00 → D 13:00)
         dt_pt_all = df_all_1m_pt["datetime_pt"]
-        mask_session = (dt_pt_all >= start_pt) & (dt_pt_all <= end_pt)
+        mask_session = (dt_pt_all >= default_start_pt) & (dt_pt_all <= default_end_pt)
         df_session = df_all_1m_pt[mask_session]
         ref_df = df_session if not df_session.empty else df_all_1m_pt
 
@@ -408,126 +288,114 @@ def register_ironbeam_callbacks(app):
             y_min_price = day_low * 0.99
             y_max_price = day_high * 1.01
         else:
-            # Safety fallback if prices are weird
-            y_pad = 0.01 * (day_high - day_low) if day_high > day_low else 1.0
-            y_min_price = day_low - y_pad
-            y_max_price = day_high + y_pad
+            pad = 0.01 * (day_high - day_low) if day_high > day_low else 1.0
+            y_min_price = day_low - pad
+            y_max_price = day_high + pad
 
-        # ----- Apply bar-interval resampling for plotting (with fallback) -----
+        # Underlying low/high over full window (for GEX level band)
+        underlying_low = float(df_all_1m["low"].min())
+        underlying_high = float(df_all_1m["high"].max())
+        band_min = underlying_low - GEX_LEVEL_PADDING
+        band_max = underlying_high + GEX_LEVEL_PADDING
+
+        # ---- Resample if needed ----
         df_bars = df_all_1m.copy()
         if interval == "5min":
             df_resampled = _resample_ohlc(df_all_1m, "5min")
             if df_resampled is not None and not df_resampled.empty:
                 df_bars = df_resampled
-            else:
-                # Fallback: keep 1m bars if resample failed
-                print(
-                    f"[Ironbeam] Resample to 5min returned empty for {trade_date}; "
-                    "using 1min bars."
-                )
 
-        # If for some reason df_bars ended up empty, fall back again
         if df_bars.empty:
             df_bars = df_all_1m.copy()
 
-        # Convert df_bars to PT for display on x-axis
+        # Convert df_bars to PT for x-axis
         df_bars["datetime_pt"] = (
             df_bars["datetime"]
             .dt.tz_localize("UTC")
-            .dt.tz_convert("America/Los_Angeles")
+            .dt.tz_convert(pt_tz)
         )
-        # Convenient HH:MM PT string for matching against Smile/Skew time slices
         df_bars["time_hhmm_pt"] = df_bars["datetime_pt"].dt.strftime("%H:%M")
 
-        # ----- Fetch GEX levels for the same trade_date (D) -----
+        # ---- Fetch GEX only for the selected trade date ----
         try:
             df_gex = _fetch_gex_grouped_by_level(selected_date)
         except Exception as e:
-            print(f"Error fetching GEX data: {e}")
+            print(f"[Ironbeam] Error fetching GEX: {e}")
             df_gex = pd.DataFrame(
                 columns=["level", "call_gamma", "put_gamma", "net_gamma"]
             )
 
-        # ----- Filter GEX to a band around price to avoid clutter -----
-        if not df_gex.empty:
-            band_min = underlying_low - GEX_LEVEL_PADDING
-            band_max = underlying_high + GEX_LEVEL_PADDING
-            df_gex = df_gex[
-                (df_gex["level"] >= band_min) & (df_gex["level"] <= band_max)
-            ]
-
-        # ---------- Build figure ----------
         fig = go.Figure()
 
-        # 1) GEX heatmap (stays on 1m time grid)
+        # ---- GEX heatmap for selected trade date's session ----
         if not df_gex.empty:
-            time_index = pd.date_range(
-                start=start_pt,
-                end=end_pt,
-                freq="1min",
-                inclusive="left",
-            )
-            times = time_index.to_pydatetime()
+            # Restrict to band around global price
+            df_gex = df_gex[
+                (df_gex["level"] >= band_min)
+                & (df_gex["level"] <= band_max)
+            ].copy()
 
-            levels = df_gex["level"].values
-            call_gex = df_gex["call_gamma"].values
-            put_gex = df_gex["put_gamma"].values
-            net_gex = df_gex["net_gamma"].values
+            if not df_gex.empty:
+                levels = df_gex["level"].to_numpy(dtype=float)
+                call_g = df_gex["call_gamma"].to_numpy(dtype=float)
+                put_g = df_gex["put_gamma"].to_numpy(dtype=float)
+                net_g = df_gex["net_gamma"].to_numpy(dtype=float)
 
-            # Tile net GEX horizontally across all timestamps (what we color by)
-            z = np.tile(net_gex.reshape(-1, 1), (1, len(times)))
+                # Time grid for *this* trade date: D-1 15:00 → D 13:00 PT
+                day_start_pt = default_start_pt
+                day_end_pt = default_end_pt
 
-            # ---- Threshold: keep rows where either side is big ----
-            mag = np.abs(call_gex) + np.abs(put_gex)
-            if current_threshold > 0:
-                mag_z = np.tile(mag.reshape(-1, 1), (1, len(times)))
-                mask = mag_z < current_threshold
-                z = np.where(mask, np.nan, z)
-                color_base = net_gex[mag >= current_threshold]
-            else:
-                color_base = net_gex
+                time_index = pd.date_range(
+                    start=day_start_pt,
+                    end=day_end_pt,
+                    freq="1min",
+                    inclusive="left",
+                )
+                if not time_index.empty:
+                    times = time_index.to_pydatetime()
+                    z = np.tile(net_g.reshape(-1, 1), (1, len(times)))
 
-            if color_base.size == 0:
-                color_base = net_gex
+                    # Threshold by combined abs magnitude of call/put
+                    mag = np.abs(call_g) + np.abs(put_g)
+                    if current_threshold > 0:
+                        mag_z = np.tile(mag.reshape(-1, 1), (1, len(times)))
+                        z = np.where(mag_z < current_threshold, np.nan, z)
 
-            # ---- Color span: cater to the cluster, not monsters ----
-            if color_base.size:
-                if GEX_COLOR_ABS_MAX > 0:
-                    color_span = GEX_COLOR_ABS_MAX
-                else:
-                    color_span = float(
-                        np.nanpercentile(np.abs(color_base), GEX_COLOR_PERCENTILE)
+                    # ---- Color span: symmetric around zero using this day's net_g ----
+                    if GEX_COLOR_ABS_MAX > 0:
+                        color_span = GEX_COLOR_ABS_MAX
+                    else:
+                        base = net_g[np.isfinite(net_g)]
+                        if base.size:
+                            max_abs = float(np.nanmax(np.abs(base)))
+                            color_span = max_abs or 1.0
+                        else:
+                            color_span = 1.0
+
+                    fig.add_trace(
+                        go.Heatmap(
+                            x=times,
+                            y=levels,
+                            z=z,
+                            coloraxis="coloraxis",
+                            opacity=0.35,
+                            zsmooth="best",
+                            hovertemplate=(
+                                "Time=%{x|%Y-%m-%d %H:%M}<br>"
+                                "Level=%{y}<br>"
+                                "Net GEX=%{z:.3g}<extra></extra>"
+                            ),
+                            zauto=False,
+                        )
                     )
-                    if not np.isfinite(color_span) or color_span <= 0:
-                        color_span = float(np.nanmax(np.abs(color_base))) or 1.0
-            else:
-                color_span = 1.0
-
-            fig.add_trace(
-                go.Heatmap(
-                    x=times,
-                    y=levels,
-                    z=z,
-                    coloraxis="coloraxis",
-                    opacity=0.35,
-                    zsmooth="best",
-                    hovertemplate=(
-                        "Time=%{x|%H:%M}<br>"
-                        "Level=%{y}<br>"
-                        "Net GEX=%{z:.3g}<extra></extra>"
-                    ),
-                    zauto=False,
-                )
-            )
-
-            fig.update_layout(
-                coloraxis=dict(
-                    colorscale=GEX_HEATMAP_COLORSCALE,
-                    cmin=-color_span,
-                    cmax=color_span,
-                    colorbar_title="Net GEX",
-                )
-            )
+                    fig.update_layout(
+                        coloraxis=dict(
+                            colorscale=GEX_HEATMAP_COLORSCALE,
+                            cmin=-color_span,
+                            cmax=color_span,
+                            colorbar_title="Net GEX",
+                        )
+                    )
         else:
             fig.add_annotation(
                 text="No GEX data for this trade date",
@@ -541,7 +409,7 @@ def register_ironbeam_callbacks(app):
                 font=dict(size=10),
             )
 
-        # 2) ES candlesticks (base layer, 1m or 5min depending on interval)
+        # ---- ES candles over full multi-day window ----
         fig.add_trace(
             go.Candlestick(
                 x=df_bars["datetime_pt"],
@@ -562,10 +430,10 @@ def register_ironbeam_callbacks(app):
             )
         )
 
-        # 3) Overlay highlighted candles for selected time slices
+        # Highlight selected time slices
         if selected_times:
-            mask_selected = df_bars["time_hhmm_pt"].isin(selected_times)
-            df_sel = df_bars[mask_selected]
+            mask_sel = df_bars["time_hhmm_pt"].isin(selected_times)
+            df_sel = df_bars[mask_sel]
             if not df_sel.empty:
                 fig.add_trace(
                     go.Candlestick(
@@ -587,17 +455,11 @@ def register_ironbeam_callbacks(app):
                     )
                 )
 
-        # 4) Invisible anchors so *default* autorange sees the 1% envelope as extremes
+        # Invisible anchors so default autorange sees the 1% envelope
         fig.add_trace(
             go.Scatter(
-                x=[
-                    df_bars["datetime_pt"].min(),
-                    df_bars["datetime_pt"].max(),
-                ],
-                y=[
-                    y_min_price,
-                    y_max_price,
-                ],
+                x=[df_bars["datetime_pt"].min(), df_bars["datetime_pt"].max()],
+                y=[y_min_price, y_max_price],
                 mode="markers",
                 marker=dict(size=0, opacity=0),
                 showlegend=False,
@@ -605,34 +467,25 @@ def register_ironbeam_callbacks(app):
             )
         )
 
-        # 5) Layout + RTH shading (NO yaxis.range / autorange here)
-        fig.update_layout(
-            title=(
-                "ES Front Month "
-                f"({interval}) - OHLC with Net GEX Heatmap "
-                f"(GEX for {selected_date.isoformat()}, "
-                f"window {start_pt.strftime('%Y-%m-%d %H:%M')}–"
-                f"{end_pt.strftime('%Y-%m-%d %H:%M')} PT)"
-            ),
-            xaxis_title="Time (Pacific Time)",
-            yaxis_title="Price / Discounted Level",
-            template="plotly_dark",
-            hovermode="closest",
-            dragmode="pan",             # default tool = Pan
-            uirevision="ironbeam-gex",
-            clickmode="event",          # click events only; no selection/fade
-            xaxis=dict(
-                rangeslider=dict(visible=False),
-                showspikes=True,
-                spikedash="dot",
-                spikemode="across",
-                spikesnap="cursor",
-                hoverformat="%H:%M:%S",
-            ),
-            plot_bgcolor=ETH_BG_COLOR,
-            paper_bgcolor=ETH_BG_COLOR,
-            height=1200,  # ~75% of a tall default chart
-            shapes=[
+        # ---- RTH shading for each day in the multi-day window ----
+        shapes = []
+        for offset in range(-days_before, days_after + 1):
+            d = selected_date + dt.timedelta(days=offset)
+            rth_start_pt = dt.datetime.combine(
+                d,
+                dt.time(6, 30),
+                tzinfo=pt_tz,
+            )
+            rth_end_pt = dt.datetime.combine(
+                d,
+                dt.time(13, 0),
+                tzinfo=pt_tz,
+            )
+
+            if rth_end_pt <= full_start_pt or rth_start_pt >= full_end_pt:
+                continue
+
+            shapes.append(
                 dict(
                     type="rect",
                     xref="x",
@@ -646,10 +499,41 @@ def register_ironbeam_callbacks(app):
                     layer="below",
                     line=dict(width=0),
                 )
-            ],
+            )
+
+        fig.update_layout(
+            title=(
+                "ES Front Month "
+                f"({interval}) - OHLC with Net GEX Heatmap "
+                f"(centered on {selected_date.isoformat()}, "
+                f"default {default_start_pt.strftime('%Y-%m-%d %H:%M')}–"
+                f"{default_end_pt.strftime('%Y-%m-%d %H:%M')} PT, "
+                f"data window {full_start_pt.strftime('%Y-%m-%d %H:%M')}–"
+                f"{full_end_pt.strftime('%Y-%m-%d %H:%M')} PT)"
+            ),
+            xaxis_title="Time (Pacific Time)",
+            yaxis_title="Price / Discounted Level",
+            template="plotly_dark",
+            hovermode="closest",
+            dragmode="pan",
+            uirevision=f"ironbeam-gex-{selected_date.isoformat()}",
+            clickmode="event",
+            xaxis=dict(
+                rangeslider=dict(visible=False),
+                showspikes=True,
+                spikedash="dot",
+                spikemode="across",
+                spikesnap="cursor",
+                hoverformat="%H:%M:%S",
+                # Default visible view: D-1 15:00 → D 13:00 PT
+                range=[default_start_pt, default_end_pt],
+            ),
+            plot_bgcolor=ETH_BG_COLOR,
+            paper_bgcolor=ETH_BG_COLOR,
+            height=1200,
+            shapes=shapes,
         )
 
-        # Style-only tweaks for Y (no range/autorange), and explicitly unlock zoom
         fig.update_yaxes(
             showgrid=False,
             fixedrange=False,
@@ -661,6 +545,10 @@ def register_ironbeam_callbacks(app):
         )
 
         return fig
+
+
+
+
 
     # ---- Click on ES bar -> toggle PT time in Smile/Skew time slices ----
     @app.callback(
