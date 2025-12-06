@@ -9,6 +9,24 @@ from sqlalchemy import text
 from sqlalchemy import create_engine
 from sqlalchemy.engine.url import make_url
 
+# ---------- DB engine ----------
+def _get_db_url() -> str:
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("DATABASE_URL is not set in the environment")
+
+    # make sure SQLAlchemy driver is compatible
+    if db_url.startswith("postgres://"):
+        db_url = "postgresql://" + db_url[len("postgres://"):]
+    if db_url.startswith("postgresql://") and "+psycopg" not in db_url:
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
+    return db_url
+
+
+db_url = _get_db_url()
+engine = create_engine(db_url, pool_pre_ping=True)
+
 # ---------- Config ----------
 # Optional zoom: set GEX_ZOOM_PCT to a float like "0.03" for ±3% of max call gamma.
 # Leave 0 (default) to show the full width with a 5% padding.
@@ -45,20 +63,23 @@ except Exception:
         # If you’re using read-only roles, keep your existing pool args
         return create_engine(url, pool_pre_ping=True, pool_recycle=300)
 
-
-# ---------- Query ----------
 def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
     """
     Returns columns:
-      level (int), call_gamma (float), put_gamma (float), net_gamma (float)
+      level, call_gamma, put_gamma, net_gamma
 
     Source table:
-      orats_oi_gamma with columns: trade_date, ticker, discounted_level, gex_call, gex_put
-    """
-    eng = get_engine()
-    dialect = eng.dialect.name
+      orats_oi_gamma with columns: trade_date, ticker,
+      discounted_level, gex_call, gex_put
 
-    # Postgres needs explicit cast; SQLite syntax differs
+    Convention:
+      - puts are negative
+      - net_gamma = call_gamma + put_gamma
+
+    Levels are binned to 1.0 index-point increments (whole points).
+    """
+    dialect = engine.dialect.name
+
     level_expr = (
         "ROUND(discounted_level)::INT"
         if dialect == "postgresql"
@@ -74,27 +95,39 @@ def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
     sql = f"""
         SELECT
             {level_expr} AS level,
-            COALESCE(SUM(gex_call), 0) AS call_gamma,
-            COALESCE(SUM(gex_put),  0) AS put_gamma
+            COALESCE(SUM(gex_call), 0) AS call_gamma_raw,
+            COALESCE(SUM(gex_put),  0) AS put_gamma_raw
         FROM orats_oi_gamma
         WHERE {" AND ".join(where)}
         GROUP BY {level_expr}
         ORDER BY {level_expr}
     """
 
-    with eng.connect() as con:
+    with engine.connect() as con:
         df = pd.read_sql(text(sql), con, params=params)
 
     if df.empty:
         return pd.DataFrame(
             columns=["level", "call_gamma", "put_gamma", "net_gamma"]
-        ).astype({"level": "int64", "call_gamma": "float64", "put_gamma": "float64", "net_gamma": "float64"})
+        ).astype(
+            {
+                "level": "float64",
+                "call_gamma": "float64",
+                "put_gamma": "float64",
+                "net_gamma": "float64",
+            }
+        )
 
-    # Convention: puts to the left (negative values), calls to the right (positive)
-    df["put_gamma"] = -df["put_gamma"].abs()
+    df["call_gamma"] = df["call_gamma_raw"].astype(float)
+    df["put_gamma"] = -df["put_gamma_raw"].abs().astype(float)  # puts negative
     df["net_gamma"] = df["call_gamma"] + df["put_gamma"]
-    df["level"] = df["level"].astype(int)
-    return df
+    df["level"] = df["level"].astype(float)
+
+    return df[["level", "call_gamma", "put_gamma", "net_gamma"]]
+
+
+# ---------- Query ----------
+
 
 
 # ---------- Figure ----------
