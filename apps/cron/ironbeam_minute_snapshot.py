@@ -47,6 +47,8 @@ from sqlalchemy import create_engine, text
 
 API_BASE = os.environ.get("IRONBEAM_API_BASE", "https://live.ironbeamapi.com/v2")
 WS_BASE = os.environ.get("IRONBEAM_WS_BASE", "wss://live.ironbeamapi.com/v2/stream")
+FORCE_ES_SYMBOL = os.environ.get("IRONBEAM_ES_SYMBOL", "").strip()
+
 
 # API_BASE = os.environ.get("IRONBEAM_API_BASE", "https://demo.ironbeamapi.com/v2")
 # WS_BASE = os.environ.get("IRONBEAM_WS_BASE", "wss://demo.ironbeamapi.com/v2/stream")
@@ -367,7 +369,7 @@ def main():
     engine = _get_engine()
 
     token = authenticate()
-    es_symbol = discover_es_front_month(token)
+    es_symbol = FORCE_ES_SYMBOL or discover_es_front_month(token)
     stream_id = create_stream(token)
 
     ws_url = f"{WS_BASE}/{stream_id}?token={token}"
