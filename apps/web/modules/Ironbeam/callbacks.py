@@ -49,18 +49,28 @@ MULTI_LOAD_DAYS_PER_TICK = int(os.getenv("IRONBEAM_MULTI_LOAD_DAYS_PER_TICK", "1
 GEX_MAX_LEVELS_PER_DAY = int(os.getenv("GEX_MAX_LEVELS_PER_DAY", "80"))
 GEX_MIN_LEVEL_SPACING = float(os.getenv("GEX_MIN_LEVEL_SPACING", "5"))  # index points
 GEX_LEVEL_BUCKET = float(os.getenv("GEX_LEVEL_BUCKET", "1"))  # index points
+# GEX line styling
+GEX_LEVEL_LINE_WIDTH = float(os.getenv("GEX_LEVEL_LINE_WIDTH", "2.0"))  # base width for all GEX level lines
+GEX_LEVEL_LINE_WIDTH_SCALE = float(os.getenv("GEX_LEVEL_LINE_WIDTH_SCALE", "1.5"))  # extra width at max |GEX|
+GEX_LEVEL_LINE_WIDTH_MAX = float(os.getenv("GEX_LEVEL_LINE_WIDTH_MAX", "4.0"))  # clamp
+GEX_LEVEL_LINE_OPACITY = float(os.getenv("GEX_LEVEL_LINE_OPACITY", "0.90"))  # base opacity
 
 # Background colors for ETH vs RTH (dark theme)
 ETH_BG_COLOR = os.getenv("IRONBEAM_ETH_BG_COLOR", "#1f2937")  # outside RTH
 RTH_BG_COLOR = os.getenv("IRONBEAM_RTH_BG_COLOR", "#4b5563")  # RTH shading
 
-# Colorscale tuned for dark background
+# Colorscale tuned for dark background (more contrast across magnitudes)
+# Negative (puts) runs indigo -> blue -> cyan; near zero is gray; positive (calls) runs green -> lime -> yellow.
 GEX_HEATMAP_COLORSCALE = [
-    [0.0, "#1d4ed8"],  # strong negative (deep blue)
-    [0.25, "#60a5fa"],  # medium negative (lighter blue)
-    [0.50, "#4b5563"],  # near zero (medium gray)
-    [0.75, "#22c55e"],  # medium positive (green)
-    [1.0, "#bbf7d0"],  # strong positive (pale green)
+    [0.00, "#312e81"],  # strong negative (deep indigo)
+    [0.15, "#1d4ed8"],  # negative (blue)
+    [0.30, "#38bdf8"],  # negative (cyan)
+    [0.45, "#bae6fd"],  # weak negative (pale cyan)
+    [0.50, "#4b5563"],  # near zero (gray)
+    [0.55, "#bbf7d0"],  # weak positive (pale green)
+    [0.70, "#4ade80"],  # positive (green)
+    [0.85, "#a3e635"],  # positive (lime)
+    [1.00, "#fef08a"],  # strong positive (pale yellow)
 ]
 
 
@@ -492,13 +502,18 @@ def register_ironbeam_callbacks(app):
                     lvl = float(r["level"])
                     net_val = float(r["net_gamma"])
                     color = _color_for_net_gex(net_val, cmin, cmax)
+                    # Make magnitude pop: slightly thicker + more opaque for larger |GEX|
+                    max_abs = float(max(abs(cmin), abs(cmax), 1e-9))
+                    norm = float(min(1.0, abs(net_val) / max_abs))
+                    line_width = min(GEX_LEVEL_LINE_WIDTH_MAX, GEX_LEVEL_LINE_WIDTH + norm * GEX_LEVEL_LINE_WIDTH_SCALE)
+                    line_opacity = float(min(1.0, max(0.15, GEX_LEVEL_LINE_OPACITY * (0.40 + 0.60 * norm))))
                     fig.add_trace(
                         go.Scatter(
                             x=[day_start_pt, day_end_pt],
                             y=[lvl, lvl],
                             mode="lines",
-                            line=dict(color=color, width=1.25),
-                            opacity=1.0,
+                            line=dict(color=color, width=line_width),
+                            opacity=line_opacity,
                             name=f"GEX {session_date.isoformat()}",
                             showlegend=False,
                             hovertemplate=(
