@@ -16,8 +16,8 @@ DB_TABLE_NAME = os.environ.get("IRONBEAM_BARS_TABLE", "ironbeam_es_1m_bars")
 DB_TRADES_TABLE = os.environ.get("IRONBEAM_TRADES_TABLE", "ironbeam_es_trades")
 
 # Candle colors (reuse GEX colors so it all feels consistent)
-PUT_COLOR = os.getenv("GEX_PUT_COLOR", "#E5E7EB")   # down candles
-CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#60a5fa") # up candles
+PUT_COLOR = os.getenv("GEX_PUT_COLOR", "#E5E7EB")  # down candles
+CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#60a5fa")  # up candles
 
 # Highlight color for selected slices
 HIGHLIGHT_COLOR = os.getenv("IRONBEAM_HIGHLIGHT_COLOR", "#ef4444")  # red
@@ -46,8 +46,6 @@ GEX_COLOR_PERCENTILE = float(os.getenv("GEX_COLOR_PERCENTILE", "95"))
 ETH_BG_COLOR = os.getenv("IRONBEAM_ETH_BG_COLOR", "#1f2937")  # dark gray (outside RTH)
 RTH_BG_COLOR = os.getenv("IRONBEAM_RTH_BG_COLOR", "#4b5563")  # medium gray (RTH)
 
-
-
 # Colorscale tuned for dark background:
 #   - strong negatives (puts dominating): bright orange
 #   - near zero: bright yellow band
@@ -67,11 +65,11 @@ RTH_BG_COLOR = os.getenv("IRONBEAM_RTH_BG_COLOR", "#4b5563")  # medium gray (RTH
 #   - strong positives: green
 
 GEX_HEATMAP_COLORSCALE = [
-    [0.0,  "#1d4ed8"],  # strong negative (deep blue)
+    [0.0, "#1d4ed8"],  # strong negative (deep blue)
     [0.25, "#60a5fa"],  # medium negative (lighter blue)
-    [0.5,  "#020617"],  # near zero (very dark slate / bg)
+    [0.5, "#020617"],  # near zero (very dark slate / bg)
     [0.75, "#22c55e"],  # medium positive (green)
-    [1.0,  "#bbf7d0"],  # strong positive (pale green)
+    [1.0, "#bbf7d0"],  # strong positive (pale green)
 ]
 
 
@@ -190,9 +188,9 @@ def register_ironbeam_callbacks(app):
         [
             Input("trade-date", "date"),
             Input("ironbeam-interval", "n_intervals"),
-            Input("gex-threshold-billions", "value"),   # slider value in billions
-            Input("smile-time-input", "value"),         # selected PT slices
-            Input("ironbeam-bar-interval", "value"),    # '1min' or '5min'
+            Input("gex-threshold-billions", "value"),  # slider value in billions
+            Input("smile-time-input", "value"),  # selected PT slices
+            Input("ironbeam-bar-interval", "value"),  # '1min' or '5min'
         ],
     )
     def update_chart(trade_date, n, threshold_billions, selected_times_pt, bar_interval):
@@ -356,7 +354,7 @@ def register_ironbeam_callbacks(app):
 
                     older_bars = df_bars_1m[
                         df_bars_1m["datetime"] <= last_bar_dt
-                    ].copy()
+                        ].copy()
 
                     df_all_1m = (
                         pd.concat([older_bars, live_df], ignore_index=True)
@@ -454,36 +452,27 @@ def register_ironbeam_callbacks(app):
             band_max = underlying_high + GEX_LEVEL_PADDING
             df_gex = df_gex[
                 (df_gex["level"] >= band_min) & (df_gex["level"] <= band_max)
-            ]
+                ]
 
         # ---------- Build figure ----------
         fig = go.Figure()
 
-        # 1) GEX heatmap (stays on 1m time grid)
+        # 1) GEX level lines (static across the window, colored by net GEX)
         if not df_gex.empty:
-            time_index = pd.date_range(
-                start=start_pt,
-                end=end_pt,
-                freq="1min",
-                inclusive="left",
-            )
-            times = time_index.to_pydatetime()
-
             levels = df_gex["level"].values
             call_gex = df_gex["call_gamma"].values
             put_gex = df_gex["put_gamma"].values
             net_gex = df_gex["net_gamma"].values
 
-            # Tile net GEX horizontally across all timestamps (what we color by)
-            z = np.tile(net_gex.reshape(-1, 1), (1, len(times)))
-
-            # ---- Threshold: keep rows where either side is big ----
+            # ---- Threshold: keep levels where either side is big ----
             mag = np.abs(call_gex) + np.abs(put_gex)
             if current_threshold > 0:
-                mag_z = np.tile(mag.reshape(-1, 1), (1, len(times)))
-                mask = mag_z < current_threshold
-                z = np.where(mask, np.nan, z)
-                color_base = net_gex[mag >= current_threshold]
+                keep = mag >= current_threshold
+                levels = levels[keep]
+                call_gex = call_gex[keep]
+                put_gex = put_gex[keep]
+                net_gex = net_gex[keep]
+                color_base = net_gex
             else:
                 color_base = net_gex
 
@@ -503,29 +492,82 @@ def register_ironbeam_callbacks(app):
             else:
                 color_span = 1.0
 
-            fig.add_trace(
-                go.Heatmap(
-                    x=times,
-                    y=levels,
-                    z=z,
-                    coloraxis="coloraxis",
-                    opacity=0.35,
-                    zsmooth="best",
-                    hovertemplate=(
-                        "Time=%{x|%H:%M}<br>"
-                        "Level=%{y}<br>"
-                        "Net GEX=%{z:.3g}<extra></extra>"
-                    ),
-                    zauto=False,
-                )
-            )
+            # Map net_gex -> colorscale color
+            from plotly.colors import sample_colorscale
 
-            fig.update_layout(
-                coloraxis=dict(
-                    colorscale=GEX_HEATMAP_COLORSCALE,
-                    cmin=-color_span,
-                    cmax=color_span,
-                    colorbar_title="Net GEX",
+            def _color_for_gex(v: float) -> str:
+                if not np.isfinite(color_span) or color_span <= 0:
+                    t = 0.5
+                else:
+                    t = (float(v) + color_span) / (2.0 * color_span)
+                if t < 0.0:
+                    t = 0.0
+                elif t > 1.0:
+                    t = 1.0
+                return sample_colorscale(GEX_HEATMAP_COLORSCALE, [t])[0]
+
+            line_width = float(os.getenv("GEX_LEVEL_LINE_WIDTH", "1.0"))
+            line_opacity = float(os.getenv("GEX_LEVEL_LINE_OPACITY", "0.75"))
+
+            # Safety cap so we don't add thousands of traces on busy days
+            max_levels = int(os.getenv("GEX_MAX_LEVEL_LINES", "300"))
+            if len(levels) > max_levels:
+                # Keep the biggest by |net_gex|
+                idx = np.argsort(np.abs(net_gex))[::-1][:max_levels]
+                levels = levels[idx]
+                call_gex = call_gex[idx]
+                put_gex = put_gex[idx]
+                net_gex = net_gex[idx]
+                fig.add_annotation(
+                    text=f"GEX lines capped to top {max_levels} levels by |net GEX|",
+                    showarrow=False,
+                    xref="paper",
+                    yref="paper",
+                    x=0.99,
+                    y=0.96,
+                    xanchor="right",
+                    yanchor="top",
+                    font=dict(size=10),
+                )
+
+            # Draw horizontal lines across the full time window
+            for lvl, ng, cg, pg in zip(levels, net_gex, call_gex, put_gex):
+                fig.add_trace(
+                    go.Scattergl(
+                        x=[start_pt, end_pt],
+                        y=[lvl, lvl],
+                        mode="lines",
+                        line=dict(color=_color_for_gex(ng), width=line_width),
+                        opacity=line_opacity,
+                        showlegend=False,
+                        hovertemplate=(
+                            "Level=%{y}<br>"
+                            "Call GEX=%{customdata[0]:.3g}<br>"
+                            "Put GEX=%{customdata[1]:.3g}<br>"
+                            "Net GEX=%{customdata[2]:.3g}<extra></extra>"
+                        ),
+                        customdata=[[cg, pg, ng], [cg, pg, ng]],
+                    )
+                )
+
+            # Keep a colorbar (without drawing a heatmap) via an invisible dummy trace
+            fig.add_trace(
+                go.Scatter(
+                    x=[start_pt, start_pt],
+                    y=[y_min_price, y_min_price],
+                    mode="markers",
+                    marker=dict(
+                        size=0.1,
+                        opacity=0.0,
+                        color=[-color_span, color_span],
+                        colorscale=GEX_HEATMAP_COLORSCALE,
+                        cmin=-color_span,
+                        cmax=color_span,
+                        showscale=True,
+                        colorbar=dict(title="Net GEX"),
+                    ),
+                    showlegend=False,
+                    hoverinfo="skip",
                 )
             )
         else:
@@ -609,7 +651,7 @@ def register_ironbeam_callbacks(app):
         fig.update_layout(
             title=(
                 "ES Front Month "
-                f"({interval}) - OHLC with Net GEX Heatmap "
+                f"({interval}) - OHLC with Net GEX Levels "
                 f"(GEX for {selected_date.isoformat()}, "
                 f"window {start_pt.strftime('%Y-%m-%d %H:%M')}–"
                 f"{end_pt.strftime('%Y-%m-%d %H:%M')} PT)"
@@ -618,9 +660,9 @@ def register_ironbeam_callbacks(app):
             yaxis_title="Price / Discounted Level",
             template="plotly_dark",
             hovermode="closest",
-            dragmode="pan",             # default tool = Pan
+            dragmode="pan",  # default tool = Pan
             uirevision="ironbeam-gex",
-            clickmode="event",          # click events only; no selection/fade
+            clickmode="event",  # click events only; no selection/fade
             xaxis=dict(
                 rangeslider=dict(visible=False),
                 showspikes=True,
