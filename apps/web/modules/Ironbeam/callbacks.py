@@ -604,6 +604,7 @@ def register_ironbeam_callbacks(app):
             )
 
         meta = dict(
+            bar_interval=interval,
             multi_target_dates=target_dates_str,
             multi_loaded_dates=[session_date.isoformat()],
             multi_effective_date=session_date.isoformat(),
@@ -750,6 +751,13 @@ def register_ironbeam_callbacks(app):
             meta = (fig.get("layout") or {}).get("meta") or {}
         except Exception:
             meta = {}
+
+        # If the user just changed bar interval, Dash can race: the interval callback might
+        # still be holding the *old* dropdown value and would overwrite the freshly rebuilt chart.
+        # We store the bar interval in meta on the base render and refuse to update when mismatched.
+        base_interval = meta.get("bar_interval")
+        if isinstance(base_interval, str) and base_interval and base_interval != interval:
+            raise PreventUpdate
 
         # Use the effective (session) date stored in meta if available
         session_str = meta.get("multi_effective_date") or selected_date.isoformat()
