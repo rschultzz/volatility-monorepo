@@ -1,3 +1,4 @@
+
 # apps/web/modules/Ironbeam/callbacks.py
 
 import os
@@ -72,23 +73,34 @@ GEX_HEATMAP_COLORSCALE = [
     [1.00, "#fef08a"],
 ]
 
+
 # ---------- DB engine ----------
 def _get_db_url() -> str:
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
         raise RuntimeError("DATABASE_URL is not set in the environment")
 
+    # Render often provides "postgres://"
     if db_url.startswith("postgres://"):
-        db_url = "postgresql://" + db_url[len("postgres://"):]
+        db_url = "postgresql://" + db_url[len("postgres://") :]
+
+    # Prefer psycopg driver
     if db_url.startswith("postgresql://") and "+psycopg" not in db_url:
         db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
     return db_url
 
 
 engine = create_engine(_get_db_url(), pool_pre_ping=True)
 
+
 # ---------- Helpers ----------
 def _session_window_pt(trade_date: dt.date, pt_tz: ZoneInfo) -> tuple[dt.datetime, dt.datetime]:
+    """
+    ES session window in PT:
+      - starts prior day 15:00 PT (ETH open)
+      - ends trade_date 13:00 PT (RTH close)
+    """
     start_pt = dt.datetime.combine(trade_date - dt.timedelta(days=1), dt.time(15, 0), tzinfo=pt_tz)
     end_pt = dt.datetime.combine(trade_date, dt.time(13, 0), tzinfo=pt_tz)
     return start_pt, end_pt
@@ -133,7 +145,14 @@ def _fetch_bars_pt(start_pt: dt.datetime, end_pt: dt.datetime, interval: str, pt
         if df5 is not None and not df5.empty:
             df = df5
 
-    df["datetime_pt"] = df["datetime"].dt.tz_localize("UTC").dt.tz_convert(pt_tz)
+    # DB datetimes are stored UTC naive -> localize then convert
+    # If they come in tz-aware for any reason, handle safely.
+    dtcol = df["datetime"]
+    if getattr(dtcol.dt, "tz", None) is None:
+        df["datetime_pt"] = dtcol.dt.tz_localize("UTC").dt.tz_convert(pt_tz)
+    else:
+        df["datetime_pt"] = dtcol.dt.tz_convert(pt_tz)
+
     df["time_hhmm_pt"] = df["datetime_pt"].dt.strftime("%H:%M")
     return df
 
@@ -171,6 +190,7 @@ def _fetch_available_trade_dates(center: dt.date, days_back: int = 45, days_fwd:
 
     if df.empty or "trade_date" not in df.columns:
         return []
+
     out: list[dt.date] = []
     for v in df["trade_date"].tolist():
         if isinstance(v, dt.date) and not isinstance(v, dt.datetime):
@@ -181,6 +201,10 @@ def _fetch_available_trade_dates(center: dt.date, days_back: int = 45, days_fwd:
 
 
 def _sanitize_figure_dict(fig: dict) -> dict:
+    """
+    Plotly sometimes sticks invalid keys under rangeslider when figures are round-tripped as dicts.
+    This keeps Dash from exploding when we rehydrate the dict into a go.Figure.
+    """
     try:
         layout = fig.get("layout") or {}
         if isinstance(layout, dict):
@@ -242,6 +266,9 @@ def _current_session_trade_date(pt_tz: ZoneInfo) -> dt.date:
 
 
 def _effective_trade_date(selected_date: dt.date, pt_tz: ZoneInfo) -> tuple[dt.date, str | None]:
+    """
+    After ~15:00 PT, the "current" ES session has effectively rolled to the next trade date.
+    """
     try:
         now_pt = dt.datetime.now(tz=pt_tz)
         if selected_date == now_pt.date() and now_pt.time() >= dt.time(15, 0):
@@ -360,8 +387,8 @@ def _remove_traces_by_name_prefix(fig_obj: go.Figure, prefix: str) -> None:
 
 
 def _infer_price_range_from_fig(fig_obj: go.Figure) -> tuple[float | None, float | None]:
-    lows = []
-    highs = []
+    lows: list[float] = []
+    highs: list[float] = []
     for tr in fig_obj.data:
         try:
             if getattr(tr, "type", None) == "candlestick":
@@ -373,6 +400,7 @@ def _infer_price_range_from_fig(fig_obj: go.Figure) -> tuple[float | None, float
                     highs.extend([float(x) for x in hi if x is not None])
         except Exception:
             continue
+
     if not lows or not highs:
         return None, None
     return float(np.nanmin(lows)), float(np.nanmax(highs))
@@ -388,13 +416,14 @@ def _build_hovergrid_traces(
     x_max: dt.datetime | str | None = None,
 ) -> tuple[go.Scattergl, go.Scattergl]:
     """
-    Two invisible hover grids on y2 (for tooltip anywhere):
-      - base: Time + Price
-      - gex : same tooltip (no GEX fields), but kept separate so we can keep the
-              "partition near GEX levels" logic without changing upstream code.
+    Two invisible hover grids on y2 (for "tooltip anywhere"):
 
-    IMPORTANT: If x_min/x_max are provided, we ONLY build grid points inside that
-    viewport (big perf win, fixes tooltip-vs-crosshair mismatch due to sparse X).
+      - base: Time + Price
+      - gex : same tooltip (NO GEX fields), but kept separate so we can preserve
+              the "partition near levels" logic without changing upstream code.
+
+    If x_min/x_max are provided, we ONLY build points inside that viewport
+    (big perf win, reduces tooltip-vs-crosshair mismatch).
     """
 
     def _to_pt_datetime(v: dt.datetime | str | None) -> dt.datetime | None:
@@ -404,19 +433,21 @@ def _build_hovergrid_traces(
             ts = pd.to_datetime(v)
         except Exception:
             return None
+
         if isinstance(ts, pd.Timestamp):
             if ts.tzinfo is None:
                 ts = ts.tz_localize(pt_tz)
             else:
                 ts = ts.tz_convert(pt_tz)
             return ts.to_pydatetime()
+
         if isinstance(ts, dt.datetime):
             if ts.tzinfo is None:
                 return ts.replace(tzinfo=pt_tz)
             return ts.astimezone(pt_tz)
+
         return None
 
-    # ---- basic guards ----
     y_points_req = max(20, int(HOVERGRID_Y_POINTS))
     max_points = max(5000, int(HOVERGRID_MAX_POINTS))
 
@@ -443,7 +474,6 @@ def _build_hovergrid_traces(
     if view_start and view_end and view_start > view_end:
         view_start, view_end = view_end, view_start
 
-    # ---- determine how many X minutes we will cover (viewport-limited) ----
     overlaps: list[tuple[str, dt.datetime, dt.datetime]] = []
     total_minutes = 0
 
@@ -482,15 +512,14 @@ def _build_hovergrid_traces(
         )
         return empty, empty
 
-    # Prefer 1-minute X spacing; reduce y_points first to stay under max_points.
+    # Prefer 1-minute X spacing; shrink Y points first to stay under max_points.
     y_points_eff = min(y_points_req, max(20, int(max_points // max(1, total_minutes))))
     step_min = 1
 
-    # If still too many points, increase the X step.
+    # If still too many points, increase X step.
     if total_minutes * y_points_eff > max_points:
         step_min = int(math.ceil((total_minutes * y_points_eff) / max_points))
 
-    # ---- y grid ----
     y_vec = np.linspace(float(y_min), float(y_max), int(y_points_eff)).astype(float)
     y_step = float(y_vec[1] - y_vec[0]) if len(y_vec) > 1 else 1.0
     tol = float(max(GEX_HOVER_TOLERANCE, 0.60 * y_step))
@@ -499,14 +528,12 @@ def _build_hovergrid_traces(
     x_gex_parts, y_gex_parts = [], []
 
     for (d_str, lo, hi) in overlaps:
-        # build x grid inside viewport/session overlap
         x_day = pd.date_range(lo, hi, freq=f"{step_min}min", inclusive="both").to_pydatetime().tolist()
         if not x_day:
             continue
 
         levels_list = gex_levels_by_day.get(d_str) if isinstance(gex_levels_by_day, dict) else None
 
-        # If no levels, everything goes to base
         if not isinstance(levels_list, list) or not levels_list:
             x_rep = np.repeat(x_day, len(y_vec))
             y_rep = np.tile(y_vec, len(x_day))
@@ -514,7 +541,6 @@ def _build_hovergrid_traces(
             y_base_parts.append(y_rep)
             continue
 
-        # Parse levels just to partition the y grid (tooltip does NOT show GEX)
         try:
             levels = np.array([float(p[0]) for p in levels_list], dtype=float)
         except Exception:
@@ -552,9 +578,8 @@ def _build_hovergrid_traces(
     x_gex = np.concatenate(x_gex_parts) if x_gex_parts else np.array([], dtype=object)
     y_gex = np.concatenate(y_gex_parts) if y_gex_parts else np.array([], dtype=float)
 
-    # ---- tooltip offset (small!) ----
-    # Shifts the *invisible points* a little so the hoverlabel is not directly under the cursor.
-    # We still display the TRUE price via customdata.
+    # Small hoverlabel offset: shift invisible points a touch (label isn't directly under cursor),
+    # but show TRUE price via customdata.
     hover_offset_steps = float(os.getenv("IRONBEAM_HOVER_OFFSET_STEPS", "0.15"))
     y_offset = float(hover_offset_steps * y_step)
 
@@ -569,7 +594,7 @@ def _build_hovergrid_traces(
         name="__hovergrid__base",
         showlegend=False,
         yaxis="y2",
-        customdata=y_base,  # show TRUE price (unshifted)
+        customdata=y_base,  # TRUE price
         hovertemplate=hover_tpl,
     )
 
@@ -582,14 +607,11 @@ def _build_hovergrid_traces(
         name="__hovergrid__gex",
         showlegend=False,
         yaxis="y2",
-        customdata=y_gex,  # show TRUE price (unshifted)
+        customdata=y_gex,  # TRUE price
         hovertemplate=hover_tpl,
     )
 
     return base_trace, gex_trace
-
-
-
 
 
 # ---------- Dash callback registration ----------
@@ -627,6 +649,7 @@ def register_ironbeam_callbacks(app):
         ui_date = selected_date
         session_date, _ = _effective_trade_date(ui_date, pt_tz)
 
+        # ---- read previous zoom locks ----
         prev_meta = {}
         if isinstance(prev_fig, dict):
             prev_meta = (prev_fig.get("layout") or {}).get("meta") or {}
@@ -634,24 +657,23 @@ def register_ironbeam_callbacks(app):
         locked_y_range = prev_meta.get("locked_y_range")
         locked_x_range = prev_meta.get("locked_x_range")
 
-        # ✅ If the user changed the trade date (effective session), do NOT reuse old zoom locks
+        # If user changed date or interval, do NOT keep old locks.
         prev_effective = prev_meta.get("multi_effective_date")
         prev_interval = prev_meta.get("bar_interval")
-
         if prev_effective and str(prev_effective) != session_date.isoformat():
             locked_x_range = None
             locked_y_range = None
-
-        # (Optional but recommended) If interval changed, also reset locks
-        if prev_interval and str(prev_interval) != (bar_interval or "1min"):
+        if prev_interval and str(prev_interval) != interval:
             locked_x_range = None
             locked_y_range = None
 
+        # ---- multi-day targets ----
         target_dates = _window_trade_dates(session_date, DAYS_EITHER_SIDE)
         target_dates_str = [d.isoformat() for d in target_dates]
 
         day_start_pt, day_end_pt = _session_window_pt(session_date, pt_tz)
-        # RTH window (PT) for the selected session day
+
+        # RTH window (PT) for the selected session day (default x-zoom)
         rth_start_pt_center = dt.datetime.combine(session_date, dt.time(6, 30), tzinfo=pt_tz)
         rth_end_pt_center = dt.datetime.combine(session_date, dt.time(13, 0), tzinfo=pt_tz)
 
@@ -664,27 +686,21 @@ def register_ironbeam_callbacks(app):
         if df_bars.empty:
             return go.Figure(layout_title_text=f"No ES bar data for {selected_date.isoformat()} session.")
 
-        # Full-session range (keep this for hover-grid coverage and general calculations)
+        # Full-session price range (for GEX band selection)
         full_low = float(df_bars["low"].min())
         full_high = float(df_bars["high"].max())
 
-        # RTH-only range (use this for DEFAULT y-zoom so it starts tighter)
-        df_rth = df_bars[
-            (df_bars["datetime_pt"] >= rth_start_pt_center) &
-            (df_bars["datetime_pt"] <= rth_end_pt_center)
-            ]
+        # RTH-only range (for tighter default y-zoom)
+        df_rth = df_bars[(df_bars["datetime_pt"] >= rth_start_pt_center) & (df_bars["datetime_pt"] <= rth_end_pt_center)]
         if df_rth.empty:
-            df_rth = df_bars  # fallback
+            df_rth = df_bars
 
         rth_low = float(df_rth["low"].min())
         rth_high = float(df_rth["high"].max())
-
-        # Default y padding (tune these two numbers if you want tighter/looser)
         rth_rng = max(1e-6, (rth_high - rth_low))
-        y_pad = min(25.0, max(3.0, 0.12 * rth_rng))  # max pad 25 pts, min pad 3 pts
+        y_pad = min(25.0, max(3.0, 0.12 * rth_rng))
         default_y_range = [rth_low - y_pad, rth_high + y_pad]
 
-        # Keep existing variables for the rest of the function
         low = full_low
         high = full_high
         band_min = low - GEX_LEVEL_PADDING
@@ -692,7 +708,7 @@ def register_ironbeam_callbacks(app):
 
         fig = go.Figure()
 
-        # --- GEX (selected day) ---
+        # --- GEX (selected day only; other days added progressively) ---
         gex_levels_by_day: dict[str, list[list[float]]] = {}
 
         try:
@@ -707,7 +723,7 @@ def register_ironbeam_callbacks(app):
                 net_g = df_gex_day["net_gamma"].to_numpy(dtype=float)
                 cmin, cmax = _compute_color_span(net_g)
 
-                # colorbar host
+                # colorbar host (invisible heatmap)
                 fig.add_trace(
                     go.Heatmap(
                         x=[day_start_pt, day_end_pt],
@@ -742,7 +758,6 @@ def register_ironbeam_callbacks(app):
                     line_width = min(GEX_LEVEL_LINE_WIDTH_MAX, GEX_LEVEL_LINE_WIDTH + norm * GEX_LEVEL_LINE_WIDTH_SCALE)
                     line_opacity = float(min(1.0, max(0.12, GEX_LEVEL_LINE_OPACITY * (0.40 + 0.60 * norm))))
 
-                    # extend to 13:00 PT even if no prices yet
                     fig.add_trace(
                         go.Scattergl(
                             x=[day_start_pt, day_end_pt],
@@ -825,7 +840,7 @@ def register_ironbeam_callbacks(app):
                 )
             )
 
-        meta = dict(
+        meta: dict = dict(
             bar_interval=interval,
             multi_target_dates=target_dates_str,
             multi_loaded_dates=[session_date.isoformat()],
@@ -839,33 +854,31 @@ def register_ironbeam_callbacks(app):
         if locked_x_range is not None:
             meta["locked_x_range"] = locked_x_range
 
-        # default zoom (only when user hasn't already zoomed/panned)
+        # Default zoom only if user hasn't already zoomed
         if locked_x_range is None:
             meta["locked_x_range"] = [rth_start_pt_center, rth_end_pt_center]
             locked_x_range = meta["locked_x_range"]
-
         if locked_y_range is None:
             meta["locked_y_range"] = default_y_range
             locked_y_range = meta["locked_y_range"]
 
-        # Hover grid (Time + cursor Price anywhere) — build ONLY for current viewport
+        # Hover grid (Time + cursor Price anywhere) — build ONLY for current viewport & only loaded days
         x0, x1 = (locked_x_range if locked_x_range is not None else [rth_start_pt_center, rth_end_pt_center])
         y0, y1 = (locked_y_range if locked_y_range is not None else default_y_range)
+        pad_y = max(5.0, 0.04 * (float(y1) - float(y0)))
 
-        pad_y = max(5.0, 0.04 * (y1 - y0))
         hover_days = meta.get("multi_loaded_dates") or [session_date.isoformat()]
         if not isinstance(hover_days, list) or not hover_days:
             hover_days = [session_date.isoformat()]
 
         hover_base, hover_gex = _build_hovergrid_traces(
             pt_tz=pt_tz,
-            target_dates_str=hover_days,  # only loaded days
+            target_dates_str=hover_days,
             gex_levels_by_day=gex_levels_by_day,
             y_min=float(y0) - pad_y,
             y_max=float(y1) + pad_y,
-            # (we'll add x_min/x_max below)
-            x_min=pd.to_datetime(x0),
-            x_max=pd.to_datetime(x1),
+            x_min=x0,
+            x_max=x1,
         )
         fig.add_trace(hover_base)
         fig.add_trace(hover_gex)
@@ -915,6 +928,7 @@ def register_ironbeam_callbacks(app):
             hoverformat="%.2f",
         )
 
+        # Apply locked ranges explicitly
         if locked_y_range is not None:
             try:
                 fig.update_yaxes(range=locked_y_range, autorange=False)
@@ -922,6 +936,7 @@ def register_ironbeam_callbacks(app):
                 fig.layout["yaxis2"]["autorange"] = False
             except Exception as e:
                 print(f"[Ironbeam] warning: could not apply locked y-range: {e}")
+
         if locked_x_range is not None:
             try:
                 fig.update_xaxes(range=locked_x_range, autorange=False)
@@ -930,30 +945,73 @@ def register_ironbeam_callbacks(app):
 
         return fig
 
-    # ---- Persist zoom locks ----
+    # ---- Persist zoom locks (and prevent stale relayout overwrites) ----
     @app.callback(
         Output("ironbeam-chart", "figure", allow_duplicate=True),
         Input("ironbeam-chart", "relayoutData"),
         State("ironbeam-chart", "figure"),
+        State("trade-date", "date"),
+        State("ironbeam-bar-interval", "value"),
         prevent_initial_call=True,
     )
-    def persist_zoom(relayout, fig):
-        if not isinstance(fig, dict) or not isinstance(relayout, dict):
+    def persist_zoom(relayout, fig, trade_date, bar_interval):
+        if not isinstance(fig, dict) or not isinstance(relayout, dict) or not trade_date:
+            raise PreventUpdate
+
+        # Ignore relayout events that aren't actual zoom/pan/autorange changes.
+        interesting = any(
+            k in relayout
+            for k in (
+                "xaxis.range[0]",
+                "xaxis.range[1]",
+                "xaxis.autorange",
+                "yaxis.range[0]",
+                "yaxis.range[1]",
+                "yaxis.autorange",
+                "yaxis2.range[0]",
+                "yaxis2.range[1]",
+                "yaxis2.autorange",
+            )
+        )
+        if not interesting:
             raise PreventUpdate
 
         layout = fig.get("layout", {})
         meta = layout.get("meta") or {}
 
+        # Stale guard: if this relayout belongs to an older figure/date, drop it.
+        pt_tz = ZoneInfo("America/Los_Angeles")
+        try:
+            selected_date = dt.datetime.strptime(trade_date, "%Y-%m-%d").date()
+        except Exception:
+            raise PreventUpdate
+        eff_date, _ = _effective_trade_date(selected_date, pt_tz)
+
+        meta_ui = meta.get("multi_ui_date")
+        meta_eff = meta.get("multi_effective_date")
+        meta_int = meta.get("bar_interval")
+        interval = bar_interval or "1min"
+
+        if isinstance(meta_ui, str) and meta_ui and meta_ui != selected_date.isoformat():
+            raise PreventUpdate
+        if isinstance(meta_eff, str) and meta_eff and meta_eff != eff_date.isoformat():
+            raise PreventUpdate
+        if isinstance(meta_int, str) and meta_int and meta_int != interval:
+            raise PreventUpdate
+
+        # Store Y lock
         y0 = relayout.get("yaxis.range[0]")
         y1 = relayout.get("yaxis.range[1]")
         if y0 is None or y1 is None:
             y0 = relayout.get("yaxis2.range[0]", y0)
             y1 = relayout.get("yaxis2.range[1]", y1)
+
         if y0 is not None and y1 is not None:
             meta["locked_y_range"] = [y0, y1]
         if relayout.get("yaxis.autorange") or relayout.get("yaxis2.autorange"):
             meta.pop("locked_y_range", None)
 
+        # Store X lock
         x0 = relayout.get("xaxis.range[0]")
         x1 = relayout.get("xaxis.range[1]")
         if x0 is not None and x1 is not None:
@@ -965,7 +1023,7 @@ def register_ironbeam_callbacks(app):
         fig["layout"] = layout
         return fig
 
-    # ---- Progressive loader + live refresh ----
+    # ---- Progressive loader + live refresh (and prevent stale interval overwrites) ----
     @app.callback(
         Output("ironbeam-chart", "figure", allow_duplicate=True),
         Input("ironbeam-interval", "n_intervals"),
@@ -986,23 +1044,32 @@ def register_ironbeam_callbacks(app):
 
         interval = bar_interval or "1min"
         current_threshold = GEX_ABS_THRESHOLD_DEFAULT if threshold_billions is None else float(threshold_billions) * 1e9
-
         pt_tz = ZoneInfo("America/Los_Angeles")
 
-        fig = _sanitize_figure_dict(fig)
-        fig_obj = go.Figure(fig)
+        # ---- stale guard: drop in-flight ticks from previous date/figure ----
+        meta0 = (fig.get("layout") or {}).get("meta") or {}
+        meta_ui = meta0.get("multi_ui_date")
+        if isinstance(meta_ui, str) and meta_ui and meta_ui != selected_date.isoformat():
+            raise PreventUpdate
 
-        meta = (fig.get("layout") or {}).get("meta") or {}
+        eff_date, _ = _effective_trade_date(selected_date, pt_tz)
+        meta_eff = meta0.get("multi_effective_date")
+        if isinstance(meta_eff, str) and meta_eff and meta_eff != eff_date.isoformat():
+            raise PreventUpdate
 
-        base_interval = meta.get("bar_interval")
+        base_interval = meta0.get("bar_interval")
         if isinstance(base_interval, str) and base_interval and base_interval != interval:
             raise PreventUpdate
 
-        session_str = meta.get("multi_effective_date") or selected_date.isoformat()
+        fig = _sanitize_figure_dict(fig)
+        fig_obj = go.Figure(fig)
+        meta = (fig.get("layout") or {}).get("meta") or {}
+
+        session_str = meta.get("multi_effective_date") or eff_date.isoformat()
         try:
             session_date = dt.datetime.strptime(session_str, "%Y-%m-%d").date()
         except Exception:
-            session_date = selected_date
+            session_date = eff_date
 
         target_dates = meta.get("multi_target_dates")
         if not isinstance(target_dates, list) or not target_dates:
@@ -1022,7 +1089,7 @@ def register_ironbeam_callbacks(app):
         did_anything = False
         loaded_changed = False
 
-        # live refresh (selected session candle trace only)
+        # ---- live refresh (selected session candle trace only) ----
         is_live_day = False
         try:
             is_live_day = (session_date == _current_session_trade_date(pt_tz))
@@ -1062,7 +1129,7 @@ def register_ironbeam_callbacks(app):
                     tr.close = df_live["close"].astype(float).tolist()
                     did_anything = True
 
-        # progressive add
+        # ---- progressive add of other days ----
         remaining = [d for d in target_dates if d != session_date.isoformat() and d not in loaded and d not in skipped]
         batch: list[str] = []
         if remaining:
@@ -1173,6 +1240,7 @@ def register_ironbeam_callbacks(app):
 
         locked_y_range = meta.get("locked_y_range")
         locked_x_range = meta.get("locked_x_range")
+
         if locked_y_range is not None:
             try:
                 fig_obj.update_layout(
@@ -1181,27 +1249,37 @@ def register_ironbeam_callbacks(app):
                 )
             except Exception:
                 pass
+
         if locked_x_range is not None:
             try:
                 fig_obj.update_layout(xaxis=dict(range=locked_x_range, autorange=False))
             except Exception:
                 pass
 
-        # rebuild hover grid only when we add days (avoid heavy work every minute)
+        # Rebuild hover grid only when we add days (avoid heavy work every tick)
         if loaded_changed:
             _remove_traces_by_name_prefix(fig_obj, "__hovergrid__")
 
-            y_min, y_max = None, None
+            # Use locked ranges if available (viewport-limited hovergrid)
+            x_min = None
+            x_max = None
+            if locked_x_range is not None and isinstance(locked_x_range, (list, tuple)) and len(locked_x_range) == 2:
+                x_min, x_max = locked_x_range[0], locked_x_range[1]
+
+            y_min = None
+            y_max = None
             if locked_y_range is not None and isinstance(locked_y_range, (list, tuple)) and len(locked_y_range) == 2:
                 try:
                     y_min = float(locked_y_range[0])
                     y_max = float(locked_y_range[1])
                 except Exception:
                     y_min, y_max = None, None
+
             if y_min is None or y_max is None:
                 y_min, y_max = _infer_price_range_from_fig(fig_obj)
             if y_min is None or y_max is None:
                 y_min, y_max = 0.0, 1.0
+
             pad = max(5.0, 0.04 * (y_max - y_min))
 
             hover_days = meta.get("multi_loaded_dates") or []
@@ -1210,12 +1288,13 @@ def register_ironbeam_callbacks(app):
 
             hb, hg = _build_hovergrid_traces(
                 pt_tz=pt_tz,
-                target_dates_str=hover_days,  # ✅ only loaded days
+                target_dates_str=hover_days,
                 gex_levels_by_day=gex_levels_by_day,
-                y_min=y_min - pad,
-                y_max=y_max + pad,
+                y_min=float(y_min) - pad,
+                y_max=float(y_max) + pad,
+                x_min=x_min,
+                x_max=x_max,
             )
-
             fig_obj.add_trace(hb)
             fig_obj.add_trace(hg)
 
