@@ -569,8 +569,22 @@ def register_ironbeam_callbacks(app):
         prev_meta = {}
         if isinstance(prev_fig, dict):
             prev_meta = (prev_fig.get("layout") or {}).get("meta") or {}
+
         locked_y_range = prev_meta.get("locked_y_range")
         locked_x_range = prev_meta.get("locked_x_range")
+
+        # ✅ If the user changed the trade date (effective session), do NOT reuse old zoom locks
+        prev_effective = prev_meta.get("multi_effective_date")
+        prev_interval = prev_meta.get("bar_interval")
+
+        if prev_effective and str(prev_effective) != session_date.isoformat():
+            locked_x_range = None
+            locked_y_range = None
+
+        # (Optional but recommended) If interval changed, also reset locks
+        if prev_interval and str(prev_interval) != (bar_interval or "1min"):
+            locked_x_range = None
+            locked_y_range = None
 
         target_dates = _window_trade_dates(session_date, DAYS_EITHER_SIDE)
         target_dates_str = [d.isoformat() for d in target_dates]
@@ -774,7 +788,7 @@ def register_ironbeam_callbacks(app):
                 spikemode="across",
                 spikesnap="cursor",
                 hoverformat="%H:%M:%S",
-                range=[day_start_pt, day_end_pt],
+                range=(locked_x_range if locked_x_range is not None else [day_start_pt, day_end_pt]),
                 domain=[0.0, 1.0],
             ),
             template="plotly_dark",
