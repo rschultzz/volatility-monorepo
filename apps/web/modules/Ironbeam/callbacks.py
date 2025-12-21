@@ -1028,12 +1028,13 @@ def register_ironbeam_callbacks(app):
         Output("ironbeam-chart", "figure", allow_duplicate=True),
         Input("ironbeam-interval", "n_intervals"),
         State("ironbeam-chart", "figure"),
+        State("ironbeam-chart", "relayoutData"),  # ✅ keep this
         State("trade-date", "date"),
         State("gex-threshold-billions", "value"),
         State("ironbeam-bar-interval", "value"),
         prevent_initial_call=True,
     )
-    def progressively_add_days(n_intervals, fig, trade_date, threshold_billions, bar_interval):
+    def progressively_add_days(n_intervals, fig, relayout, trade_date, threshold_billions, bar_interval):
         if not isinstance(fig, dict) or not trade_date:
             raise PreventUpdate
 
@@ -1064,6 +1065,28 @@ def register_ironbeam_callbacks(app):
         fig = _sanitize_figure_dict(fig)
         fig_obj = go.Figure(fig)
         meta = (fig.get("layout") or {}).get("meta") or {}
+
+        # ---- NEW: apply latest viewport immediately (prevents first-interval "recenter") ----
+        if isinstance(relayout, dict):
+            # X
+            x0 = relayout.get("xaxis.range[0]")
+            x1 = relayout.get("xaxis.range[1]")
+            if x0 is not None and x1 is not None:
+                meta["locked_x_range"] = [x0, x1]
+            if relayout.get("xaxis.autorange"):
+                meta.pop("locked_x_range", None)
+
+            # Y (prefer yaxis2, but accept yaxis too)
+            y0 = relayout.get("yaxis.range[0]")
+            y1 = relayout.get("yaxis.range[1]")
+            if y0 is None or y1 is None:
+                y0 = relayout.get("yaxis2.range[0]", y0)
+                y1 = relayout.get("yaxis2.range[1]", y1)
+            if y0 is not None and y1 is not None:
+                meta["locked_y_range"] = [y0, y1]
+            if relayout.get("yaxis.autorange") or relayout.get("yaxis2.autorange"):
+                meta.pop("locked_y_range", None)
+
 
         session_str = meta.get("multi_effective_date") or eff_date.isoformat()
         try:
