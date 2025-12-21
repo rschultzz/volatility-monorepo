@@ -385,52 +385,47 @@ def _build_hovergrid_traces(
     y_min: float,
     y_max: float,
 ) -> tuple[go.Scattergl, go.Scattergl]:
-    """
-    Two invisible hover grids on y2:
-      - base: always Time + cursor Price
-      - gex: Time + cursor Price + (GEX Level, Net GEX) when close to a plotted level
-    """
-    y_points = max(20, int(HOVERGRID_Y_POINTS))
+    y_points_req = max(20, int(HOVERGRID_Y_POINTS))
     max_points = max(5000, int(HOVERGRID_MAX_POINTS))
 
     if y_min >= y_max:
         y_min, y_max = y_max - 1.0, y_max
 
-    y_vec = np.linspace(float(y_min), float(y_max), y_points).astype(float)
     if not target_dates_str:
-        base = go.Scattergl(
-            x=[], y=[], mode="markers",
-            marker=dict(size=7, color="rgba(0,0,0,0)"),
+        empty = go.Scattergl(
+            x=[], y=[],
+            mode="markers",
+            marker=dict(size=6, color="rgba(0,0,0,0)"),
             opacity=HOVERGRID_OPACITY,
-            name="__hovergrid__base",
+            name="__hovergrid__empty",
             showlegend=False,
             yaxis="y2",
-            hovertemplate="Time=%{x|%Y-%m-%d %H:%M:%S}<br>Price=%{y:.2f}<extra></extra>",
+            customdata=[],
+            hovertemplate="Time=%{x|%Y-%m-%d %H:%M:%S}<br>Price=%{customdata:.2f}<extra></extra>",
         )
-        gex = go.Scattergl(
-            x=[], y=[], mode="markers",
-            marker=dict(size=7, color="rgba(0,0,0,0)"),
-            opacity=HOVERGRID_OPACITY,
-            name="__hovergrid__gex",
-            showlegend=False,
-            yaxis="y2",
-            hovertemplate="Time=%{x|%Y-%m-%d %H:%M:%S}<br>Price=%{y:.2f}<extra></extra>",
-        )
-        return base, gex
+        return empty, empty
 
-    # estimate minutes per session to compute a minute-step that stays under max_points
+    # minutes per session (for budget)
     d0 = dt.datetime.strptime(target_dates_str[0], "%Y-%m-%d").date()
     start0, end0 = _session_window_pt(d0, pt_tz)
     minutes_per_session = int((end0 - start0).total_seconds() // 60) + 1
-    total_x_full = minutes_per_session * len(target_dates_str)
-    denom = max(1, total_x_full * y_points)
-    step_min = max(1, int(math.ceil(denom / max_points)))
 
+    total_x_full = minutes_per_session * len(target_dates_str)
+
+    # Prefer 1-minute x spacing; reduce y_points first to stay under max_points.
+    y_points_eff = min(y_points_req, max(20, int(max_points // max(1, total_x_full))))
+    step_min = 1
+    # If still too many (rare), then increase x step.
+    if total_x_full * y_points_eff > max_points:
+        step_min = int(math.ceil((total_x_full * y_points_eff) / max_points))
+
+    # y grid
+    y_vec = np.linspace(float(y_min), float(y_max), int(y_points_eff)).astype(float)
     y_step = float(y_vec[1] - y_vec[0]) if len(y_vec) > 1 else 1.0
     tol = float(max(GEX_HOVER_TOLERANCE, 0.60 * y_step))
 
     x_base_parts, y_base_parts = [], []
-    x_gex_parts, y_gex_parts, cd_gex_parts = [], [], []
+    x_gex_parts, y_gex_parts = [], []
 
     for d_str in target_dates_str:
         try:
@@ -439,13 +434,12 @@ def _build_hovergrid_traces(
             continue
 
         start_pt, end_pt = _session_window_pt(d, pt_tz)
-
-        # full to 13:00 regardless of bar availability
         x_day = pd.date_range(start_pt, end_pt, freq=f"{step_min}min", inclusive="both").to_pydatetime().tolist()
         if not x_day:
             continue
 
         levels_list = gex_levels_by_day.get(d_str) if isinstance(gex_levels_by_day, dict) else None
+
         if not isinstance(levels_list, list) or not levels_list:
             x_rep = np.repeat(x_day, len(y_vec))
             y_rep = np.tile(y_vec, len(x_day))
@@ -455,10 +449,8 @@ def _build_hovergrid_traces(
 
         try:
             levels = np.array([float(p[0]) for p in levels_list], dtype=float)
-            nets = np.array([float(p[1]) for p in levels_list], dtype=float)  # already in B
         except Exception:
             levels = np.array([], dtype=float)
-            nets = np.array([], dtype=float)
 
         if levels.size == 0:
             x_rep = np.repeat(x_day, len(y_vec))
@@ -469,13 +461,10 @@ def _build_hovergrid_traces(
 
         idx = np.abs(levels.reshape(-1, 1) - y_vec.reshape(1, -1)).argmin(axis=0)
         nearest_lvl = levels[idx]
-        nearest_net = nets[idx]
         mask = np.abs(y_vec - nearest_lvl) <= tol
 
         y_base = y_vec[~mask]
         y_gex = y_vec[mask]
-        lvl_gex = nearest_lvl[mask]
-        net_gex = nearest_net[mask]
 
         if y_base.size > 0:
             x_rep_b = np.repeat(x_day, len(y_base))
@@ -486,49 +475,49 @@ def _build_hovergrid_traces(
         if y_gex.size > 0:
             x_rep_g = np.repeat(x_day, len(y_gex))
             y_rep_g = np.tile(y_gex, len(x_day))
-            lvl_rep = np.tile(lvl_gex, len(x_day))
-            net_rep = np.tile(net_gex, len(x_day))
             x_gex_parts.append(x_rep_g)
             y_gex_parts.append(y_rep_g)
-            cd_gex_parts.append(np.column_stack([lvl_rep, net_rep]))
 
     x_base = np.concatenate(x_base_parts) if x_base_parts else np.array([], dtype=object)
     y_base = np.concatenate(y_base_parts) if y_base_parts else np.array([], dtype=float)
-
     x_gex = np.concatenate(x_gex_parts) if x_gex_parts else np.array([], dtype=object)
     y_gex = np.concatenate(y_gex_parts) if y_gex_parts else np.array([], dtype=float)
-    cd_gex = np.concatenate(cd_gex_parts) if cd_gex_parts else np.empty((0, 2), dtype=float)
+
+    # Optional tiny offset (keep small, or set env var to "0" to disable)
+    hover_offset_steps = float(os.getenv("IRONBEAM_HOVER_OFFSET_STEPS", "0.15"))
+    y_offset = float(hover_offset_steps * y_step)
+
+    hover_tpl = "Time=%{x|%Y-%m-%d %H:%M:%S}<br>Price=%{customdata:.2f}<extra></extra>"
 
     base_trace = go.Scattergl(
         x=x_base,
-        y=y_base,
+        y=y_base + y_offset,
         mode="markers",
-        marker=dict(size=7, color="rgba(0,0,0,0)"),
+        marker=dict(size=6, color="rgba(0,0,0,0)"),
         opacity=HOVERGRID_OPACITY,
         name="__hovergrid__base",
         showlegend=False,
         yaxis="y2",
-        hovertemplate="Time=%{x|%Y-%m-%d %H:%M:%S}<br>Price=%{y:.2f}<extra></extra>",
+        customdata=y_base,
+        hovertemplate=hover_tpl,
     )
 
     gex_trace = go.Scattergl(
         x=x_gex,
-        y=y_gex,
+        y=y_gex + y_offset,
         mode="markers",
-        marker=dict(size=7, color="rgba(0,0,0,0)"),
+        marker=dict(size=6, color="rgba(0,0,0,0)"),
         opacity=HOVERGRID_OPACITY,
         name="__hovergrid__gex",
         showlegend=False,
         yaxis="y2",
-        customdata=cd_gex,
-        hovertemplate=(
-            "Time=%{x|%Y-%m-%d %H:%M:%S}<br>"
-            "Price=%{y:.2f}<br>"
-            "GEX Level=%{customdata[0]:.0f}<br>"
-            "Net GEX=%{customdata[1]:.2f}B<extra></extra>"
-        ),
+        customdata=y_gex,
+        hovertemplate=hover_tpl,
     )
+
     return base_trace, gex_trace
+
+
 
 
 # ---------- Dash callback registration ----------
@@ -787,13 +776,18 @@ def register_ironbeam_callbacks(app):
             meta["locked_y_range"] = default_y_range
             locked_y_range = meta["locked_y_range"]
 
-        # Hover grid (time+cursor price anywhere; add gex info near level)
+        # Hover grid (time+cursor price anywhere)
         y_min0 = low
         y_max0 = high
         pad = max(5.0, 0.04 * (y_max0 - y_min0))
+
+        hover_days = meta.get("multi_loaded_dates") or [session_date.isoformat()]
+        if not isinstance(hover_days, list) or not hover_days:
+            hover_days = [session_date.isoformat()]
+
         hover_base, hover_gex = _build_hovergrid_traces(
             pt_tz=pt_tz,
-            target_dates_str=target_dates_str,
+            target_dates_str=hover_days,  # ✅ was target_dates_str (all days)
             gex_levels_by_day=gex_levels_by_day,
             y_min=y_min0 - pad,
             y_max=y_max0 + pad,
@@ -1135,13 +1129,18 @@ def register_ironbeam_callbacks(app):
                 y_min, y_max = 0.0, 1.0
             pad = max(5.0, 0.04 * (y_max - y_min))
 
+            hover_days = meta.get("multi_loaded_dates") or []
+            if not isinstance(hover_days, list) or not hover_days:
+                hover_days = [session_date.isoformat()]
+
             hb, hg = _build_hovergrid_traces(
                 pt_tz=pt_tz,
-                target_dates_str=target_dates,
+                target_dates_str=hover_days,  # ✅ only loaded days
                 gex_levels_by_day=gex_levels_by_day,
                 y_min=y_min - pad,
                 y_max=y_max + pad,
             )
+
             fig_obj.add_trace(hb)
             fig_obj.add_trace(hg)
 
