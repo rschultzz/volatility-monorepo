@@ -590,6 +590,9 @@ def register_ironbeam_callbacks(app):
         target_dates_str = [d.isoformat() for d in target_dates]
 
         day_start_pt, day_end_pt = _session_window_pt(session_date, pt_tz)
+        # RTH window (PT) for the selected session day
+        rth_start_pt_center = dt.datetime.combine(session_date, dt.time(6, 30), tzinfo=pt_tz)
+        rth_end_pt_center = dt.datetime.combine(session_date, dt.time(13, 0), tzinfo=pt_tz)
 
         try:
             df_bars = _fetch_bars_pt(day_start_pt, day_end_pt, interval, pt_tz)
@@ -600,8 +603,29 @@ def register_ironbeam_callbacks(app):
         if df_bars.empty:
             return go.Figure(layout_title_text=f"No ES bar data for {selected_date.isoformat()} session.")
 
-        low = float(df_bars["low"].min())
-        high = float(df_bars["high"].max())
+        # Full-session range (keep this for hover-grid coverage and general calculations)
+        full_low = float(df_bars["low"].min())
+        full_high = float(df_bars["high"].max())
+
+        # RTH-only range (use this for DEFAULT y-zoom so it starts tighter)
+        df_rth = df_bars[
+            (df_bars["datetime_pt"] >= rth_start_pt_center) &
+            (df_bars["datetime_pt"] <= rth_end_pt_center)
+            ]
+        if df_rth.empty:
+            df_rth = df_bars  # fallback
+
+        rth_low = float(df_rth["low"].min())
+        rth_high = float(df_rth["high"].max())
+
+        # Default y padding (tune these two numbers if you want tighter/looser)
+        rth_rng = max(1e-6, (rth_high - rth_low))
+        y_pad = min(25.0, max(3.0, 0.12 * rth_rng))  # max pad 25 pts, min pad 3 pts
+        default_y_range = [rth_low - y_pad, rth_high + y_pad]
+
+        # Keep existing variables for the rest of the function
+        low = full_low
+        high = full_high
         band_min = low - GEX_LEVEL_PADDING
         band_max = high + GEX_LEVEL_PADDING
 
@@ -754,10 +778,14 @@ def register_ironbeam_callbacks(app):
         if locked_x_range is not None:
             meta["locked_x_range"] = locked_x_range
 
-        # default zoom
+        # default zoom (only when user hasn't already zoomed/panned)
         if locked_x_range is None:
-            meta["locked_x_range"] = [day_start_pt, day_end_pt]
+            meta["locked_x_range"] = [rth_start_pt_center, rth_end_pt_center]
             locked_x_range = meta["locked_x_range"]
+
+        if locked_y_range is None:
+            meta["locked_y_range"] = default_y_range
+            locked_y_range = meta["locked_y_range"]
 
         # Hover grid (time+cursor price anywhere; add gex info near level)
         y_min0 = low
@@ -788,7 +816,7 @@ def register_ironbeam_callbacks(app):
                 spikemode="across",
                 spikesnap="cursor",
                 hoverformat="%H:%M:%S",
-                range=(locked_x_range if locked_x_range is not None else [day_start_pt, day_end_pt]),
+                range=(locked_x_range if locked_x_range is not None else [rth_start_pt_center, rth_end_pt_center]),
                 domain=[0.0, 1.0],
             ),
             template="plotly_dark",
