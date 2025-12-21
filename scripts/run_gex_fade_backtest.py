@@ -72,23 +72,31 @@ def main():
 
     # Looser params for exploration so we see more trades
     params = GexFadeParams(
-        entry_proximity_max=1.5,  # tests within ~1.5 pts of wall
-        touch_proximity_max=0.5,  # "touch" within ~1 pt
+        entry_proximity_max=1.5,
+        touch_proximity_max=1.0,
         min_test_gap_bars=15,
-        put_skew_increase_min=0.3,  # your ~68% skew change passes
-        min_baseline_skew=0.2,
+
+        # 🔻 Make skew requirement much easier
+        put_skew_increase_min=0.1,  # was 0.3
+        min_baseline_skew=0.1,  # was 0.2
+
         gex_net_min=0.0,
         gex_wall_min=1e11,
+
         bar_index_min=30,
         bar_index_max=350,
+
         stop_loss_points=2.0,
-        r_mult=4.0,
+        r_mult=2.0,
         max_bars_in_trade=60,
         max_trades_per_day=8,
         rth_skew_min_offset_bars=15,
-        use_lower_gex_target=True,
-        lower_gex_min_abs=1e11,
-        entry_min_range_frac=0.7,  # 🔹 only short near top 30% of day's range
+
+        # 🔻 Loosen “top of range only”
+        entry_min_range_frac=0.6,  # or even 0.0 to disable while debugging
+
+        # leave targets off for now, or flip on later
+        use_lower_gex_target=False,
     )
 
     trades_df, summary = run_gex_fade_backtest(df, params)
