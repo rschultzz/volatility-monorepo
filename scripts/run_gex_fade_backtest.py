@@ -1,82 +1,60 @@
-#!/usr/bin/env python
-"""
-Run the simplified GEX fade backtest against the `es_minutes_with_features` view.
-
-All tunable parameters live in the PARAMS object so it's easy to wire them
-into Dash controls later.
-"""
 from __future__ import annotations
 
-import json
+# Load local environment variables from .env (for DATABASE_URL)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 import os
 import sys
-from pathlib import Path as _P
+from pathlib import Path
 
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-# --- Make repo root importable so `packages.*` works ---
-REPO_ROOT = _P(__file__).resolve().parents[1]
+# Make the repo root importable so that `packages.*` works
+REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# --- Load .env (same pattern as other scripts) ---
-try:
-    from dotenv import load_dotenv, find_dotenv
-
-    load_dotenv(find_dotenv())
-except Exception:
-    pass
-
-from packages.backtests.gex_fade import GexFadeParams, run_gex_fade_backtest
+from packages.backtests.gex_fade import GexFadeParams, run_gex_fade_backtest  # noqa: E402
 
 
-# ---------------------------------------------------------------------------
-# Tunable parameters
-# ---------------------------------------------------------------------------
+# ===================== Tunable parameters =====================
 
+# Date range for the backtest (inclusive).
+# Use None for either end to leave it open.
+START_DATE = "2025-11-01"
+END_DATE = "2025-12-31"
+
+# Strategy parameters. You can tweak these and re-run.
 PARAMS = GexFadeParams(
-    # How close to the upper wall do we need to be to consider it a "test"?
-    entry_proximity_max=2.0,      # points from wall for a candidate cluster
-    touch_proximity_max=1.0,      # points from wall to count as a true "touch"
-
-    # Structure of tests / bars we care about
-    min_test_gap_bars=5,          # separate tests by at least this many bars
-    bar_index_min=60,             # roughly 7:30 PT if bar_index starts at 0
-    bar_index_max=360,            # roughly 13:00 PT
-
-    # Gamma filters
-    gex_wall_min=5e10,            # minimum |gex_wall_above_gex| in the cluster
-    gex_net_min=-1e12,            # minimum net_gex at entry (very loose by default)
-
-    # Optional skew filter (0 = disabled)
-    min_entry_skew_abs=0.0,       # require |put_skew_pp_primary| >= this at entry
-
-    # Risk management
-    stop_loss_points=2.0,         # stop above entry (short)
-    r_mult=2.0,                   # target = entry - stop_loss_points * r_mult
-    max_bars_in_trade=60,         # time stop in bars
-    max_trades_per_day=8,         # safety cap
-
-    # Misc
-    rth_only=True,                # trade only bars flagged as RTH
+    entry_proximity_max=2.0,      # points below wall
+    gex_wall_min=5e10,            # minimum |GEX| at the wall
+    gex_net_min=0.0,              # require net_gex >= this
+    min_bar_index=30,             # don't trade in first 30 minutes
+    max_bar_index=350,            # don't trade into the close
+    require_rth=True,             # only trade RTH minutes
+    min_abs_skew=0.5,             # require at least 0.5pp of skew (abs)
+    stop_loss_points=2.0,         # stop size in ES points
+    target_rr=2.0,                # target = stop * R
+    max_bars_in_trade=60,         # max holding time
+    max_trades_per_day=8,         # daily trade cap
 )
 
 
-# ---------------------------------------------------------------------------
-# Data loading
-# ---------------------------------------------------------------------------
+def main() -> None:
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("DATABASE_URL environment variable is not set")
 
-def load_minutes(engine) -> pd.DataFrame:
-    """
-    Load the joined minute/gamma/smile data from the view.
+    engine = create_engine(db_url)
 
-    We intentionally only select columns that we know exist on
-    `es_minutes_with_features`. Distance-to-wall columns, if missing,
-    are computed in `gex_fade.run_gex_fade_backtest`.
-    """
-    query = text(
-        """
+    print("[run_gex_fade_backtest] Loading data from es_minutes_with_features...")
+
+    base_query = """
         SELECT
             trade_date,
             ts_utc,
@@ -97,48 +75,62 @@ def load_minutes(engine) -> pd.DataFrame:
             smile_dte_primary,
             smile_expir_primary
         FROM es_minutes_with_features
-        ORDER BY trade_date, ts_utc
-        """
-    )
+    """
 
-    df = pd.read_sql_query(
-        query,
-        engine,
-        parse_dates=["trade_date", "ts_utc", "ts_pt"],
-    )
-    return df
+    conditions = []
+    params: dict[str, object] = {}
 
+    if START_DATE is not None:
+        conditions.append("trade_date >= :start_date")
+        params["start_date"] = START_DATE
+    if END_DATE is not None:
+        conditions.append("trade_date <= :end_date")
+        params["end_date"] = END_DATE
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+    if conditions:
+        base_query += " WHERE " + " AND ".join(conditions)
 
-def main() -> None:
-    database_url = os.environ.get("DATABASE_URL")
-    if not database_url:
-        raise RuntimeError("DATABASE_URL environment variable is not set")
+    base_query += " ORDER BY trade_date, ts_utc"
 
-    print("[run_gex_fade_backtest] Loading data from es_minutes_with_features...")
-    engine = create_engine(database_url)
+    with engine.connect() as conn:
+        df = pd.read_sql_query(text(base_query), conn, params=params)
 
-    df = load_minutes(engine)
     print(f"[run_gex_fade_backtest] Loaded {len(df):,} rows")
 
     trades_df, summary = run_gex_fade_backtest(df, PARAMS)
-    print(f"[run_gex_fade_backtest] Simulated {len(trades_df):,} trades")
 
-    # --- Persist outputs next to the script ---
-    out_trades = "gex_fade_trades.csv"
-    out_summary = "gex_fade_summary.json"
+    print("\n[run_gex_fade_backtest] Summary:")
+    print(f"  n_trades : {summary['n_trades']}")
+    print(f"  win_rate : {summary['win_rate']:.1%}")
+    print(f"  avg R    : {summary['avg_r']:.2f}")
+    print(f"  total R  : {summary['total_r']:.1f}")
 
-    trades_df.to_csv(out_trades, index=False)
+    if not trades_df.empty:
+        cols_to_show = [
+            "trade_date",
+            "entry_ts_pt",
+            "entry_bar_index",
+            "entry_price",
+            "wall_level",
+            "dist_to_wall_at_entry",
+            "put_skew_entry_pp",
+            "exit_ts_pt",
+            "exit_bar_index",
+            "exit_price",
+            "exit_reason",
+            "pnl_points",
+            "r_mult",
+        ]
+        cols_to_show = [c for c in cols_to_show if c in trades_df.columns]
 
-    with open(out_summary, "w") as f:
-        json.dump(summary, f, indent=2, default=str)
+        print("\n[run_gex_fade_backtest] First 50 trades:")
+        print(trades_df[cols_to_show].head(50).to_string(index=False))
 
-    print(f"[run_gex_fade_backtest] Wrote trades to {out_trades}")
-    print("[run_gex_fade_backtest] Summary:")
-    print(json.dumps(summary, indent=2, default=str))
+        out_path = REPO_ROOT / "gex_fade_trades.csv"
+        trades_df.to_csv(out_path, index=False)
+        print(f"\n[run_gex_fade_backtest] Saved trades to {out_path}")
+    else:
+        print("\n[run_gex_fade_backtest] No trades generated with current parameters.")
 
 
 if __name__ == "__main__":
