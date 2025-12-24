@@ -449,8 +449,10 @@ def _simulate_day(
                         "put_skew_base_ts_pt": position.get("put_skew_base_ts_pt"),
                         "put_skew_entry_ts_pt": position.get("put_skew_entry_ts_pt"),
                         "smile_dte_primary": position.get("smile_dte_primary"),
+                        "smile_expir_primary": position.get("smile_expir_primary"),  # 🔹 NEW
                     }
                 )
+
                 position = None
 
         # --- Consider new LONG entry if flat ---
@@ -522,7 +524,9 @@ def _simulate_day(
                 "put_skew_base_ts_pt": cand.get("put_skew_base_ts_pt"),
                 "put_skew_entry_ts_pt": cand.get("put_skew_entry_ts_pt"),
                 "smile_dte_primary": row.get("smile_dte_primary"),
+                "smile_expir_primary": row.get("smile_expir_primary"),  # 🔹 NEW
             }
+
             trades_today += 1
 
     return trades

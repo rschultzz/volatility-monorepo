@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Backfill primary (front) expiry ATM IV + skew into es_minute_features
+Backfill primary (front) expiry ATM IV + skew *and expiry date* into es_minute_features
 from orats_monies_minute.
 
 Logic:
@@ -10,7 +10,8 @@ Logic:
 - Join on ts_utc in es_minute_features.
 - For those minutes, populate:
 
-    smile_dte_primary                    = dte of front expiry
+    smile_dte_primary                    = dte of front expiry (rounded to int)
+    smile_expir_primary                  = expiry date of that same row
     iv_atm                               = atmiv
     iv_atm_change_10m                    = iv_atm - iv_atm 10 rows earlier
     call_skew_pp_primary                 = (vol25 - vol50) * 100
@@ -44,6 +45,17 @@ FEATURES_TABLE = os.environ.get("ES_FEATURES_TABLE", "es_minute_features")
 MONIES_TABLE = os.environ.get("ORATS_MONIES_TABLE", "orats_monies_minute")
 
 
+def ensure_smile_expiry_column(engine) -> None:
+    """Make sure es_minute_features has smile_expir_primary as a DATE column."""
+    ddl = text(f"""
+        ALTER TABLE {FEATURES_TABLE}
+        ADD COLUMN IF NOT EXISTS smile_expir_primary date;
+    """)
+    with engine.begin() as conn:
+        conn.execute(ddl)
+    print("[ensure_smile_expiry_column] Ensured smile_expir_primary column exists")
+
+
 def load_feature_timestamps(engine) -> pd.DataFrame:
     """
     Load ts_utc for ALL feature rows. We'll recompute smile features for
@@ -65,7 +77,7 @@ def load_monies_front(engine) -> pd.DataFrame:
     the row with the smallest non-negative dte (front expiry).
 
     We select the pieces we need:
-        atmiv, dte, vol50, vol25, vol75
+        atmiv, dte, vol50, vol25, vol75, expir_date
     and convert snapshot_pt (ET) to UTC.
     """
     q = text(f"""
@@ -75,9 +87,10 @@ def load_monies_front(engine) -> pd.DataFrame:
             dte,
             vol50,
             vol25,
-            vol75
+            vol75,
+            expir_date
         FROM {MONIES_TABLE}
-        WHERE ticker LIKE 'SPX%%'
+        WHERE ticker LIKE 'SPX%'
           AND dte >= 0;
     """)
     df = pd.read_sql_query(q, engine)
@@ -97,13 +110,14 @@ def load_monies_front(engine) -> pd.DataFrame:
 def build_feature_updates(df_feat: pd.DataFrame, df_monies: pd.DataFrame) -> pd.DataFrame:
     """
     Merge feature timestamps with front-expiry monies by ts_utc and compute
-    ATM IV + skew features and 10-minute changes.
+    ATM IV + skew features, 10-minute changes, and the matching expiry date.
     """
     if df_feat.empty or df_monies.empty:
         return pd.DataFrame(
             columns=[
                 "ts_utc",
                 "smile_dte_primary",
+                "smile_expir_primary",
                 "iv_atm",
                 "iv_atm_change_10m",
                 "call_skew_pp_primary",
@@ -123,9 +137,13 @@ def build_feature_updates(df_feat: pd.DataFrame, df_monies: pd.DataFrame) -> pd.
     df.rename(columns={"atmiv": "iv_atm"}, inplace=True)
     df["smile_dte_primary"] = df["dte"].astype("int64")
 
-    # Skews in vol points (pp), same as Skew callbacks
-    # call = 25Δ call (vol25) vs ATM (vol50)
-    # put  = 25Δ put  (vol75) vs ATM (vol50)
+    # Expiry date used for this smile snapshot (store as plain date)
+    if "expir_date" in df.columns:
+        df["smile_expir_primary"] = pd.to_datetime(df["expir_date"]).dt.date
+    else:
+        df["smile_expir_primary"] = pd.NaT
+
+    # Skews in vol points (pp)
     df["call_skew_pp_primary"] = (df["vol25"] - df["vol50"]) * 100.0
     df["put_skew_pp_primary"] = (df["vol75"] - df["vol50"]) * 100.0
 
@@ -144,6 +162,7 @@ def build_feature_updates(df_feat: pd.DataFrame, df_monies: pd.DataFrame) -> pd.
         [
             "ts_utc",
             "smile_dte_primary",
+            "smile_expir_primary",
             "iv_atm",
             "iv_atm_change_10m",
             "call_skew_pp_primary",
@@ -158,9 +177,7 @@ def build_feature_updates(df_feat: pd.DataFrame, df_monies: pd.DataFrame) -> pd.
 
 
 def apply_updates(engine, df_updates: pd.DataFrame):
-    """
-    Apply updates to es_minute_features for each ts_utc row.
-    """
+    """Apply updates to es_minute_features for each ts_utc row."""
     if df_updates.empty:
         print("[apply_updates] No updates to apply.")
         return
@@ -169,6 +186,7 @@ def apply_updates(engine, df_updates: pd.DataFrame):
         UPDATE {FEATURES_TABLE}
         SET
             smile_dte_primary                 = :smile_dte_primary,
+            smile_expir_primary               = :smile_expir_primary,
             iv_atm                            = :iv_atm,
             iv_atm_change_10m                 = :iv_atm_change_10m,
             call_skew_pp_primary              = :call_skew_pp_primary,
@@ -187,6 +205,8 @@ def apply_updates(engine, df_updates: pd.DataFrame):
 
 
 def main():
+    ensure_smile_expiry_column(ENGINE)
+
     df_feat = load_feature_timestamps(ENGINE)
     if df_feat.empty:
         print("[main] No feature rows found; exiting.")
@@ -199,7 +219,7 @@ def main():
 
     df_updates = build_feature_updates(df_feat, df_monies)
     apply_updates(ENGINE, df_updates)
-    print("[main] Front-expiry smile + skew backfill complete.")
+    print("[main] Front-expiry smile + skew + expiry backfill complete.")
 
 
 if __name__ == "__main__":

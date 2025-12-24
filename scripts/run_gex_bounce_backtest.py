@@ -14,6 +14,10 @@ from sqlalchemy import create_engine, text
 import sys
 from pathlib import Path as _P
 
+from sqlalchemy import create_engine, text
+import pandas as pd
+
+
 REPO_ROOT = _P(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -28,6 +32,9 @@ except Exception:
 from packages.backtests.gex_bounce import run_gex_bounce_backtest, GexBounceParams
 
 
+
+
+
 def main():
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
@@ -36,26 +43,14 @@ def main():
     engine = create_engine(db_url)
 
     query = text("""
-        SELECT
-            trade_date,
-            ts_utc,
-            ts_pt,
-            bar_index,
-            is_rth,
-            close,
-            high,
-            low,
-            net_gex,
-            gex_wall_below,
-            gex_wall_below_gex,
-            dist_to_wall_below_pts,
-            gex_wall_above,
-            gex_wall_above_gex,
-            put_skew_pp_primary,
-            smile_dte_primary
-        FROM es_minute_features
-        ORDER BY trade_date, ts_utc
-    """)
+                 SELECT trade_date,
+                        ts_utc,
+                        ts_pt,
+                        bar_index,
+                        is_rth, close, high, low, net_gex, gex_wall_below, gex_wall_below_gex, dist_to_wall_below_pts, gex_wall_above, gex_wall_above_gex, put_skew_pp_primary, smile_dte_primary, smile_expir_primary -- 🔹 NEW
+                 FROM es_minute_features
+                 ORDER BY trade_date, ts_utc
+                 """)
 
     print("[run_gex_bounce_backtest] Loading features from es_minute_features...")
     df = pd.read_sql_query(query, engine)
@@ -91,6 +86,7 @@ def main():
     )
 
     trades_df, summary = run_gex_bounce_backtest(df, params)
+
 
     print("\n=== Backtest Summary (GEX Bounce) ===")
     for k, v in summary.items():
