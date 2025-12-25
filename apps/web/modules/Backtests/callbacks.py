@@ -37,6 +37,7 @@ DASH_TIME_SLICES_ID = "smile-time-input"
 # Main tabs ID / values (must match app.py)
 MAIN_TABS_ID = "main-tabs"
 TAB_DASHBOARD = "tab-dashboard"
+TAB_PRICE_CHART = "tab-price-chart"
 
 
 @lru_cache(maxsize=1)
@@ -197,7 +198,7 @@ def register_callbacks(app, expected_toggle_id: str):
         columns = [{"name": c, "id": c} for c in out_df.columns]
         return records, records, columns, _summary_block(summary), []
 
-    # --- Selecting a row pushes values into the Dashboard controls AND switches to Dashboard tab ---
+    # --- Selecting a row pushes values into the Dashboard controls AND switches to Price Chart tab ---
     @app.callback(
         Output(DASH_TRADE_DATE_ID, "date", allow_duplicate=True),
         Output(DASH_EXPIRATION_ID, "date", allow_duplicate=True),
@@ -236,7 +237,8 @@ def register_callbacks(app, expected_toggle_id: str):
         out_expir = expir if expir else no_update
         out_times = times if times else no_update
 
-        return out_trade, out_expir, out_times, TAB_DASHBOARD
+        # Switch to Price Chart tab instead of Dashboard tab
+        return out_trade, out_expir, out_times, TAB_PRICE_CHART
 
     # --- Download CSV ---
     @app.callback(

@@ -54,6 +54,7 @@ LIVE_UPDATE_TIMER_ID = "live-update-timer"
 # Tabs (selector only; containers below stay mounted)
 MAIN_TABS_ID = "main-tabs"
 TAB_DASHBOARD = "tab-dashboard"
+TAB_PRICE_CHART = "tab-price-chart"
 TAB_BACKTESTS = "tab-backtests"
 
 # ---- Tabs styling (match backtest section cards) ----
@@ -278,8 +279,10 @@ def serve_layout():
                 "alignItems": "stretch",
             },
         ),
-        html.Hr(style={"borderColor": "#333"}),
+    ]
 
+    # ----- IRONBEAM BODY -----
+    ironbeam_children = [
         # ===== Ironbeam section + GEX threshold + Bar Interval toggle =====
         html.Div(
             [
@@ -433,6 +436,12 @@ def serve_layout():
                                 selected_style=TAB_SELECTED_STYLE,
                             ),
                             dcc.Tab(
+                                label="Price Chart",
+                                value=TAB_PRICE_CHART,
+                                style=TAB_STYLE,
+                                selected_style=TAB_SELECTED_STYLE,
+                            ),
+                            dcc.Tab(
                                 label="Backtests",
                                 value=TAB_BACKTESTS,
                                 style=TAB_STYLE,
@@ -446,6 +455,9 @@ def serve_layout():
 
             # ===== Dashboard container =====
             html.Div(id="dashboard-container", children=dashboard_children, style={"display": "block"}),
+
+            # ===== Ironbeam container =====
+            html.Div(id="ironbeam-container", children=ironbeam_children, style={"display": "none"}),
 
             # ===== Backtests container =====
             html.Div(
@@ -476,13 +488,16 @@ def sync_expiration_with_trade(trade_date):
 
 @app.callback(
     Output("dashboard-container", "style"),
+    Output("ironbeam-container", "style"),
     Output("backtests-container", "style"),
     Input(MAIN_TABS_ID, "value"),
 )
 def _switch_main_tab(tab_value):
     if tab_value == TAB_BACKTESTS:
-        return {"display": "none"}, {"display": "block"}
-    return {"display": "block"}, {"display": "none"}
+        return {"display": "none"}, {"display": "none"}, {"display": "block"}
+    if tab_value == TAB_PRICE_CHART:
+        return {"display": "none"}, {"display": "block"}, {"display": "none"}
+    return {"display": "block"}, {"display": "none"}, {"display": "none"}
 
 
 # Register module callbacks
