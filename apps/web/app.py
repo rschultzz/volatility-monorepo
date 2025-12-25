@@ -72,6 +72,7 @@ BT_MIN_ABS_SKEW_ID = "bt-min-abs-skew"
 
 BT_MIN_MINUTES_BETWEEN_TESTS_ID = "bt-min-minutes-between-tests"
 BT_MIN_SKEW_CHANGE_PCT_ID = "bt-min-skew-change-pct"
+BT_ANCHOR_IN_TOP_RANGE_PCT_ID = "bt-anchor-in-top-range-pct"
 
 # NEW option controls
 BT_REQUIRE_RESET_ID = "bt-require-reset"
@@ -84,6 +85,9 @@ BT_MAX_TRADES_DAY_ID = "bt-max-trades-per-day"
 
 # Backtest Mode Toggle
 BT_MODE_TOGGLE_ID = "bt-mode-toggle"
+
+# NEW: Backtest SS compare toggle (synced to dashboard toggle)
+BT_EXPECTED_TOGGLE_ID = "bt-expected-ss-toggle"
 
 
 def get_default_trade_date() -> dt.date:
@@ -132,7 +136,15 @@ def _load_es_minutes_with_features(eng, start_date: Optional[str], end_date: Opt
             gex_wall_below_gex,
             put_skew_pp_primary,
             smile_dte_primary,
-            smile_expir_primary
+            smile_expir_primary,
+
+            -- NEW (appended in view): required to compute Expected (SS) in gex_fade
+            stock_price,
+            atmiv,
+            call_skew_pp_primary,
+            vol10, vol15, vol20, vol25, vol30, vol35, vol40, vol45,
+            vol50,
+            vol55, vol60, vol65, vol70, vol75, vol80, vol85, vol90
         FROM es_minutes_with_features
     """
     conditions = []
@@ -160,7 +172,7 @@ def _summary_row(label: str, value: str) -> html.Div:
     )
 
 
-def _num_input(label: str, _id: str, value: float | int, step: float | int = 1, min_: float | int | None = None):
+def _num_input(label: str, _id: str, value: float | int, step: float | int = 1, min_: float | int | None = None, max_: float | int | None = None):
     return html.Div(
         [
             html.Label(label, style={"color": "white", "marginBottom": "6px", "fontSize": "13px", "fontWeight": "500"}),
@@ -170,6 +182,7 @@ def _num_input(label: str, _id: str, value: float | int, step: float | int = 1, 
                 value=value,
                 step=step,
                 min=min_,
+                max=max_,
                 debounce=True,
                 style={"width": "100%", "backgroundColor": "#0b0f19", "color": "#e5e7eb", "border": "1px solid #1f2937", "borderRadius": "8px", "padding": "8px 10px"},
             ),
@@ -315,6 +328,21 @@ def _backtests_tab(default_start: dt.date, default_end: dt.date) -> html.Div:
                         ],
                         style={"display": "flex", "flexDirection": "column", "gap": "4px", "marginLeft": "20px"},
                     ),
+                    # NEW: SS compare toggle (synced with dashboard)
+                    html.Div(
+                        [
+                            html.Label("Compare to Expected (SS)", style={"color": "white", "marginBottom": "6px", "fontSize": "13px"}),
+                            dcc.RadioItems(
+                                id=BT_EXPECTED_TOGGLE_ID,
+                                options=[{"label": "ON", "value": "on"}, {"label": "OFF", "value": "off"}],
+                                value="on",
+                                inline=True,
+                                labelStyle={"marginRight": "14px", "color": "white", "fontSize": "13px"},
+                                inputStyle={"marginRight": "6px"},
+                            ),
+                        ],
+                        style={"display": "flex", "flexDirection": "column", "gap": "4px", "marginLeft": "20px"},
+                    ),
                 ],
                 style={"border": "1px solid #1f2937", "borderRadius": "12px", "padding": "14px", "backgroundColor": "#0b0f19", "display": "flex", "alignItems": "center", "justifyContent": "space-between"},
             ),
@@ -346,7 +374,8 @@ def _backtests_tab(default_start: dt.date, default_end: dt.date) -> html.Div:
 
                     _num_input("Min |put skew| (pp) for tests", BT_MIN_ABS_SKEW_ID, 0.5, step=0.1, min_=0),
                     _num_input("Min minutes between tests", BT_MIN_MINUTES_BETWEEN_TESTS_ID, 30, step=1, min_=0),
-                    _num_input("Min skew increase (%) from anchor", BT_MIN_SKEW_CHANGE_PCT_ID, 50, step=1, min_=0),
+                    _num_input("Min skew increase (%) from baseline", BT_MIN_SKEW_CHANGE_PCT_ID, 50, step=1, min_=0),
+                    _num_input("Anchor in Top % of Day's Range", BT_ANCHOR_IN_TOP_RANGE_PCT_ID, 30, step=1, min_=0, max_=100),
 
                     # NEW: reset option
                     html.Div(
@@ -465,6 +494,25 @@ def sync_expiration_with_trade(trade_date):
     return trade_date
 
 
+# NEW: keep Dashboard Expected(SS) toggle and Backtests Compare(SS) toggle in sync
+@app.callback(
+    Output(EXPECTED_TOGGLE_ID, "value"),
+    Output(BT_EXPECTED_TOGGLE_ID, "value"),
+    Input(EXPECTED_TOGGLE_ID, "value"),
+    Input(BT_EXPECTED_TOGGLE_ID, "value"),
+    prevent_initial_call=True,
+)
+def sync_ss_toggles(dash_val, bt_val):
+    trig = ctx.triggered_id
+    if trig == EXPECTED_TOGGLE_ID:
+        v = dash_val
+    elif trig == BT_EXPECTED_TOGGLE_ID:
+        v = bt_val
+    else:
+        raise PreventUpdate
+    return v, v
+
+
 @app.callback(
     Output(BT_TRADES_TABLE_ID, "data"),
     Output(BT_TRADES_TABLE_ID, "columns"),
@@ -483,12 +531,15 @@ def sync_expiration_with_trade(trade_date):
     State(BT_MIN_ABS_SKEW_ID, "value"),
     State(BT_MIN_MINUTES_BETWEEN_TESTS_ID, "value"),
     State(BT_MIN_SKEW_CHANGE_PCT_ID, "value"),
+    State(BT_ANCHOR_IN_TOP_RANGE_PCT_ID, "value"),
     State(BT_REQUIRE_RESET_ID, "value"),
     State(BT_RESET_BUFFER_ID, "value"),
     State(BT_STOP_POINTS_ID, "value"),
     State(BT_TARGET_RR_ID, "value"),
     State(BT_MAX_BARS_TRADE_ID, "value"),
     State(BT_MAX_TRADES_DAY_ID, "value"),
+    # NEW: SS compare toggle (synced)
+    State(BT_EXPECTED_TOGGLE_ID, "value"),
 )
 def run_backtest_cb(
     n_clicks,
@@ -503,12 +554,14 @@ def run_backtest_cb(
     min_abs_skew,
     min_minutes_between_tests,
     min_skew_change_pct,
+    anchor_in_top_range_pct,
     require_reset,
     reset_buffer_points,
     stop_points,
     target_rr,
     max_bars_in_trade,
     max_trades_per_day,
+    bt_expected_toggle,
 ):
     if not n_clicks:
         raise PreventUpdate
@@ -528,6 +581,8 @@ def run_backtest_cb(
     min_gap_i = int(min_minutes_between_tests) if min_minutes_between_tests is not None else 30
     min_change_frac = (float(min_skew_change_pct) / 100.0) if min_skew_change_pct is not None else 0.50
 
+    anchor_top_pct_f = float(anchor_in_top_range_pct) if anchor_in_top_range_pct is not None else 30.0
+
     require_reset_b = (require_reset == "yes")
     reset_buffer_f = float(reset_buffer_points) if reset_buffer_points is not None else 2.0
 
@@ -536,6 +591,8 @@ def run_backtest_cb(
     max_bars_i = int(max_bars_in_trade) if max_bars_in_trade is not None else 60
     max_trades_i = int(max_trades_per_day) if max_trades_per_day is not None else 8
 
+    compare_expected_ss = (bt_expected_toggle != "off")
+
     params = GexFadeParams(
         entry_proximity_max=entry_prox_f,
         gex_wall_min=wall_gex_min,
@@ -543,11 +600,13 @@ def run_backtest_cb(
         min_bar_index=min_bar_i,
         max_bar_index=max_bar_i,
         require_rth=require_rth_b,
+        anchor_in_top_range_pct=anchor_top_pct_f,
         min_abs_skew=min_abs_skew_f,
         min_minutes_between_tests=min_gap_i,
         min_put_skew_increase_frac=min_change_frac,
         require_reset_between_tests=require_reset_b,
         reset_buffer_points=reset_buffer_f,
+        compare_put_skew_to_expected_ss=compare_expected_ss,
         stop_loss_points=stop_points_f,
         target_rr=target_rr_f,
         max_bars_in_trade=max_bars_i,
@@ -592,6 +651,11 @@ def run_backtest_cb(
         "anchor_put_skew_pp",
         "confirm_put_skew_pp",
         "put_skew_change_pct",
+        "compare_to_expected_ss",
+        "expected_put_skew_pp",
+        "atm_exp_ss_pct",
+        "atm_residual_bp",
+        "k_shift",
         "entry_ts_pt",
         "exit_ts_pt",
         "entry_price",
@@ -661,35 +725,22 @@ def on_trade_selected(selected_rows, data, mode_value):
         raise PreventUpdate
 
     row = data[row_idx]
-    
-    # Extract fields
+
     trade_date = row.get("trade_date")
     expiration = row.get("smile_expir_primary")
-    
-    # Timeslices: anchor_test_ts_pt and confirm_test_ts_pt
-    # Note: These might be formatted as HH:MM strings already if they come from the table
-    # If they are missing, fallback to entry_ts_pt
-    
+
     times = []
     if row.get("anchor_test_ts_pt"):
         times.append(row["anchor_test_ts_pt"])
     if row.get("confirm_test_ts_pt"):
         times.append(row["confirm_test_ts_pt"])
-        
-    # If no anchor/confirm times (e.g. old backtest logic), maybe just use entry time?
-    # But user specifically asked for anchor/confirm.
-    # If the list is empty, let's default to entry time if available
+
     if not times and row.get("entry_ts_pt"):
         times.append(row["entry_ts_pt"])
 
-    # Ensure unique
     times = list(set(times))
-    
-    # If we have valid data, switch tab and update inputs
+
     if trade_date:
-        # Return: Switch to Dashboard tab, set trade date, set expiration, set time slices
-        # Note: expiration date picker might need YYYY-MM-DD. 
-        # smile_expir_primary is likely a date string or object.
         return TAB_DASHBOARD, trade_date, expiration, times
 
     raise PreventUpdate
