@@ -20,13 +20,14 @@ def ironbeam_layout():
             # Main ES + GEX chart
             dcc.Graph(
                 id="ironbeam-chart",
-                style={"height": "1500px"},
+                style={"height": "calc(100vh - 240px)"},
                 config={
                     "displaylogo": False,
                     "scrollZoom": True,           # wheel zoom on hover
                     "modeBarButtonsToRemove": [
                         "autoScale2d",
                     ],
+                    "responsive": True,
                 },
             ),
         ],
