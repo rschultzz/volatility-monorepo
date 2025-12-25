@@ -33,9 +33,9 @@ class GexFadeParams:
     # Skew filter
     min_abs_skew: float = 0.0         # minimum |put_skew_pp_primary| at entry
 
-    # Multi-test + skew-drop logic
+    # Multi-test + skew-increase logic
     min_minutes_between_tests: int = 30
-    min_put_skew_drop_frac: float = 0.50  # 0.50 => 50% drop in |skew|
+    min_put_skew_increase_frac: float = 0.50  # 0.50 => 50% increase in skew
 
     # NEW: optional reset requirement
     require_reset_between_tests: bool = False
@@ -176,7 +176,7 @@ def run_gex_fade_backtest(
                         "confirm_test_ts_pt": _fmt_time(position.get("confirm_test_ts_pt")),
                         "anchor_put_skew_pp": round(float(position.get("anchor_put_skew_pp", np.nan)), 2),
                         "confirm_put_skew_pp": round(float(position.get("confirm_put_skew_pp", np.nan)), 2),
-                        "put_skew_drop_pct": round(float(position.get("put_skew_drop_pct", np.nan)), 1),
+                        "put_skew_change_pct": round(float(position.get("put_skew_change_pct", np.nan)), 1),
                         "minutes_between_tests": position.get("minutes_between_tests", np.nan),
                         "reset_required": bool(position.get("reset_required", False)),
                         "reset_seen": bool(position.get("reset_seen", False)),
@@ -190,7 +190,7 @@ def run_gex_fade_backtest(
 
         # Update trailing info even if we don't trade at this bar
         last_close = float(row["close"])
-        last_ts_utc = row["ts_utc"]
+        last_ts_utc = row.get("ts_utc")
         last_ts_pt = row.get("ts_pt")
         last_bar_index = int(row["bar_index"])
 
@@ -241,7 +241,7 @@ def run_gex_fade_backtest(
                         "entry_ts_pt": _fmt_time(position["entry_ts_pt"]),
                         "exit_ts_pt": _fmt_time(row.get("ts_pt")),
                         "entry_price": position["entry_price"],
-                        "exit_price": exit_price,
+                        "exit_price": float(exit_price),
                         "pnl_points": pnl_points,
                         "stop_price": position["stop_price"],
                         "target_price": position["target_price"],
@@ -259,7 +259,7 @@ def run_gex_fade_backtest(
                         "confirm_test_ts_pt": _fmt_time(position.get("confirm_test_ts_pt")),
                         "anchor_put_skew_pp": round(float(position.get("anchor_put_skew_pp", np.nan)), 2),
                         "confirm_put_skew_pp": round(float(position.get("confirm_put_skew_pp", np.nan)), 2),
-                        "put_skew_drop_pct": round(float(position.get("put_skew_drop_pct", np.nan)), 1),
+                        "put_skew_change_pct": round(float(position.get("put_skew_change_pct", np.nan)), 1),
                         "minutes_between_tests": position.get("minutes_between_tests", np.nan),
                         "reset_required": bool(position.get("reset_required", False)),
                         "reset_seen": bool(position.get("reset_seen", False)),
@@ -344,12 +344,11 @@ def run_gex_fade_backtest(
         # (curr - base) / max(abs(base), 0.25) * 100.0
         pct_change = _pct_change_pp(confirm_skew, anchor_skew)
 
-        # We want a DROP of at least X%.
-        # If skew is positive (normal), a drop means pct_change is negative.
-        # e.g. 50% drop => pct_change <= -50.0
-        # So we check if pct_change <= -(min_put_skew_drop_frac * 100.0)
-        required_drop_pct = float(params.min_put_skew_drop_frac) * 100.0
-        if pct_change > -required_drop_pct:
+        # We want an INCREASE of at least X%.
+        # If skew is positive (normal), an increase means pct_change is positive.
+        # e.g. 50% increase => pct_change >= 50.0
+        required_increase_pct = float(params.min_put_skew_increase_frac) * 100.0
+        if pct_change < required_increase_pct:
             continue
 
         # All conditions satisfied: open a new short
@@ -359,13 +358,13 @@ def run_gex_fade_backtest(
 
         position = {
             "is_open": True,
-            "entry_ts": row["ts_utc"],
+            "entry_ts": row.get("ts_utc"),
             "entry_ts_pt": row.get("ts_pt"),
             "entry_bar_index": bar_index,
             "entry_price": entry_price,
             "stop_price": stop_price,
             "target_price": target_price,
-            "wall_level": float(gex_wall_above),
+            "wall_level": wall_level,
             "wall_gex": float(gex_wall_above_gex),
             "net_gex": float(net_gex),
             "dist_to_wall_at_entry": float(dist_to_wall),
@@ -381,12 +380,12 @@ def run_gex_fade_backtest(
             "confirm_test_ts_pt": row.get("ts_pt"),
             "anchor_put_skew_pp": anchor_skew,
             "confirm_put_skew_pp": confirm_skew,
-            "put_skew_drop_pct": pct_change,
+            "put_skew_change_pct": pct_change,
             "minutes_between_tests": int(round(minutes_between)),
             "reset_required": bool(params.require_reset_between_tests),
             "reset_seen": bool(anchor.get("reset_seen", False)),
         }
-        
+
         # After taking a trade, clear anchors so we don't reuse them immediately
         anchors_by_wall = {}
 
@@ -417,7 +416,7 @@ def run_gex_fade_backtest(
                 "confirm_test_ts_pt": _fmt_time(position.get("confirm_test_ts_pt")),
                 "anchor_put_skew_pp": round(float(position.get("anchor_put_skew_pp", np.nan)), 2),
                 "confirm_put_skew_pp": round(float(position.get("confirm_put_skew_pp", np.nan)), 2),
-                "put_skew_drop_pct": round(float(position.get("put_skew_drop_pct", np.nan)), 1),
+                "put_skew_change_pct": round(float(position.get("put_skew_change_pct", np.nan)), 1),
                 "minutes_between_tests": position.get("minutes_between_tests", np.nan),
                 "reset_required": bool(position.get("reset_required", False)),
                 "reset_seen": bool(position.get("reset_seen", False)),

@@ -71,7 +71,7 @@ BT_REQUIRE_RTH_ID = "bt-require-rth"
 BT_MIN_ABS_SKEW_ID = "bt-min-abs-skew"
 
 BT_MIN_MINUTES_BETWEEN_TESTS_ID = "bt-min-minutes-between-tests"
-BT_MIN_SKEW_DROP_PCT_ID = "bt-min-skew-drop-pct"
+BT_MIN_SKEW_CHANGE_PCT_ID = "bt-min-skew-change-pct"
 
 # NEW option controls
 BT_REQUIRE_RESET_ID = "bt-require-reset"
@@ -346,7 +346,7 @@ def _backtests_tab(default_start: dt.date, default_end: dt.date) -> html.Div:
 
                     _num_input("Min |put skew| (pp) for tests", BT_MIN_ABS_SKEW_ID, 0.5, step=0.1, min_=0),
                     _num_input("Min minutes between tests", BT_MIN_MINUTES_BETWEEN_TESTS_ID, 30, step=1, min_=0),
-                    _num_input("Min skew drop (%) from anchor", BT_MIN_SKEW_DROP_PCT_ID, 50, step=1, min_=0),
+                    _num_input("Min skew increase (%) from anchor", BT_MIN_SKEW_CHANGE_PCT_ID, 50, step=1, min_=0),
 
                     # NEW: reset option
                     html.Div(
@@ -482,7 +482,7 @@ def sync_expiration_with_trade(trade_date):
     State(BT_REQUIRE_RTH_ID, "value"),
     State(BT_MIN_ABS_SKEW_ID, "value"),
     State(BT_MIN_MINUTES_BETWEEN_TESTS_ID, "value"),
-    State(BT_MIN_SKEW_DROP_PCT_ID, "value"),
+    State(BT_MIN_SKEW_CHANGE_PCT_ID, "value"),
     State(BT_REQUIRE_RESET_ID, "value"),
     State(BT_RESET_BUFFER_ID, "value"),
     State(BT_STOP_POINTS_ID, "value"),
@@ -502,7 +502,7 @@ def run_backtest_cb(
     require_rth,
     min_abs_skew,
     min_minutes_between_tests,
-    min_skew_drop_pct,
+    min_skew_change_pct,
     require_reset,
     reset_buffer_points,
     stop_points,
@@ -526,7 +526,7 @@ def run_backtest_cb(
     min_abs_skew_f = float(min_abs_skew) if min_abs_skew is not None else 0.0
 
     min_gap_i = int(min_minutes_between_tests) if min_minutes_between_tests is not None else 30
-    min_drop_frac = (float(min_skew_drop_pct) / 100.0) if min_skew_drop_pct is not None else 0.50
+    min_change_frac = (float(min_skew_change_pct) / 100.0) if min_skew_change_pct is not None else 0.50
 
     require_reset_b = (require_reset == "yes")
     reset_buffer_f = float(reset_buffer_points) if reset_buffer_points is not None else 2.0
@@ -545,7 +545,7 @@ def run_backtest_cb(
         require_rth=require_rth_b,
         min_abs_skew=min_abs_skew_f,
         min_minutes_between_tests=min_gap_i,
-        min_put_skew_drop_frac=min_drop_frac,
+        min_put_skew_increase_frac=min_change_frac,
         require_reset_between_tests=require_reset_b,
         reset_buffer_points=reset_buffer_f,
         stop_loss_points=stop_points_f,
@@ -591,7 +591,7 @@ def run_backtest_cb(
         "reset_seen",
         "anchor_put_skew_pp",
         "confirm_put_skew_pp",
-        "put_skew_drop_pct",
+        "put_skew_change_pct",
         "entry_ts_pt",
         "exit_ts_pt",
         "entry_price",
