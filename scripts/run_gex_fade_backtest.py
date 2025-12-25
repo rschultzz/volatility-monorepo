@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-# Make the repo root importable so that `packages.*` works
+# Make repo root importable so `packages.*` works
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -22,26 +22,29 @@ if str(REPO_ROOT) not in sys.path:
 from packages.backtests.gex_fade import GexFadeParams, run_gex_fade_backtest  # noqa: E402
 
 
-# ===================== Tunable parameters =====================
-
-# Date range for the backtest (inclusive).
-# Use None for either end to leave it open.
 START_DATE = "2025-11-01"
 END_DATE = "2025-12-31"
 
-# Strategy parameters. You can tweak these and re-run.
 PARAMS = GexFadeParams(
-    entry_proximity_max=2.0,      # points below wall
-    gex_wall_min=5e10,            # minimum |GEX| at the wall
-    gex_net_min=0.0,              # require net_gex >= this
-    min_bar_index=30,             # don't trade in first 30 minutes
-    max_bar_index=350,            # don't trade into the close
-    require_rth=True,             # only trade RTH minutes
-    min_abs_skew=0.5,             # require at least 0.5pp of skew (abs)
-    stop_loss_points=2.0,         # stop size in ES points
-    target_rr=2.0,                # target = stop * R
-    max_bars_in_trade=60,         # max holding time
-    max_trades_per_day=8,         # daily trade cap
+    entry_proximity_max=2.0,
+    gex_wall_min=5e10,
+    gex_net_min=0.0,
+    min_bar_index=30,
+    max_bar_index=350,
+    require_rth=True,
+    min_abs_skew=0.5,
+
+    min_minutes_between_tests=30,
+    min_put_skew_drop_frac=0.50,
+
+    # NEW option:
+    require_reset_between_tests=False,  # set True to require "leave zone" before confirm
+    reset_buffer_points=2.0,            # extra distance beyond proximity zone
+
+    stop_loss_points=2.0,
+    target_rr=2.0,
+    max_bars_in_trade=60,
+    max_trades_per_day=8,
 )
 
 
@@ -51,8 +54,6 @@ def main() -> None:
         raise RuntimeError("DATABASE_URL environment variable is not set")
 
     engine = create_engine(db_url)
-
-    print("[run_gex_fade_backtest] Loading data from es_minutes_with_features...")
 
     base_query = """
         SELECT
@@ -78,14 +79,14 @@ def main() -> None:
     """
 
     conditions = []
-    params: dict[str, object] = {}
+    qparams: dict[str, object] = {}
 
-    if START_DATE is not None:
+    if START_DATE:
         conditions.append("trade_date >= :start_date")
-        params["start_date"] = START_DATE
-    if END_DATE is not None:
+        qparams["start_date"] = START_DATE
+    if END_DATE:
         conditions.append("trade_date <= :end_date")
-        params["end_date"] = END_DATE
+        qparams["end_date"] = END_DATE
 
     if conditions:
         base_query += " WHERE " + " AND ".join(conditions)
@@ -93,44 +94,45 @@ def main() -> None:
     base_query += " ORDER BY trade_date, ts_utc"
 
     with engine.connect() as conn:
-        df = pd.read_sql_query(text(base_query), conn, params=params)
-
-    print(f"[run_gex_fade_backtest] Loaded {len(df):,} rows")
+        df = pd.read_sql_query(text(base_query), conn, params=qparams)
 
     trades_df, summary = run_gex_fade_backtest(df, PARAMS)
 
-    print("\n[run_gex_fade_backtest] Summary:")
+    print("\nSummary:")
     print(f"  n_trades : {summary['n_trades']}")
     print(f"  win_rate : {summary['win_rate']:.1%}")
     print(f"  avg R    : {summary['avg_r']:.2f}")
     print(f"  total R  : {summary['total_r']:.1f}")
 
-    if not trades_df.empty:
-        cols_to_show = [
-            "trade_date",
-            "entry_ts_pt",
-            "entry_bar_index",
-            "entry_price",
-            "wall_level",
-            "dist_to_wall_at_entry",
-            "put_skew_entry_pp",
-            "exit_ts_pt",
-            "exit_bar_index",
-            "exit_price",
-            "exit_reason",
-            "pnl_points",
-            "r_mult",
-        ]
-        cols_to_show = [c for c in cols_to_show if c in trades_df.columns]
+    if trades_df.empty:
+        print("\nNo trades.")
+        return
 
-        print("\n[run_gex_fade_backtest] First 50 trades:")
-        print(trades_df[cols_to_show].head(50).to_string(index=False))
+    cols_to_show = [
+        "trade_date",
+        "anchor_test_ts_pt",
+        "confirm_test_ts_pt",
+        "minutes_between_tests",
+        "reset_required",
+        "reset_seen",
+        "anchor_put_skew_pp",
+        "confirm_put_skew_pp",
+        "put_skew_drop_pct",
+        "entry_ts_pt",
+        "exit_ts_pt",
+        "entry_price",
+        "exit_price",
+        "exit_reason",
+        "pnl_points",
+        "r_mult",
+    ]
+    cols_to_show = [c for c in cols_to_show if c in trades_df.columns]
+    print("\nFirst 50 trades:")
+    print(trades_df[cols_to_show].head(50).to_string(index=False))
 
-        out_path = REPO_ROOT / "gex_fade_trades.csv"
-        trades_df.to_csv(out_path, index=False)
-        print(f"\n[run_gex_fade_backtest] Saved trades to {out_path}")
-    else:
-        print("\n[run_gex_fade_backtest] No trades generated with current parameters.")
+    out_path = REPO_ROOT / "gex_fade_trades.csv"
+    trades_df.to_csv(out_path, index=False)
+    print(f"\nSaved trades to {out_path}")
 
 
 if __name__ == "__main__":
