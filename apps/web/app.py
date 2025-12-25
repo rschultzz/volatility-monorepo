@@ -22,7 +22,7 @@ from typing import List, Optional, Dict, Any
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-from dash import Dash, html, dcc, Input, Output, State, dash_table
+from dash import Dash, html, dcc, Input, Output, State, dash_table, ctx
 from dash.exceptions import PreventUpdate
 import dash_auth
 
@@ -81,6 +81,9 @@ BT_STOP_POINTS_ID = "bt-stop-loss-points"
 BT_TARGET_RR_ID = "bt-target-rr"
 BT_MAX_BARS_TRADE_ID = "bt-max-bars-in-trade"
 BT_MAX_TRADES_DAY_ID = "bt-max-trades-per-day"
+
+# Backtest Mode Toggle
+BT_MODE_TOGGLE_ID = "bt-mode-toggle"
 
 
 def get_default_trade_date() -> dt.date:
@@ -298,8 +301,22 @@ def _backtests_tab(default_start: dt.date, default_end: dt.date) -> html.Div:
                         ],
                         style={"display": "flex", "flexDirection": "column", "gap": "4px"},
                     ),
+                    html.Div(
+                        [
+                            html.Label("Backtest Mode", style={"color": "white", "marginBottom": "6px", "fontSize": "13px"}),
+                            dcc.RadioItems(
+                                id=BT_MODE_TOGGLE_ID,
+                                options=[{"label": "ON", "value": "on"}, {"label": "OFF", "value": "off"}],
+                                value="off",
+                                inline=True,
+                                labelStyle={"marginRight": "14px", "color": "white", "fontSize": "13px"},
+                                inputStyle={"marginRight": "6px"},
+                            ),
+                        ],
+                        style={"display": "flex", "flexDirection": "column", "gap": "4px", "marginLeft": "20px"},
+                    ),
                 ],
-                style={"border": "1px solid #1f2937", "borderRadius": "12px", "padding": "14px", "backgroundColor": "#0b0f19"},
+                style={"border": "1px solid #1f2937", "borderRadius": "12px", "padding": "14px", "backgroundColor": "#0b0f19", "display": "flex", "alignItems": "center", "justifyContent": "space-between"},
             ),
 
             html.Div(style={"height": "12px"}),
@@ -388,7 +405,10 @@ def _backtests_tab(default_start: dt.date, default_end: dt.date) -> html.Div:
                     style_header={"backgroundColor": "#111827", "color": "#e5e7eb", "border": "1px solid #1f2937", "fontWeight": "700", "fontSize": "12px"},
                     style_cell={"backgroundColor": "#0b0f19", "color": "#e5e7eb", "border": "1px solid #111827", "fontSize": "12px", "padding": "8px",
                                 "whiteSpace": "nowrap", "maxWidth": "520px", "overflow": "hidden", "textOverflow": "ellipsis"},
-                    style_data_conditional=[{"if": {"row_index": "odd"}, "backgroundColor": "#0a0d14"}],
+                    style_data_conditional=[
+                        {"if": {"row_index": "odd"}, "backgroundColor": "#0a0d14"},
+                        {"if": {"state": "selected"}, "backgroundColor": "#1e3a8a", "color": "white", "border": "1px solid #2563eb"},
+                    ],
                 ),
                 type="default",
             ),
@@ -440,7 +460,7 @@ def serve_layout():
 app.layout = serve_layout
 
 
-@app.callback(Output(EXPIRATION_DATE_PICK, "date"), Input(TRADE_DATE_PICK, "date"))
+@app.callback(Output(EXPIRATION_DATE_PICK, "date", allow_duplicate=True), Input(TRADE_DATE_PICK, "date"), prevent_initial_call=True)
 def sync_expiration_with_trade(trade_date):
     return trade_date
 
@@ -608,6 +628,91 @@ def download_trades_cb(n, store_json):
         raise PreventUpdate
     df = pd.read_json(store_json, orient="split")
     return dcc.send_data_frame(df.to_csv, "gex_fade_trades.csv", index=False)
+
+
+# --- NEW: Toggle row selection mode ---
+@app.callback(
+    Output(BT_TRADES_TABLE_ID, "row_selectable"),
+    Input(BT_MODE_TOGGLE_ID, "value"),
+)
+def toggle_row_selection(mode_value):
+    if mode_value == "on":
+        return "single"
+    return False
+
+
+# --- NEW: Handle row selection -> Update Dashboard ---
+@app.callback(
+    Output(MAIN_TABS_ID, "value"),
+    Output(TRADE_DATE_PICK, "date"),
+    Output(EXPIRATION_DATE_PICK, "date", allow_duplicate=True),
+    Output(SMILE_TIME_INPUT, "value"),
+    Input(BT_TRADES_TABLE_ID, "selected_rows"),
+    State(BT_TRADES_TABLE_ID, "data"),
+    State(BT_MODE_TOGGLE_ID, "value"),
+    prevent_initial_call=True,
+)
+def on_trade_selected(selected_rows, data, mode_value):
+    if mode_value != "on" or not selected_rows or not data:
+        raise PreventUpdate
+
+    row_idx = selected_rows[0]
+    if row_idx >= len(data):
+        raise PreventUpdate
+
+    row = data[row_idx]
+    
+    # Extract fields
+    trade_date = row.get("trade_date")
+    expiration = row.get("smile_expir_primary")
+    
+    # Timeslices: anchor_test_ts_pt and confirm_test_ts_pt
+    # Note: These might be formatted as HH:MM strings already if they come from the table
+    # If they are missing, fallback to entry_ts_pt
+    
+    times = []
+    if row.get("anchor_test_ts_pt"):
+        times.append(row["anchor_test_ts_pt"])
+    if row.get("confirm_test_ts_pt"):
+        times.append(row["confirm_test_ts_pt"])
+        
+    # If no anchor/confirm times (e.g. old backtest logic), maybe just use entry time?
+    # But user specifically asked for anchor/confirm.
+    # If the list is empty, let's default to entry time if available
+    if not times and row.get("entry_ts_pt"):
+        times.append(row["entry_ts_pt"])
+
+    # Ensure unique
+    times = list(set(times))
+    
+    # If we have valid data, switch tab and update inputs
+    if trade_date:
+        # Return: Switch to Dashboard tab, set trade date, set expiration, set time slices
+        # Note: expiration date picker might need YYYY-MM-DD. 
+        # smile_expir_primary is likely a date string or object.
+        return TAB_DASHBOARD, trade_date, expiration, times
+
+    raise PreventUpdate
+
+
+# --- NEW: Highlight selected row ---
+@app.callback(
+    Output(BT_TRADES_TABLE_ID, "style_data_conditional"),
+    Input(BT_TRADES_TABLE_ID, "selected_rows"),
+)
+def update_table_style(selected_rows):
+    base_style = [
+        {"if": {"row_index": "odd"}, "backgroundColor": "#0a0d14"},
+    ]
+    if selected_rows:
+        row_idx = selected_rows[0]
+        base_style.append({
+            "if": {"row_index": row_idx},
+            "backgroundColor": "#1e3a8a",
+            "color": "white",
+            "border": "1px solid #2563eb",
+        })
+    return base_style
 
 
 register_smile(app)
