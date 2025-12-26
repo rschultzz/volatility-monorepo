@@ -127,13 +127,28 @@ def _fetch_trades_utc(start_utc: dt.datetime, end_utc: dt.datetime, symbol: str)
     return df
 
 
-def _trades_to_ohlc(df_trades: pd.DataFrame, freq: str, pt_tz: ZoneInfo) -> pd.DataFrame:
+def _trades_to_ohlc(
+    df_trades: pd.DataFrame,
+    freq: str,
+    pt_tz: ZoneInfo,
+    *,
+    label_mode: str = "left",
+) -> pd.DataFrame:
     """
     Convert trades -> OHLC bars (tz-aware PT in datetime_pt).
-    Uses label='right', closed='right' so bars are timestamped at the period end.
+
+    `label_mode`:
+      - "left": bars are timestamped at the period START (recommended for matching 1m bar tables)
+      - "right": bars are timestamped at the period END (useful when matching resampled 5m bars)
+
+    The returned dataframe has columns: datetime_pt, open, high, low, close, volume
     """
     if df_trades is None or df_trades.empty:
         return pd.DataFrame(columns=["datetime_pt", "open", "high", "low", "close", "volume"])
+
+    label_mode = (label_mode or "left").lower().strip()
+    if label_mode not in ("left", "right"):
+        label_mode = "left"
 
     df = df_trades.sort_values("ts_utc").copy()
 
@@ -143,57 +158,122 @@ def _trades_to_ohlc(df_trades: pd.DataFrame, freq: str, pt_tz: ZoneInfo) -> pd.D
         return pd.DataFrame(columns=["datetime_pt", "open", "high", "low", "close", "volume"])
 
     df["ts_utc"] = ts
-    df = df.set_index("ts_utc")
+    df["ts_pt"] = df["ts_utc"].dt.tz_convert(pt_tz)
 
-    ohlc = df["price"].resample(freq, label="right", closed="right").ohlc()
-    vol = df["size"].resample(freq, label="right", closed="right").sum().rename("volume")
+    # Build bucket labels that match the desired convention
+    if label_mode == "left":
+        df["bucket_pt"] = df["ts_pt"].dt.floor(freq)
+    else:
+        # ceil() returns the same timestamp if already on a boundary
+        df["bucket_pt"] = df["ts_pt"].dt.ceil(freq)
 
-    out = pd.concat([ohlc, vol], axis=1).dropna(subset=["open", "high", "low", "close"]).reset_index()
+    g = df.groupby("bucket_pt", sort=True)
 
-    out["datetime_pt"] = out["ts_utc"].dt.tz_convert(pt_tz)
-    out = out.drop(columns=["ts_utc"])
+    out = pd.DataFrame(
+        {
+            "open": g["price"].first(),
+            "high": g["price"].max(),
+            "low": g["price"].min(),
+            "close": g["price"].last(),
+            "volume": g["size"].sum(),
+        }
+    ).reset_index()
+
+    out = out.rename(columns={"bucket_pt": "datetime_pt"})
+    out = out.dropna(subset=["open", "high", "low", "close"])
     return out
 
 
 def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, interval: str, pt_tz: ZoneInfo) -> bool:
     """
     Adds/refreshes a separate candlestick trace built from trades.
-    Only plots bars AFTER the last bar currently in df_base_bars (the lagging feed).
+
+    Goal:
+      - Use your lagging 1m bars table for history (unchanged)
+      - Overlay ONLY the missing minutes + the current in-progress minute built from trades
+      - Never duplicate a candle that already exists in the base bars trace
 
     Returns True if the figure was changed (overlay removed/added), else False.
     """
-    # Only support 1min/5min modes for now
     if df_base_bars is None or df_base_bars.empty:
         return False
     if interval not in ("1min", "5min"):
         return False
 
+    # Decide bar cadence + how we label trade bars to match the base data
+    if interval == "1min":
+        freq = "1min"
+        label_mode = os.getenv("IRONBEAM_LIVE_TRADES_LABEL_1MIN", "left")
+    else:
+        freq = "5min"
+        label_mode = os.getenv("IRONBEAM_LIVE_TRADES_LABEL_5MIN", "right")
+
+    label_mode = (label_mode or "left").lower().strip()
+    if label_mode not in ("left", "right"):
+        label_mode = "left"
+
     # Do we currently have an overlay?
     had_overlay = False
     try:
         for tr in fig_obj.data:
-            nm = getattr(tr, "name", "") or ""
-            if isinstance(nm, str) and nm.startswith(LIVE_TRADES_TRACE_PREFIX):
+            if getattr(tr, "name", "") and str(tr.name).startswith(LIVE_TRADES_TRACE_PREFIX):
                 had_overlay = True
                 break
     except Exception:
         had_overlay = False
 
-    freq = "1min" if interval == "1min" else "5min"
+    # Parse base bar times and find the latest timestamp we already have
+    base_ts = pd.to_datetime(df_base_bars.get("datetime_pt"), errors="coerce")
+    base_ts = base_ts.dropna()
+    if base_ts.empty:
+        if had_overlay:
+            _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
+            return True
+        return False
 
-    # last plotted bar time (PT)
-    last_bar_end_pt = pd.to_datetime(df_base_bars["datetime_pt"].iloc[-1]).to_pydatetime()
+    # Ensure PT tz
+    try:
+        if base_ts.dt.tz is None:
+            base_ts = base_ts.dt.tz_localize(pt_tz)
+        else:
+            base_ts = base_ts.dt.tz_convert(pt_tz)
+    except Exception:
+        # If anything weird, just bail quietly
+        return False
+
+    base_ts = base_ts.sort_values()
+    last_base_ts = base_ts.iloc[-1]
+
     now_pt = dt.datetime.now(tz=pt_tz)
+    now_ts = pd.Timestamp(now_pt)
 
-    # keep queries small for performance
-    start_pt = max(
-        now_pt - dt.timedelta(minutes=LIVE_TRADES_LOOKBACK_MIN),
-        last_bar_end_pt - dt.timedelta(minutes=LIVE_TRADES_LOOKBACK_MIN),
-    )
-    end_pt = now_pt + dt.timedelta(seconds=5)
+    # What minute(s) should the overlay cover?
+    if label_mode == "left":
+        current_bucket = now_ts.floor(freq)
+    else:
+        current_bucket = now_ts.ceil(freq)
 
-    start_utc = start_pt.astimezone(ZoneInfo("UTC"))
-    end_utc = end_pt.astimezone(ZoneInfo("UTC"))
+    step = pd.Timedelta(freq)
+    start_bucket = last_base_ts + step
+
+    if start_bucket > current_bucket:
+        # Base feed has caught up; remove any stale overlay
+        if had_overlay:
+            _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
+            return True
+        return False
+
+    expected = pd.date_range(start=start_bucket, end=current_bucket, freq=freq)
+    expected_set = set(expected.to_pydatetime())  # compare against python datetimes too
+
+    # Fetch trades for a small window that covers the missing buckets.
+    # Add a buffer because Render/DB clocks and trade timestamps may be a hair off.
+    buffer = max(dt.timedelta(seconds=10), dt.timedelta(minutes=1) if freq == "1min" else dt.timedelta(minutes=5))
+    fetch_start_pt = (expected[0].to_pydatetime() - buffer)
+    fetch_end_pt = (expected[-1].to_pydatetime() + buffer)
+
+    start_utc = fetch_start_pt.astimezone(ZoneInfo("UTC"))
+    end_utc = fetch_end_pt.astimezone(ZoneInfo("UTC"))
 
     try:
         df_tr = _fetch_trades_utc(start_utc, end_utc, symbol=TRADES_SYMBOL)
@@ -202,51 +282,50 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
         print(f"[live trades] fetch error: {e}")
         return False
 
-    bars_tr = _trades_to_ohlc(df_tr, freq=freq, pt_tz=pt_tz)
+    bars_tr = _trades_to_ohlc(df_tr, freq=freq, pt_tz=pt_tz, label_mode=label_mode)
     if bars_tr.empty:
-        # If base feed has caught up, remove stale overlay
         if had_overlay:
             _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
             return True
         return False
 
-    # --- De-dupe overlay vs base bars (prevents “double candle” on the last completed minute) ---
-    try:
-        base_ts = pd.to_datetime(df_base_bars["datetime_pt"], errors="coerce")
-        base_ts = base_ts.dropna()
-        if not base_ts.empty:
-            # normalize to PT + minute resolution
-            if getattr(base_ts.dt, "tz", None) is None:
-                base_ts = base_ts.dt.tz_localize(pt_tz)
-            else:
-                base_ts = base_ts.dt.tz_convert(pt_tz)
-            base_floor = base_ts.dt.floor("min")
+    # Keep ONLY the buckets we expect to be missing, and never overlap the base bars.
+    bars_tr["datetime_pt"] = pd.to_datetime(bars_tr["datetime_pt"], errors="coerce")
+    bars_tr = bars_tr.dropna(subset=["datetime_pt"]).copy()
 
-            bars_tr["__floor"] = bars_tr["datetime_pt"].dt.floor("min")
-            bars_tr = bars_tr[~bars_tr["__floor"].isin(base_floor)].copy()
-            bars_tr.drop(columns=["__floor"], inplace=True, errors="ignore")
-    except Exception as e:
-        print(f"[live trades] dedupe warning: {e}")
+    # Ensure tz-aware PT
+    if bars_tr["datetime_pt"].dt.tz is None:
+        bars_tr["datetime_pt"] = bars_tr["datetime_pt"].dt.tz_localize(pt_tz)
+    else:
+        bars_tr["datetime_pt"] = bars_tr["datetime_pt"].dt.tz_convert(pt_tz)
 
-
-    # Only show bars that your lagging 1m feed hasn't printed yet
-    bars_tr = bars_tr[bars_tr["datetime_pt"] > last_bar_end_pt].copy()
+    # Filter to expected buckets
+    bars_tr = bars_tr[bars_tr["datetime_pt"].isin(expected)].copy()
 
     if bars_tr.empty:
-        # Base feed likely caught up; remove overlay if present
         if had_overlay:
             _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
             return True
         return False
 
-    bars_tr = bars_tr.tail(max(1, LIVE_TRADES_MAX_BARS))
+    # Extra safety: drop anything that matches an existing base timestamp (prevents the duplicate bar)
+    base_set = set(pd.to_datetime(base_ts).to_list())
+    bars_tr = bars_tr[~bars_tr["datetime_pt"].isin(base_set)].copy()
 
-    # We are going to refresh overlay: remove then add
+    if bars_tr.empty:
+        if had_overlay:
+            _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
+            return True
+        return False
+
+    bars_tr = bars_tr.sort_values("datetime_pt").tail(max(1, LIVE_TRADES_MAX_BARS))
+
+    # Refresh overlay: remove then add
     _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
 
     fig_obj.add_trace(
         go.Candlestick(
-            x=bars_tr["datetime_pt"].astype(str).tolist(),
+            x=bars_tr["datetime_pt"],
             open=bars_tr["open"].astype(float).tolist(),
             high=bars_tr["high"].astype(float).tolist(),
             low=bars_tr["low"].astype(float).tolist(),
