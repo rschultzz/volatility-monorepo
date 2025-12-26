@@ -7,4 +7,5 @@ SQLAlchemy>=2.0
 pandas>=2.2
 websocket-client
 certifi
-psycopg2
+## psycopg2
+python-dotenv
