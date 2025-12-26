@@ -1,4 +1,3 @@
-
 # apps/web/modules/Ironbeam/callbacks.py
 
 import os
@@ -19,9 +18,20 @@ from sqlalchemy import create_engine, text
 DB_TABLE_NAME = os.environ.get("IRONBEAM_BARS_TABLE", "ironbeam_es_1m_bars")
 DB_TRADES_TABLE = os.environ.get("IRONBEAM_TRADES_TABLE", "ironbeam_es_trades")
 
+TRADES_SYMBOL = os.environ.get("IRONBEAM_TRADES_SYMBOL") or os.environ.get("IRONBEAM_SYMBOL", "XCME:ES.H26")
+
+LIVE_TRADES_LOOKBACK_MIN = int(os.getenv("IRONBEAM_LIVE_TRADES_LOOKBACK_MIN", "15"))
+LIVE_TRADES_MAX_BARS = int(os.getenv("IRONBEAM_LIVE_TRADES_MAX_BARS", "12"))
+
 # Candle colors
-PUT_COLOR = os.getenv("GEX_PUT_COLOR", "#E5E7EB")
-CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#60a5fa")
+PUT_COLOR = os.getenv("GEX_PUT_COLOR", "#E5E7EB")   # down candles
+CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#60a5fa") # up candles
+
+LIVE_TRADES_TRACE_PREFIX = "Live (trades)"
+# Match the rest of the plot
+LIVE_UP_COLOR = os.getenv("IRONBEAM_LIVE_UP_COLOR", CALL_COLOR)
+LIVE_DOWN_COLOR = os.getenv("IRONBEAM_LIVE_DOWN_COLOR", PUT_COLOR)
+
 
 HIGHLIGHT_COLOR = os.getenv("IRONBEAM_HIGHLIGHT_COLOR", "#ef4444")
 
@@ -84,7 +94,7 @@ def _get_db_url() -> str:
     if db_url.startswith("postgres://"):
         db_url = "postgresql://" + db_url[len("postgres://") :]
 
-    # Prefer psycopg driver
+    # Prefer psycopg driver (psycopg v3)
     if db_url.startswith("postgresql://") and "+psycopg" not in db_url:
         db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
@@ -95,6 +105,164 @@ engine = create_engine(_get_db_url(), pool_pre_ping=True)
 
 
 # ---------- Helpers ----------
+
+def _fetch_trades_utc(start_utc: dt.datetime, end_utc: dt.datetime, symbol: str) -> pd.DataFrame:
+    q = text(
+        f"""
+        SELECT ts_utc, symbol, price, size
+        FROM {DB_TRADES_TABLE}
+        WHERE symbol = :sym
+          AND ts_utc >= :start_utc
+          AND ts_utc <  :end_utc
+        ORDER BY ts_utc ASC
+        """
+    )
+    with engine.connect() as conn:
+        df = pd.read_sql(
+            q,
+            conn,
+            params={"sym": symbol, "start_utc": start_utc, "end_utc": end_utc},
+            parse_dates=["ts_utc"],
+        )
+    return df
+
+
+def _trades_to_ohlc(df_trades: pd.DataFrame, freq: str, pt_tz: ZoneInfo) -> pd.DataFrame:
+    """
+    Convert trades -> OHLC bars (tz-aware PT in datetime_pt).
+    Uses label='right', closed='right' so bars are timestamped at the period end.
+    """
+    if df_trades is None or df_trades.empty:
+        return pd.DataFrame(columns=["datetime_pt", "open", "high", "low", "close", "volume"])
+
+    df = df_trades.sort_values("ts_utc").copy()
+
+    ts = pd.to_datetime(df["ts_utc"], utc=True, errors="coerce")
+    df = df.loc[ts.notna()].copy()
+    if df.empty:
+        return pd.DataFrame(columns=["datetime_pt", "open", "high", "low", "close", "volume"])
+
+    df["ts_utc"] = ts
+    df = df.set_index("ts_utc")
+
+    ohlc = df["price"].resample(freq, label="right", closed="right").ohlc()
+    vol = df["size"].resample(freq, label="right", closed="right").sum().rename("volume")
+
+    out = pd.concat([ohlc, vol], axis=1).dropna(subset=["open", "high", "low", "close"]).reset_index()
+
+    out["datetime_pt"] = out["ts_utc"].dt.tz_convert(pt_tz)
+    out = out.drop(columns=["ts_utc"])
+    return out
+
+
+def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, interval: str, pt_tz: ZoneInfo) -> bool:
+    """
+    Adds/refreshes a separate candlestick trace built from trades.
+    Only plots bars AFTER the last bar currently in df_base_bars (the lagging feed).
+
+    Returns True if the figure was changed (overlay removed/added), else False.
+    """
+    # Only support 1min/5min modes for now
+    if df_base_bars is None or df_base_bars.empty:
+        return False
+    if interval not in ("1min", "5min"):
+        return False
+
+    # Do we currently have an overlay?
+    had_overlay = False
+    try:
+        for tr in fig_obj.data:
+            nm = getattr(tr, "name", "") or ""
+            if isinstance(nm, str) and nm.startswith(LIVE_TRADES_TRACE_PREFIX):
+                had_overlay = True
+                break
+    except Exception:
+        had_overlay = False
+
+    freq = "1min" if interval == "1min" else "5min"
+
+    # last plotted bar time (PT)
+    last_bar_end_pt = pd.to_datetime(df_base_bars["datetime_pt"].iloc[-1]).to_pydatetime()
+    now_pt = dt.datetime.now(tz=pt_tz)
+
+    # keep queries small for performance
+    start_pt = max(
+        now_pt - dt.timedelta(minutes=LIVE_TRADES_LOOKBACK_MIN),
+        last_bar_end_pt - dt.timedelta(minutes=LIVE_TRADES_LOOKBACK_MIN),
+    )
+    end_pt = now_pt + dt.timedelta(seconds=5)
+
+    start_utc = start_pt.astimezone(ZoneInfo("UTC"))
+    end_utc = end_pt.astimezone(ZoneInfo("UTC"))
+
+    try:
+        df_tr = _fetch_trades_utc(start_utc, end_utc, symbol=TRADES_SYMBOL)
+    except Exception as e:
+        # Don't kill the existing overlay just because of a transient DB hiccup.
+        print(f"[live trades] fetch error: {e}")
+        return False
+
+    bars_tr = _trades_to_ohlc(df_tr, freq=freq, pt_tz=pt_tz)
+    if bars_tr.empty:
+        # If base feed has caught up, remove stale overlay
+        if had_overlay:
+            _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
+            return True
+        return False
+
+    # --- De-dupe overlay vs base bars (prevents “double candle” on the last completed minute) ---
+    try:
+        base_ts = pd.to_datetime(df_base_bars["datetime_pt"], errors="coerce")
+        base_ts = base_ts.dropna()
+        if not base_ts.empty:
+            # normalize to PT + minute resolution
+            if getattr(base_ts.dt, "tz", None) is None:
+                base_ts = base_ts.dt.tz_localize(pt_tz)
+            else:
+                base_ts = base_ts.dt.tz_convert(pt_tz)
+            base_floor = base_ts.dt.floor("min")
+
+            bars_tr["__floor"] = bars_tr["datetime_pt"].dt.floor("min")
+            bars_tr = bars_tr[~bars_tr["__floor"].isin(base_floor)].copy()
+            bars_tr.drop(columns=["__floor"], inplace=True, errors="ignore")
+    except Exception as e:
+        print(f"[live trades] dedupe warning: {e}")
+
+
+    # Only show bars that your lagging 1m feed hasn't printed yet
+    bars_tr = bars_tr[bars_tr["datetime_pt"] > last_bar_end_pt].copy()
+
+    if bars_tr.empty:
+        # Base feed likely caught up; remove overlay if present
+        if had_overlay:
+            _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
+            return True
+        return False
+
+    bars_tr = bars_tr.tail(max(1, LIVE_TRADES_MAX_BARS))
+
+    # We are going to refresh overlay: remove then add
+    _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
+
+    fig_obj.add_trace(
+        go.Candlestick(
+            x=bars_tr["datetime_pt"].astype(str).tolist(),
+            open=bars_tr["open"].astype(float).tolist(),
+            high=bars_tr["high"].astype(float).tolist(),
+            low=bars_tr["low"].astype(float).tolist(),
+            close=bars_tr["close"].astype(float).tolist(),
+            name=f"{LIVE_TRADES_TRACE_PREFIX} {TRADES_SYMBOL}",
+            increasing=dict(line=dict(color=LIVE_UP_COLOR, width=2.0), fillcolor="rgba(96,165,250,0.18)"),
+            decreasing=dict(line=dict(color=LIVE_DOWN_COLOR, width=2.0), fillcolor="rgba(229,231,235,0.18)"),
+            showlegend=True,
+            yaxis="y2",
+            hoverinfo="skip",
+        )
+    )
+
+    return True
+
+
 def _session_window_pt(trade_date: dt.date, pt_tz: ZoneInfo) -> tuple[dt.datetime, dt.datetime]:
     """
     ES session window in PT:
@@ -145,8 +313,6 @@ def _fetch_bars_pt(start_pt: dt.datetime, end_pt: dt.datetime, interval: str, pt
         if df5 is not None and not df5.empty:
             df = df5
 
-    # DB datetimes are stored UTC naive -> localize then convert
-    # If they come in tz-aware for any reason, handle safely.
     dtcol = df["datetime"]
     if getattr(dtcol.dt, "tz", None) is None:
         df["datetime_pt"] = dtcol.dt.tz_localize("UTC").dt.tz_convert(pt_tz)
@@ -578,8 +744,6 @@ def _build_hovergrid_traces(
     x_gex = np.concatenate(x_gex_parts) if x_gex_parts else np.array([], dtype=object)
     y_gex = np.concatenate(y_gex_parts) if y_gex_parts else np.array([], dtype=float)
 
-    # Small hoverlabel offset: shift invisible points a touch (label isn't directly under cursor),
-    # but show TRUE price via customdata.
     hover_offset_steps = float(os.getenv("IRONBEAM_HOVER_OFFSET_STEPS", "0.15"))
     y_offset = float(hover_offset_steps * y_step)
 
@@ -594,7 +758,7 @@ def _build_hovergrid_traces(
         name="__hovergrid__base",
         showlegend=False,
         yaxis="y2",
-        customdata=y_base,  # TRUE price
+        customdata=y_base,
         hovertemplate=hover_tpl,
     )
 
@@ -607,7 +771,7 @@ def _build_hovergrid_traces(
         name="__hovergrid__gex",
         showlegend=False,
         yaxis="y2",
-        customdata=y_gex,  # TRUE price
+        customdata=y_gex,
         hovertemplate=hover_tpl,
     )
 
@@ -819,6 +983,18 @@ def register_ironbeam_callbacks(app):
                     )
                 )
 
+        # --- Live trades overlay (only when chart is on current session day) ---
+        try:
+            is_live_day = (session_date == _current_session_trade_date(pt_tz))
+        except Exception:
+            is_live_day = False
+
+        if is_live_day:
+            try:
+                _apply_live_trades_overlay(fig, df_bars, interval, pt_tz)
+            except Exception as e:
+                print(f"[Ironbeam] live overlay error: {e}")
+
         # RTH shading for each target date
         shapes = []
         for d in target_dates:
@@ -959,7 +1135,6 @@ def register_ironbeam_callbacks(app):
         if not isinstance(fig, dict) or not isinstance(relayout, dict) or not trade_date:
             raise PreventUpdate
 
-        # Ignore relayout events that aren't actual zoom/pan/autorange changes.
         interesting = any(
             k in relayout
             for k in (
@@ -980,7 +1155,6 @@ def register_ironbeam_callbacks(app):
         layout = fig.get("layout", {})
         meta = layout.get("meta") or {}
 
-        # Stale guard: if this relayout belongs to an older figure/date, drop it.
         pt_tz = ZoneInfo("America/Los_Angeles")
         try:
             selected_date = dt.datetime.strptime(trade_date, "%Y-%m-%d").date()
@@ -1090,7 +1264,7 @@ def register_ironbeam_callbacks(app):
         did_anything = False
         loaded_changed = False
 
-        # ---- live refresh (selected session candle trace only) ----
+        # ---- live refresh (selected session candle trace + trades overlay) ----
         is_live_day = False
         try:
             is_live_day = (session_date == _current_session_trade_date(pt_tz))
@@ -1099,6 +1273,7 @@ def register_ironbeam_callbacks(app):
 
         if is_live_day:
             day_start_pt, day_end_pt = _session_window_pt(session_date, pt_tz)
+
             try:
                 df_live = _fetch_bars_pt(day_start_pt, day_end_pt, interval, pt_tz)
             except Exception as e:
@@ -1129,6 +1304,17 @@ def register_ironbeam_callbacks(app):
                     tr.low = df_live["low"].astype(float).tolist()
                     tr.close = df_live["close"].astype(float).tolist()
                     did_anything = True
+
+                # Refresh live overlay EVERY tick (so the current minute bar "ticks" even if 1m feed hasn't advanced)
+                try:
+                    changed = _apply_live_trades_overlay(fig_obj, df_live, interval, pt_tz)
+                    if changed:
+                        did_anything = True
+                    else:
+                        # Even if unchanged, you may still want to repaint occasionally; keep this False by default.
+                        pass
+                except Exception as e:
+                    print(f"[Ironbeam live] overlay error: {e}")
 
         # ---- progressive add of other days ----
         remaining = [d for d in target_dates if d != session_date.isoformat() and d not in loaded and d not in skipped]
@@ -1261,7 +1447,6 @@ def register_ironbeam_callbacks(app):
         if loaded_changed:
             _remove_traces_by_name_prefix(fig_obj, "__hovergrid__")
 
-            # Use locked ranges if available (viewport-limited hovergrid)
             x_min = None
             x_max = None
             if locked_x_range is not None and isinstance(locked_x_range, (list, tuple)) and len(locked_x_range) == 2:
