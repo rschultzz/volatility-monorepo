@@ -247,16 +247,16 @@ def serve_layout():
         html.Div(
             [
                 html.Div(
-                    dcc.Graph(id=SMILE_GRAPH, style={"height": "840px"}),
-                    style={"minWidth": 0},
+                    dcc.Graph(id=SMILE_GRAPH, style={"height": "100%"}),
+                    style={"minWidth": 0, "flex": "2"},
                 ),
-                html.Div(gex_block(), style={"minWidth": 0}),
+                html.Div(gex_block(), style={"minWidth": 0, "flex": "1"}),
             ],
             style={
-                "display": "grid",
-                "gridTemplateColumns": "2fr 1fr",
+                "display": "flex",
                 "gap": "16px",
                 "alignItems": "stretch",
+                "height": "calc(60vh - 100px)",  # Adjust height dynamically
             },
         ),
         html.Hr(style={"borderColor": "#333"}),
@@ -264,19 +264,20 @@ def serve_layout():
         # ===== Term structure / Skew / Term metrics =====
         html.Div(
             [
-                make_term_structure_block(),
+                html.Div(make_term_structure_block(), style={"flex": "1"}),
                 html.Div(
                     [
                         make_skew_block(),
                         make_term_metrics_block(),
-                    ]
+                    ],
+                    style={"flex": "1", "display": "flex", "flexDirection": "column", "gap": "16px"}
                 ),
             ],
             style={
-                "display": "grid",
-                "gridTemplateColumns": "1fr 1fr",
+                "display": "flex",
                 "gap": "16px",
                 "alignItems": "stretch",
+                "height": "calc(40vh - 100px)", # Adjust height dynamically
             },
         ),
     ]

@@ -12,8 +12,8 @@ def make_term_structure_block() -> html.Div:
             html.H3( style={"textAlign": "center"}),
             dcc.Graph(
                 id=TERM_STRUCTURE_GRAPH_ID,
-                style={"height": "480px"}
+                style={"height": "100%"}
             ),
         ],
-        style={"minWidth": 0},
+        style={"minWidth": 0, "height": "100%"},
     )
