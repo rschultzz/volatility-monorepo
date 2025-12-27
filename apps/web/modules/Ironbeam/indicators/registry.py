@@ -5,10 +5,12 @@ from __future__ import annotations
 from typing import Dict, List
 
 from .aggressor_flow import AggressorFlow
+from .gex_overlay import GexOverlay
 from .base import IndicatorPlugin
 
 PLUGINS: List[IndicatorPlugin] = [
     AggressorFlow(),
+    GexOverlay(),
 ]
 
 PLUGIN_MAP: Dict[str, IndicatorPlugin] = {p.id: p for p in PLUGINS}

@@ -5,6 +5,7 @@ from __future__ import annotations
 # load local environment variables from .env
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except Exception:
     pass
@@ -21,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 import os
 import datetime as dt
 from typing import List
+
 from dash import Dash, html, dcc, Input, Output
 import dash_auth
 
@@ -147,10 +149,7 @@ def serve_layout():
             [
                 html.Div(
                     [
-                        html.Label(
-                            "Trade Date",
-                            style={"color": "white", "marginBottom": "4px"},
-                        ),
+                        html.Label("Trade Date", style={"color": "white", "marginBottom": "4px"}),
                         dcc.DatePickerSingle(
                             id=TRADE_DATE_PICK,
                             disabled=False,
@@ -158,18 +157,11 @@ def serve_layout():
                             date=default_trade_date,
                         ),
                     ],
-                    style={
-                        "marginRight": "16px",
-                        "display": "flex",
-                        "flexDirection": "column",
-                    },
+                    style={"marginRight": "16px", "display": "flex", "flexDirection": "column"},
                 ),
                 html.Div(
                     [
-                        html.Label(
-                            "Expiration",
-                            style={"color": "white", "marginBottom": "4px"},
-                        ),
+                        html.Label("Expiration", style={"color": "white", "marginBottom": "4px"}),
                         dcc.DatePickerSingle(
                             id=EXPIRATION_DATE_PICK,
                             disabled=False,
@@ -177,18 +169,11 @@ def serve_layout():
                             date=default_trade_date,
                         ),
                     ],
-                    style={
-                        "marginRight": "16px",
-                        "display": "flex",
-                        "flexDirection": "column",
-                    },
+                    style={"marginRight": "16px", "display": "flex", "flexDirection": "column"},
                 ),
                 html.Div(
                     [
-                        html.Label(
-                            "Time Slices (PT)",
-                            style={"color": "white", "marginBottom": "4px"},
-                        ),
+                        html.Label("Time Slices (PT)", style={"color": "white", "marginBottom": "4px"}),
                         # IMPORTANT: multi=True and list value (Smile/Skew callbacks expect list)
                         dcc.Dropdown(
                             id=SMILE_TIME_INPUT,
@@ -198,39 +183,21 @@ def serve_layout():
                             style={"minWidth": "320px"},
                         ),
                     ],
-                    style={
-                        "marginRight": "16px",
-                        "display": "flex",
-                        "flexDirection": "column",
-                    },
+                    style={"marginRight": "16px", "display": "flex", "flexDirection": "column"},
                 ),
                 html.Div(
                     [
-                        html.Label(
-                            "Compare to Expected (SS)",
-                            style={"color": "white", "marginBottom": "4px"},
-                        ),
+                        html.Label("Compare to Expected (SS)", style={"color": "white", "marginBottom": "4px"}),
                         dcc.RadioItems(
                             id=EXPECTED_TOGGLE_ID,
-                            options=[
-                                {"label": "ON", "value": "on"},
-                                {"label": "OFF", "value": "off"},
-                            ],
+                            options=[{"label": "ON", "value": "on"}, {"label": "OFF", "value": "off"}],
                             value="on",
                             inline=True,
-                            labelStyle={
-                                "marginRight": "16px",
-                                "color": "white",
-                                "fontSize": "13px",
-                            },
+                            labelStyle={"marginRight": "16px", "color": "white", "fontSize": "13px"},
                             inputStyle={"marginRight": "6px"},
                         ),
                     ],
-                    style={
-                        "marginRight": "16px",
-                        "display": "flex",
-                        "flexDirection": "column",
-                    },
+                    style={"marginRight": "16px", "display": "flex", "flexDirection": "column"},
                 ),
             ],
             style={
@@ -242,86 +209,37 @@ def serve_layout():
             },
         ),
         html.Hr(style={"borderColor": "#444"}),
-
         # ===== Smile + GEX block =====
         html.Div(
             [
-                html.Div(
-                    dcc.Graph(id=SMILE_GRAPH, style={"height": "100%"}),
-                    style={"minWidth": 0, "flex": "2"},
-                ),
+                html.Div(dcc.Graph(id=SMILE_GRAPH, style={"height": "100%"}), style={"minWidth": 0, "flex": "2"}),
                 html.Div(gex_block(), style={"minWidth": 0, "flex": "1"}),
             ],
-            style={
-                "display": "flex",
-                "gap": "16px",
-                "alignItems": "stretch",
-                "height": "calc(60vh - 100px)",  # Adjust height dynamically
-            },
+            style={"display": "flex", "gap": "16px", "alignItems": "stretch", "height": "calc(60vh - 100px)"},
         ),
         html.Hr(style={"borderColor": "#333"}),
-
         # ===== Term structure / Skew / Term metrics =====
         html.Div(
             [
                 html.Div(make_term_structure_block(), style={"flex": "1"}),
                 html.Div(
-                    [
-                        make_skew_block(),
-                        make_term_metrics_block(),
-                    ],
-                    style={"flex": "1", "display": "flex", "flexDirection": "column", "gap": "16px"}
+                    [make_skew_block(), make_term_metrics_block()],
+                    style={"flex": "1", "display": "flex", "flexDirection": "column", "gap": "16px"},
                 ),
             ],
-            style={
-                "display": "flex",
-                "gap": "16px",
-                "alignItems": "stretch",
-                "height": "calc(40vh - 100px)", # Adjust height dynamically
-            },
+            style={"display": "flex", "gap": "16px", "alignItems": "stretch", "height": "calc(40vh - 100px)"},
         ),
     ]
 
     # ----- IRONBEAM BODY -----
+    # NOTE: The old "Min GEX" control that used to live above the Ironbeam chart
+    # has been removed; Min |GEX| is now controlled via the Indicators sidebar (GEX Levels plugin).
     ironbeam_children = [
-        # ===== Ironbeam section + GEX threshold + Bar Interval toggle =====
         html.Div(
             [
-                # Top row: GEX slider + Bar Interval toggle side-by-side
+                # Controls row (Bar Interval only)
                 html.Div(
                     [
-                        # GEX threshold slider
-                        html.Div(
-                            [
-                                html.Label(
-                                    "Min |Net GEX| (Billions)",
-                                    style={
-                                        "color": "white",
-                                        "marginBottom": "6px",
-                                        "fontSize": "13px",
-                                        "fontWeight": "500",
-                                    },
-                                ),
-                                dcc.Slider(
-                                    id="gex-threshold-billions",
-                                    min=0,
-                                    max=300,
-                                    step=10,
-                                    value=100,
-                                    marks={
-                                        0: {"label": "0", "style": {"fontSize": "11px"}},
-                                        50: {"label": "50", "style": {"fontSize": "11px"}},
-                                        100: {"label": "100", "style": {"fontSize": "11px"}},
-                                        150: {"label": "150", "style": {"fontSize": "11px"}},
-                                        200: {"label": "200", "style": {"fontSize": "11px"}},
-                                        250: {"label": "250", "style": {"fontSize": "11px"}},
-                                        300: {"label": "300", "style": {"fontSize": "11px"}},
-                                    },
-                                ),
-                            ],
-                            style={"minWidth": "320px", "flex": "1 1 auto"},
-                        ),
-                        # Bar interval toggle
                         html.Div(
                             [
                                 html.Label(
@@ -341,11 +259,7 @@ def serve_layout():
                                     ],
                                     value="1min",
                                     inline=True,
-                                    labelStyle={
-                                        "marginRight": "16px",
-                                        "color": "white",
-                                        "fontSize": "13px",
-                                    },
+                                    labelStyle={"marginRight": "16px", "color": "white", "fontSize": "13px"},
                                     inputStyle={"marginRight": "6px"},
                                     style={"paddingTop": "4px"},
                                 ),
@@ -369,14 +283,13 @@ def serve_layout():
                 # Ironbeam chart block
                 ironbeam_layout(),
             ]
-        ),
+        )
     ]
 
     return html.Div(
         [
             dcc.Store(id=LIVE_DATA_STORE_ID),
             dcc.Interval(id=LIVE_UPDATE_TIMER_ID, interval=15 * 1000, n_intervals=0),
-
             # ===== Top bar =====
             html.Div(
                 [
@@ -407,72 +320,34 @@ def serve_layout():
                         },
                     ),
                 ],
-                style={
-                    "position": "relative",
-                    "padding": "8px 16px",
-                    "borderBottom": "1px solid #1f2937",
-                    "marginBottom": "8px",
-                },
+                style={"position": "relative", "padding": "8px 16px", "borderBottom": "1px solid #1f2937", "marginBottom": "8px"},
             ),
-
             dcc.Interval(id=CLOCK_ID, interval=60_000, n_intervals=0),
-
             # ===== Tabs selector (styled) =====
             html.Div(
                 [
                     dcc.Tabs(
                         id=MAIN_TABS_ID,
                         value=TAB_DASHBOARD,
-                        colors={
-                            "border": "#1f2937",
-                            "primary": "#60a5fa",
-                            "background": "#0b1220",
-                        },
+                        colors={"border": "#1f2937", "primary": "#60a5fa", "background": "#0b1220"},
                         style=TABS_STYLE,
                         children=[
-                            dcc.Tab(
-                                label="Dashboard",
-                                value=TAB_DASHBOARD,
-                                style=TAB_STYLE,
-                                selected_style=TAB_SELECTED_STYLE,
-                            ),
-                            dcc.Tab(
-                                label="Price Chart",
-                                value=TAB_PRICE_CHART,
-                                style=TAB_STYLE,
-                                selected_style=TAB_SELECTED_STYLE,
-                            ),
-                            dcc.Tab(
-                                label="Backtests",
-                                value=TAB_BACKTESTS,
-                                style=TAB_STYLE,
-                                selected_style=TAB_SELECTED_STYLE,
-                            ),
+                            dcc.Tab(label="Dashboard", value=TAB_DASHBOARD, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
+                            dcc.Tab(label="Price Chart", value=TAB_PRICE_CHART, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
+                            dcc.Tab(label="Backtests", value=TAB_BACKTESTS, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                         ],
                     )
                 ],
                 style=TABS_WRAP_STYLE,
             ),
-
             # ===== Dashboard container =====
             html.Div(id="dashboard-container", children=dashboard_children, style={"display": "block"}),
-
             # ===== Ironbeam container =====
             html.Div(id="ironbeam-container", children=ironbeam_children, style={"display": "none"}),
-
             # ===== Backtests container =====
-            html.Div(
-                id="backtests-container",
-                children=make_backtests_tab(bt_start, bt_end),
-                style={"display": "none"},
-            ),
+            html.Div(id="backtests-container", children=make_backtests_tab(bt_start, bt_end), style={"display": "none"}),
         ],
-        style={
-            "backgroundColor": "black",
-            "color": "white",
-            "minHeight": "100vh",
-            "padding": "0 80px 30px",
-        },
+        style={"backgroundColor": "black", "color": "white", "minHeight": "100vh", "padding": "0 80px 30px"},
     )
 
 

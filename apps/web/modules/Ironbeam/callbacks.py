@@ -16,7 +16,26 @@ from dash.exceptions import PreventUpdate
 
 # Indicator plugin registry (Step 6)
 from modules.Ironbeam.indicators.registry import PLUGIN_MAP as IB_PLUGIN_MAP, options as ib_indicator_options
+from modules.Ironbeam.indicators.gex_overlay import build_gex_overlay_traces as _build_gex_overlay_traces_plugin
 from sqlalchemy import create_engine, text
+
+
+def _indicator_state_token(state: object) -> str:
+    """Stable token for guarding against stale-figure overwrites when indicator state changes."""
+    if not isinstance(state, dict):
+        return ""
+    enabled = state.get("enabled") or []
+    if enabled is None:
+        enabled = []
+    elif not isinstance(enabled, list):
+        enabled = [enabled]
+    enabled = sorted(str(x) for x in enabled if x is not None)
+
+    cfg_all = state.get("cfg") if isinstance(state.get("cfg"), dict) else {}
+    gex_cfg = cfg_all.get("gex_overlay") if isinstance(cfg_all.get("gex_overlay"), dict) else {}
+    min_abs_b = gex_cfg.get("min_abs_b")
+    return f"enabled={','.join(enabled)}|gex_min_abs_b={min_abs_b}"
+
 
 # ---------- Config ----------
 DB_TABLE_NAME = os.environ.get("IRONBEAM_BARS_TABLE", "ironbeam_es_1m_bars")
@@ -1101,7 +1120,7 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
         margin=dict(l=90, r=80, t=55, b=50),
         height=360,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
-        title=dict(text=f"Aggressor Flow — EMA Buy/Sell + Diff (one panel) — {FLOW_SYMBOL}", x=0.01),
+        # title=dict(text=f"Aggressor Flow — EMA Buy/Sell + Diff (one panel) — {FLOW_SYMBOL}", x=0.01),
         uirevision=f"ironbeam-flow-{trade_date}-{FLOW_RESAMPLE}-{span}-{FLOW_SESSION}",
         dragmode="pan",
         hovermode="x unified",
@@ -1130,13 +1149,13 @@ def register_ironbeam_callbacks(app):
         Output("ironbeam-chart", "figure"),
         [
             Input("trade-date", "date"),
-            Input("gex-threshold-billions", "value"),
             Input("smile-time-input", "value"),
             Input("ironbeam-bar-interval", "value"),
+            Input("ib-indicator-state", "data"),
         ],
         [State("ironbeam-chart", "figure")],
     )
-    def update_chart(trade_date, threshold_billions, selected_times_pt, bar_interval, prev_fig):
+    def update_chart(trade_date, selected_times_pt, bar_interval, indicator_state, prev_fig):
         if not trade_date:
             return go.Figure(layout_title_text="Select a trade date to view chart.")
 
@@ -1148,7 +1167,23 @@ def register_ironbeam_callbacks(app):
             selected_times = [str(selected_times_pt)]
 
         interval = bar_interval or "1min"
-        current_threshold = GEX_ABS_THRESHOLD_DEFAULT if threshold_billions is None else float(threshold_billions) * 1e9
+        # Decide whether the GEX overlay is enabled + what threshold to use.
+        indicator_state = indicator_state if isinstance(indicator_state, dict) else {}
+        enabled_list = indicator_state.get("enabled") or []
+        if not isinstance(enabled_list, list):
+            enabled_list = [enabled_list]
+        gex_enabled = ("gex_overlay" in enabled_list)
+
+        # Fallback: old top-level threshold control (billions)
+        fallback_threshold = GEX_ABS_THRESHOLD_DEFAULT
+
+        # Preferred: plugin config (Min |GEX| in billions)
+        gex_plugin = IB_PLUGIN_MAP.get("gex_overlay")
+        gex_defaults = (getattr(gex_plugin, "default_config", lambda: {})() or {}) if gex_plugin else {}
+        gex_cfg_all = (indicator_state.get("cfg") or {}) if isinstance(indicator_state.get("cfg"), dict) else {}
+        gex_cfg = gex_cfg_all.get("gex_overlay") if isinstance(gex_cfg_all.get("gex_overlay"), dict) else {}
+        min_abs_b = gex_cfg.get("min_abs_b", gex_defaults.get("min_abs_b"))
+        current_threshold = (float(min_abs_b) * 1e9) if (min_abs_b is not None) else fallback_threshold
 
         try:
             selected_date = dt.datetime.strptime(trade_date, "%Y-%m-%d").date()
@@ -1220,14 +1255,17 @@ def register_ironbeam_callbacks(app):
 
         # --- GEX (selected day only; other days added progressively) ---
         gex_levels_by_day: dict[str, list[list[float]]] = {}
-
-        try:
-            df_gex = _fetch_gex_grouped_by_level(session_date)
-        except Exception as e:
-            print(f"[Ironbeam] Error fetching GEX: {e}")
+        if gex_enabled:
+            try:
+                df_gex = _fetch_gex_grouped_by_level(session_date)
+            except Exception as e:
+                print(f"[Ironbeam] Error fetching GEX: {e}")
+                df_gex = pd.DataFrame(columns=["level", "call_gamma", "put_gamma", "net_gamma"])
+        else:
             df_gex = pd.DataFrame(columns=["level", "call_gamma", "put_gamma", "net_gamma"])
 
-        if not df_gex.empty:
+        if gex_enabled and (not df_gex.empty):
+            # selection for hover-grid + consistent colorbar span
             df_gex_day = _select_levels(df_gex, band_min, band_max, current_threshold)
             if not df_gex_day.empty:
                 net_g = df_gex_day["net_gamma"].to_numpy(dtype=float)
@@ -1254,34 +1292,25 @@ def register_ironbeam_callbacks(app):
                     )
                 )
 
+                # store selected levels (for hover-grid / debugging)
                 gex_levels_by_day[session_date.isoformat()] = [
                     [float(r["level"]), float(r["net_gamma"]) / 1e9] for _, r in df_gex_day.iterrows()
                 ]
 
-                max_abs = float(max(abs(cmin), abs(cmax), 1e-9))
-                for _, r in df_gex_day.iterrows():
-                    lvl = float(r["level"])
-                    net_val = float(r["net_gamma"])
-                    color = _color_for_net_gex(net_val, cmin, cmax)
+                # overlay lines are now built by the plugin helper (keeps callbacks smaller)
+                for tr in _build_gex_overlay_traces_plugin(
+                        df_gex=df_gex,
+                        x_start=day_start_pt,
+                        x_end=day_end_pt,
+                        band_min=band_min,
+                        band_max=band_max,
+                        threshold_abs=current_threshold,
+                        name_prefix=f"GEX {session_date.isoformat()}",
+                ):
+                    fig.add_trace(tr)
 
-                    norm = float(min(1.0, abs(net_val) / max_abs))
-                    line_width = min(GEX_LEVEL_LINE_WIDTH_MAX, GEX_LEVEL_LINE_WIDTH + norm * GEX_LEVEL_LINE_WIDTH_SCALE)
-                    line_opacity = float(min(1.0, max(0.12, GEX_LEVEL_LINE_OPACITY * (0.40 + 0.60 * norm))))
-
-                    fig.add_trace(
-                        go.Scattergl(
-                            x=[day_start_pt, day_end_pt],
-                            y=[lvl, lvl],
-                            mode="lines",
-                            line=dict(color=color, width=line_width),
-                            opacity=line_opacity,
-                            name=f"GEX {session_date.isoformat()}",
-                            showlegend=False,
-                            hoverinfo="skip",
-                        )
-                    )
-
-        if "coloraxis" not in fig.layout:
+        if gex_enabled and "coloraxis" not in fig.layout:
+            # Ensure a coloraxis exists (for multi-day updates) even if no levels plotted yet.
             fig.update_layout(
                 coloraxis=dict(
                     colorscale=GEX_HEATMAP_COLORSCALE,
@@ -1371,6 +1400,7 @@ def register_ironbeam_callbacks(app):
             multi_skip_dates=[],
             gex_levels_by_day=gex_levels_by_day,
         )
+        meta["indicator_state_token"] = _indicator_state_token(indicator_state)
         if locked_y_range is not None:
             meta["locked_y_range"] = locked_y_range
         if locked_x_range is not None:
@@ -1406,7 +1436,7 @@ def register_ironbeam_callbacks(app):
         fig.add_trace(hover_gex)
 
         fig.update_layout(
-            title=f"ES (front month) + Net GEX Lines (multi-day; center={session_date.isoformat()})",
+            # title=f"ES (front month) + Net GEX Lines (multi-day; center={session_date.isoformat()})",
             xaxis_title="Time (Pacific Time)",
             yaxis_title="Discounted Level (GEX)",
             yaxis=dict(showticklabels=False, ticks=""),
@@ -1474,10 +1504,12 @@ def register_ironbeam_callbacks(app):
         Input("ironbeam-chart", "relayoutData"),
         State("ironbeam-chart", "figure"),
         State("trade-date", "date"),
+        State("smile-time-input", "value"),
         State("ironbeam-bar-interval", "value"),
+        State("ib-indicator-state", "data"),
         prevent_initial_call=True,
     )
-    def persist_zoom(relayout, fig, trade_date, bar_interval):
+    def persist_zoom(relayout, fig, trade_date, selected_times_pt, bar_interval, indicator_state):
         if not isinstance(fig, dict) or not isinstance(relayout, dict) or not trade_date:
             raise PreventUpdate
 
@@ -1519,6 +1551,11 @@ def register_ironbeam_callbacks(app):
             raise PreventUpdate
         if isinstance(meta_int, str) and meta_int and meta_int != interval:
             raise PreventUpdate
+        # Guard against stale relayout events overwriting a freshly-rendered figure after indicator toggles/settings changes.
+        current_token = _indicator_state_token(indicator_state)
+        fig_token = meta.get("indicator_state_token")
+        if fig_token is not None and current_token and fig_token != current_token:
+            raise PreventUpdate
 
         # Store Y lock
         y0 = relayout.get("yaxis.range[0]")
@@ -1540,6 +1577,7 @@ def register_ironbeam_callbacks(app):
         if relayout.get("xaxis.autorange"):
             meta.pop("locked_x_range", None)
 
+        meta["indicator_state_token"] = _indicator_state_token(indicator_state)
         layout["meta"] = meta
         fig["layout"] = layout
         return fig
@@ -1550,11 +1588,12 @@ def register_ironbeam_callbacks(app):
         Input("ironbeam-interval", "n_intervals"),
         State("ironbeam-chart", "figure"),
         State("trade-date", "date"),
-        State("gex-threshold-billions", "value"),
+        State("smile-time-input", "value"),
         State("ironbeam-bar-interval", "value"),
+        State("ib-indicator-state", "data"),
         prevent_initial_call=True,
     )
-    def progressively_add_days(n_intervals, fig, trade_date, threshold_billions, bar_interval):
+    def progressively_add_days(n_intervals, fig, trade_date, selected_times_pt, bar_interval, indicator_state):
         if not isinstance(fig, dict) or not trade_date:
             raise PreventUpdate
 
@@ -1564,7 +1603,30 @@ def register_ironbeam_callbacks(app):
             raise PreventUpdate
 
         interval = bar_interval or "1min"
-        current_threshold = GEX_ABS_THRESHOLD_DEFAULT if threshold_billions is None else float(threshold_billions) * 1e9
+        # Guard against stale interval overwrites after indicator toggles.
+        current_token = _indicator_state_token(indicator_state)
+        meta = (fig.get("layout") or {}).get("meta") if isinstance(fig, dict) else {}
+        fig_token = meta.get("indicator_state_token") if isinstance(meta, dict) else None
+        if fig_token is not None and current_token and fig_token != current_token:
+            raise PreventUpdate
+
+        # Respect the GEX overlay enabled state + plugin threshold.
+        indicator_state = indicator_state if isinstance(indicator_state, dict) else {}
+        enabled_list = indicator_state.get("enabled") or []
+        if not isinstance(enabled_list, list):
+            enabled_list = [enabled_list]
+        gex_enabled = ("gex_overlay" in enabled_list)
+        if not gex_enabled:
+            raise PreventUpdate
+
+        fallback_threshold = GEX_ABS_THRESHOLD_DEFAULT
+        gex_plugin = IB_PLUGIN_MAP.get("gex_overlay")
+        gex_defaults = (getattr(gex_plugin, "default_config", lambda: {})() or {}) if gex_plugin else {}
+        gex_cfg_all = (indicator_state.get("cfg") or {}) if isinstance(indicator_state.get("cfg"), dict) else {}
+        gex_cfg = gex_cfg_all.get("gex_overlay") if isinstance(gex_cfg_all.get("gex_overlay"), dict) else {}
+        min_abs_b = gex_cfg.get("min_abs_b", gex_defaults.get("min_abs_b"))
+        current_threshold = (float(min_abs_b) * 1e9) if (min_abs_b is not None) else fallback_threshold
+
         pt_tz = ZoneInfo("America/Los_Angeles")
 
         # ---- stale guard: drop in-flight ticks from previous date/figure ----
@@ -1608,6 +1670,7 @@ def register_ironbeam_callbacks(app):
             gex_levels_by_day = {}
 
         did_anything = False
+        df_live = pd.DataFrame()  # default; may be replaced when session is live
         loaded_changed = False
 
         # ---- live refresh (selected session candle trace + trades overlay) ----
@@ -1830,6 +1893,46 @@ def register_ironbeam_callbacks(app):
             fig_obj.add_trace(hb)
             fig_obj.add_trace(hg)
 
+        # ---- re-apply selected time-slice highlight so it persists across interval refresh/tab switches ----
+        try:
+            if selected_times_pt:
+                # Remove any existing highlight trace(s)
+                _remove_traces_by_name_prefix(fig_obj, "Selected slices")
+
+                # Prefer already-fetched live bars for the session day; otherwise refetch the day bars
+                df_sel = None
+                if isinstance(df_live, pd.DataFrame) and (not df_live.empty):
+                    df_sel = df_live
+                else:
+                    # Recompute day window for the effective session date in PT
+                    day_start_pt = dt.datetime.combine(session_date, dt.time(0, 0), tzinfo=pt_tz)
+                    day_end_pt = day_start_pt + dt.timedelta(days=1)
+                    df_sel = _fetch_bars_pt(day_start_pt, day_end_pt, interval, pt_tz)
+
+                if isinstance(df_sel, pd.DataFrame) and (not df_sel.empty) and 'time_hhmm_pt' in df_sel.columns:
+                    mask_sel = df_sel['time_hhmm_pt'].isin(selected_times_pt if isinstance(selected_times_pt, list) else [selected_times_pt])
+                    df_h = df_sel.loc[mask_sel]
+                    if not df_h.empty:
+                        fig_obj.add_trace(
+                            go.Candlestick(
+                                x=df_h['datetime_pt'],
+                                open=df_h['open'],
+                                high=df_h['high'],
+                                low=df_h['low'],
+                                close=df_h['close'],
+                                name="Selected slices",
+                                increasing=dict(line=dict(color=HIGHLIGHT_COLOR, width=2.0), fillcolor=HIGHLIGHT_COLOR),
+                                decreasing=dict(line=dict(color=HIGHLIGHT_COLOR, width=2.0), fillcolor=HIGHLIGHT_COLOR),
+                                showlegend=False,
+                                yaxis='y2',
+                                hoverinfo='skip',
+                            )
+                        )
+                        did_anything = True
+        except Exception:
+            # Never break live refresh due to highlight issues
+            pass
+
         if not did_anything:
             raise PreventUpdate
 
@@ -1852,6 +1955,37 @@ def register_ironbeam_callbacks(app):
         # Keep the options stable; just return everything in the registry.
         # (We still limit selection to enabled indicators in ib_sync_indicator_sidebar.)
         return opts, opts
+
+    @app.callback(
+        Output("ib-indicator-state", "data", allow_duplicate=True),
+        Input("ib-indicator-enabled", "options"),
+        State("ib-indicator-state", "data"),
+        prevent_initial_call="initial_duplicate",
+    )
+    def ib_migrate_default_enabled(options, state):
+        """One-time migration: keep legacy behavior by default-enabling GEX overlay when first introduced."""
+        state = state if isinstance(state, dict) else {}
+        migrations = state.get("migrations") if isinstance(state.get("migrations"), dict) else {}
+        if migrations.get("default_enable_gex_overlay") is True:
+            return no_update
+
+        has_gex = any(isinstance(o, dict) and o.get("value") == "gex_overlay" for o in (options or []))
+        if not has_gex:
+            return no_update
+
+        enabled = state.get("enabled") or []
+        if not isinstance(enabled, list):
+            enabled = [enabled]
+        if "gex_overlay" not in enabled:
+            enabled = list(enabled) + ["gex_overlay"]
+
+        migrations = dict(migrations)
+        migrations["default_enable_gex_overlay"] = True
+        cfg_all = state.get("cfg") or {}
+        if not isinstance(cfg_all, dict):
+            cfg_all = {}
+        extras = {k: v for k, v in state.items() if k not in ("enabled", "cfg", "migrations")}
+        return {"enabled": enabled, "cfg": cfg_all, "migrations": migrations, **extras}
 
     @app.callback(
         Output("ib-indicator-enabled", "value"),
@@ -1908,7 +2042,8 @@ def register_ironbeam_callbacks(app):
         else:
             enabled = [enabled_value]
 
-        return {"enabled": enabled, "cfg": cfg_all}
+        extras = {k: v for k, v in (state.items() if isinstance(state, dict) else []) if k not in ("enabled", "cfg")}
+        return {"enabled": enabled, "cfg": cfg_all, **extras}
 
     @app.callback(
         Output("ib-settings-form", "children"),
@@ -1935,6 +2070,41 @@ def register_ironbeam_callbacks(app):
         if isinstance(persisted, dict):
             cfg.update(persisted)
 
+        # Special-case: GEX overlay settings
+        if selected_indicator == "gex_overlay":
+            val = cfg.get("min_abs_b")
+            try:
+                val = float(val) if val is not None else 10.0
+            except Exception:
+                val = 10.0
+
+            return html.Div(
+                [
+                    html.Label("Min |GEX| (B)", style={"color": "white", "fontSize": "12px"}),
+                    dcc.Slider(
+                        id="ib-gex-min-abs-b",
+                        min=0,
+                        max=200,
+                        step=1,
+                        value=val,
+                        updatemode="mouseup",
+                        marks={
+                            0: {"label": "0", "style": {"fontSize": "11px"}},
+                            10: {"label": "10", "style": {"fontSize": "11px"}},
+                            25: {"label": "25", "style": {"fontSize": "11px"}},
+                            50: {"label": "50", "style": {"fontSize": "11px"}},
+                            100: {"label": "100", "style": {"fontSize": "11px"}},
+                            150: {"label": "150", "style": {"fontSize": "11px"}},
+                            200: {"label": "200", "style": {"fontSize": "11px"}},
+                        },
+                        tooltip={"placement": "bottom", "always_visible": False},
+                    ),
+                    html.Div(
+                        "Only plot levels with |Net GEX| at or above this threshold (in billions).",
+                        style={"color": "#9ca3af", "fontSize": "11px", "marginTop": "6px"},
+                    ),
+                ]
+            )
         schema = dict(getattr(plugin, "schema", lambda: {})() or {})
 
         # Back-compat: keep your existing flow controls, even if the plugin schema is minimal.
@@ -2091,7 +2261,36 @@ def register_ironbeam_callbacks(app):
                 pass
 
         cfg_all["aggressor_flow"] = flow_cfg
-        return {"enabled": enabled, "cfg": cfg_all}
+        extras = {k: v for k, v in (state.items() if isinstance(state, dict) else []) if k not in ("enabled", "cfg")}
+        return {"enabled": enabled, "cfg": cfg_all, **extras}
+
+    @app.callback(
+        Output("ib-indicator-state", "data", allow_duplicate=True),
+        Input("ib-gex-min-abs-b", "value"),
+        State("ib-indicator-state", "data"),
+        prevent_initial_call=True,
+    )
+    def ib_persist_gex_settings(min_abs_b, state):
+        """Persist GEX overlay settings into ib-indicator-state.cfg[gex_overlay]."""
+        state = state if isinstance(state, dict) else {}
+        enabled = state.get("enabled") or []
+        if not isinstance(enabled, list):
+            enabled = [enabled]
+        cfg_all = state.get("cfg") or {}
+        if not isinstance(cfg_all, dict):
+            cfg_all = {}
+        gex_cfg = cfg_all.get("gex_overlay")
+        if not isinstance(gex_cfg, dict):
+            gex_cfg = {}
+        if min_abs_b is not None:
+            try:
+                gex_cfg["min_abs_b"] = float(min_abs_b)
+            except Exception:
+                pass
+        cfg_all = dict(cfg_all)
+        cfg_all["gex_overlay"] = gex_cfg
+        extras = {k: v for k, v in state.items() if k not in ("enabled", "cfg")}
+        return {"enabled": enabled, "cfg": cfg_all, **extras}
 
     @app.callback(
         Output("ib-indicator-panels", "children"),
@@ -2214,4 +2413,136 @@ def register_ironbeam_callbacks(app):
 
         return {"x0": x0, "x1": x1}
 
+    # ---- Click a price bar to set global Time Slices (PT) ----
+    # This restores the old behavior: clicking a candle sets the "Time Slices (PT)" dropdown
+    # (id="smile-time-input") and the selected bar is highlighted in red by the main chart builder.
+    @app.callback(
+        Output("smile-time-input", "value", allow_duplicate=True),
+        Input("ironbeam-chart", "clickData"),
+        State("smile-time-input", "value"),
+        prevent_initial_call=True,
+    )
+    def ib_click_bar_sets_time_slices(click_data, current_value):
+        if not isinstance(click_data, dict):
+            raise PreventUpdate
+        pts = click_data.get("points") or []
+        if not pts:
+            raise PreventUpdate
+
+        x = pts[0].get("x")
+        if x is None:
+            raise PreventUpdate
+
+        # Parse x (can be ISO string / datetime)
+        try:
+            ts = pd.to_datetime(x, utc=False)
+        except Exception:
+            raise PreventUpdate
+
+        # Convert to PT and format to match dropdown options (HH:MM)
+        try:
+            if getattr(ts, "tzinfo", None) is None:
+                ts = ts.tz_localize(ZoneInfo("America/Los_Angeles"))
+            else:
+                ts = ts.tz_convert(ZoneInfo("America/Los_Angeles"))
+        except Exception:
+            # if pandas returns python datetime already
+            pass
+
+        try:
+            hhmm = ts.strftime("%H:%M")
+        except Exception:
+            try:
+                hhmm = pd.Timestamp(ts).strftime("%H:%M")
+            except Exception:
+                raise PreventUpdate
+        # Build a MULTI-select value list (append, keep unique)
+        if current_value is None:
+            existing = []
+        elif isinstance(current_value, list):
+            existing = current_value
+        else:
+            existing = [current_value]
+
+        if hhmm in existing:
+            # Toggle off: remove the clicked time
+            new_val = [t for t in existing if t != hhmm]
+        else:
+            # Toggle on: append
+            new_val = existing + [hhmm]
+
+        # Avoid unnecessary updates (prevents UI jitter)
+        if isinstance(existing, list) and existing == new_val:
+            raise PreventUpdate
+        return new_val
+
+    # -------------------------
+    # UI: Collapsible indicator sidebar (left)
+    # -------------------------
+    @app.callback(
+        Output("ib-ui-state", "data"),
+        Input("ib-sidebar-toggle", "n_clicks"),
+        State("ib-ui-state", "data"),
+        prevent_initial_call=True,
+    )
+    def ib_toggle_sidebar(n_clicks, ui_state):
+        ui_state = ui_state or {}
+        collapsed = bool(ui_state.get("sidebar_collapsed", False))
+        ui_state["sidebar_collapsed"] = not collapsed
+        return ui_state
+
+    @app.callback(
+        Output("ib-indicator-sidebar", "style"),
+        Output("ib-sidebar-content", "style"),
+        Output("ib-sidebar-toggle", "children"),
+        Output("ib-ironbeam-row", "style"),
+        Output("ib-sidebar-toggle", "style"),
+        Input("ib-ui-state", "data"),
+    )
+    def ib_apply_sidebar_styles(ui_state):
+        ui_state = ui_state or {}
+        collapsed = bool(ui_state.get("sidebar_collapsed", False))
+
+        base = {
+            "border": "1px solid #1f2937",
+            "borderRadius": "12px",
+            "backgroundColor": "#0b1220",
+            "transition": "width 0.18s ease, min-width 0.18s ease, padding 0.18s ease",
+            "overflow": "hidden",
+        }
+
+        row_style = {"display": "flex", "alignItems": "flex-start", "gap": "12px"}
+
+        # Base toggle style (we only move `left`)
+        toggle_style = {
+            "position": "absolute",
+            "top": "10px",
+            "zIndex": 2000,
+            "width": "34px",
+            "height": "34px",
+            "borderRadius": "10px",
+            "border": "1px solid #1f2937",
+            "backgroundColor": "#111827",
+            "color": "#bfdbfe",
+            "cursor": "pointer",
+            "fontWeight": "900",
+            "lineHeight": "32px",
+            "transition": "left 0.18s ease",
+        }
+
+        if collapsed:
+            # Fully hidden sidebar; charts reclaim space
+            sidebar_style = {**base, "width": "0px", "minWidth": "0px", "padding": "0px", "border": "0px"}
+            content_style = {"display": "none"}
+            btn = "»"
+            row_style["gap"] = "0px"
+            toggle_style["left"] = "8px"
+        else:
+            sidebar_style = {**base, "width": "320px", "minWidth": "320px", "padding": "12px"}
+            content_style = {"display": "block"}
+            btn = "«"
+            # Dock the button to the RIGHT edge of the sidebar (overlapping by half its width)
+            toggle_style["left"] = "303px"  # 320 - (34/2)
+
+        return sidebar_style, content_style, btn, row_style, toggle_style
 
