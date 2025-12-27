@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.colors as pc
+from plotly.subplots import make_subplots
 
 from dash import Input, Output, State
 from dash.exceptions import PreventUpdate
@@ -34,6 +35,21 @@ LIVE_DOWN_COLOR = os.getenv("IRONBEAM_LIVE_DOWN_COLOR", PUT_COLOR)
 
 
 HIGHLIGHT_COLOR = os.getenv("IRONBEAM_HIGHLIGHT_COLOR", "#ef4444")
+
+
+# Flow aggregation table (1s) for aggressor-based indicators
+FLOW_TABLE_NAME = os.environ.get("IRONBEAM_FLOW_TABLE", "ironbeam_es_flow_1s")
+FLOW_SYMBOL = os.environ.get("IRONBEAM_FLOW_SYMBOL", TRADES_SYMBOL)
+
+FLOW_EMA_LEN = int(os.getenv("IRONBEAM_FLOW_EMA_LEN", "840"))      # smoothing length
+FLOW_RESAMPLE = os.getenv("IRONBEAM_FLOW_RESAMPLE", "1s").lower() # 1s, 5s, 15s, 1m
+FLOW_SESSION = os.getenv("IRONBEAM_FLOW_SESSION", "RTH").upper()  # RTH or FULL
+
+# Defaults match price chart colors
+FLOW_POS_COLOR = os.getenv("IRONBEAM_FLOW_POS_COLOR", CALL_COLOR)
+FLOW_NEG_COLOR = os.getenv("IRONBEAM_FLOW_NEG_COLOR", PUT_COLOR)
+FLOW_STRENGTH_COLOR = os.getenv("IRONBEAM_FLOW_STRENGTH_COLOR", "rgba(156,163,175,0.75)")
+FLOW_FILL_ALPHA = float(os.getenv("IRONBEAM_FLOW_FILL_ALPHA", "0.18"))
 
 # Ticker for the GEX table
 TICKER = os.getenv("GEX_TICKER", "SPX")
@@ -127,6 +143,48 @@ def _fetch_trades_utc(start_utc: dt.datetime, end_utc: dt.datetime, symbol: str)
     return df
 
 
+
+def _hex_to_rgba(color: str, alpha: float) -> str:
+    """
+    Convert '#RRGGBB' to 'rgba(r,g,b,a)'. If input is already rgba/other, return as-is.
+    """
+    c = (color or "").strip()
+    if c.startswith("rgba") or c.startswith("rgb"):
+        return c
+    if not c.startswith("#") or len(c) != 7:
+        return c
+    r = int(c[1:3], 16)
+    g = int(c[3:5], 16)
+    b = int(c[5:7], 16)
+    a = max(0.0, min(1.0, float(alpha)))
+    return f"rgba({r},{g},{b},{a})"
+
+
+def _fetch_flow_utc(start_utc: dt.datetime, end_utc: dt.datetime, symbol: str) -> pd.DataFrame:
+    q = text(
+        f"""
+        SELECT ts_utc, symbol, buy_vol, sell_vol, unknown_vol
+        FROM {FLOW_TABLE_NAME}
+        WHERE symbol = :sym
+          AND ts_utc >= :start_utc
+          AND ts_utc <  :end_utc
+        ORDER BY ts_utc ASC
+        """
+    )
+    with engine.connect() as conn:
+        df = pd.read_sql(
+            q,
+            conn,
+            params={"sym": symbol, "start_utc": start_utc, "end_utc": end_utc},
+            parse_dates=["ts_utc"],
+        )
+    return df
+
+
+def _floor_to_sec(ts: dt.datetime) -> dt.datetime:
+    return ts.replace(microsecond=0)
+
+
 def _trades_to_ohlc(
     df_trades: pd.DataFrame,
     freq: str,
@@ -203,14 +261,10 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
     # Decide bar cadence + how we label trade bars to match the base data
     if interval == "1min":
         freq = "1min"
-        label_mode = os.getenv("IRONBEAM_LIVE_TRADES_LABEL_1MIN", "left")
+        label_mode = "left"   # base 1m table is almost always stamped at bar-start
     else:
         freq = "5min"
-        label_mode = os.getenv("IRONBEAM_LIVE_TRADES_LABEL_5MIN", "right")
-
-    label_mode = (label_mode or "left").lower().strip()
-    if label_mode not in ("left", "right"):
-        label_mode = "left"
+        label_mode = "right"  # our 5m display is resampled with label='right' in _resample_ohlc
 
     # Do we currently have an overlay?
     had_overlay = False
@@ -333,7 +387,7 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
             name=f"{LIVE_TRADES_TRACE_PREFIX} {TRADES_SYMBOL}",
             increasing=dict(line=dict(color=LIVE_UP_COLOR, width=2.0), fillcolor="rgba(96,165,250,0.18)"),
             decreasing=dict(line=dict(color=LIVE_DOWN_COLOR, width=2.0), fillcolor="rgba(229,231,235,0.18)"),
-            showlegend=True,
+            showlegend=False,
             yaxis="y2",
             hoverinfo="skip",
         )
@@ -512,13 +566,25 @@ def _current_session_trade_date(pt_tz: ZoneInfo) -> dt.date:
 
 def _effective_trade_date(selected_date: dt.date, pt_tz: ZoneInfo) -> tuple[dt.date, str | None]:
     """
-    After ~15:00 PT, the "current" ES session has effectively rolled to the next trade date.
+    Map the user-selected trade date to the session date used for loading bars/GEX.
+
+    IMPORTANT:
+    - By default we do **NOT** roll the selected date forward after 15:00 PT.
+      (That roll-forward makes it look like "today" data disappeared after the close.)
+    - If you *do* want ETH behavior (15:00 PT roll), set:
+        IRONBEAM_ROLL_SESSION_AFTER_15PT=1
     """
+
+    roll = str(os.getenv('IRONBEAM_ROLL_SESSION_AFTER_15PT', '0')).lower() in ('1', 'true', 'yes')
+    if not roll:
+        return selected_date, None
+
+    # Optional: roll forward after ~15:00 PT to follow the CME/ETH session boundary.
     try:
         now_pt = dt.datetime.now(tz=pt_tz)
         if selected_date == now_pt.date() and now_pt.time() >= dt.time(15, 0):
             eff = _next_trade_date(selected_date, pt_tz)
-            return eff, f"After 15:00 PT, overnight session rolls to {eff.isoformat()}"
+            return eff, f'After 15:00 PT, overnight session rolls to {eff.isoformat()}'
     except Exception:
         pass
     return selected_date, None
@@ -927,7 +993,7 @@ def register_ironbeam_callbacks(app):
             return go.Figure(layout_title_text="Database error when loading bars.")
 
         if df_bars.empty:
-            return go.Figure(layout_title_text=f"No ES bar data for {selected_date.isoformat()} session.")
+            return go.Figure(layout_title_text=f"No ES bar data for session {session_date.isoformat()}.")
 
         # Full-session price range (for GEX band selection)
         full_low = float(df_bars["low"].min())
@@ -1035,7 +1101,7 @@ def register_ironbeam_callbacks(app):
                 name=f"ES {session_date.isoformat()} ({interval})",
                 increasing=dict(line=dict(color=CALL_COLOR, width=1.0), fillcolor=CALL_COLOR),
                 decreasing=dict(line=dict(color=PUT_COLOR, width=1.0), fillcolor=PUT_COLOR),
-                showlegend=True,
+                showlegend=False,
                 yaxis="y2",
                 hoverinfo="skip",
             )
@@ -1567,6 +1633,225 @@ def register_ironbeam_callbacks(app):
             raise PreventUpdate
 
         return fig_obj
+
+
+    # ---- Aggressor Flow (from 1s table) ----
+    @app.callback(
+        Output("ironbeam-flow-chart", "figure"),
+        [
+            Input("trade-date", "date"),
+            Input("smile-time-input", "value"),  # heartbeat (value not used)
+        ],
+        prevent_initial_call=False,
+    )
+    def update_flow_chart(trade_date, _heartbeat):
+        if not trade_date:
+            return go.Figure(layout_title_text="Select a trade date to view Aggressor Flow.")
+
+        pt_tz = ZoneInfo("America/Los_Angeles")
+        session_date = dt.date.fromisoformat(trade_date)
+        now_pt = dt.datetime.now(pt_tz)
+
+        # Session window in PT
+        if FLOW_SESSION == "RTH":
+            start_pt = dt.datetime.combine(session_date, dt.time(6, 30), tzinfo=pt_tz)
+            end_pt = dt.datetime.combine(session_date, dt.time(13, 0), tzinfo=pt_tz)
+        else:  # FULL
+            start_pt = dt.datetime.combine(session_date, dt.time(0, 0), tzinfo=pt_tz)
+            end_pt = dt.datetime.combine(session_date, dt.time(23, 59, 59), tzinfo=pt_tz)
+
+        if session_date == now_pt.date():
+            end_pt = min(end_pt, now_pt)
+
+        start_utc = _floor_to_sec(start_pt.astimezone(ZoneInfo("UTC")))
+        end_utc = _floor_to_sec(end_pt.astimezone(ZoneInfo("UTC")))
+        if end_utc <= start_utc:
+            return go.Figure(layout_title_text="Aggressor Flow: empty time range.")
+
+        try:
+            df = _fetch_flow_utc(start_utc, end_utc, symbol=FLOW_SYMBOL)
+        except Exception as e:
+            return go.Figure(layout_title_text=f"Aggressor Flow DB error: {e}")
+
+        if df.empty:
+            return go.Figure(layout_title_text="Aggressor Flow: no data for this window (yet).")
+
+        df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True, errors="coerce")
+        df = df.dropna(subset=["ts_utc"]).set_index("ts_utc").sort_index()
+
+        for col in ["buy_vol", "sell_vol", "unknown_vol"]:
+            if col not in df.columns:
+                df[col] = 0.0
+
+        # Continuous 1s index (fills missing seconds with 0)
+        full_idx = pd.date_range(start=start_utc, end=end_utc, freq="1S", tz="UTC", inclusive="left")
+        df = df.reindex(full_idx)
+        df[["buy_vol", "sell_vol", "unknown_vol"]] = (
+            df[["buy_vol", "sell_vol", "unknown_vol"]].fillna(0.0).astype(float)
+        )
+
+        # Optional resample (controls what “1 period” means for EMA)
+        rule_map = {"1s": "1S", "5s": "5S", "15s": "15S", "1m": "1T", "60s": "1T"}
+        rule = rule_map.get((FLOW_RESAMPLE or "1s").lower(), "1S")
+        if rule != "1S":
+            df = df.resample(rule).sum()
+
+        buy = df["buy_vol"].astype(float)
+        sell = df["sell_vol"].astype(float)
+
+        span = max(1, int(FLOW_EMA_LEN))
+        ema_buy = buy.ewm(span=span, adjust=False).mean()
+        ema_sell = sell.ewm(span=span, adjust=False).mean()
+
+        diff = ema_buy - ema_sell
+        x = ema_buy.index.tz_convert(pt_tz)
+
+        def _to_y_list(s: pd.Series) -> list:
+            out = []
+            for v in s.to_numpy():
+                try:
+                    fv = float(v)
+                except Exception:
+                    out.append(None)
+                    continue
+                out.append(fv if np.isfinite(fv) else None)
+            return out
+
+        pos_line = CALL_COLOR
+        neg_line = PUT_COLOR
+
+        # Continuous “histogram” fills
+        hist_alpha = float(os.getenv("IRONBEAM_FLOW_HIST_ALPHA", "0.30"))
+        pos_hist_fill = _hex_to_rgba(pos_line, hist_alpha)
+        neg_hist_fill = _hex_to_rgba(neg_line, hist_alpha)
+
+        diff_pos = _to_y_list(diff.where(diff >= 0))
+        diff_neg = _to_y_list(diff.where(diff < 0))
+
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.03,
+            row_heights=[0.40, 0.60],
+        )
+
+        # Row 1: EMA lines ONLY (no shading)
+        fig.add_trace(
+            go.Scatter(
+                x=x, y=_to_y_list(ema_buy),
+                mode="lines", name=f"Buy EMA ({span})",
+                line=dict(color=pos_line, width=2.0),
+                connectgaps=False,
+            ),
+            row=1, col=1
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=x, y=_to_y_list(ema_sell),
+                mode="lines", name=f"Sell EMA ({span})",
+                line=dict(color=neg_line, width=2.0),
+                connectgaps=False,
+            ),
+            row=1, col=1
+        )
+
+        # Row 2: Continuous diff (filled to zero)
+        fig.add_trace(
+            go.Scatter(
+                x=x, y=diff_pos,
+                mode="lines",
+                line=dict(color=pos_line, width=1.5),
+                fill="tozeroy", fillcolor=pos_hist_fill,
+                showlegend=False,
+                hovertemplate="Diff=%{y:.2f}<extra></extra>",
+                connectgaps=False,
+            ),
+            row=2, col=1
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=x, y=diff_neg,
+                mode="lines",
+                line=dict(color=neg_line, width=1.5),
+                fill="tozeroy", fillcolor=neg_hist_fill,
+                showlegend=False,
+                hovertemplate="Diff=%{y:.2f}<extra></extra>",
+                connectgaps=False,
+            ),
+            row=2, col=1
+        )
+
+        fig.add_hline(
+            y=0, line_width=1, line_dash="solid",
+            line_color="rgba(255,255,255,0.25)",
+            row=2, col=1
+        )
+
+        fig.update_layout(
+            template="plotly_dark",
+            plot_bgcolor=ETH_BG_COLOR,
+            paper_bgcolor=ETH_BG_COLOR,
+            margin=dict(l=90, r=80, t=55, b=50),
+            height=420,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
+            # title=dict(text=f"Aggressor Flow — EMA Buy vs Sell + Diff (continuous) — {FLOW_SYMBOL}", x=0.01),
+            uirevision=f"ironbeam-flow-{trade_date}-{FLOW_RESAMPLE}-{span}-{FLOW_SESSION}",
+            dragmode="pan",
+            hovermode="x unified",
+        )
+
+        fig.update_xaxes(rangeslider=dict(visible=False))
+        fig.update_yaxes(title_text="Buy/Sell EMA", showgrid=True, fixedrange=False, row=1, col=1)
+        fig.update_yaxes(title_text="Diff", showgrid=True, fixedrange=False, zeroline=False, row=2, col=1)
+
+        return fig
+
+    # ---- Keep Flow chart x-range in sync with the main price chart ----
+    @app.callback(
+        Output("ironbeam-flow-chart", "figure", allow_duplicate=True),
+        Input("ironbeam-chart", "relayoutData"),
+        State("ironbeam-flow-chart", "figure"),
+        prevent_initial_call=True,
+    )
+    def sync_flow_xaxis(relayout, flow_fig):
+        """When you zoom/pan the price chart, apply the same x-range to the flow chart."""
+        if not isinstance(relayout, dict) or not isinstance(flow_fig, dict):
+            raise PreventUpdate
+
+        # Accept either form: xaxis.range[0]/[1] OR xaxis.range = [..,..]
+        x0 = relayout.get("xaxis.range[0]")
+        x1 = relayout.get("xaxis.range[1]")
+        rng = relayout.get("xaxis.range")
+        if (x0 is None or x1 is None) and isinstance(rng, (list, tuple)) and len(rng) == 2:
+            x0, x1 = rng[0], rng[1]
+
+        autor = relayout.get("xaxis.autorange")
+
+        if x0 is None or x1 is None:
+            # Nothing interesting (e.g., y-zoom only)
+            if not autor:
+                raise PreventUpdate
+
+        layout = flow_fig.get("layout") or {}
+
+        def _set_axis(ax_key: str):
+            ax = layout.get(ax_key) or {}
+            if autor:
+                ax["autorange"] = True
+                ax.pop("range", None)
+            else:
+                ax["autorange"] = False
+                ax["range"] = [x0, x1]
+            layout[ax_key] = ax
+
+        _set_axis("xaxis")
+        if "xaxis2" in layout:
+            _set_axis("xaxis2")
+
+        flow_fig["layout"] = layout
+        return flow_fig
+
 
     # ---- Click on ES bar -> toggle PT time ----
     @app.callback(
