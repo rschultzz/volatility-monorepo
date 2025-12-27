@@ -1835,21 +1835,6 @@ def register_ironbeam_callbacks(app):
 
         return fig_obj
 
-    # ---- Aggressor Flow (from 1s table) ----
-    @app.callback(
-        Output("ironbeam-flow-chart", "figure"),
-        [
-            Input("trade-date", "date"),
-            Input("smile-time-input", "value"),  # heartbeat (value not used)
-            Input("ib-indicator-state", "data"),
-        ],
-        State("ib-shared-xrange", "data"),
-        prevent_initial_call=False,
-    )
-    def update_flow_chart(trade_date, _heartbeat, indicator_state, shared_xrange):
-        # Legacy static flow chart is hidden in Step 7; avoid duplicate work.
-        return go.Figure()
-
     # -------------------------------------------------------------------------
     # Step 4: Wire Indicators sidebar -> Store (enabled + settings) and behavior
     # -------------------------------------------------------------------------
@@ -2109,26 +2094,6 @@ def register_ironbeam_callbacks(app):
         return {"enabled": enabled, "cfg": cfg_all}
 
     @app.callback(
-        Output("ironbeam-flow-chart", "style"),
-        Input("ib-indicator-state", "data"),
-        State("ironbeam-flow-chart", "style"),
-        prevent_initial_call=False,
-    )
-    def ib_toggle_flow_visibility(state, current_style):
-        """
-        Step 7: The legacy fixed 'ironbeam-flow-chart' is superseded by the dynamic panel system.
-        Keep the component in the layout for now, but always hide it to avoid duplicate panels.
-        """
-        base_style = current_style if isinstance(current_style, dict) else {"height": "260px", "marginTop": "10px"}
-        s = dict(base_style)
-        s["display"] = "none"
-        return s
-
-    # -------------------------------------------------------------------------
-    # Step 7: Dynamic panel indicators (rendered under ib-indicator-panels)
-    # -------------------------------------------------------------------------
-
-    @app.callback(
         Output("ib-indicator-panels", "children"),
         Input("ib-indicator-state", "data"),
         prevent_initial_call=False,
@@ -2249,65 +2214,4 @@ def register_ironbeam_callbacks(app):
 
         return {"x0": x0, "x1": x1}
 
-    # ---- Apply shared x-range to Flow chart ----
-    @app.callback(
-        Output("ironbeam-flow-chart", "figure", allow_duplicate=True),
-        Input("ib-shared-xrange", "data"),
-        State("ironbeam-flow-chart", "figure"),
-        prevent_initial_call=True,
-    )
-    def apply_shared_xrange_to_flow(xr, flow_fig):
-        """Mirror the shared x-range onto the aggressor flow chart."""
-        if not isinstance(flow_fig, dict):
-            raise PreventUpdate
 
-        layout = flow_fig.get("layout") or {}
-
-        def _set_axis(ax_key: str):
-            ax = layout.get(ax_key) or {}
-            if not xr or not isinstance(xr, dict):
-                ax["autorange"] = True
-                ax.pop("range", None)
-            else:
-                ax["autorange"] = False
-                ax["range"] = [xr.get("x0"), xr.get("x1")]
-            layout[ax_key] = ax
-
-        _set_axis("xaxis")
-        if "xaxis2" in layout:
-            _set_axis("xaxis2")
-
-        flow_fig["layout"] = layout
-        return flow_fig
-
-    # ---- Click on ES bar -> toggle PT time ----
-    @app.callback(
-        Output("smile-time-input", "value", allow_duplicate=True),
-        Input("ironbeam-chart", "clickData"),
-        State("smile-time-input", "value"),
-        prevent_initial_call=True,
-    )
-    def add_smile_time_from_price_click(click_data, current_values):
-        if not click_data or not click_data.get("points"):
-            raise PreventUpdate
-
-        point = click_data["points"][0]
-        x_val = point.get("x")
-        if x_val is None:
-            raise PreventUpdate
-
-        ts = pd.to_datetime(x_val)
-        if ts.tzinfo is None:
-            ts = ts.tz_localize("America/Los_Angeles")
-        ts_pt = ts.tz_convert("America/Los_Angeles")
-
-        hhmm = ts_pt.strftime("%H:%M")
-
-        if current_values is None:
-            current_values = []
-        elif not isinstance(current_values, list):
-            current_values = [current_values]
-
-        if hhmm in current_values:
-            return [t for t in current_values if t != hhmm]
-        return current_values + [hhmm]

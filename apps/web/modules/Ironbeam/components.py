@@ -1,22 +1,14 @@
 # apps/web/modules/Ironbeam/components.py
+#
+# Step 10:
+# - Remove the hidden legacy placeholder `ironbeam-flow-chart` entirely.
+# - Layout is now fully plugin-panel based: Aggressor Flow renders inside `ib-indicator-panels`.
+# - Stores + sidebar IDs unchanged.
 
 from dash import html, dcc
 
 
 def ironbeam_layout():
-    """
-    Ironbeam block: auto-refresh timer + main ES/GEX chart + aggressor flow chart.
-
-    Step 3 (SAFE UI scaffolding):
-    - Adds an "indicators" sidebar UI (enable list + settings selector).
-    - Keeps ALL existing chart IDs unchanged so current callbacks keep working:
-        - ironbeam-chart
-        - ironbeam-flow-chart
-    - Keeps the Stores from Step 1:
-        - ib-indicator-state (persisted)
-        - ib-shared-xrange (memory)
-    - Does NOT yet wire the sidebar to anything (that’s Step 4).
-    """
     return html.Div(
         [
             # Auto-refresh timer for live bars / overlays
@@ -31,13 +23,12 @@ def ironbeam_layout():
                 id="ib-indicator-state",
                 storage_type="local",
                 data={
-                    # purely a default; Step 4 will sync this with the checklist
                     "enabled": ["aggressor_flow"],
                     "cfg": {},
                 },
             ),
 
-            # Shared x-range for keeping all panels aligned (Step 2 uses this)
+            # Shared x-range for keeping all panels aligned
             dcc.Store(id="ib-shared-xrange", storage_type="memory"),
 
             html.Div(
@@ -47,7 +38,8 @@ def ironbeam_layout():
                         [
                             dcc.Graph(
                                 id="ironbeam-chart",
-                                style={"height": "calc(100vh - 520px)"},
+                                # Default height; callbacks may override to reclaim space
+                                style={"height": "calc(100vh - 250px)"},
                                 config={
                                     "displaylogo": False,
                                     "scrollZoom": True,
@@ -56,18 +48,7 @@ def ironbeam_layout():
                                 },
                             ),
 
-                            dcc.Graph(
-                                id="ironbeam-flow-chart",
-                                style={"height": "260px", "marginTop": "10px"},
-                                config={
-                                    "displayModeBar": True,
-                                    "scrollZoom": True,
-                                    "displaylogo": False,
-                                    "responsive": True,
-                                },
-                            ),
-
-                            # Placeholder: future dynamic plugin panels will render here
+                            # Dynamic plugin panels render here (Aggressor Flow is now one of them)
                             html.Div(id="ib-indicator-panels", style={"marginTop": "10px"}),
                         ],
                         style={"flex": "1", "minWidth": 0},
@@ -77,7 +58,7 @@ def ironbeam_layout():
                     html.Div(
                         [
                             html.Div(
-                                "indicators",
+                                "Indicators",
                                 style={
                                     "color": "white",
                                     "fontWeight": "700",
@@ -88,9 +69,7 @@ def ironbeam_layout():
 
                             dcc.Checklist(
                                 id="ib-indicator-enabled",
-                                options=[
-                                    {"label": "Aggressor Flow (current bottom chart)", "value": "aggressor_flow"},
-                                ],
+                                options=[],  # populated from registry in callbacks
                                 value=["aggressor_flow"],
                                 inputStyle={"marginRight": "8px"},
                                 labelStyle={
@@ -122,9 +101,7 @@ def ironbeam_layout():
 
                             dcc.Dropdown(
                                 id="ib-settings-indicator",
-                                options=[
-                                    {"label": "Aggressor Flow", "value": "aggressor_flow"},
-                                ],
+                                options=[],  # populated from registry in callbacks
                                 value="aggressor_flow",
                                 clearable=False,
                                 style={
@@ -133,18 +110,8 @@ def ironbeam_layout():
                                 },
                             ),
 
-                            # Settings form placeholder (Step 4 will populate and bind)
                             html.Div(
                                 id="ib-settings-form",
-                                children=html.Div(
-                                    "Step 4 will wire these settings to the indicator and persist them.",
-                                    style={
-                                        "color": "#9ca3af",
-                                        "fontSize": "12px",
-                                        "marginTop": "10px",
-                                        "lineHeight": "16px",
-                                    },
-                                ),
                                 style={"marginTop": "6px"},
                             ),
                         ],
