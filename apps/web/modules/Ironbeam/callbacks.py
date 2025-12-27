@@ -11,8 +11,11 @@ import plotly.graph_objects as go
 import plotly.colors as pc
 from plotly.subplots import make_subplots
 
-from dash import Input, Output, State
+from dash import Input, Output, State, html, dcc, ctx, no_update, MATCH
 from dash.exceptions import PreventUpdate
+
+# Indicator plugin registry (Step 6)
+from modules.Ironbeam.indicators.registry import PLUGIN_MAP as IB_PLUGIN_MAP, options as ib_indicator_options
 from sqlalchemy import create_engine, text
 
 # ---------- Config ----------
@@ -25,24 +28,22 @@ LIVE_TRADES_LOOKBACK_MIN = int(os.getenv("IRONBEAM_LIVE_TRADES_LOOKBACK_MIN", "1
 LIVE_TRADES_MAX_BARS = int(os.getenv("IRONBEAM_LIVE_TRADES_MAX_BARS", "12"))
 
 # Candle colors
-PUT_COLOR = os.getenv("GEX_PUT_COLOR", "#E5E7EB")   # down candles
-CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#60a5fa") # up candles
+PUT_COLOR = os.getenv("GEX_PUT_COLOR", "#E5E7EB")  # down candles
+CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#60a5fa")  # up candles
 
 LIVE_TRADES_TRACE_PREFIX = "Live (trades)"
 # Match the rest of the plot
 LIVE_UP_COLOR = os.getenv("IRONBEAM_LIVE_UP_COLOR", CALL_COLOR)
 LIVE_DOWN_COLOR = os.getenv("IRONBEAM_LIVE_DOWN_COLOR", PUT_COLOR)
 
-
 HIGHLIGHT_COLOR = os.getenv("IRONBEAM_HIGHLIGHT_COLOR", "#ef4444")
-
 
 # Flow aggregation table (1s) for aggressor-based indicators
 FLOW_TABLE_NAME = os.environ.get("IRONBEAM_FLOW_TABLE", "ironbeam_es_flow_1s")
 FLOW_SYMBOL = os.environ.get("IRONBEAM_FLOW_SYMBOL", TRADES_SYMBOL)
 
-FLOW_EMA_LEN = int(os.getenv("IRONBEAM_FLOW_EMA_LEN", "840"))      # smoothing length
-FLOW_RESAMPLE = os.getenv("IRONBEAM_FLOW_RESAMPLE", "1s").lower() # 1s, 5s, 15s, 1m
+FLOW_EMA_LEN = int(os.getenv("IRONBEAM_FLOW_EMA_LEN", "840"))  # smoothing length
+FLOW_RESAMPLE = os.getenv("IRONBEAM_FLOW_RESAMPLE", "1s").lower()  # 1s, 5s, 15s, 1m
 FLOW_SESSION = os.getenv("IRONBEAM_FLOW_SESSION", "RTH").upper()  # RTH or FULL
 
 # Defaults match price chart colors
@@ -108,7 +109,7 @@ def _get_db_url() -> str:
 
     # Render often provides "postgres://"
     if db_url.startswith("postgres://"):
-        db_url = "postgresql://" + db_url[len("postgres://") :]
+        db_url = "postgresql://" + db_url[len("postgres://"):]
 
     # Prefer psycopg driver (psycopg v3)
     if db_url.startswith("postgresql://") and "+psycopg" not in db_url:
@@ -141,7 +142,6 @@ def _fetch_trades_utc(start_utc: dt.datetime, end_utc: dt.datetime, symbol: str)
             parse_dates=["ts_utc"],
         )
     return df
-
 
 
 def _hex_to_rgba(color: str, alpha: float) -> str:
@@ -186,11 +186,11 @@ def _floor_to_sec(ts: dt.datetime) -> dt.datetime:
 
 
 def _trades_to_ohlc(
-    df_trades: pd.DataFrame,
-    freq: str,
-    pt_tz: ZoneInfo,
-    *,
-    label_mode: str = "left",
+        df_trades: pd.DataFrame,
+        freq: str,
+        pt_tz: ZoneInfo,
+        *,
+        label_mode: str = "left",
 ) -> pd.DataFrame:
     """
     Convert trades -> OHLC bars (tz-aware PT in datetime_pt).
@@ -261,7 +261,7 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
     # Decide bar cadence + how we label trade bars to match the base data
     if interval == "1min":
         freq = "1min"
-        label_mode = "left"   # base 1m table is almost always stamped at bar-start
+        label_mode = "left"  # base 1m table is almost always stamped at bar-start
     else:
         freq = "5min"
         label_mode = "right"  # our 5m display is resampled with label='right' in _resample_ohlc
@@ -533,8 +533,8 @@ def _window_trade_dates(center: dt.date, n_each_side: int) -> list[dt.date]:
         dates = sorted(set(dates + [center]))
         idx = dates.index(center)
 
-    left = dates[max(0, idx - n_each_side) : idx]
-    right = dates[idx + 1 : idx + 1 + n_each_side]
+    left = dates[max(0, idx - n_each_side): idx]
+    right = dates[idx + 1: idx + 1 + n_each_side]
     return left + [center] + right
 
 
@@ -718,13 +718,13 @@ def _infer_price_range_from_fig(fig_obj: go.Figure) -> tuple[float | None, float
 
 
 def _build_hovergrid_traces(
-    pt_tz: ZoneInfo,
-    target_dates_str: list[str],
-    gex_levels_by_day: dict,
-    y_min: float,
-    y_max: float,
-    x_min: dt.datetime | str | None = None,
-    x_max: dt.datetime | str | None = None,
+        pt_tz: ZoneInfo,
+        target_dates_str: list[str],
+        gex_levels_by_day: dict,
+        y_min: float,
+        y_max: float,
+        x_min: dt.datetime | str | None = None,
+        x_max: dt.datetime | str | None = None,
 ) -> tuple[go.Scattergl, go.Scattergl]:
     """
     Two invisible hover grids on y2 (for "tooltip anywhere"):
@@ -921,6 +921,207 @@ def _build_hovergrid_traces(
     )
 
     return base_trace, gex_trace
+
+
+def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
+    """Build the Aggressor Flow panel figure (used by dynamic indicator panels)."""
+    if not trade_date:
+        return go.Figure(layout_title_text="Select a trade date to view Aggressor Flow.")
+
+    # Indicator enable + settings (from sidebar)
+    enabled = []
+    if isinstance(indicator_state, dict):
+        enabled = indicator_state.get("enabled") or []
+    if not isinstance(enabled, list):
+        enabled = [enabled] if enabled else []
+
+    if "aggressor_flow" not in enabled:
+        return go.Figure(layout_title_text="Aggressor Flow is disabled (enable it in the Indicators panel).")
+
+    cfg = {}
+    if isinstance(indicator_state, dict):
+        cfg = (indicator_state.get("cfg") or {}).get("aggressor_flow") or {}
+
+    # Defaults fall back to environment-driven module constants
+    session_mode = str(cfg.get("session", FLOW_SESSION)).upper()
+    resample_mode = str(cfg.get("resample", FLOW_RESAMPLE)).lower()
+    ema_len = int(cfg.get("ema_len", FLOW_EMA_LEN))
+    pos_line_cfg = str(cfg.get("pos_color", FLOW_POS_COLOR))
+    neg_line_cfg = str(cfg.get("neg_color", FLOW_NEG_COLOR))
+    hist_alpha_cfg = float(cfg.get("opacity", cfg.get("hist_alpha", float(os.getenv("IRONBEAM_FLOW_HIST_ALPHA", "0.30")))))
+
+    pt_tz = ZoneInfo("America/Los_Angeles")
+    session_date = dt.date.fromisoformat(trade_date)
+    now_pt = dt.datetime.now(pt_tz)
+
+    # Session window in PT
+    if session_mode == "RTH":
+        start_pt = dt.datetime.combine(session_date, dt.time(6, 30), tzinfo=pt_tz)
+        end_pt = dt.datetime.combine(session_date, dt.time(13, 0), tzinfo=pt_tz)
+    else:  # FULL
+        start_pt = dt.datetime.combine(session_date, dt.time(0, 0), tzinfo=pt_tz)
+        end_pt = dt.datetime.combine(session_date, dt.time(23, 59, 59), tzinfo=pt_tz)
+
+    # If viewing today, don't look into the future.
+    if session_date == now_pt.date():
+        end_pt = min(end_pt, now_pt)
+
+    start_utc = _floor_to_sec(start_pt.astimezone(ZoneInfo("UTC")))
+    end_utc = _floor_to_sec(end_pt.astimezone(ZoneInfo("UTC")))
+    if end_utc <= start_utc:
+        return go.Figure(layout_title_text="Aggressor Flow: empty time range.")
+
+    try:
+        df = _fetch_flow_utc(start_utc, end_utc, symbol=FLOW_SYMBOL)
+    except Exception as e:
+        return go.Figure(layout_title_text=f"Aggressor Flow DB error: {e}")
+
+    if df.empty:
+        return go.Figure(layout_title_text="Aggressor Flow: no data for this window (yet).")
+
+    df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True, errors="coerce")
+    df = df.dropna(subset=["ts_utc"]).set_index("ts_utc").sort_index()
+
+    # Ensure columns exist
+    for col in ["buy_vol", "sell_vol", "unknown_vol"]:
+        if col not in df.columns:
+            df[col] = 0.0
+
+    # Continuous 1s index (fills missing seconds with 0)
+    full_idx = pd.date_range(start=start_utc, end=end_utc, freq="1S", tz="UTC", inclusive="left")
+    df = df.reindex(full_idx)
+    df[["buy_vol", "sell_vol", "unknown_vol"]] = (
+        df[["buy_vol", "sell_vol", "unknown_vol"]].fillna(0.0).astype(float)
+    )
+
+    # Optional resample (controls what “1 period” means for EMA)
+    rule_map = {"1s": "1S", "5s": "5S", "15s": "15S", "1m": "1T", "60s": "1T"}
+    rule = rule_map.get((resample_mode or "1s").lower(), "1S")
+    if rule != "1S":
+        df = df.resample(rule).sum()
+
+    buy = df["buy_vol"].astype(float)
+    sell = df["sell_vol"].astype(float)
+
+    span = max(1, int(ema_len))
+    ema_buy = buy.ewm(span=span, adjust=False).mean()
+    ema_sell = sell.ewm(span=span, adjust=False).mean()
+
+    diff = ema_buy - ema_sell
+    x = ema_buy.index.tz_convert(pt_tz)
+
+    def _to_y_list(s: pd.Series) -> list:
+        out = []
+        for v in s.to_numpy():
+            try:
+                fv = float(v)
+            except Exception:
+                out.append(None)
+                continue
+            out.append(fv if np.isfinite(fv) else None)
+        return out
+
+    pos_line = pos_line_cfg
+    neg_line = neg_line_cfg
+
+    # Continuous diff fills (not bars)
+    hist_alpha_cfg = float(cfg.get("opacity", cfg.get("hist_alpha", float(os.getenv("IRONBEAM_FLOW_HIST_ALPHA", "0.30")))))
+    pos_hist_fill = _hex_to_rgba(pos_line, hist_alpha_cfg)
+    neg_hist_fill = _hex_to_rgba(neg_line, hist_alpha_cfg)
+
+    diff_pos = _to_y_list(diff.where(diff >= 0))
+    diff_neg = _to_y_list(diff.where(diff < 0))
+
+    fig = go.Figure()
+
+    # Diff first (so EMA lines sit on top)
+    fig.add_trace(
+        go.Scatter(
+            x=x, y=diff_pos,
+            mode="lines",
+            line=dict(color=pos_line, width=1.5),
+            fill="tozeroy",
+            fillcolor=pos_hist_fill,
+            name="Diff (Buy-Sell)",
+            showlegend=False,
+            hovertemplate="Diff=%{y:.2f}<extra></extra>",
+            connectgaps=False,
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x, y=diff_neg,
+            mode="lines",
+            line=dict(color=neg_line, width=1.5),
+            fill="tozeroy",
+            fillcolor=neg_hist_fill,
+            name="Diff (Buy-Sell)",
+            showlegend=False,
+            hovertemplate="Diff=%{y:.2f}<extra></extra>",
+            connectgaps=False,
+        )
+    )
+
+    # EMA lines
+    fig.add_trace(
+        go.Scatter(
+            x=x, y=_to_y_list(ema_buy),
+            mode="lines",
+            name=f"Buy EMA ({span})",
+            line=dict(color=pos_line, width=2.0),
+            connectgaps=False,
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x, y=_to_y_list(ema_sell),
+            mode="lines",
+            name=f"Sell EMA ({span})",
+            line=dict(color=neg_line, width=2.0),
+            connectgaps=False,
+        )
+    )
+
+    # Zero line
+    fig.add_hline(y=0, line_width=1, line_dash="solid", line_color="rgba(255,255,255,0.25)")
+
+    # Make sure 0 is in view; keep autoscaling sane
+    try:
+        y_min = float(np.nanmin([np.nanmin(ema_buy.values), np.nanmin(ema_sell.values), np.nanmin(diff.values), 0.0]))
+        y_max = float(np.nanmax([np.nanmax(ema_buy.values), np.nanmax(ema_sell.values), np.nanmax(diff.values), 0.0]))
+        pad = max(1.0, 0.06 * (y_max - y_min))
+        y_range = [y_min - pad, y_max + pad]
+    except Exception:
+        y_range = None
+
+    fig.update_layout(
+        template="plotly_dark",
+        plot_bgcolor=ETH_BG_COLOR,
+        paper_bgcolor=ETH_BG_COLOR,
+        margin=dict(l=90, r=80, t=55, b=50),
+        height=360,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
+        title=dict(text=f"Aggressor Flow — EMA Buy/Sell + Diff (one panel) — {FLOW_SYMBOL}", x=0.01),
+        uirevision=f"ironbeam-flow-{trade_date}-{FLOW_RESAMPLE}-{span}-{FLOW_SESSION}",
+        dragmode="pan",
+        hovermode="x unified",
+    )
+
+    fig.update_xaxes(rangeslider=dict(visible=False))
+    fig.update_yaxes(
+        title_text="Aggression",
+        showgrid=True,
+        fixedrange=False,
+        zeroline=False,
+        range=y_range if y_range is not None else None,
+        autorange=False if y_range is not None else True,
+    )
+
+    # Apply shared x-range (zoom/pan) if available so the flow panel stays aligned
+    if isinstance(shared_xrange, dict) and shared_xrange.get("x0") and shared_xrange.get("x1"):
+        fig.update_xaxes(range=[shared_xrange["x0"], shared_xrange["x1"]], autorange=False)
+
+    return fig
 
 
 # ---------- Dash callback registration ----------
@@ -1634,200 +1835,406 @@ def register_ironbeam_callbacks(app):
 
         return fig_obj
 
-
     # ---- Aggressor Flow (from 1s table) ----
     @app.callback(
         Output("ironbeam-flow-chart", "figure"),
         [
             Input("trade-date", "date"),
             Input("smile-time-input", "value"),  # heartbeat (value not used)
+            Input("ib-indicator-state", "data"),
+        ],
+        State("ib-shared-xrange", "data"),
+        prevent_initial_call=False,
+    )
+    def update_flow_chart(trade_date, _heartbeat, indicator_state, shared_xrange):
+        # Legacy static flow chart is hidden in Step 7; avoid duplicate work.
+        return go.Figure()
+
+    # -------------------------------------------------------------------------
+    # Step 4: Wire Indicators sidebar -> Store (enabled + settings) and behavior
+    # -------------------------------------------------------------------------
+
+    @app.callback(
+        Output("ib-indicator-enabled", "options"),
+        Output("ib-settings-indicator", "options"),
+        Input("ib-indicator-state", "data"),
+        prevent_initial_call=False,
+    )
+    def ib_populate_indicator_options(state):
+        """Populate sidebar indicator options from the plugin registry."""
+        opts = ib_indicator_options()
+
+        # Keep the options stable; just return everything in the registry.
+        # (We still limit selection to enabled indicators in ib_sync_indicator_sidebar.)
+        return opts, opts
+
+    @app.callback(
+        Output("ib-indicator-enabled", "value"),
+        Output("ib-settings-indicator", "value"),
+        Input("ib-indicator-state", "data"),
+        State("ib-settings-indicator", "value"),
+        State("ib-indicator-enabled", "value"),
+        prevent_initial_call=False,
+    )
+    def ib_sync_indicator_sidebar(state, current_settings_selection, current_enabled_value):
+        """Keep the sidebar controls in sync with the persisted indicator state."""
+        enabled = []
+        if isinstance(state, dict):
+            enabled = state.get("enabled") or []
+        if enabled is None:
+            enabled = []
+        elif not isinstance(enabled, list):
+            enabled = [enabled]
+
+        # Filter to known plugins (in case localStorage contains old ids)
+        enabled = [pid for pid in enabled if pid in IB_PLUGIN_MAP]
+
+        sel = current_settings_selection
+        if sel not in enabled:
+            sel = enabled[0] if enabled else None
+
+        # If only configs changed (not enabled list / selection), don't push updates.
+        cur_enabled = current_enabled_value
+        if cur_enabled is None:
+            cur_enabled = []
+        elif not isinstance(cur_enabled, list):
+            cur_enabled = [cur_enabled]
+
+        if cur_enabled == enabled and current_settings_selection == sel:
+            return no_update, no_update
+
+        return enabled, sel
+
+    @app.callback(
+        Output("ib-indicator-state", "data", allow_duplicate=True),
+        Input("ib-indicator-enabled", "value"),
+        State("ib-indicator-state", "data"),
+        prevent_initial_call=True,
+    )
+    def ib_update_enabled_indicators(enabled_value, state):
+        """Persist the enabled indicators list (preserve configs even if disabled)."""
+        state = state if isinstance(state, dict) else {}
+        cfg_all = state.get("cfg") or {}
+
+        if enabled_value is None:
+            enabled = []
+        elif isinstance(enabled_value, list):
+            enabled = enabled_value
+        else:
+            enabled = [enabled_value]
+
+        return {"enabled": enabled, "cfg": cfg_all}
+
+    @app.callback(
+        Output("ib-settings-form", "children"),
+        Input("ib-settings-indicator", "value"),
+        State("ib-indicator-state", "data"),
+        prevent_initial_call=False,
+    )
+    def ib_render_settings_form(selected_indicator, state):
+        """Render settings controls for the selected indicator (schema-driven)."""
+        if not selected_indicator or selected_indicator not in IB_PLUGIN_MAP:
+            return html.Div(
+                "Select an indicator to edit settings.",
+                style={"color": "#9ca3af", "fontSize": "12px", "marginTop": "6px"},
+            )
+
+        plugin = IB_PLUGIN_MAP[selected_indicator]
+
+        state = state if isinstance(state, dict) else {}
+        cfg_all = state.get("cfg") or {}
+        persisted = cfg_all.get(selected_indicator) or {}
+
+        # Merge defaults -> persisted
+        cfg = dict(getattr(plugin, "default_config", lambda: {})() or {})
+        if isinstance(persisted, dict):
+            cfg.update(persisted)
+
+        schema = dict(getattr(plugin, "schema", lambda: {})() or {})
+
+        # Back-compat: keep your existing flow controls, even if the plugin schema is minimal.
+        if selected_indicator == "aggressor_flow":
+            schema.setdefault("ema_len", {"type": "int", "min": 1, "max": 5000, "step": 1, "label": "EMA length"})
+            schema.setdefault(
+                "resample",
+                {"type": "select", "options": ["1s", "5s", "15s", "1m"], "label": "Resample"},
+            )
+            schema.setdefault("session", {"type": "select", "options": ["RTH", "FULL"], "label": "Session"})
+            schema.setdefault("pos_color", {"type": "text", "label": "Buy color (hex)"})
+            schema.setdefault("neg_color", {"type": "text", "label": "Sell color (hex)"})
+            schema.setdefault(
+                "hist_alpha",
+                {"type": "float", "min": 0.05, "max": 1.0, "step": 0.05, "label": "Histogram opacity"},
+            )
+
+            # Fill any missing defaults from env vars (keeps old behavior)
+            cfg.setdefault("ema_len", int(os.getenv("IRONBEAM_FLOW_EMA_LEN", "840")))
+            cfg.setdefault("resample", str(os.getenv("IRONBEAM_FLOW_RESAMPLE", "1s")))
+            cfg.setdefault("session", str(os.getenv("IRONBEAM_FLOW_SESSION", "RTH")))
+            cfg.setdefault("pos_color", str(os.getenv("IRONBEAM_FLOW_POS_COLOR", "#60a5fa")))
+            cfg.setdefault("neg_color", str(os.getenv("IRONBEAM_FLOW_NEG_COLOR", "#ef4444")))
+            cfg.setdefault("hist_alpha", float(os.getenv("IRONBEAM_FLOW_HIST_ALPHA", "0.30")))
+
+        label_style = {"color": "#e5e7eb", "fontSize": "12px", "marginBottom": "4px", "marginTop": "8px"}
+        input_style = {
+            "width": "100%",
+            "backgroundColor": "#0b1220",
+            "color": "white",
+            "border": "1px solid #1f2937",
+            "borderRadius": "8px",
+            "padding": "6px",
+        }
+
+        def _control(field: str):
+            meta = schema.get(field) or {}
+            ftype = meta.get("type")
+            label = meta.get("label", field)
+
+            # ID mapping (keep old ids for Aggressor Flow so Step 4 callbacks keep working)
+            if selected_indicator == "aggressor_flow":
+                id_map = {
+                    "ema_len": "ib-flow-ema-len",
+                    "resample": "ib-flow-resample",
+                    "session": "ib-flow-session",
+                    "pos_color": "ib-flow-pos-color",
+                    "neg_color": "ib-flow-neg-color",
+                    "hist_alpha": "ib-flow-hist-alpha",
+                }
+                cid = id_map.get(field, f"ib-flow-{field}")
+            else:
+                cid = f"ib-{selected_indicator}-{field}"
+
+            value = cfg.get(field)
+
+            if ftype in ("int", "float", "number"):
+                step = meta.get("step", 1 if ftype == "int" else 0.1)
+                return html.Div(
+                    [
+                        html.Div(label, style=label_style),
+                        dcc.Input(
+                            id=cid,
+                            type="number",
+                            min=meta.get("min"),
+                            max=meta.get("max"),
+                            step=step,
+                            value=value,
+                            debounce=True,
+                            style=input_style,
+                        ),
+                    ]
+                )
+
+            if ftype == "select":
+                return html.Div(
+                    [
+                        html.Div(label, style=label_style),
+                        dcc.Dropdown(
+                            id=cid,
+                            options=[{"label": str(o), "value": o} for o in (meta.get("options") or [])],
+                            value=value,
+                            clearable=False,
+                            style={
+                                "backgroundColor": "#0b1220",
+                                "borderRadius": "8px",
+                            },
+                        ),
+                    ]
+                )
+
+            # default: text
+            return html.Div(
+                [
+                    html.Div(label, style=label_style),
+                    dcc.Input(
+                        id=cid,
+                        type="text",
+                        value="" if value is None else str(value),
+                        style=input_style,
+                    ),
+                ]
+            )
+
+        # For now, only Aggressor Flow has settings wired end-to-end.
+        if selected_indicator != "aggressor_flow":
+            return html.Div(
+                "No settings UI is wired for this indicator yet.",
+                style={"color": "#9ca3af", "fontSize": "12px", "marginTop": "6px"},
+            )
+
+        # Ordered fields for the current flow indicator
+        fields = ["ema_len", "resample", "session", "pos_color", "neg_color", "hist_alpha"]
+        return html.Div([_control(f) for f in fields])
+
+    @app.callback(
+        Output("ib-indicator-state", "data", allow_duplicate=True),
+        Input("ib-flow-ema-len", "value"),
+        Input("ib-flow-resample", "value"),
+        Input("ib-flow-session", "value"),
+        Input("ib-flow-pos-color", "value"),
+        Input("ib-flow-neg-color", "value"),
+        Input("ib-flow-hist-alpha", "value"),
+        State("ib-indicator-state", "data"),
+        prevent_initial_call=True,
+    )
+    def ib_persist_flow_settings(ema_len, resample_mode, session_mode, pos_color, neg_color, hist_alpha, state):
+        """Persist Aggressor Flow settings into ib-indicator-state.cfg.aggressor_flow."""
+        state = state if isinstance(state, dict) else {}
+        enabled = state.get("enabled") or []
+        if not isinstance(enabled, list):
+            enabled = [enabled] if enabled else []
+
+        cfg_all = state.get("cfg") or {}
+        flow_cfg = cfg_all.get("aggressor_flow") or {}
+
+        if ema_len is not None:
+            try:
+                flow_cfg["ema_len"] = int(ema_len)
+            except Exception:
+                pass
+        if resample_mode:
+            flow_cfg["resample"] = str(resample_mode).lower()
+        if session_mode:
+            flow_cfg["session"] = str(session_mode).upper()
+        if pos_color:
+            flow_cfg["pos_color"] = str(pos_color)
+        if neg_color:
+            flow_cfg["neg_color"] = str(neg_color)
+        if hist_alpha is not None:
+            try:
+                flow_cfg["hist_alpha"] = float(hist_alpha)
+            except Exception:
+                pass
+
+        cfg_all["aggressor_flow"] = flow_cfg
+        return {"enabled": enabled, "cfg": cfg_all}
+
+    @app.callback(
+        Output("ironbeam-flow-chart", "style"),
+        Input("ib-indicator-state", "data"),
+        State("ironbeam-flow-chart", "style"),
+        prevent_initial_call=False,
+    )
+    def ib_toggle_flow_visibility(state, current_style):
+        """
+        Step 7: The legacy fixed 'ironbeam-flow-chart' is superseded by the dynamic panel system.
+        Keep the component in the layout for now, but always hide it to avoid duplicate panels.
+        """
+        base_style = current_style if isinstance(current_style, dict) else {"height": "260px", "marginTop": "10px"}
+        s = dict(base_style)
+        s["display"] = "none"
+        return s
+
+    # -------------------------------------------------------------------------
+    # Step 7: Dynamic panel indicators (rendered under ib-indicator-panels)
+    # -------------------------------------------------------------------------
+
+    @app.callback(
+        Output("ib-indicator-panels", "children"),
+        Input("ib-indicator-state", "data"),
+        prevent_initial_call=False,
+    )
+    def ib_render_indicator_panels(state):
+        enabled = []
+        if isinstance(state, dict):
+            enabled = state.get('enabled') or []
+        if not isinstance(enabled, list):
+            enabled = [enabled] if enabled else []
+
+        # De-duplicate while preserving order
+        seen = set()
+        enabled = [x for x in enabled if x and (x not in seen and not seen.add(x))]
+
+        children = []
+        for pid in enabled:
+            plugin = IB_PLUGIN_MAP.get(pid)
+            if not plugin:
+                continue
+            kind = getattr(plugin, 'kind', 'panel')
+            if kind != 'panel':
+                continue
+
+            # Panel height can be customized later; default to 260px for now
+            height_px = 260
+            children.append(
+                dcc.Graph(
+                    id={'type': 'ib-indicator-panel', 'id': pid},
+                    style={'height': f'{height_px}px', 'marginTop': '10px'},
+                    config={'displayModeBar': True, 'scrollZoom': True, 'displaylogo': False, 'responsive': True},
+                )
+            )
+        return children
+
+    @app.callback(
+        Output({'type': 'ib-indicator-panel', 'id': MATCH}, 'figure'),
+        [
+            Input('trade-date', 'date'),
+            Input('smile-time-input', 'value'),  # heartbeat (value not used)
+            Input('ib-indicator-state', 'data'),
+            Input('ib-shared-xrange', 'data'),
+            State({'type': 'ib-indicator-panel', 'id': MATCH}, 'id'),
         ],
         prevent_initial_call=False,
     )
-    def update_flow_chart(trade_date, _heartbeat):
-        if not trade_date:
-            return go.Figure(layout_title_text="Select a trade date to view Aggressor Flow.")
+    def ib_update_indicator_panel(trade_date, _heartbeat, indicator_state, shared_xrange, panel_id):
+        pid = panel_id.get('id') if isinstance(panel_id, dict) else None
+        if not pid:
+            raise PreventUpdate
 
-        pt_tz = ZoneInfo("America/Los_Angeles")
-        session_date = dt.date.fromisoformat(trade_date)
-        now_pt = dt.datetime.now(pt_tz)
+        # If disabled (race), just show an empty figure
+        enabled = []
+        if isinstance(indicator_state, dict):
+            enabled = indicator_state.get('enabled') or []
+        if not isinstance(enabled, list):
+            enabled = [enabled] if enabled else []
+        if pid not in enabled:
+            return go.Figure()
 
-        # Session window in PT
-        if FLOW_SESSION == "RTH":
-            start_pt = dt.datetime.combine(session_date, dt.time(6, 30), tzinfo=pt_tz)
-            end_pt = dt.datetime.combine(session_date, dt.time(13, 0), tzinfo=pt_tz)
-        else:  # FULL
-            start_pt = dt.datetime.combine(session_date, dt.time(0, 0), tzinfo=pt_tz)
-            end_pt = dt.datetime.combine(session_date, dt.time(23, 59, 59), tzinfo=pt_tz)
+        if pid == 'aggressor_flow':
+            return build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange)
 
-        # If viewing today, don't look into the future.
-        if session_date == now_pt.date():
-            end_pt = min(end_pt, now_pt)
+        # Unknown panel plugin: return empty
+        return go.Figure()
 
-        start_utc = _floor_to_sec(start_pt.astimezone(ZoneInfo("UTC")))
-        end_utc = _floor_to_sec(end_pt.astimezone(ZoneInfo("UTC")))
-        if end_utc <= start_utc:
-            return go.Figure(layout_title_text="Aggressor Flow: empty time range.")
-
-        try:
-            df = _fetch_flow_utc(start_utc, end_utc, symbol=FLOW_SYMBOL)
-        except Exception as e:
-            return go.Figure(layout_title_text=f"Aggressor Flow DB error: {e}")
-
-        if df.empty:
-            return go.Figure(layout_title_text="Aggressor Flow: no data for this window (yet).")
-
-        df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True, errors="coerce")
-        df = df.dropna(subset=["ts_utc"]).set_index("ts_utc").sort_index()
-
-        # Ensure columns exist
-        for col in ["buy_vol", "sell_vol", "unknown_vol"]:
-            if col not in df.columns:
-                df[col] = 0.0
-
-        # Continuous 1s index (fills missing seconds with 0)
-        full_idx = pd.date_range(start=start_utc, end=end_utc, freq="1S", tz="UTC", inclusive="left")
-        df = df.reindex(full_idx)
-        df[["buy_vol", "sell_vol", "unknown_vol"]] = (
-            df[["buy_vol", "sell_vol", "unknown_vol"]].fillna(0.0).astype(float)
-        )
-
-        # Optional resample (controls what “1 period” means for EMA)
-        rule_map = {"1s": "1S", "5s": "5S", "15s": "15S", "1m": "1T", "60s": "1T"}
-        rule = rule_map.get((FLOW_RESAMPLE or "1s").lower(), "1S")
-        if rule != "1S":
-            df = df.resample(rule).sum()
-
-        buy = df["buy_vol"].astype(float)
-        sell = df["sell_vol"].astype(float)
-
-        span = max(1, int(FLOW_EMA_LEN))
-        ema_buy = buy.ewm(span=span, adjust=False).mean()
-        ema_sell = sell.ewm(span=span, adjust=False).mean()
-
-        diff = ema_buy - ema_sell
-        x = ema_buy.index.tz_convert(pt_tz)
-
-        def _to_y_list(s: pd.Series) -> list:
-            out = []
-            for v in s.to_numpy():
-                try:
-                    fv = float(v)
-                except Exception:
-                    out.append(None)
-                    continue
-                out.append(fv if np.isfinite(fv) else None)
-            return out
-
-        pos_line = CALL_COLOR
-        neg_line = PUT_COLOR
-
-        # Continuous diff fills (not bars)
-        hist_alpha = float(os.getenv("IRONBEAM_FLOW_HIST_ALPHA", "0.30"))
-        pos_hist_fill = _hex_to_rgba(pos_line, hist_alpha)
-        neg_hist_fill = _hex_to_rgba(neg_line, hist_alpha)
-
-        diff_pos = _to_y_list(diff.where(diff >= 0))
-        diff_neg = _to_y_list(diff.where(diff < 0))
-
-        fig = go.Figure()
-
-        # Diff first (so EMA lines sit on top)
-        fig.add_trace(
-            go.Scatter(
-                x=x, y=diff_pos,
-                mode="lines",
-                line=dict(color=pos_line, width=1.5),
-                fill="tozeroy",
-                fillcolor=pos_hist_fill,
-                name="Diff (Buy-Sell)",
-                showlegend=False,
-                hovertemplate="Diff=%{y:.2f}<extra></extra>",
-                connectgaps=False,
-            )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=x, y=diff_neg,
-                mode="lines",
-                line=dict(color=neg_line, width=1.5),
-                fill="tozeroy",
-                fillcolor=neg_hist_fill,
-                name="Diff (Buy-Sell)",
-                showlegend=False,
-                hovertemplate="Diff=%{y:.2f}<extra></extra>",
-                connectgaps=False,
-            )
-        )
-
-        # EMA lines
-        fig.add_trace(
-            go.Scatter(
-                x=x, y=_to_y_list(ema_buy),
-                mode="lines",
-                name=f"Buy EMA ({span})",
-                line=dict(color=pos_line, width=2.0),
-                connectgaps=False,
-            )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=x, y=_to_y_list(ema_sell),
-                mode="lines",
-                name=f"Sell EMA ({span})",
-                line=dict(color=neg_line, width=2.0),
-                connectgaps=False,
-            )
-        )
-
-        # Zero line
-        fig.add_hline(y=0, line_width=1, line_dash="solid", line_color="rgba(255,255,255,0.25)")
-
-        # Make sure 0 is in view; keep autoscaling sane
-        try:
-            y_min = float(np.nanmin([np.nanmin(ema_buy.values), np.nanmin(ema_sell.values), np.nanmin(diff.values), 0.0]))
-            y_max = float(np.nanmax([np.nanmax(ema_buy.values), np.nanmax(ema_sell.values), np.nanmax(diff.values), 0.0]))
-            pad = max(1.0, 0.06 * (y_max - y_min))
-            y_range = [y_min - pad, y_max + pad]
-        except Exception:
-            y_range = None
-
-        fig.update_layout(
-            template="plotly_dark",
-            plot_bgcolor=ETH_BG_COLOR,
-            paper_bgcolor=ETH_BG_COLOR,
-            margin=dict(l=90, r=80, t=55, b=50),
-            height=360,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
-            title=dict(text=f"Aggressor Flow — EMA Buy/Sell + Diff (one panel) — {FLOW_SYMBOL}", x=0.01),
-            uirevision=f"ironbeam-flow-{trade_date}-{FLOW_RESAMPLE}-{span}-{FLOW_SESSION}",
-            dragmode="pan",
-            hovermode="x unified",
-        )
-
-        fig.update_xaxes(rangeslider=dict(visible=False))
-        fig.update_yaxes(
-            title_text="Aggression",
-            showgrid=True,
-            fixedrange=False,
-            zeroline=False,
-            range=y_range if y_range is not None else None,
-            autorange=False if y_range is not None else True,
-        )
-
-        return fig
-
-    # ---- Keep Flow chart x-range in sync with the main price chart ----
     @app.callback(
-        Output("ironbeam-flow-chart", "figure", allow_duplicate=True),
+        Output("ironbeam-chart", "style"),
+        Input("ib-indicator-state", "data"),
+        State("ironbeam-chart", "style"),
+        prevent_initial_call=False,
+    )
+    def ib_resize_price_when_flow_hidden(state, current_style):
+        """Grow the price chart when the Aggressor Flow panel is disabled."""
+        base_style = current_style if isinstance(current_style, dict) else {}
+
+        enabled = []
+        if isinstance(state, dict):
+            enabled = state.get("enabled") or []
+        if not isinstance(enabled, list):
+            enabled = [enabled] if enabled else []
+
+        s = dict(base_style)
+
+        # The original layout reserved ~260px for the flow chart + ~10px margin.
+        # When flow is hidden, reclaim that vertical space.
+        if "aggressor_flow" in enabled:
+            s["height"] = "calc(100vh - 520px)"
+        else:
+            s["height"] = "calc(100vh - 250px)"
+
+        return s
+
+    @app.callback(
+        Output("ib-shared-xrange", "data"),
         Input("ironbeam-chart", "relayoutData"),
-        State("ironbeam-flow-chart", "figure"),
         prevent_initial_call=True,
     )
-    def sync_flow_xaxis(relayout, flow_fig):
-        """When you zoom/pan the price chart, apply the same x-range to the flow chart."""
-        if not isinstance(relayout, dict) or not isinstance(flow_fig, dict):
+    def capture_shared_xrange(relayout):
+        """Capture the current x-range from the main price chart so other panels can mirror it."""
+        if not isinstance(relayout, dict):
             raise PreventUpdate
+
+        # If user reset x-axis (double-click), clear the shared range
+        if relayout.get("xaxis.autorange"):
+            return None
 
         # Accept either form: xaxis.range[0]/[1] OR xaxis.range = [..,..]
         x0 = relayout.get("xaxis.range[0]")
@@ -1836,23 +2243,34 @@ def register_ironbeam_callbacks(app):
         if (x0 is None or x1 is None) and isinstance(rng, (list, tuple)) and len(rng) == 2:
             x0, x1 = rng[0], rng[1]
 
-        autor = relayout.get("xaxis.autorange")
-
         if x0 is None or x1 is None:
             # Nothing interesting (e.g., y-zoom only)
-            if not autor:
-                raise PreventUpdate
+            raise PreventUpdate
+
+        return {"x0": x0, "x1": x1}
+
+    # ---- Apply shared x-range to Flow chart ----
+    @app.callback(
+        Output("ironbeam-flow-chart", "figure", allow_duplicate=True),
+        Input("ib-shared-xrange", "data"),
+        State("ironbeam-flow-chart", "figure"),
+        prevent_initial_call=True,
+    )
+    def apply_shared_xrange_to_flow(xr, flow_fig):
+        """Mirror the shared x-range onto the aggressor flow chart."""
+        if not isinstance(flow_fig, dict):
+            raise PreventUpdate
 
         layout = flow_fig.get("layout") or {}
 
         def _set_axis(ax_key: str):
             ax = layout.get(ax_key) or {}
-            if autor:
+            if not xr or not isinstance(xr, dict):
                 ax["autorange"] = True
                 ax.pop("range", None)
             else:
                 ax["autorange"] = False
-                ax["range"] = [x0, x1]
+                ax["range"] = [xr.get("x0"), xr.get("x1")]
             layout[ax_key] = ax
 
         _set_axis("xaxis")
@@ -1861,7 +2279,6 @@ def register_ironbeam_callbacks(app):
 
         flow_fig["layout"] = layout
         return flow_fig
-
 
     # ---- Click on ES bar -> toggle PT time ----
     @app.callback(
