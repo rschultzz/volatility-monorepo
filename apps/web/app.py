@@ -22,8 +22,14 @@ if str(REPO_ROOT) not in sys.path:
 import os
 import datetime as dt
 from typing import List
+from functools import lru_cache
 
-from dash import Dash, html, dcc, Input, Output
+import pandas as pd
+from sqlalchemy import create_engine, text
+
+from dash import Dash, html, dcc, Input, Output, State
+from dash import dash_table
+from dash.exceptions import PreventUpdate
 import dash_auth
 
 # ===== Modules =====
@@ -39,7 +45,7 @@ from modules.TermMetrics.callbacks import register_callbacks as register_term_me
 from modules.Ironbeam.components import ironbeam_layout
 from modules.Ironbeam.callbacks import register_ironbeam_callbacks
 
-# ===== Backtests (NEW) =====
+# ===== Backtests (existing) =====
 from modules.Backtests.components import make_backtests_tab
 from modules.Backtests.callbacks import register_callbacks as register_backtests
 
@@ -58,6 +64,10 @@ MAIN_TABS_ID = "main-tabs"
 TAB_DASHBOARD = "tab-dashboard"
 TAB_PRICE_CHART = "tab-price-chart"
 TAB_BACKTESTS = "tab-backtests"
+TAB_BACKTESTS_V2 = "tab-backtests-v2"
+
+# Backtests v2 view name (you renamed it)
+BT_VIEW_NAME = os.getenv("BT_VIEW_NAME", "es_minutes_with_features_bt")
 
 # ---- Tabs styling (match backtest section cards) ----
 TABS_WRAP_STYLE = {
@@ -94,6 +104,15 @@ TAB_SELECTED_STYLE = {
     "fontSize": "13px",
 }
 
+CARD_STYLE = {
+    "backgroundColor": "#0b1220",
+    "border": "1px solid #1f2937",
+    "borderRadius": "14px",
+    "padding": "12px",
+}
+
+LABEL_STYLE = {"color": "#e5e7eb", "fontSize": "12px", "fontWeight": "600", "marginBottom": "6px"}
+
 
 # ===== UI Helpers =====
 def get_default_trade_date() -> dt.date:
@@ -120,6 +139,75 @@ def pt_time_options(start="06:30", end="13:00", step_min=1) -> List[dict]:
     return out
 
 
+# ===== DB helpers (Backtests v2 only) =====
+@lru_cache(maxsize=1)
+def _get_engine():
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("DATABASE_URL is not set")
+    return create_engine(db_url, pool_pre_ping=True)
+
+
+def _bt2_fetch_rows(start_date: str, end_date: str, rth_only: bool, limit_rows: int):
+    engine = _get_engine()
+
+    # Convert Dash date strings -> Python date objects (cleanest for Postgres)
+    start_d = dt.date.fromisoformat(start_date)
+    end_d = dt.date.fromisoformat(end_date)
+
+    q = text(
+        f"""
+        SELECT
+          ts_pt,
+          ts_utc,
+          trade_date,
+          is_rth,
+          open,
+          high,
+          low,
+          close,
+          volume,
+          net_gex,
+          gex_wall_above,
+          gex_wall_above_gex,
+          gex_wall_below,
+          gex_wall_below_gex,
+          gex_strong_wall_above,
+          gex_strong_wall_above_gex,
+          gex_strong_wall_below,
+          gex_strong_wall_below_gex,
+          stock_price,
+          atmiv,
+          put_skew_pp_primary,
+          call_skew_pp_primary,
+          smile_vol25_primary,
+          smile_vol50_primary,
+          smile_vol75_primary
+        FROM public.{BT_VIEW_NAME}
+        WHERE trade_date >= :start_date
+          AND trade_date <= :end_date
+          AND (:rth_only = FALSE OR is_rth = TRUE)
+        ORDER BY ts_pt
+        LIMIT :limit_rows
+        """
+    )
+
+    with engine.connect() as conn:
+        df = pd.read_sql(
+            q,
+            conn,
+            params={
+                "start_date": start_d,
+                "end_date": end_d,
+                "rth_only": bool(rth_only),
+                "limit_rows": int(limit_rows),
+            },
+        )
+
+    return df
+
+
+
 # ===== App setup =====
 app = Dash(__name__, suppress_callback_exceptions=True)
 server = app.server
@@ -138,9 +226,13 @@ def serve_layout():
     default_trade_date = get_default_trade_date()
     time_options = pt_time_options()
 
-    # Backtests default range
+    # Backtests (existing) default range
     bt_end = default_trade_date
     bt_start = default_trade_date - dt.timedelta(days=10)
+
+    # Backtests v2 default range
+    bt2_end = default_trade_date
+    bt2_start = default_trade_date - dt.timedelta(days=3)
 
     # ----- DASHBOARD BODY (this matches your original layout) -----
     dashboard_children = [
@@ -232,8 +324,6 @@ def serve_layout():
     ]
 
     # ----- IRONBEAM BODY -----
-    # NOTE: The old "Min GEX" control that used to live above the Ironbeam chart
-    # has been removed; Min |GEX| is now controlled via the Indicators sidebar (GEX Levels plugin).
     ironbeam_children = [
         html.Div(
             [
@@ -286,6 +376,125 @@ def serve_layout():
         )
     ]
 
+    # ----- BACKTESTS V2 BODY (NEW) -----
+    backtests_v2_children = [
+        html.Div(
+            [
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.Label("Date Range (Backtests v2)", style=LABEL_STYLE),
+                                dcc.DatePickerRange(
+                                    id="bt2-date-range",
+                                    start_date=bt2_start,
+                                    end_date=bt2_end,
+                                    display_format="YYYY-MM-DD",
+                                ),
+                            ],
+                            style={"flex": "0 0 auto", "minWidth": "320px"},
+                        ),
+                        html.Div(
+                            [
+                                html.Label("RTH only", style=LABEL_STYLE),
+                                dcc.RadioItems(
+                                    id="bt2-rth-only",
+                                    options=[{"label": "Yes", "value": "yes"}, {"label": "No", "value": "no"}],
+                                    value="yes",
+                                    inline=True,
+                                    labelStyle={"marginRight": "16px", "color": "white", "fontSize": "13px"},
+                                    inputStyle={"marginRight": "6px"},
+                                ),
+                            ],
+                            style={"flex": "0 0 auto", "minWidth": "200px"},
+                        ),
+                        html.Div(
+                            [
+                                html.Label("Max rows", style=LABEL_STYLE),
+                                dcc.Input(
+                                    id="bt2-limit-rows",
+                                    type="number",
+                                    min=50,
+                                    max=10000,
+                                    step=50,
+                                    value=800,
+                                    style={
+                                        "width": "120px",
+                                        "padding": "6px 8px",
+                                        "borderRadius": "8px",
+                                        "border": "1px solid #1f2937",
+                                        "backgroundColor": "#0b1220",
+                                        "color": "white",
+                                    },
+                                ),
+                            ],
+                            style={"flex": "0 0 auto", "minWidth": "140px"},
+                        ),
+                        html.Div(
+                            [
+                                html.Button(
+                                    "Load",
+                                    id="bt2-load-btn",
+                                    n_clicks=0,
+                                    style={
+                                        "backgroundColor": "#111827",
+                                        "border": "1px solid #60a5fa",
+                                        "color": "#bfdbfe",
+                                        "fontWeight": "800",
+                                        "borderRadius": "10px",
+                                        "padding": "8px 14px",
+                                        "cursor": "pointer",
+                                        "marginTop": "20px",
+                                    },
+                                ),
+                            ],
+                            style={"flex": "0 0 auto"},
+                        ),
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        html.Div("Source view:", style={"color": "#94a3b8", "fontSize": "12px"}),
+                                        html.Div(BT_VIEW_NAME, style={"color": "#e5e7eb", "fontSize": "13px", "fontWeight": "700"}),
+                                    ],
+                                    style={"marginTop": "18px"},
+                                )
+                            ],
+                            style={"flex": "1"},
+                        ),
+                    ],
+                    style={"display": "flex", "gap": "14px", "alignItems": "flex-start", "flexWrap": "wrap"},
+                ),
+                html.Hr(style={"borderColor": "#1f2937", "margin": "12px 0"}),
+                html.Div(id="bt2-summary", style={"color": "#e5e7eb", "fontSize": "13px", "marginBottom": "10px"}),
+                dash_table.DataTable(
+                    id="bt2-table",
+                    data=[],
+                    columns=[],
+                    page_size=25,
+                    sort_action="native",
+                    filter_action="native",
+                    style_table={"overflowX": "auto", "maxHeight": "70vh", "overflowY": "auto"},
+                    style_header={
+                        "backgroundColor": "#111827",
+                        "color": "white",
+                        "fontWeight": "700",
+                        "border": "1px solid #1f2937",
+                    },
+                    style_cell={
+                        "backgroundColor": "#0b1220",
+                        "color": "white",
+                        "border": "1px solid #1f2937",
+                        "fontSize": "12px",
+                        "padding": "6px",
+                        "whiteSpace": "nowrap",
+                    },
+                ),
+            ],
+            style=CARD_STYLE,
+        )
+    ]
+
     return html.Div(
         [
             dcc.Store(id=LIVE_DATA_STORE_ID),
@@ -320,7 +529,12 @@ def serve_layout():
                         },
                     ),
                 ],
-                style={"position": "relative", "padding": "8px 16px", "borderBottom": "1px solid #1f2937", "marginBottom": "8px"},
+                style={
+                    "position": "relative",
+                    "padding": "8px 16px",
+                    "borderBottom": "1px solid #1f2937",
+                    "marginBottom": "8px",
+                },
             ),
             dcc.Interval(id=CLOCK_ID, interval=60_000, n_intervals=0),
             # ===== Tabs selector (styled) =====
@@ -335,6 +549,7 @@ def serve_layout():
                             dcc.Tab(label="Dashboard", value=TAB_DASHBOARD, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                             dcc.Tab(label="Price Chart", value=TAB_PRICE_CHART, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                             dcc.Tab(label="Backtests", value=TAB_BACKTESTS, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
+                            dcc.Tab(label="Backtests v2", value=TAB_BACKTESTS_V2, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                         ],
                     )
                 ],
@@ -344,8 +559,10 @@ def serve_layout():
             html.Div(id="dashboard-container", children=dashboard_children, style={"display": "block"}),
             # ===== Ironbeam container =====
             html.Div(id="ironbeam-container", children=ironbeam_children, style={"display": "none"}),
-            # ===== Backtests container =====
+            # ===== Backtests container (existing) =====
             html.Div(id="backtests-container", children=make_backtests_tab(bt_start, bt_end), style={"display": "none"}),
+            # ===== Backtests v2 container (new) =====
+            html.Div(id="backtests-v2-container", children=backtests_v2_children, style={"display": "none"}),
         ],
         style={"backgroundColor": "black", "color": "white", "minHeight": "100vh", "padding": "0 80px 30px"},
     )
@@ -366,14 +583,56 @@ def sync_expiration_with_trade(trade_date):
     Output("dashboard-container", "style"),
     Output("ironbeam-container", "style"),
     Output("backtests-container", "style"),
+    Output("backtests-v2-container", "style"),
     Input(MAIN_TABS_ID, "value"),
 )
 def _switch_main_tab(tab_value):
     if tab_value == TAB_BACKTESTS:
-        return {"display": "none"}, {"display": "none"}, {"display": "block"}
+        return {"display": "none"}, {"display": "none"}, {"display": "block"}, {"display": "none"}
+    if tab_value == TAB_BACKTESTS_V2:
+        return {"display": "none"}, {"display": "none"}, {"display": "none"}, {"display": "block"}
     if tab_value == TAB_PRICE_CHART:
-        return {"display": "none"}, {"display": "block"}, {"display": "none"}
-    return {"display": "block"}, {"display": "none"}, {"display": "none"}
+        return {"display": "none"}, {"display": "block"}, {"display": "none"}, {"display": "none"}
+    return {"display": "block"}, {"display": "none"}, {"display": "none"}, {"display": "none"}
+
+
+# ===== Backtests v2 loader callback (NEW) =====
+@app.callback(
+    Output("bt2-table", "data"),
+    Output("bt2-table", "columns"),
+    Output("bt2-summary", "children"),
+    Input("bt2-load-btn", "n_clicks"),
+    State("bt2-date-range", "start_date"),
+    State("bt2-date-range", "end_date"),
+    State("bt2-rth-only", "value"),
+    State("bt2-limit-rows", "value"),
+)
+def _bt2_load_rows(n_clicks, start_date, end_date, rth_only_value, limit_rows):
+    if not n_clicks:
+        # show instructions until the first click
+        return [], [], "Click Load to pull rows from the new backtest view."
+
+    if not start_date or not end_date:
+        return [], [], "Pick a start + end date, then click Load."
+
+    rth_only = (rth_only_value == "yes")
+    limit_rows = int(limit_rows or 800)
+
+    try:
+        df = _bt2_fetch_rows(start_date, end_date, rth_only, limit_rows)
+    except Exception as e:
+        return [], [], f"Error loading data from {BT_VIEW_NAME}: {e}"
+
+    if df.empty:
+        return [], [], f"No rows returned from {BT_VIEW_NAME} for {start_date} → {end_date} (rth_only={rth_only})."
+
+    cols = [{"name": c, "id": c} for c in df.columns]
+    summary = (
+        f"Loaded {len(df):,} rows from {BT_VIEW_NAME} | "
+        f"{df['ts_pt'].min()} → {df['ts_pt'].max()} | "
+        f"trade_date range: {start_date} → {end_date} | rth_only={rth_only}"
+    )
+    return df.to_dict("records"), cols, summary
 
 
 # Register module callbacks
