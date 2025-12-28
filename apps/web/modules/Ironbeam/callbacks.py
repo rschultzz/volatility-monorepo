@@ -965,6 +965,13 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
     session_mode = str(cfg.get("session", FLOW_SESSION)).upper()
     resample_mode = str(cfg.get("resample", FLOW_RESAMPLE)).lower()
     ema_len = int(cfg.get("ema_len", FLOW_EMA_LEN))
+    # Panel height (px) from settings (used for figure sizing)
+    panel_height = cfg.get("panel_height", 330)
+    try:
+        panel_height = int(float(panel_height))
+    except Exception:
+        panel_height = 330
+    panel_height = max(120, min(700, panel_height))
     pos_line_cfg = str(cfg.get("pos_color", FLOW_POS_COLOR))
     neg_line_cfg = str(cfg.get("neg_color", FLOW_NEG_COLOR))
     hist_alpha_cfg = float(cfg.get("opacity", cfg.get("hist_alpha", float(os.getenv("IRONBEAM_FLOW_HIST_ALPHA", "0.30")))))
@@ -1118,9 +1125,9 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
         plot_bgcolor=ETH_BG_COLOR,
         paper_bgcolor=ETH_BG_COLOR,
         margin=dict(l=90, r=80, t=55, b=50),
-        height=360,
+        height=panel_height,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
-        # title=dict(text=f"Aggressor Flow — EMA Buy/Sell + Diff (one panel) — {FLOW_SYMBOL}", x=0.01),
+        title=dict(text=f"Aggressor Flow — EMA Buy/Sell + Diff (one panel) — {FLOW_SYMBOL}", x=0.01),
         uirevision=f"ironbeam-flow-{trade_date}-{FLOW_RESAMPLE}-{span}-{FLOW_SESSION}",
         dragmode="pan",
         hovermode="x unified",
@@ -1436,7 +1443,7 @@ def register_ironbeam_callbacks(app):
         fig.add_trace(hover_gex)
 
         fig.update_layout(
-            # title=f"ES (front month) + Net GEX Lines (multi-day; center={session_date.isoformat()})",
+            title=f"ES (front month) + Net GEX Lines (multi-day; center={session_date.isoformat()})",
             xaxis_title="Time (Pacific Time)",
             yaxis_title="Discounted Level (GEX)",
             yaxis=dict(showticklabels=False, ticks=""),
@@ -2115,20 +2122,18 @@ def register_ironbeam_callbacks(app):
                 {"type": "select", "options": ["1s", "5s", "15s", "1m"], "label": "Resample"},
             )
             schema.setdefault("session", {"type": "select", "options": ["RTH", "FULL"], "label": "Session"})
-            schema.setdefault("pos_color", {"type": "text", "label": "Buy color (hex)"})
-            schema.setdefault("neg_color", {"type": "text", "label": "Sell color (hex)"})
             schema.setdefault(
                 "hist_alpha",
                 {"type": "float", "min": 0.05, "max": 1.0, "step": 0.05, "label": "Histogram opacity"},
             )
+            schema.setdefault("panel_height", {"type": "int", "min": 140, "max": 520, "step": 10, "label": "Panel height (px)"})
 
             # Fill any missing defaults from env vars (keeps old behavior)
             cfg.setdefault("ema_len", int(os.getenv("IRONBEAM_FLOW_EMA_LEN", "840")))
             cfg.setdefault("resample", str(os.getenv("IRONBEAM_FLOW_RESAMPLE", "1s")))
             cfg.setdefault("session", str(os.getenv("IRONBEAM_FLOW_SESSION", "RTH")))
-            cfg.setdefault("pos_color", str(os.getenv("IRONBEAM_FLOW_POS_COLOR", "#60a5fa")))
-            cfg.setdefault("neg_color", str(os.getenv("IRONBEAM_FLOW_NEG_COLOR", "#ef4444")))
             cfg.setdefault("hist_alpha", float(os.getenv("IRONBEAM_FLOW_HIST_ALPHA", "0.30")))
+            cfg.setdefault("panel_height", int(os.getenv("IRONBEAM_FLOW_PANEL_HEIGHT", "260")))
 
         label_style = {"color": "#e5e7eb", "fontSize": "12px", "marginBottom": "4px", "marginTop": "8px"}
         input_style = {
@@ -2151,9 +2156,8 @@ def register_ironbeam_callbacks(app):
                     "ema_len": "ib-flow-ema-len",
                     "resample": "ib-flow-resample",
                     "session": "ib-flow-session",
-                    "pos_color": "ib-flow-pos-color",
-                    "neg_color": "ib-flow-neg-color",
                     "hist_alpha": "ib-flow-hist-alpha",
+                    "panel_height": "ib-flow-panel-height",
                 }
                 cid = id_map.get(field, f"ib-flow-{field}")
             else:
@@ -2162,6 +2166,28 @@ def register_ironbeam_callbacks(app):
             value = cfg.get(field)
 
             if ftype in ("int", "float", "number"):
+                # Special: Aggressor Flow panel height as a slider
+                if selected_indicator == "aggressor_flow" and field == "panel_height":
+                    vmin = meta.get("min", 140)
+                    vmax = meta.get("max", 520)
+                    vstep = meta.get("step", 10)
+                    # Simple marks so it stays readable
+                    marks = {int(vmin): str(int(vmin)), int((vmin + vmax) // 2): str(int((vmin + vmax) // 2)), int(vmax): str(int(vmax))}
+                    return html.Div(
+                        [
+                            html.Div(label, style=label_style),
+                            dcc.Slider(
+                                id=cid,
+                                min=vmin,
+                                max=vmax,
+                                step=vstep,
+                                value=value,
+                                updatemode="mouseup",
+                                marks=marks,
+                            ),
+                        ]
+                    )
+
                 step = meta.get("step", 1 if ftype == "int" else 0.1)
                 return html.Div(
                     [
@@ -2217,7 +2243,7 @@ def register_ironbeam_callbacks(app):
             )
 
         # Ordered fields for the current flow indicator
-        fields = ["ema_len", "resample", "session", "pos_color", "neg_color", "hist_alpha"]
+        fields = ["ema_len", "resample", "session", "hist_alpha", "panel_height"]
         return html.Div([_control(f) for f in fields])
 
     @app.callback(
@@ -2225,13 +2251,12 @@ def register_ironbeam_callbacks(app):
         Input("ib-flow-ema-len", "value"),
         Input("ib-flow-resample", "value"),
         Input("ib-flow-session", "value"),
-        Input("ib-flow-pos-color", "value"),
-        Input("ib-flow-neg-color", "value"),
         Input("ib-flow-hist-alpha", "value"),
+        Input("ib-flow-panel-height", "value"),
         State("ib-indicator-state", "data"),
         prevent_initial_call=True,
     )
-    def ib_persist_flow_settings(ema_len, resample_mode, session_mode, pos_color, neg_color, hist_alpha, state):
+    def ib_persist_flow_settings(ema_len, resample_mode, session_mode, hist_alpha, panel_height, state):
         """Persist Aggressor Flow settings into ib-indicator-state.cfg.aggressor_flow."""
         state = state if isinstance(state, dict) else {}
         enabled = state.get("enabled") or []
@@ -2250,13 +2275,15 @@ def register_ironbeam_callbacks(app):
             flow_cfg["resample"] = str(resample_mode).lower()
         if session_mode:
             flow_cfg["session"] = str(session_mode).upper()
-        if pos_color:
-            flow_cfg["pos_color"] = str(pos_color)
-        if neg_color:
-            flow_cfg["neg_color"] = str(neg_color)
         if hist_alpha is not None:
             try:
                 flow_cfg["hist_alpha"] = float(hist_alpha)
+            except Exception:
+                pass
+
+        if panel_height is not None:
+            try:
+                flow_cfg["panel_height"] = int(panel_height)
             except Exception:
                 pass
 
@@ -2317,8 +2344,17 @@ def register_ironbeam_callbacks(app):
             if kind != 'panel':
                 continue
 
-            # Panel height can be customized later; default to 260px for now
+            # Panel height (per-indicator config; defaults to 260px)
             height_px = 260
+            try:
+                cfg_all = (state or {}).get("cfg") or {}
+                cfg_pid = cfg_all.get(pid) or {}
+                # Aggressor Flow uses panel_height setting
+                if isinstance(cfg_pid, dict) and cfg_pid.get("panel_height") is not None:
+                    height_px = int(cfg_pid.get("panel_height"))
+            except Exception:
+                height_px = 260
+
             children.append(
                 dcc.Graph(
                     id={'type': 'ib-indicator-panel', 'id': pid},
@@ -2377,13 +2413,22 @@ def register_ironbeam_callbacks(app):
 
         s = dict(base_style)
 
-        # The original layout reserved ~260px for the flow chart + ~10px margin.
+        # The original layout reserved ~panel_height px for the flow chart + ~10px margin.
         # When flow is hidden, reclaim that vertical space.
-        if "aggressor_flow" in enabled:
-            s["height"] = "calc(100vh - 520px)"
-        else:
-            s["height"] = "calc(100vh - 250px)"
+        base_reserved = 250  # header/tabs/padding, etc.
+        flow_height = 260
+        try:
+            cfg_all = (state or {}).get("cfg") or {}
+            flow_cfg = cfg_all.get("aggressor_flow") or {}
+            if isinstance(flow_cfg, dict) and flow_cfg.get("panel_height") is not None:
+                flow_height = int(flow_cfg.get("panel_height"))
+        except Exception:
+            flow_height = 260
 
+        if "aggressor_flow" in enabled:
+            s["height"] = f"calc(100vh - {base_reserved + flow_height + 10}px)"
+        else:
+            s["height"] = f"calc(100vh - {base_reserved}px)"
         return s
 
     @app.callback(
@@ -2545,4 +2590,3 @@ def register_ironbeam_callbacks(app):
             toggle_style["left"] = "303px"  # 320 - (34/2)
 
         return sidebar_style, content_style, btn, row_style, toggle_style
-

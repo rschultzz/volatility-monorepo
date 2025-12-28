@@ -135,7 +135,11 @@ def ironbeam_layout():
                         [
                             dcc.Graph(
                                 id="ironbeam-chart",
-                                style={"height": "calc(100vh - 250px)"},
+                                style={
+                                    "flex": "1 1 auto",
+                                    "height": "100%",
+                                    "minHeight": "260px",
+                                },
                                 config={
                                     "displaylogo": False,
                                     "scrollZoom": True,
@@ -143,10 +147,19 @@ def ironbeam_layout():
                                     "responsive": True,
                                 },
                             ),
-                            html.Div(id="ib-indicator-panels", style={"marginTop": "10px"}),
+                            html.Div(
+                                id="ib-indicator-panels",
+                                style={"flex": "0 0 auto", "marginTop": "10px"},
+                            ),
                         ],
                         id="ib-chart-area",
-                        style={"flex": "1", "minWidth": 0},
+                        style={
+                            "flex": "1",
+                            "minWidth": 0,
+                            "height": "calc(100vh - 190px)",
+                            "display": "flex",
+                            "flexDirection": "column",
+                        },
                     ),
                 ],
                 style={"display": "flex", "gap": "12px", "alignItems": "flex-start"},
