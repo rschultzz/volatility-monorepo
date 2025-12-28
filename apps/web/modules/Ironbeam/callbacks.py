@@ -1127,7 +1127,7 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
         margin=dict(l=90, r=80, t=55, b=50),
         height=panel_height,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
-        title=dict(text=f"Aggressor Flow — EMA Buy/Sell + Diff (one panel) — {FLOW_SYMBOL}", x=0.01),
+         # title=dict(text=f"Aggressor Flow — EMA Buy/Sell + Diff (one panel) — {FLOW_SYMBOL}", x=0.01),
         uirevision=f"ironbeam-flow-{trade_date}-{FLOW_RESAMPLE}-{span}-{FLOW_SESSION}",
         dragmode="pan",
         hovermode="x unified",
@@ -1443,7 +1443,7 @@ def register_ironbeam_callbacks(app):
         fig.add_trace(hover_gex)
 
         fig.update_layout(
-            title=f"ES (front month) + Net GEX Lines (multi-day; center={session_date.isoformat()})",
+            # title=f"ES (front month) + Net GEX Lines (multi-day; center={session_date.isoformat()})",
             xaxis_title="Time (Pacific Time)",
             yaxis_title="Discounted Level (GEX)",
             yaxis=dict(showticklabels=False, ticks=""),
