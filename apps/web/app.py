@@ -147,6 +147,11 @@ def _get_engine():
         raise RuntimeError("DATABASE_URL is not set")
     return create_engine(db_url, pool_pre_ping=True)
 
+def _to_iso_utc(x) -> str:
+    ts = pd.to_datetime(x, utc=True)
+    return ts.isoformat()
+
+
 
 def _bt2_fetch_rows(start_date: str, end_date: str, rth_only: bool, limit_rows: int):
     engine = _get_engine()
@@ -205,6 +210,126 @@ def _bt2_fetch_rows(start_date: str, end_date: str, rth_only: bool, limit_rows: 
         )
 
     return df
+
+def _safe_ident(name: str) -> str:
+    # allow only letters, numbers, underscore
+    ok = all(ch.isalnum() or ch == "_" for ch in name)
+    if not ok:
+        raise ValueError(f"Unsafe identifier: {name}")
+    return name
+
+
+def _ensure_strategy_id(strategy_name: str) -> int:
+    """
+    Create strategy if missing; return id.
+    """
+    engine = _get_engine()
+    strategy_name = (strategy_name or "").strip()
+    if not strategy_name:
+        raise ValueError("Strategy name is required")
+
+    with engine.begin() as conn:
+        row = conn.execute(
+            text("SELECT id FROM bt_strategies WHERE name = :name"),
+            {"name": strategy_name},
+        ).fetchone()
+        if row:
+            return int(row[0])
+
+        new_id = conn.execute(
+            text("INSERT INTO bt_strategies (name, feature_version) VALUES (:name, 'v1') RETURNING id"),
+            {"name": strategy_name},
+        ).fetchone()[0]
+        return int(new_id)
+
+
+def _save_strategy_instance(strategy_id: int, anchor_ts_utc: str, entry_ts_utc: str, label: int = 1) -> int:
+    """
+    Save anchor+entry rows from es_minutes_with_features_bt and a small feature JSON.
+    Returns inserted instance id.
+    """
+    engine = _get_engine()
+    view_name = _safe_ident(os.getenv("BT_VIEW_NAME", "es_minutes_with_features_bt"))
+
+    sql = text(
+        f"""
+        WITH
+        a AS (
+          SELECT *
+          FROM public.{view_name}
+          WHERE ts_utc = :anchor_ts_utc
+          LIMIT 1
+        ),
+        e AS (
+          SELECT *
+          FROM public.{view_name}
+          WHERE ts_utc = :entry_ts_utc
+          LIMIT 1
+        ),
+        f AS (
+          SELECT jsonb_build_object(
+            'px_chg',          (e.close - a.close),
+            'ret',             CASE WHEN a.close IS NULL OR a.close = 0 THEN NULL ELSE (e.close / a.close - 1) END,
+
+            'atmiv_chg',       (e.atmiv - a.atmiv),
+            'put_skew_pp_chg', (e.put_skew_pp_primary - a.put_skew_pp_primary),
+            'call_skew_pp_chg',(e.call_skew_pp_primary - a.call_skew_pp_primary),
+
+            'net_gex',         e.net_gex,
+            'is_rth',          e.is_rth,
+
+            'dist_wall_above', CASE WHEN e.gex_wall_above IS NULL THEN NULL ELSE (e.gex_wall_above - e.close) END,
+            'dist_wall_below', CASE WHEN e.gex_wall_below IS NULL THEN NULL ELSE (e.close - e.gex_wall_below) END,
+
+            'es_close_entry',  e.close,
+            'spx_stock_entry', e.stock_price
+          ) AS features
+          FROM a CROSS JOIN e
+        )
+        INSERT INTO bt_strategy_instances (
+          strategy_id,
+          anchor_ts_utc,
+          entry_ts_utc,
+          trade_date,
+          is_rth,
+          anchor_row,
+          entry_row,
+          features,
+          feature_version,
+          label,
+          labeled_at
+        )
+        SELECT
+          :strategy_id,
+          (SELECT ts_utc FROM a),
+          (SELECT ts_utc FROM e),
+          (SELECT trade_date FROM e),
+          (SELECT is_rth FROM e),
+          (SELECT to_jsonb(a) FROM a),
+          (SELECT to_jsonb(e) FROM e),
+          (SELECT features FROM f),
+          'v1',
+          :label,
+          CASE WHEN :label = 0 THEN NULL ELSE now() END
+        RETURNING id;
+        """
+    )
+
+    with engine.begin() as conn:
+        row = conn.execute(
+            sql,
+            {
+                "strategy_id": int(strategy_id),
+                "anchor_ts_utc": anchor_ts_utc,
+                "entry_ts_utc": entry_ts_utc,
+                "label": int(label),
+            },
+        ).fetchone()
+
+    if not row:
+        raise ValueError("Could not save instance — missing anchor or entry row for those timestamps.")
+    return int(row[0])
+
 
 
 
@@ -466,12 +591,102 @@ def serve_layout():
                     style={"display": "flex", "gap": "14px", "alignItems": "flex-start", "flexWrap": "wrap"},
                 ),
                 html.Hr(style={"borderColor": "#1f2937", "margin": "12px 0"}),
-                html.Div(id="bt2-summary", style={"color": "#e5e7eb", "fontSize": "13px", "marginBottom": "10px"}),
+
+                # Stores live INSIDE the tab/card
+                dcc.Store(id="bt2-anchor-ts-utc"),
+                dcc.Store(id="bt2-entry-ts-utc"),
+
+                html.Div(
+                    id="bt2-summary",
+                    style={"color": "#e5e7eb", "fontSize": "13px", "marginBottom": "10px"},
+                ),
+
+                # ✅ UI controls go HERE (above the table)
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.Label("Strategy name", style=LABEL_STYLE),
+                                dcc.Input(
+                                    id="bt2-strategy-name",
+                                    type="text",
+                                    value="Strategy A",
+                                    style={
+                                        "width": "220px",
+                                        "padding": "6px 8px",
+                                        "borderRadius": "8px",
+                                        "border": "1px solid #1f2937",
+                                        "backgroundColor": "#0b1220",
+                                        "color": "white",
+                                    },
+                                ),
+                            ],
+                            style={"marginRight": "12px"},
+                        ),
+                        html.Button(
+                            "Set Anchor (selected row)",
+                            id="bt2-set-anchor",
+                            n_clicks=0,
+                            style={
+                                "backgroundColor": "#111827",
+                                "border": "1px solid #60a5fa",
+                                "color": "#bfdbfe",
+                                "fontWeight": "800",
+                                "borderRadius": "10px",
+                                "padding": "8px 14px",
+                                "cursor": "pointer",
+                                "marginTop": "20px",
+                                "marginRight": "10px",
+                            },
+                        ),
+                        html.Button(
+                            "Set Entry (selected row)",
+                            id="bt2-set-entry",
+                            n_clicks=0,
+                            style={
+                                "backgroundColor": "#111827",
+                                "border": "1px solid #60a5fa",
+                                "color": "#bfdbfe",
+                                "fontWeight": "800",
+                                "borderRadius": "10px",
+                                "padding": "8px 14px",
+                                "cursor": "pointer",
+                                "marginTop": "20px",
+                                "marginRight": "10px",
+                            },
+                        ),
+                        html.Button(
+                            "Save Example",
+                            id="bt2-save-example",
+                            n_clicks=0,
+                            style={
+                                "backgroundColor": "#0b1220",
+                                "border": "1px solid #22c55e",
+                                "color": "#bbf7d0",
+                                "fontWeight": "900",
+                                "borderRadius": "10px",
+                                "padding": "8px 14px",
+                                "cursor": "pointer",
+                                "marginTop": "20px",
+                            },
+                        ),
+                        html.Div(
+                            id="bt2-anchor-entry-status",
+                            style={"color": "#e5e7eb", "marginTop": "24px", "marginLeft": "14px"},
+                        ),
+                    ],
+                    style={"display": "flex", "alignItems": "flex-start", "flexWrap": "wrap"},
+                ),
+
+                html.Div(id="bt2-save-status", style={"color": "#e5e7eb", "marginTop": "8px"}),
+
                 dash_table.DataTable(
                     id="bt2-table",
                     data=[],
                     columns=[],
                     page_size=25,
+                    row_selectable="single",
+                    selected_rows=[],
                     sort_action="native",
                     filter_action="native",
                     style_table={"overflowX": "auto", "maxHeight": "70vh", "overflowY": "auto"},
@@ -490,6 +705,7 @@ def serve_layout():
                         "whiteSpace": "nowrap",
                     },
                 ),
+
             ],
             style=CARD_STYLE,
         )
@@ -642,6 +858,77 @@ register_term_structure(app)
 register_term_metrics(app)
 register_ironbeam_callbacks(app)
 register_backtests(app, expected_toggle_id=EXPECTED_TOGGLE_ID)
+
+from dash import callback_context  # add this import near your other dash imports if missing
+
+
+@app.callback(
+    Output("bt2-anchor-ts-utc", "data"),
+    Output("bt2-entry-ts-utc", "data"),
+    Output("bt2-anchor-entry-status", "children"),
+    Input("bt2-set-anchor", "n_clicks"),
+    Input("bt2-set-entry", "n_clicks"),
+    State("bt2-table", "data"),
+    State("bt2-table", "selected_rows"),
+    State("bt2-anchor-ts-utc", "data"),
+    State("bt2-entry-ts-utc", "data"),
+    prevent_initial_call=True,
+)
+def _bt2_set_anchor_or_entry(n_anchor, n_entry, rows, selected_rows, anchor_ts, entry_ts):
+    # Which button fired?
+    trig = callback_context.triggered[0]["prop_id"].split(".")[0] if callback_context.triggered else None
+
+    if not rows or not selected_rows:
+        msg = "Select a row in the table first."
+        return anchor_ts, entry_ts, msg
+
+    r = rows[selected_rows[0]]
+    ts_utc = r.get("ts_utc")
+    if ts_utc is None:
+        return anchor_ts, entry_ts, "Selected row has no ts_utc."
+
+    ts_utc = _to_iso_utc(ts_utc)
+
+    if trig == "bt2-set-anchor":
+        anchor_ts = ts_utc
+    elif trig == "bt2-set-entry":
+        entry_ts = ts_utc
+    else:
+        raise PreventUpdate
+
+    msg = f"Anchor: {anchor_ts or '(not set)'} | Entry: {entry_ts or '(not set)'}"
+    return anchor_ts, entry_ts, msg
+
+
+
+@app.callback(
+    Output("bt2-save-status", "children"),
+    Input("bt2-save-example", "n_clicks"),
+    State("bt2-strategy-name", "value"),
+    State("bt2-anchor-ts-utc", "data"),
+    State("bt2-entry-ts-utc", "data"),
+)
+def _bt2_save_example(n, strategy_name, anchor_ts, entry_ts):
+    if not n:
+        raise PreventUpdate
+    if not anchor_ts or not entry_ts:
+        return "Set both Anchor and Entry first."
+
+    # Ensure ordering (if user picked them backwards, auto-fix)
+    a = pd.to_datetime(anchor_ts, utc=True)
+    e = pd.to_datetime(entry_ts, utc=True)
+    if e < a:
+        a, e = e, a
+        anchor_ts = a.isoformat()
+        entry_ts = e.isoformat()
+
+    try:
+        sid = _ensure_strategy_id(strategy_name)
+        instance_id = _save_strategy_instance(sid, anchor_ts, entry_ts, label=1)
+        return f"✅ Saved instance {instance_id} to strategy '{strategy_name}' (strategy_id={sid})."
+    except Exception as ex:
+        return f"Error saving instance: {ex}"
+
 
 
 if __name__ == "__main__":
