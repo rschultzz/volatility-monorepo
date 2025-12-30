@@ -961,20 +961,25 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
     if isinstance(indicator_state, dict):
         cfg = (indicator_state.get("cfg") or {}).get("aggressor_flow") or {}
 
-    # Defaults fall back to environment-driven module constants
     session_mode = str(cfg.get("session", FLOW_SESSION)).upper()
     resample_mode = str(cfg.get("resample", FLOW_RESAMPLE)).lower()
     ema_len = int(cfg.get("ema_len", FLOW_EMA_LEN))
-    # Panel height (px) from settings (used for figure sizing)
+
     panel_height = cfg.get("panel_height", 330)
     try:
         panel_height = int(float(panel_height))
     except Exception:
         panel_height = 330
     panel_height = max(120, min(700, panel_height))
-    pos_line_cfg = str(cfg.get("pos_color", FLOW_POS_COLOR))
-    neg_line_cfg = str(cfg.get("neg_color", FLOW_NEG_COLOR))
-    hist_alpha_cfg = float(cfg.get("opacity", cfg.get("hist_alpha", float(os.getenv("IRONBEAM_FLOW_HIST_ALPHA", "0.30")))))
+
+    pos_line = str(cfg.get("pos_color", FLOW_POS_COLOR))
+    neg_line = str(cfg.get("neg_color", FLOW_NEG_COLOR))
+
+    hist_alpha = cfg.get("hist_alpha", float(os.getenv("IRONBEAM_FLOW_HIST_ALPHA", "0.30")))
+    try:
+        hist_alpha = float(hist_alpha)
+    except Exception:
+        hist_alpha = float(os.getenv("IRONBEAM_FLOW_HIST_ALPHA", "0.30"))
 
     pt_tz = ZoneInfo("America/Los_Angeles")
     session_date = dt.date.fromisoformat(trade_date)
@@ -988,7 +993,6 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
         start_pt = dt.datetime.combine(session_date, dt.time(0, 0), tzinfo=pt_tz)
         end_pt = dt.datetime.combine(session_date, dt.time(23, 59, 59), tzinfo=pt_tz)
 
-    # If viewing today, don't look into the future.
     if session_date == now_pt.date():
         end_pt = min(end_pt, now_pt)
 
@@ -1008,7 +1012,6 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
     df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True, errors="coerce")
     df = df.dropna(subset=["ts_utc"]).set_index("ts_utc").sort_index()
 
-    # Ensure columns exist
     for col in ["buy_vol", "sell_vol", "unknown_vol"]:
         if col not in df.columns:
             df[col] = 0.0
@@ -1020,7 +1023,7 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
         df[["buy_vol", "sell_vol", "unknown_vol"]].fillna(0.0).astype(float)
     )
 
-    # Optional resample (controls what “1 period” means for EMA)
+    # Optional resample
     rule_map = {"1s": "1S", "5s": "5S", "15s": "15S", "1m": "1T", "60s": "1T"}
     rule = rule_map.get((resample_mode or "1s").lower(), "1S")
     if rule != "1S":
@@ -1033,92 +1036,84 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
     ema_buy = buy.ewm(span=span, adjust=False).mean()
     ema_sell = sell.ewm(span=span, adjust=False).mean()
 
-    diff = ema_buy - ema_sell
+    # Signed histogram
+    diff = (ema_buy - ema_sell).astype(float)
+
     x = ema_buy.index.tz_convert(pt_tz)
+    x_list = list(x)
 
-    def _to_y_list(s: pd.Series) -> list:
-        out = []
-        for v in s.to_numpy():
-            try:
-                fv = float(v)
-            except Exception:
-                out.append(None)
-                continue
-            out.append(fv if np.isfinite(fv) else None)
-        return out
-
-    pos_line = pos_line_cfg
-    neg_line = neg_line_cfg
-
-    # Continuous diff fills (not bars)
-    hist_alpha_cfg = float(cfg.get("opacity", cfg.get("hist_alpha", float(os.getenv("IRONBEAM_FLOW_HIST_ALPHA", "0.30")))))
-    pos_hist_fill = _hex_to_rgba(pos_line, hist_alpha_cfg)
-    neg_hist_fill = _hex_to_rgba(neg_line, hist_alpha_cfg)
-
-    diff_pos = _to_y_list(diff.where(diff >= 0))
-    diff_neg = _to_y_list(diff.where(diff < 0))
+    pos_hist_fill = _hex_to_rgba(pos_line, hist_alpha)
+    neg_hist_fill = _hex_to_rgba(neg_line, hist_alpha)
 
     fig = go.Figure()
 
-    # Diff first (so EMA lines sit on top)
-    fig.add_trace(
-        go.Scatter(
-            x=x, y=diff_pos,
-            mode="lines",
-            line=dict(color=pos_line, width=1.5),
-            fill="tozeroy",
-            fillcolor=pos_hist_fill,
-            name="Diff (Buy-Sell)",
-            showlegend=False,
-            hovertemplate="Diff=%{y:.2f}<extra></extra>",
-            connectgaps=False,
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x, y=diff_neg,
-            mode="lines",
-            line=dict(color=neg_line, width=1.5),
-            fill="tozeroy",
-            fillcolor=neg_hist_fill,
-            name="Diff (Buy-Sell)",
-            showlegend=False,
-            hovertemplate="Diff=%{y:.2f}<extra></extra>",
-            connectgaps=False,
-        )
-    )
+    # ---- Histogram fill in contiguous segments (prevents any wrong-side fill) ----
+    diff_arr = diff.to_numpy(dtype=float)
 
-    # EMA lines
-    fig.add_trace(
-        go.Scatter(
-            x=x, y=_to_y_list(ema_buy),
-            mode="lines",
-            name=f"Buy EMA ({span})",
-            line=dict(color=pos_line, width=2.0),
-            connectgaps=False,
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x, y=_to_y_list(ema_sell),
-            mode="lines",
-            name=f"Sell EMA ({span})",
-            line=dict(color=neg_line, width=2.0),
-            connectgaps=False,
-        )
-    )
+    def _add_hist_segments(mask: np.ndarray, line_color: str, fill_color: str):
+        idx = np.flatnonzero(mask & np.isfinite(diff_arr))
+        if idx.size == 0:
+            return
+
+        start = int(idx[0])
+        prev = int(idx[0])
+
+        for k in idx[1:]:
+            k = int(k)
+            if k != prev + 1:
+                if prev - start >= 1:
+                    xs = x_list[start: prev + 1]
+                    ys = diff_arr[start: prev + 1].tolist()
+                    fig.add_trace(
+                        go.Scatter(
+                            x=xs,
+                            y=ys,
+                            mode="lines",
+                            line=dict(color=line_color, width=1.5),
+                            fill="tozeroy",
+                            fillcolor=fill_color,
+                            showlegend=False,
+                            hovertemplate="Diff=%{y:.2f}<extra></extra>",
+                            connectgaps=False,
+                        )
+                    )
+                start = k
+            prev = k
+
+        if prev - start >= 1:
+            xs = x_list[start: prev + 1]
+            ys = diff_arr[start: prev + 1].tolist()
+            fig.add_trace(
+                go.Scatter(
+                    x=xs,
+                    y=ys,
+                    mode="lines",
+                    line=dict(color=line_color, width=1.5),
+                    fill="tozeroy",
+                    fillcolor=fill_color,
+                    showlegend=False,
+                    hovertemplate="Diff=%{y:.2f}<extra></extra>",
+                    connectgaps=False,
+                )
+            )
+
+    _add_hist_segments(diff_arr >= 0, pos_line, pos_hist_fill)
+    _add_hist_segments(diff_arr < 0,  neg_line, neg_hist_fill)
 
     # Zero line
     fig.add_hline(y=0, line_width=1, line_dash="solid", line_color="rgba(255,255,255,0.25)")
 
-    # Make sure 0 is in view; keep autoscaling sane
-    try:
-        y_min = float(np.nanmin([np.nanmin(ema_buy.values), np.nanmin(ema_sell.values), np.nanmin(diff.values), 0.0]))
-        y_max = float(np.nanmax([np.nanmax(ema_buy.values), np.nanmax(ema_sell.values), np.nanmax(diff.values), 0.0]))
-        pad = max(1.0, 0.06 * (y_max - y_min))
-        y_range = [y_min - pad, y_max + pad]
-    except Exception:
-        y_range = None
+    # ---- Center 0 in the middle: symmetric y-range around 0 ----
+    finite = diff_arr[np.isfinite(diff_arr)]
+    if finite.size == 0:
+        max_abs = 1.0
+    else:
+        max_abs = float(np.nanmax(np.abs(finite)))
+        if not np.isfinite(max_abs) or max_abs <= 0:
+            max_abs = 1.0
+
+    pad = max(1e-6, 0.10 * max_abs)
+    y_range = [-max_abs - pad, max_abs + pad]
 
     fig.update_layout(
         template="plotly_dark",
@@ -1126,9 +1121,8 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
         paper_bgcolor=ETH_BG_COLOR,
         margin=dict(l=90, r=80, t=55, b=50),
         height=panel_height,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
-         # title=dict(text=f"Aggressor Flow — EMA Buy/Sell + Diff (one panel) — {FLOW_SYMBOL}", x=0.01),
-        uirevision=f"ironbeam-flow-{trade_date}-{FLOW_RESAMPLE}-{span}-{FLOW_SESSION}",
+        showlegend=False,
+        uirevision=f"ironbeam-flow-{trade_date}-{resample_mode}-{span}-{session_mode}-histonly",
         dragmode="pan",
         hovermode="x unified",
     )
@@ -1139,15 +1133,17 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
         showgrid=True,
         fixedrange=False,
         zeroline=False,
-        range=y_range if y_range is not None else None,
-        autorange=False if y_range is not None else True,
+        range=y_range,
+        autorange=False,
     )
 
-    # Apply shared x-range (zoom/pan) if available so the flow panel stays aligned
+    # Apply shared x-range if available
     if isinstance(shared_xrange, dict) and shared_xrange.get("x0") and shared_xrange.get("x1"):
         fig.update_xaxes(range=[shared_xrange["x0"], shared_xrange["x1"]], autorange=False)
 
     return fig
+
+
 
 
 # ---------- Dash callback registration ----------

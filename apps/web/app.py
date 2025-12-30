@@ -680,6 +680,159 @@ def serve_layout():
 
                 html.Div(id="bt2-save-status", style={"color": "#e5e7eb", "marginTop": "8px"}),
 
+                # --- Find Similar (v1) controls + candidates table ---
+                html.Hr(style={"borderColor": "#1f2937", "margin": "12px 0"}),
+
+                dcc.Store(id="bt2-cands-store"),
+
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.Label("Lookahead (minutes)", style=LABEL_STYLE),
+                                dcc.Input(
+                                    id="bt2-lookahead-min",
+                                    type="number",
+                                    min=1,
+                                    max=240,
+                                    step=1,
+                                    value=5,
+                                    style={
+                                        "width": "120px",
+                                        "padding": "6px 8px",
+                                        "borderRadius": "8px",
+                                        "border": "1px solid #1f2937",
+                                        "backgroundColor": "#0b1220",
+                                        "color": "white",
+                                    },
+                                ),
+                            ],
+                            style={"marginRight": "12px"},
+                        ),
+                        html.Div(
+                            [
+                                html.Label("Stride (minutes)", style=LABEL_STYLE),
+                                dcc.Input(
+                                    id="bt2-stride-min",
+                                    type="number",
+                                    min=1,
+                                    max=60,
+                                    step=1,
+                                    value=1,
+                                    style={
+                                        "width": "120px",
+                                        "padding": "6px 8px",
+                                        "borderRadius": "8px",
+                                        "border": "1px solid #1f2937",
+                                        "backgroundColor": "#0b1220",
+                                        "color": "white",
+                                    },
+                                ),
+                            ],
+                            style={"marginRight": "12px"},
+                        ),
+                        html.Div(
+                            [
+                                html.Label("Top N", style=LABEL_STYLE),
+                                dcc.Input(
+                                    id="bt2-topn",
+                                    type="number",
+                                    min=5,
+                                    max=500,
+                                    step=5,
+                                    value=50,
+                                    style={
+                                        "width": "120px",
+                                        "padding": "6px 8px",
+                                        "borderRadius": "8px",
+                                        "border": "1px solid #1f2937",
+                                        "backgroundColor": "#0b1220",
+                                        "color": "white",
+                                    },
+                                ),
+                            ],
+                            style={"marginRight": "12px"},
+                        ),
+                        html.Button(
+                            "Find Similar",
+                            id="bt2-find-similar",
+                            n_clicks=0,
+                            style={
+                                "backgroundColor": "#111827",
+                                "border": "1px solid #f59e0b",
+                                "color": "#fde68a",
+                                "fontWeight": "900",
+                                "borderRadius": "10px",
+                                "padding": "8px 14px",
+                                "cursor": "pointer",
+                                "marginTop": "20px",
+                                "marginRight": "10px",
+                            },
+                        ),
+                        html.Button(
+                            "Accept",
+                            id="bt2-accept-cand",
+                            n_clicks=0,
+                            style={
+                                "backgroundColor": "#0b1220",
+                                "border": "1px solid #22c55e",
+                                "color": "#bbf7d0",
+                                "fontWeight": "900",
+                                "borderRadius": "10px",
+                                "padding": "8px 14px",
+                                "cursor": "pointer",
+                                "marginTop": "20px",
+                                "marginRight": "10px",
+                            },
+                        ),
+                        html.Button(
+                            "Reject",
+                            id="bt2-reject-cand",
+                            n_clicks=0,
+                            style={
+                                "backgroundColor": "#0b1220",
+                                "border": "1px solid #ef4444",
+                                "color": "#fecaca",
+                                "fontWeight": "900",
+                                "borderRadius": "10px",
+                                "padding": "8px 14px",
+                                "cursor": "pointer",
+                                "marginTop": "20px",
+                            },
+                        ),
+                        html.Div(id="bt2-find-status", style={"color": "#e5e7eb", "marginTop": "24px", "marginLeft": "14px"}),
+                    ],
+                    style={"display": "flex", "alignItems": "flex-start", "flexWrap": "wrap"},
+                ),
+
+                dash_table.DataTable(
+                    id="bt2-cands-table",
+                    data=[],
+                    columns=[],
+                    page_size=15,
+                    row_selectable="single",
+                    selected_rows=[],
+                    sort_action="native",
+                    filter_action="native",
+                    style_table={"overflowX": "auto", "maxHeight": "40vh", "overflowY": "auto"},
+                    style_header={
+                        "backgroundColor": "#111827",
+                        "color": "white",
+                        "fontWeight": "700",
+                        "border": "1px solid #1f2937",
+                    },
+                    style_cell={
+                        "backgroundColor": "#0b1220",
+                        "color": "white",
+                        "border": "1px solid #1f2937",
+                        "fontSize": "12px",
+                        "padding": "6px",
+                        "whiteSpace": "nowrap",
+                    },
+                ),
+
+                html.Div(id="bt2-cand-action-status", style={"color": "#e5e7eb", "marginTop": "8px"}),
+
                 dash_table.DataTable(
                     id="bt2-table",
                     data=[],
