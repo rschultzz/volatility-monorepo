@@ -1119,7 +1119,7 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
         template="plotly_dark",
         plot_bgcolor=ETH_BG_COLOR,
         paper_bgcolor=ETH_BG_COLOR,
-        margin=dict(l=90, r=80, t=55, b=50),
+        margin=dict(l=90, r=80, t=55, b=50, autoexpand=False),
         height=panel_height,
         showlegend=False,
         uirevision=f"ironbeam-flow-{trade_date}-{resample_mode}-{span}-{session_mode}-histonly",
@@ -1138,8 +1138,49 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
     )
 
     # Apply shared x-range if available
-    if isinstance(shared_xrange, dict) and shared_xrange.get("x0") and shared_xrange.get("x1"):
-        fig.update_xaxes(range=[shared_xrange["x0"], shared_xrange["x1"]], autorange=False)
+    def _parse_to_pt(v):
+        """Coerce x values into PT tz-aware pandas Timestamps.
+
+        Plotly/Dash sometimes emits naive strings (no timezone). Those are in the
+        chart's display timezone (PT for this app), *not* UTC.
+        """
+        if v is None:
+            return None
+        try:
+            ts = pd.to_datetime(v, errors="coerce")
+        except Exception:
+            return None
+        if ts is pd.NaT:
+            return None
+
+        try:
+            ts = pd.Timestamp(ts)
+        except Exception:
+            return None
+
+        try:
+            if ts.tzinfo is None:
+                ts = ts.tz_localize(pt_tz)
+            else:
+                ts = ts.tz_convert(pt_tz)
+        except Exception:
+            return None
+        return ts
+
+    if isinstance(shared_xrange, dict):
+        x0 = _parse_to_pt(shared_xrange.get("x0"))
+        x1 = _parse_to_pt(shared_xrange.get("x1"))
+        if x0 is not None and x1 is not None:
+            fig.update_xaxes(range=[x0, x1], autorange=False)
+
+        hx = _parse_to_pt(shared_xrange.get("hover_x"))
+        if hx is not None:
+            fig.add_vline(
+                x=hx,
+                line_width=1,
+                line_dash="dash",
+                line_color="rgba(255,255,255,0.35)",
+            )
 
     return fig
 
@@ -1469,7 +1510,7 @@ def register_ironbeam_callbacks(app):
             autosize=True,
             shapes=shapes,
             meta=meta,
-            margin=dict(l=90, r=80, t=80, b=80),
+            margin=dict(l=90, r=80, t=80, b=80, autoexpand=False),
         )
 
         fig.update_yaxes(
@@ -2430,29 +2471,117 @@ def register_ironbeam_callbacks(app):
     @app.callback(
         Output("ib-shared-xrange", "data"),
         Input("ironbeam-chart", "relayoutData"),
+        Input("ironbeam-chart", "hoverData"),
+        State("ib-shared-xrange", "data"),
         prevent_initial_call=True,
     )
-    def capture_shared_xrange(relayout):
-        """Capture the current x-range from the main price chart so other panels can mirror it."""
-        if not isinstance(relayout, dict):
+    def capture_shared_xrange(relayout, hover, current):
+        """
+        Stores:
+          - x0/x1 from relayout (zoom/pan)
+          - hover_x from hoverData (for crosshair carry-down)
+
+        NOTE: Dash can trigger both relayoutData and hoverData in the same tick.
+        We handle BOTH (no reliance on triggered order), otherwise pan can fail to
+        propagate the x-range.
+        """
+        data = dict(current or {})
+
+        pt_tz = ZoneInfo("America/Los_Angeles")
+
+        def _to_pt_iso(v):
+            """Normalize x values to PT ISO strings (with offset)."""
+            if v is None:
+                return None
+            try:
+                ts = pd.to_datetime(v, errors="coerce")
+            except Exception:
+                return None
+            if ts is pd.NaT:
+                return None
+            ts = pd.Timestamp(ts)
+            try:
+                if ts.tzinfo is None:
+                    ts = ts.tz_localize(pt_tz)
+                else:
+                    ts = ts.tz_convert(pt_tz)
+            except Exception:
+                return None
+            return ts.isoformat()
+
+        trig_ids = set((ctx.triggered_prop_ids or {}).keys())
+
+        changed = False
+
+        # --- Zoom / pan range (relayout) ---
+        if any(t.endswith(".relayoutData") for t in trig_ids):
+            if not isinstance(relayout, dict):
+                raise PreventUpdate
+
+            # Reset (double click)
+            if relayout.get("xaxis.autorange") or relayout.get("xaxis.autorange") is True:
+                if "x0" in data or "x1" in data:
+                    data.pop("x0", None)
+                    data.pop("x1", None)
+                    changed = True
+            else:
+                # Most common keys
+                x0 = relayout.get("xaxis.range[0]")
+                x1 = relayout.get("xaxis.range[1]")
+                rng = relayout.get("xaxis.range")
+
+                # Some plotly updates use list-style range
+                if (x0 is None or x1 is None) and isinstance(rng, (list, tuple)) and len(rng) == 2:
+                    x0, x1 = rng[0], rng[1]
+
+                # Fallback: support xaxis2/xaxis3 if present
+                if x0 is None or x1 is None:
+                    for ax in ("xaxis", "xaxis2", "xaxis3"):
+                        x0 = relayout.get(f"{ax}.range[0]")
+                        x1 = relayout.get(f"{ax}.range[1]")
+                        rng = relayout.get(f"{ax}.range")
+                        if (x0 is None or x1 is None) and isinstance(rng, (list, tuple)) and len(rng) == 2:
+                            x0, x1 = rng[0], rng[1]
+                        if x0 is not None and x1 is not None:
+                            break
+
+                x0n = _to_pt_iso(x0)
+                x1n = _to_pt_iso(x1)
+                if x0n is not None and x1n is not None:
+                    if data.get("x0") != x0n or data.get("x1") != x1n:
+                        data["x0"] = x0n
+                        data["x1"] = x1n
+                        changed = True
+
+        # --- Hover crosshair x (hoverData) ---
+        if any(t.endswith(".hoverData") for t in trig_ids):
+            if not isinstance(hover, dict):
+                if "hover_x" in data:
+                    data.pop("hover_x", None)
+                    changed = True
+            else:
+                pts = hover.get("points") or []
+                if not pts or pts[0].get("x") is None:
+                    if "hover_x" in data:
+                        data.pop("hover_x", None)
+                        changed = True
+                else:
+                    hx = pts[0].get("x")
+                    hxn = _to_pt_iso(hx)
+                    if hxn is None:
+                        if "hover_x" in data:
+                            data.pop("hover_x", None)
+                            changed = True
+                    else:
+                        if data.get("hover_x") != hxn:
+                            data["hover_x"] = hxn
+                            changed = True
+
+        if not changed:
             raise PreventUpdate
 
-        # If user reset x-axis (double-click), clear the shared range
-        if relayout.get("xaxis.autorange"):
-            return None
+        return data or None
 
-        # Accept either form: xaxis.range[0]/[1] OR xaxis.range = [..,..]
-        x0 = relayout.get("xaxis.range[0]")
-        x1 = relayout.get("xaxis.range[1]")
-        rng = relayout.get("xaxis.range")
-        if (x0 is None or x1 is None) and isinstance(rng, (list, tuple)) and len(rng) == 2:
-            x0, x1 = rng[0], rng[1]
-
-        if x0 is None or x1 is None:
-            # Nothing interesting (e.g., y-zoom only)
-            raise PreventUpdate
-
-        return {"x0": x0, "x1": x1}
 
     # ---- Click a price bar to set global Time Slices (PT) ----
     # This restores the old behavior: clicking a candle sets the "Time Slices (PT)" dropdown

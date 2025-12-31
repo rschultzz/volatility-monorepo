@@ -135,6 +135,7 @@ def ironbeam_layout():
                         [
                             dcc.Graph(
                                 id="ironbeam-chart",
+                                clear_on_unhover=True,
                                 style={
                                     "flex": "1 1 auto",
                                     "height": "100%",
