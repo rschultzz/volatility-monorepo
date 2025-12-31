@@ -3,6 +3,7 @@
 import os
 import math
 import datetime as dt
+import time
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -11,7 +12,7 @@ import plotly.graph_objects as go
 import plotly.colors as pc
 from plotly.subplots import make_subplots
 
-from dash import Input, Output, State, html, dcc, ctx, no_update, MATCH
+from dash import Input, Output, State, html, dcc, ctx, no_update, MATCH, Patch
 from dash.exceptions import PreventUpdate
 
 # Indicator plugin registry (Step 6)
@@ -83,6 +84,12 @@ GEX_COLOR_PERCENTILE = float(os.getenv("GEX_COLOR_PERCENTILE", "95"))
 DAYS_EITHER_SIDE = int(os.getenv("IRONBEAM_DAYS_EITHER_SIDE", "5"))
 MULTI_LOAD_DAYS_PER_TICK = int(os.getenv("IRONBEAM_MULTI_LOAD_DAYS_PER_TICK", "1"))
 
+# --- Smoothness toggles (render-only; safe defaults) ---
+USE_HOVERGRID = os.getenv("IRONBEAM_USE_HOVERGRID", "1").strip().lower() in ("1", "true", "yes", "y")
+HOVERLINE_MAX_POINTS = int(os.getenv("IRONBEAM_HOVERLINE_MAX_POINTS", "60000"))
+MULTIDAY_PREFETCH = os.getenv("IRONBEAM_MULTIDAY_PREFETCH", "0").strip().lower() in ("1", "true", "yes", "y")
+ZOOM_COOLDOWN_MS = int(float(os.getenv("IRONBEAM_ZOOM_COOLDOWN_MS", "450")))
+
 GEX_MAX_LEVELS_PER_DAY = int(os.getenv("GEX_MAX_LEVELS_PER_DAY", "80"))
 GEX_MIN_LEVEL_SPACING = float(os.getenv("GEX_MIN_LEVEL_SPACING", "5"))
 GEX_LEVEL_BUCKET = float(os.getenv("GEX_LEVEL_BUCKET", "1"))
@@ -93,8 +100,9 @@ GEX_LEVEL_LINE_WIDTH_MAX = float(os.getenv("GEX_LEVEL_LINE_WIDTH_MAX", "4.0"))
 GEX_LEVEL_LINE_OPACITY = float(os.getenv("GEX_LEVEL_LINE_OPACITY", "0.90"))
 
 # Hover grid (tooltip everywhere)
-HOVERGRID_MAX_POINTS = int(os.getenv("IRONBEAM_HOVERGRID_MAX_POINTS", "300000"))
-HOVERGRID_Y_POINTS = int(os.getenv("IRONBEAM_HOVERGRID_Y_POINTS", "70"))
+HOVERGRID_MAX_POINTS = int(os.getenv("IRONBEAM_HOVERGRID_MAX_POINTS", "60000"))
+HOVERGRID_Y_POINTS = int(os.getenv("IRONBEAM_HOVERGRID_Y_POINTS", "45"))
+HOVERGRID_X_SECONDS = int(os.getenv("IRONBEAM_HOVERGRID_X_SECONDS", "15"))
 HOVERGRID_OPACITY = float(os.getenv("IRONBEAM_HOVERGRID_OPACITY", "0.001"))
 GEX_HOVER_TOLERANCE = float(os.getenv("GEX_HOVER_TOLERANCE", "2.0"))
 
@@ -393,22 +401,55 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
 
     bars_tr = bars_tr.sort_values("datetime_pt").tail(max(1, LIVE_TRADES_MAX_BARS))
 
-    # Refresh overlay: remove then add
-    _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
+    # Refresh overlay IN-PLACE (avoid remove/add jitter during zoom/pan).
+    overlay_idx = None
+    try:
+        for i, tr in enumerate(fig_obj.data):
+            if getattr(tr, "name", "") and str(tr.name).startswith(LIVE_TRADES_TRACE_PREFIX):
+                overlay_idx = i
+                break
+    except Exception:
+        overlay_idx = None
+
+    x_new = bars_tr["datetime_pt"].tolist()
+    o_new = bars_tr["open"].astype(float).tolist()
+    h_new = bars_tr["high"].astype(float).tolist()
+    l_new = bars_tr["low"].astype(float).tolist()
+    c_new = bars_tr["close"].astype(float).tolist()
+
+    # If we already have an overlay trace and the last bar hasn't changed, do nothing.
+    if overlay_idx is not None:
+        try:
+            tr = fig_obj.data[overlay_idx]
+            old_x = list(getattr(tr, "x", []) or [])
+            old_c = list(getattr(tr, "close", []) or [])
+            if old_x and old_c and str(old_x[-1]) == str(x_new[-1]) and float(old_c[-1]) == float(c_new[-1]) and len(old_x) == len(x_new):
+                return False
+
+            tr.x = x_new
+            setattr(tr, "open", o_new)
+            tr.high = h_new
+            tr.low = l_new
+            tr.close = c_new
+            return True
+        except Exception:
+            # Fallback: rebuild the overlay trace if an in-place update fails
+            _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
+            overlay_idx = None
 
     fig_obj.add_trace(
         go.Candlestick(
-            x=bars_tr["datetime_pt"],
-            open=bars_tr["open"].astype(float).tolist(),
-            high=bars_tr["high"].astype(float).tolist(),
-            low=bars_tr["low"].astype(float).tolist(),
-            close=bars_tr["close"].astype(float).tolist(),
+            x=x_new,
+            open=o_new,
+            high=h_new,
+            low=l_new,
+            close=c_new,
             name=f"{LIVE_TRADES_TRACE_PREFIX} {TRADES_SYMBOL}",
             increasing=dict(line=dict(color=LIVE_UP_COLOR, width=2.0), fillcolor="rgba(96,165,250,0.18)"),
             decreasing=dict(line=dict(color=LIVE_DOWN_COLOR, width=2.0), fillcolor="rgba(229,231,235,0.18)"),
             showlegend=False,
             yaxis="y2",
-            hoverinfo="skip",
+            hovertemplate="<extra></extra>",
         )
     )
 
@@ -789,7 +830,7 @@ def _build_hovergrid_traces(
             x=[],
             y=[],
             mode="markers",
-            marker=dict(size=6, color="rgba(0,0,0,0)"),
+            marker=dict(size=10, color="rgba(0,0,0,0)"),
             opacity=HOVERGRID_OPACITY,
             name="__hovergrid__empty",
             showlegend=False,
@@ -805,7 +846,7 @@ def _build_hovergrid_traces(
         view_start, view_end = view_end, view_start
 
     overlaps: list[tuple[str, dt.datetime, dt.datetime]] = []
-    total_minutes = 0
+    total_seconds = 0
 
     for d_str in target_dates_str:
         try:
@@ -825,14 +866,14 @@ def _build_hovergrid_traces(
             continue
 
         overlaps.append((d_str, lo, hi))
-        total_minutes += int((hi - lo).total_seconds() // 60) + 1
+        total_seconds += int((hi - lo).total_seconds()) + 1
 
     if not overlaps:
         empty = go.Scattergl(
             x=[],
             y=[],
             mode="markers",
-            marker=dict(size=6, color="rgba(0,0,0,0)"),
+            marker=dict(size=10, color="rgba(0,0,0,0)"),
             opacity=HOVERGRID_OPACITY,
             name="__hovergrid__empty",
             showlegend=False,
@@ -842,13 +883,15 @@ def _build_hovergrid_traces(
         )
         return empty, empty
 
-    # Prefer 1-minute X spacing; shrink Y points first to stay under max_points.
-    y_points_eff = min(y_points_req, max(20, int(max_points // max(1, total_minutes))))
-    step_min = 1
+        # Prefer fine X spacing (seconds) for "cursor anywhere"; shrink Y first to stay under max_points.
+    x_step_req = max(1, int(HOVERGRID_X_SECONDS))
+    # Approximate requested x points across all overlaps
+    x_points_req = max(1, int(math.ceil(total_seconds / x_step_req)) + len(overlaps))
+    y_points_eff = min(y_points_req, max(20, int(max_points // max(1, x_points_req))))
 
-    # If still too many points, increase X step.
-    if total_minutes * y_points_eff > max_points:
-        step_min = int(math.ceil((total_minutes * y_points_eff) / max_points))
+    # Choose an effective X step so (x_points_eff * y_points_eff) <= max_points
+    allowed_x_points = max(100, int(max_points // max(1, y_points_eff)))
+    step_sec = max(x_step_req, int(math.ceil(total_seconds / max(1, allowed_x_points))))
 
     y_vec = np.linspace(float(y_min), float(y_max), int(y_points_eff)).astype(float)
     y_step = float(y_vec[1] - y_vec[0]) if len(y_vec) > 1 else 1.0
@@ -858,7 +901,7 @@ def _build_hovergrid_traces(
     x_gex_parts, y_gex_parts = [], []
 
     for (d_str, lo, hi) in overlaps:
-        x_day = pd.date_range(lo, hi, freq=f"{step_min}min", inclusive="both").to_pydatetime().tolist()
+        x_day = pd.date_range(lo, hi, freq=f"{step_sec}S", inclusive="both").to_pydatetime().tolist()
         if not x_day:
             continue
 
@@ -940,6 +983,109 @@ def _build_hovergrid_traces(
     )
 
     return base_trace, gex_trace
+
+
+def _empty_hoverline(name: str) -> go.Scattergl:
+    return go.Scattergl(
+        x=[],
+        y=[],
+        mode="markers",
+        marker=dict(size=6, color="rgba(0,0,0,0)"),
+        opacity=float(os.getenv("IRONBEAM_HOVERLINE_OPACITY", "0.01")),
+        name=name,
+        showlegend=False,
+        yaxis="y2",
+        customdata=[],
+        hovertemplate="Time=%{x|%Y-%m-%d %H:%M:%S}<br>Price=%{customdata:.2f}<extra></extra>",
+    )
+
+
+def _build_hoverline_from_df(df_bars: pd.DataFrame) -> go.Scattergl:
+    """Lightweight hover trigger: one invisible point per bar (much faster than a 2D hover grid)."""
+    if df_bars is None or df_bars.empty or "datetime_pt" not in df_bars.columns:
+        return _empty_hoverline("__hoverline__")
+
+    xs = df_bars["datetime_pt"].tolist()
+    ys = df_bars["close"].astype(float).tolist() if "close" in df_bars.columns else [0.0] * len(xs)
+
+    # Downsample to keep interactions snappy
+    max_pts = max(5000, int(HOVERLINE_MAX_POINTS))
+    if len(xs) > max_pts:
+        step = int(math.ceil(len(xs) / max_pts))
+        xs = xs[::step]
+        ys = ys[::step]
+
+    return go.Scattergl(
+        x=xs,
+        y=ys,
+        mode="markers",
+        marker=dict(size=6, color="rgba(0,0,0,0)"),
+        opacity=float(os.getenv("IRONBEAM_HOVERLINE_OPACITY", "0.01")),
+        name="__hoverline__",
+        showlegend=False,
+        yaxis="y2",
+        customdata=ys,
+        hovertemplate="Time=%{x|%Y-%m-%d %H:%M:%S}<br>Price=%{customdata:.2f}<extra></extra>",
+    )
+
+
+def _build_hoverline_from_fig(fig_obj: go.Figure, pt_tz: ZoneInfo) -> go.Scattergl:
+    xs: list = []
+    ys: list[float] = []
+
+    try:
+        for tr in fig_obj.data:
+            if getattr(tr, "type", None) != "candlestick":
+                continue
+            nm = str(getattr(tr, "name", "") or "")
+            if not nm.startswith("ES "):
+                continue
+            x = list(getattr(tr, "x", []) or [])
+            c = list(getattr(tr, "close", []) or [])
+            if not x or not c:
+                continue
+            # align lengths
+            n = min(len(x), len(c))
+            xs.extend(x[:n])
+            ys.extend([float(v) for v in c[:n]])
+    except Exception:
+        xs, ys = [], []
+
+    if not xs:
+        return _empty_hoverline("__hoverline__")
+
+    # Sort by time (best effort)
+    try:
+        ts = pd.to_datetime(xs, errors="coerce")
+        if isinstance(ts, pd.DatetimeIndex) or isinstance(ts, pd.Series):
+            m = ~pd.isna(ts)
+            ts_valid = ts[m]
+            xs_valid = [xs[i] for i, ok in enumerate(m) if ok]
+            ys_valid = [ys[i] for i, ok in enumerate(m) if ok]
+            order = list(ts_valid.argsort())
+            xs = [xs_valid[i] for i in order]
+            ys = [ys_valid[i] for i in order]
+    except Exception:
+        pass
+
+    max_pts = max(5000, int(HOVERLINE_MAX_POINTS))
+    if len(xs) > max_pts:
+        step = int(math.ceil(len(xs) / max_pts))
+        xs = xs[::step]
+        ys = ys[::step]
+
+    return go.Scattergl(
+        x=xs,
+        y=ys,
+        mode="markers",
+        marker=dict(size=6, color="rgba(0,0,0,0)"),
+        opacity=float(os.getenv("IRONBEAM_HOVERLINE_OPACITY", "0.01")),
+        name="__hoverline__",
+        showlegend=False,
+        yaxis="y2",
+        customdata=ys,
+        hovertemplate="Time=%{x|%Y-%m-%d %H:%M:%S}<br>Price=%{customdata:.2f}<extra></extra>",
+    )
 
 
 def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
@@ -1377,7 +1523,7 @@ def register_ironbeam_callbacks(app):
                 decreasing=dict(line=dict(color=PUT_COLOR, width=1.0), fillcolor=PUT_COLOR),
                 showlegend=False,
                 yaxis="y2",
-                hoverinfo="skip",
+                hovertemplate="<extra></extra>",
             )
         )
 
@@ -1398,7 +1544,7 @@ def register_ironbeam_callbacks(app):
                         decreasing=dict(line=dict(color=HIGHLIGHT_COLOR, width=2.0), fillcolor=HIGHLIGHT_COLOR),
                         showlegend=False,
                         yaxis="y2",
-                        hoverinfo="skip",
+                        hovertemplate="<extra></extra>",
                     )
                 )
 
@@ -1457,27 +1603,30 @@ def register_ironbeam_callbacks(app):
         if locked_y_range is None:
             meta["locked_y_range"] = default_y_range
             locked_y_range = meta["locked_y_range"]
+        # Hover trigger (kept lightweight by default; hovergrid is optional)
+        if USE_HOVERGRID:
+            x0, x1 = (locked_x_range if locked_x_range is not None else [rth_start_pt_center, rth_end_pt_center])
+            y0, y1 = (locked_y_range if locked_y_range is not None else default_y_range)
+            pad_y = max(5.0, 0.04 * (float(y1) - float(y0)))
 
-        # Hover grid (Time + cursor Price anywhere) — build ONLY for current viewport & only loaded days
-        x0, x1 = (locked_x_range if locked_x_range is not None else [rth_start_pt_center, rth_end_pt_center])
-        y0, y1 = (locked_y_range if locked_y_range is not None else default_y_range)
-        pad_y = max(5.0, 0.04 * (float(y1) - float(y0)))
+            hover_days = meta.get("multi_loaded_dates") or [session_date.isoformat()]
+            if not isinstance(hover_days, list) or not hover_days:
+                hover_days = [session_date.isoformat()]
 
-        hover_days = meta.get("multi_loaded_dates") or [session_date.isoformat()]
-        if not isinstance(hover_days, list) or not hover_days:
-            hover_days = [session_date.isoformat()]
-
-        hover_base, hover_gex = _build_hovergrid_traces(
-            pt_tz=pt_tz,
-            target_dates_str=hover_days,
-            gex_levels_by_day=gex_levels_by_day,
-            y_min=float(y0) - pad_y,
-            y_max=float(y1) + pad_y,
-            x_min=x0,
-            x_max=x1,
-        )
-        fig.add_trace(hover_base)
-        fig.add_trace(hover_gex)
+            hover_base, hover_gex = _build_hovergrid_traces(
+                pt_tz=pt_tz,
+                target_dates_str=hover_days,
+                gex_levels_by_day=gex_levels_by_day,
+                y_min=float(y0) - pad_y,
+                y_max=float(y1) + pad_y,
+                x_min=x0,
+                x_max=x1,
+            )
+            fig.add_trace(hover_base)
+            fig.add_trace(hover_gex)
+        else:
+            # One invisible point per bar is enough to keep crosshairs/hover smooth.
+            fig.add_trace(_build_hoverline_from_df(df_bars))
 
         fig.update_layout(
             # title=f"ES (front month) + Net GEX Lines (multi-day; center={session_date.isoformat()})",
@@ -1551,9 +1700,10 @@ def register_ironbeam_callbacks(app):
         State("smile-time-input", "value"),
         State("ironbeam-bar-interval", "value"),
         State("ib-indicator-state", "data"),
+        State("ib-shared-xrange", "data"),
         prevent_initial_call=True,
     )
-    def persist_zoom(relayout, fig, trade_date, selected_times_pt, bar_interval, indicator_state):
+    def persist_zoom(relayout, fig, trade_date, selected_times_pt, bar_interval, indicator_state, shared_xrange):
         if not isinstance(fig, dict) or not isinstance(relayout, dict) or not trade_date:
             raise PreventUpdate
 
@@ -1622,6 +1772,7 @@ def register_ironbeam_callbacks(app):
             meta.pop("locked_x_range", None)
 
         meta["indicator_state_token"] = _indicator_state_token(indicator_state)
+        meta["last_relayout_ms"] = int(time.time() * 1000)
         layout["meta"] = meta
         fig["layout"] = layout
         return fig
@@ -1635,9 +1786,10 @@ def register_ironbeam_callbacks(app):
         State("smile-time-input", "value"),
         State("ironbeam-bar-interval", "value"),
         State("ib-indicator-state", "data"),
+        State("ib-shared-xrange", "data"),
         prevent_initial_call=True,
     )
-    def progressively_add_days(n_intervals, fig, trade_date, selected_times_pt, bar_interval, indicator_state):
+    def progressively_add_days(n_intervals, fig, trade_date, selected_times_pt, bar_interval, indicator_state, shared_xrange):
         if not isinstance(fig, dict) or not trade_date:
             raise PreventUpdate
 
@@ -1770,9 +1922,78 @@ def register_ironbeam_callbacks(app):
                     print(f"[Ironbeam live] overlay error: {e}")
 
         # ---- progressive add of other days ----
-        remaining = [d for d in target_dates if d != session_date.isoformat() and d not in loaded and d not in skipped]
+        # Default behavior: ONLY load other days when the current viewport overlaps them.
+        # This keeps zoom/pan smooth and prevents the chart from "jumping" while days stream in.
+        view_start = None
+        view_end = None
+        locked_x_range = meta.get("locked_x_range") if isinstance(meta, dict) else None
+        if isinstance(locked_x_range, (list, tuple)) and len(locked_x_range) == 2:
+            try:
+                vs = pd.to_datetime(locked_x_range[0])
+                ve = pd.to_datetime(locked_x_range[1])
+                if isinstance(vs, pd.Timestamp):
+                    if vs.tzinfo is None:
+                        vs = vs.tz_localize(pt_tz)
+                    else:
+                        vs = vs.tz_convert(pt_tz)
+                if isinstance(ve, pd.Timestamp):
+                    if ve.tzinfo is None:
+                        ve = ve.tz_localize(pt_tz)
+                    else:
+                        ve = ve.tz_convert(pt_tz)
+                view_start = vs.to_pydatetime()
+                view_end = ve.to_pydatetime()
+                if view_start > view_end:
+                    view_start, view_end = view_end, view_start
+            except Exception:
+                view_start, view_end = None, None
+
+        # Optional cooldown after a relayout event (avoid updates mid-drag).
+        cooldown_active = False
+        try:
+            last_ms = meta.get("last_relayout_ms") if isinstance(meta, dict) else None
+            if last_ms is not None:
+                now_ms = int(time.time() * 1000)
+                cooldown_active = (now_ms - int(last_ms)) < int(ZOOM_COOLDOWN_MS)
+        except Exception:
+            cooldown_active = False
+
+        # Optional cooldown after hover updates (avoid resetting crosshair mid-hover).
+        hover_cooldown_active = False
+        try:
+            if isinstance(shared_xrange, dict):
+                hm = shared_xrange.get("last_hover_ms")
+                if hm is not None:
+                    now_ms = int(time.time() * 1000)
+                    hover_cooldown_active = (now_ms - int(hm)) < int(HOVER_COOLDOWN_MS)
+        except Exception:
+            hover_cooldown_active = False
+
+        # If hovering, skip all figure mutations for this tick to prevent crosshair flicker.
+        if hover_cooldown_active:
+            raise PreventUpdate
+
+
+        needed: list[str] = []
+        if (not MULTIDAY_PREFETCH) and view_start and view_end:
+            for d_str in target_dates:
+                if d_str == session_date.isoformat():
+                    continue
+                try:
+                    d = dt.datetime.strptime(d_str, "%Y-%m-%d").date()
+                except Exception:
+                    continue
+                sess_start, sess_end = _session_window_pt(d, pt_tz)
+                if sess_end >= view_start and sess_start <= view_end:
+                    needed.append(d_str)
+
+        if MULTIDAY_PREFETCH or not needed:
+            remaining = [d for d in target_dates if d != session_date.isoformat() and d not in loaded and d not in skipped]
+        else:
+            remaining = [d for d in needed if d not in loaded and d not in skipped]
+
         batch: list[str] = []
-        if remaining:
+        if remaining and not cooldown_active:
             remaining_dates: list[dt.date] = []
             for s in remaining:
                 try:
@@ -1823,7 +2044,7 @@ def register_ironbeam_callbacks(app):
                     decreasing=dict(line=dict(color=PUT_COLOR, width=1.0), fillcolor=PUT_COLOR),
                     showlegend=False,
                     yaxis="y2",
-                    hoverinfo="skip",
+                    hovertemplate="<extra></extra>",
                 )
             )
 
@@ -1896,46 +2117,51 @@ def register_ironbeam_callbacks(app):
             except Exception:
                 pass
 
-        # Rebuild hover grid only when we add days (avoid heavy work every tick)
+        # Rebuild hover trigger only when we add days (avoid heavy work every tick)
         if loaded_changed:
             _remove_traces_by_name_prefix(fig_obj, "__hovergrid__")
+            _remove_traces_by_name_prefix(fig_obj, "__hoverline__")
 
-            x_min = None
-            x_max = None
-            if locked_x_range is not None and isinstance(locked_x_range, (list, tuple)) and len(locked_x_range) == 2:
-                x_min, x_max = locked_x_range[0], locked_x_range[1]
+            if USE_HOVERGRID:
+                x_min = None
+                x_max = None
+                if locked_x_range is not None and isinstance(locked_x_range, (list, tuple)) and len(locked_x_range) == 2:
+                    x_min, x_max = locked_x_range[0], locked_x_range[1]
 
-            y_min = None
-            y_max = None
-            if locked_y_range is not None and isinstance(locked_y_range, (list, tuple)) and len(locked_y_range) == 2:
-                try:
-                    y_min = float(locked_y_range[0])
-                    y_max = float(locked_y_range[1])
-                except Exception:
-                    y_min, y_max = None, None
+                y_min = None
+                y_max = None
+                if locked_y_range is not None and isinstance(locked_y_range, (list, tuple)) and len(locked_y_range) == 2:
+                    try:
+                        y_min = float(locked_y_range[0])
+                        y_max = float(locked_y_range[1])
+                    except Exception:
+                        y_min, y_max = None, None
 
-            if y_min is None or y_max is None:
-                y_min, y_max = _infer_price_range_from_fig(fig_obj)
-            if y_min is None or y_max is None:
-                y_min, y_max = 0.0, 1.0
+                if y_min is None or y_max is None:
+                    y_min, y_max = _infer_price_range_from_fig(fig_obj)
+                if y_min is None or y_max is None:
+                    y_min, y_max = 0.0, 1.0
 
-            pad = max(5.0, 0.04 * (y_max - y_min))
+                pad = max(5.0, 0.04 * (y_max - y_min))
 
-            hover_days = meta.get("multi_loaded_dates") or []
-            if not isinstance(hover_days, list) or not hover_days:
-                hover_days = [session_date.isoformat()]
+                hover_days = meta.get("multi_loaded_dates") or []
+                if not isinstance(hover_days, list) or not hover_days:
+                    hover_days = [session_date.isoformat()]
 
-            hb, hg = _build_hovergrid_traces(
-                pt_tz=pt_tz,
-                target_dates_str=hover_days,
-                gex_levels_by_day=gex_levels_by_day,
-                y_min=float(y_min) - pad,
-                y_max=float(y_max) + pad,
-                x_min=x_min,
-                x_max=x_max,
-            )
-            fig_obj.add_trace(hb)
-            fig_obj.add_trace(hg)
+                hb, hg = _build_hovergrid_traces(
+                    pt_tz=pt_tz,
+                    target_dates_str=hover_days,
+                    gex_levels_by_day=gex_levels_by_day,
+                    y_min=float(y_min) - pad,
+                    y_max=float(y_max) + pad,
+                    x_min=x_min,
+                    x_max=x_max,
+                )
+                fig_obj.add_trace(hb)
+                fig_obj.add_trace(hg)
+            else:
+                # Lightweight hover trigger from already-loaded candle traces.
+                fig_obj.add_trace(_build_hoverline_from_fig(fig_obj, pt_tz))
 
         # ---- re-apply selected time-slice highlight so it persists across interval refresh/tab switches ----
         try:
@@ -1969,7 +2195,7 @@ def register_ironbeam_callbacks(app):
                                 decreasing=dict(line=dict(color=HIGHLIGHT_COLOR, width=2.0), fillcolor=HIGHLIGHT_COLOR),
                                 showlegend=False,
                                 yaxis='y2',
-                                hoverinfo='skip',
+                                hovertemplate='<extra></extra>',
                             )
                         )
                         did_anything = True
@@ -2004,9 +2230,10 @@ def register_ironbeam_callbacks(app):
         Output("ib-indicator-state", "data", allow_duplicate=True),
         Input("ib-indicator-enabled", "options"),
         State("ib-indicator-state", "data"),
+        State("ib-shared-xrange", "data"),
         prevent_initial_call="initial_duplicate",
     )
-    def ib_migrate_default_enabled(options, state):
+    def ib_migrate_default_enabled(options, state, shared_xrange):
         """One-time migration: keep legacy behavior by default-enabling GEX overlay when first introduced."""
         state = state if isinstance(state, dict) else {}
         migrations = state.get("migrations") if isinstance(state.get("migrations"), dict) else {}
@@ -2072,9 +2299,10 @@ def register_ironbeam_callbacks(app):
         Output("ib-indicator-state", "data", allow_duplicate=True),
         Input("ib-indicator-enabled", "value"),
         State("ib-indicator-state", "data"),
+        State("ib-shared-xrange", "data"),
         prevent_initial_call=True,
     )
-    def ib_update_enabled_indicators(enabled_value, state):
+    def ib_update_enabled_indicators(enabled_value, state, shared_xrange):
         """Persist the enabled indicators list (preserve configs even if disabled)."""
         state = state if isinstance(state, dict) else {}
         cfg_all = state.get("cfg") or {}
@@ -2093,9 +2321,10 @@ def register_ironbeam_callbacks(app):
         Output("ib-settings-form", "children"),
         Input("ib-settings-indicator", "value"),
         State("ib-indicator-state", "data"),
+        State("ib-shared-xrange", "data"),
         prevent_initial_call=False,
     )
-    def ib_render_settings_form(selected_indicator, state):
+    def ib_render_settings_form(selected_indicator, state, shared_xrange):
         """Render settings controls for the selected indicator (schema-driven)."""
         if not selected_indicator or selected_indicator not in IB_PLUGIN_MAP:
             return html.Div(
@@ -2291,9 +2520,10 @@ def register_ironbeam_callbacks(app):
         Input("ib-flow-hist-alpha", "value"),
         Input("ib-flow-panel-height", "value"),
         State("ib-indicator-state", "data"),
+        State("ib-shared-xrange", "data"),
         prevent_initial_call=True,
     )
-    def ib_persist_flow_settings(ema_len, resample_mode, session_mode, hist_alpha, panel_height, state):
+    def ib_persist_flow_settings(ema_len, resample_mode, session_mode, hist_alpha, panel_height, state, shared_xrange):
         """Persist Aggressor Flow settings into ib-indicator-state.cfg.aggressor_flow."""
         state = state if isinstance(state, dict) else {}
         enabled = state.get("enabled") or []
@@ -2332,9 +2562,10 @@ def register_ironbeam_callbacks(app):
         Output("ib-indicator-state", "data", allow_duplicate=True),
         Input("ib-gex-min-abs-b", "value"),
         State("ib-indicator-state", "data"),
+        State("ib-shared-xrange", "data"),
         prevent_initial_call=True,
     )
-    def ib_persist_gex_settings(min_abs_b, state):
+    def ib_persist_gex_settings(min_abs_b, state, shared_xrange):
         """Persist GEX overlay settings into ib-indicator-state.cfg[gex_overlay]."""
         state = state if isinstance(state, dict) else {}
         enabled = state.get("enabled") or []
@@ -2409,10 +2640,11 @@ def register_ironbeam_callbacks(app):
             Input('ib-indicator-state', 'data'),
             Input('ib-shared-xrange', 'data'),
             State({'type': 'ib-indicator-panel', 'id': MATCH}, 'id'),
+            State({'type': 'ib-indicator-panel', 'id': MATCH}, 'figure'),
         ],
         prevent_initial_call=False,
     )
-    def ib_update_indicator_panel(trade_date, _heartbeat, indicator_state, shared_xrange, panel_id):
+    def ib_update_indicator_panel(trade_date, _heartbeat, indicator_state, shared_xrange, panel_id, prev_panel_fig):
         pid = panel_id.get('id') if isinstance(panel_id, dict) else None
         if not pid:
             raise PreventUpdate
@@ -2427,6 +2659,35 @@ def register_ironbeam_callbacks(app):
             return go.Figure()
 
         if pid == 'aggressor_flow':
+            # Smooth hover-line sync: if ONLY the hover_x changed, PATCH the existing figure
+            # instead of rebuilding from DB on every mouse move.
+            try:
+                if isinstance(prev_panel_fig, dict) and ctx.triggered_id == "ib-shared-xrange":
+                    hx = (shared_xrange or {}).get("hover_x") if isinstance(shared_xrange, dict) else None
+                    meta = ((prev_panel_fig.get("layout") or {}).get("meta") or {})
+                    last_hx = meta.get("hover_vline_last_x")
+                    hover_idx = meta.get("hover_vline_idx")
+
+                    # If unchanged, do nothing.
+                    if hx is None and last_hx is None:
+                        raise PreventUpdate
+                    if isinstance(hx, str) and isinstance(last_hx, str) and hx == last_hx:
+                        raise PreventUpdate
+
+                    if hover_idx is not None and isinstance(hover_idx, int):
+                        p = Patch()
+                        # Ensure line becomes visible when we have hx, and hidden when we don't.
+                        p["layout"]["shapes"][hover_idx]["x0"] = hx
+                        p["layout"]["shapes"][hover_idx]["x1"] = hx
+                        p["layout"]["shapes"][hover_idx]["line"]["color"] = ("rgba(255,255,255,0.35)" if hx else "rgba(0,0,0,0)")
+                        p["layout"]["meta"]["hover_vline_last_x"] = hx
+                        return p
+            except PreventUpdate:
+                raise
+            except Exception:
+                # Fall back to full rebuild on any unexpected shape/meta issue
+                pass
+
             return build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange)
 
         # Unknown panel plugin: return empty
@@ -2558,12 +2819,14 @@ def register_ironbeam_callbacks(app):
             if not isinstance(hover, dict):
                 if "hover_x" in data:
                     data.pop("hover_x", None)
+                    data.pop("last_hover_ms", None)
                     changed = True
             else:
                 pts = hover.get("points") or []
                 if not pts or pts[0].get("x") is None:
                     if "hover_x" in data:
                         data.pop("hover_x", None)
+                        data.pop("last_hover_ms", None)
                         changed = True
                 else:
                     hx = pts[0].get("x")
@@ -2575,6 +2838,7 @@ def register_ironbeam_callbacks(app):
                     else:
                         if data.get("hover_x") != hxn:
                             data["hover_x"] = hxn
+                            data["last_hover_ms"] = int(time.time() * 1000)
                             changed = True
 
         if not changed:
