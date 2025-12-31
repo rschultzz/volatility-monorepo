@@ -1472,6 +1472,15 @@ def register_ironbeam_callbacks(app):
         prevent_initial_call=True,
     )
 
+    # ---- Clientside Highlight: Click on Candle ----
+    app.clientside_callback(
+        ClientsideFunction(namespace="ironbeam", function_name="highlight_candle"),
+        Output("ironbeam-chart", "figure", allow_duplicate=True),
+        [Input("ironbeam-chart", "clickData")],
+        [State("ironbeam-chart", "figure")],
+        prevent_initial_call=True,
+    )
+
     @app.callback(
         Output("ironbeam-chart", "figure"),
         [
@@ -1910,9 +1919,11 @@ def register_ironbeam_callbacks(app):
 
         meta["indicator_state_token"] = _indicator_state_token(indicator_state)
         meta["last_relayout_ms"] = int(time.time() * 1000)
-        layout["meta"] = meta
-        fig["layout"] = layout
-        return fig
+        
+        # Use Patch to update meta without sending full figure
+        p = Patch()
+        p.layout.meta = meta
+        return p
 
     # ---- Progressive loader + live refresh (and prevent stale interval overwrites) ----
     @app.callback(
@@ -2955,9 +2966,10 @@ def register_ironbeam_callbacks(app):
         Output("smile-time-input", "value", allow_duplicate=True),
         Input("ironbeam-chart", "clickData"),
         State("smile-time-input", "value"),
+        State("ironbeam-bar-interval", "value"),
         prevent_initial_call=True,
     )
-    def ib_click_bar_sets_time_slices(click_data, current_value):
+    def ib_click_bar_sets_time_slices(click_data, current_value, bar_interval):
         if not isinstance(click_data, dict):
             raise PreventUpdate
         pts = click_data.get("points") or []
@@ -2983,6 +2995,11 @@ def register_ironbeam_callbacks(app):
         except Exception:
             # if pandas returns python datetime already
             pass
+
+        # Adjust for 1-minute bars: select the next minute (end of bar)
+        # This fixes the "selecting bars a minute behind" issue.
+        if (bar_interval or "1min") == "1min":
+             ts = ts + pd.Timedelta(minutes=1)
 
         try:
             hhmm = ts.strftime("%H:%M")
