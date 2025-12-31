@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 import plotly.colors as pc
 from plotly.subplots import make_subplots
 
-from dash import Input, Output, State, html, dcc, ctx, no_update, MATCH, Patch
+from dash import Input, Output, State, html, dcc, ctx, no_update, MATCH, Patch, ClientsideFunction
 from dash.exceptions import PreventUpdate
 
 # Indicator plugin registry (Step 6)
@@ -269,57 +269,44 @@ def _trades_to_ohlc(
     return out
 
 
-def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, interval: str, pt_tz: ZoneInfo) -> bool:
+def _apply_live_trades_overlay_patch(patch_obj: Patch, fig_dict: dict, df_base_bars: pd.DataFrame, interval: str, pt_tz: ZoneInfo) -> bool:
     """
-    Adds/refreshes a separate candlestick trace built from trades.
-
-    Goal:
-      - Use your lagging 1m bars table for history (unchanged)
-      - Overlay ONLY the missing minutes + the current in-progress minute built from trades
-      - Never duplicate a candle that already exists in the base bars trace
-
-    Returns True if the figure was changed (overlay removed/added), else False.
+    Adds/refreshes a separate candlestick trace built from trades using Patch.
     """
     if df_base_bars is None or df_base_bars.empty:
         return False
     if interval not in ("1min", "5min"):
         return False
 
-    # Decide bar cadence + how we label trade bars to match the base data
     if interval == "1min":
         freq = "1min"
-        label_mode = "left"  # base 1m table is almost always stamped at bar-start
+        label_mode = "left"
     else:
         freq = "5min"
-        label_mode = "right"  # our 5m display is resampled with label='right' in _resample_ohlc
+        label_mode = "right"
 
-    # Do we currently have an overlay?
-    had_overlay = False
-    try:
-        for tr in fig_obj.data:
-            if getattr(tr, "name", "") and str(tr.name).startswith(LIVE_TRADES_TRACE_PREFIX):
-                had_overlay = True
+    # Check if overlay exists in fig_dict
+    overlay_idx = None
+    if "data" in fig_dict and isinstance(fig_dict["data"], list):
+        for i, tr in enumerate(fig_dict["data"]):
+            if tr.get("name", "").startswith(LIVE_TRADES_TRACE_PREFIX):
+                overlay_idx = i
                 break
-    except Exception:
-        had_overlay = False
 
-    # Parse base bar times and find the latest timestamp we already have
     base_ts = pd.to_datetime(df_base_bars.get("datetime_pt"), errors="coerce")
     base_ts = base_ts.dropna()
     if base_ts.empty:
-        if had_overlay:
-            _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
+        if overlay_idx is not None:
+            del patch_obj.data[overlay_idx]
             return True
         return False
 
-    # Ensure PT tz
     try:
         if base_ts.dt.tz is None:
             base_ts = base_ts.dt.tz_localize(pt_tz)
         else:
             base_ts = base_ts.dt.tz_convert(pt_tz)
     except Exception:
-        # If anything weird, just bail quietly
         return False
 
     base_ts = base_ts.sort_values()
@@ -328,7 +315,6 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
     now_pt = dt.datetime.now(tz=pt_tz)
     now_ts = pd.Timestamp(now_pt)
 
-    # What minute(s) should the overlay cover?
     if label_mode == "left":
         current_bucket = now_ts.floor(freq)
     else:
@@ -338,17 +324,13 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
     start_bucket = last_base_ts + step
 
     if start_bucket > current_bucket:
-        # Base feed has caught up; remove any stale overlay
-        if had_overlay:
-            _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
+        if overlay_idx is not None:
+            del patch_obj.data[overlay_idx]
             return True
         return False
 
     expected = pd.date_range(start=start_bucket, end=current_bucket, freq=freq)
-    expected_set = set(expected.to_pydatetime())  # compare against python datetimes too
-
-    # Fetch trades for a small window that covers the missing buckets.
-    # Add a buffer because Render/DB clocks and trade timestamps may be a hair off.
+    
     buffer = max(dt.timedelta(seconds=10), dt.timedelta(minutes=1) if freq == "1min" else dt.timedelta(minutes=5))
     fetch_start_pt = (expected[0].to_pydatetime() - buffer)
     fetch_end_pt = (expected[-1].to_pydatetime() + buffer)
@@ -359,7 +341,160 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
     try:
         df_tr = _fetch_trades_utc(start_utc, end_utc, symbol=TRADES_SYMBOL)
     except Exception as e:
-        # Don't kill the existing overlay just because of a transient DB hiccup.
+        print(f"[live trades] fetch error: {e}")
+        return False
+
+    bars_tr = _trades_to_ohlc(df_tr, freq=freq, pt_tz=pt_tz, label_mode=label_mode)
+    if bars_tr.empty:
+        if overlay_idx is not None:
+            del patch_obj.data[overlay_idx]
+            return True
+        return False
+
+    bars_tr["datetime_pt"] = pd.to_datetime(bars_tr["datetime_pt"], errors="coerce")
+    bars_tr = bars_tr.dropna(subset=["datetime_pt"]).copy()
+
+    if bars_tr["datetime_pt"].dt.tz is None:
+        bars_tr["datetime_pt"] = bars_tr["datetime_pt"].dt.tz_localize(pt_tz)
+    else:
+        bars_tr["datetime_pt"] = bars_tr["datetime_pt"].dt.tz_convert(pt_tz)
+
+    bars_tr = bars_tr[bars_tr["datetime_pt"].isin(expected)].copy()
+
+    if bars_tr.empty:
+        if overlay_idx is not None:
+            del patch_obj.data[overlay_idx]
+            return True
+        return False
+
+    base_set = set(pd.to_datetime(base_ts).to_list())
+    bars_tr = bars_tr[~bars_tr["datetime_pt"].isin(base_set)].copy()
+
+    if bars_tr.empty:
+        if overlay_idx is not None:
+            del patch_obj.data[overlay_idx]
+            return True
+        return False
+
+    bars_tr = bars_tr.sort_values("datetime_pt").tail(max(1, LIVE_TRADES_MAX_BARS))
+
+    x_new = bars_tr["datetime_pt"].tolist()
+    o_new = bars_tr["open"].astype(float).tolist()
+    h_new = bars_tr["high"].astype(float).tolist()
+    l_new = bars_tr["low"].astype(float).tolist()
+    c_new = bars_tr["close"].astype(float).tolist()
+
+    if overlay_idx is not None:
+        # Check if update is needed
+        tr = fig_dict["data"][overlay_idx]
+        old_x = tr.get("x", [])
+        old_c = tr.get("close", [])
+        
+        # Simple check: if last point matches, assume no change (optimization)
+        if old_x and old_c and len(old_x) == len(x_new):
+             if str(old_x[-1]) == str(x_new[-1]) and float(old_c[-1]) == float(c_new[-1]):
+                 return False
+
+        patch_obj.data[overlay_idx].x = x_new
+        patch_obj.data[overlay_idx].open = o_new
+        patch_obj.data[overlay_idx].high = h_new
+        patch_obj.data[overlay_idx].low = l_new
+        patch_obj.data[overlay_idx].close = c_new
+        return True
+    else:
+        # Add new trace
+        new_trace = dict(
+            type="candlestick",
+            x=x_new,
+            open=o_new,
+            high=h_new,
+            low=l_new,
+            close=c_new,
+            name=f"{LIVE_TRADES_TRACE_PREFIX} {TRADES_SYMBOL}",
+            increasing=dict(line=dict(color=LIVE_UP_COLOR, width=2.0), fillcolor="rgba(96,165,250,0.18)"),
+            decreasing=dict(line=dict(color=LIVE_DOWN_COLOR, width=2.0), fillcolor="rgba(229,231,235,0.18)"),
+            showlegend=False,
+            yaxis="y2",
+            hovertemplate="<extra></extra>",
+        )
+        patch_obj.data.append(new_trace)
+        return True
+
+
+def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, interval: str, pt_tz: ZoneInfo) -> bool:
+    """
+    Adds/refreshes a separate candlestick trace built from trades.
+    (Legacy version for full figure rebuilds)
+    """
+    if df_base_bars is None or df_base_bars.empty:
+        return False
+    if interval not in ("1min", "5min"):
+        return False
+
+    if interval == "1min":
+        freq = "1min"
+        label_mode = "left"
+    else:
+        freq = "5min"
+        label_mode = "right"
+
+    had_overlay = False
+    try:
+        for tr in fig_obj.data:
+            if getattr(tr, "name", "") and str(tr.name).startswith(LIVE_TRADES_TRACE_PREFIX):
+                had_overlay = True
+                break
+    except Exception:
+        had_overlay = False
+
+    base_ts = pd.to_datetime(df_base_bars.get("datetime_pt"), errors="coerce")
+    base_ts = base_ts.dropna()
+    if base_ts.empty:
+        if had_overlay:
+            _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
+            return True
+        return False
+
+    try:
+        if base_ts.dt.tz is None:
+            base_ts = base_ts.dt.tz_localize(pt_tz)
+        else:
+            base_ts = base_ts.dt.tz_convert(pt_tz)
+    except Exception:
+        return False
+
+    base_ts = base_ts.sort_values()
+    last_base_ts = base_ts.iloc[-1]
+
+    now_pt = dt.datetime.now(tz=pt_tz)
+    now_ts = pd.Timestamp(now_pt)
+
+    if label_mode == "left":
+        current_bucket = now_ts.floor(freq)
+    else:
+        current_bucket = now_ts.ceil(freq)
+
+    step = pd.Timedelta(freq)
+    start_bucket = last_base_ts + step
+
+    if start_bucket > current_bucket:
+        if had_overlay:
+            _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
+            return True
+        return False
+
+    expected = pd.date_range(start=start_bucket, end=current_bucket, freq=freq)
+    
+    buffer = max(dt.timedelta(seconds=10), dt.timedelta(minutes=1) if freq == "1min" else dt.timedelta(minutes=5))
+    fetch_start_pt = (expected[0].to_pydatetime() - buffer)
+    fetch_end_pt = (expected[-1].to_pydatetime() + buffer)
+
+    start_utc = fetch_start_pt.astimezone(ZoneInfo("UTC"))
+    end_utc = fetch_end_pt.astimezone(ZoneInfo("UTC"))
+
+    try:
+        df_tr = _fetch_trades_utc(start_utc, end_utc, symbol=TRADES_SYMBOL)
+    except Exception as e:
         print(f"[live trades] fetch error: {e}")
         return False
 
@@ -370,17 +505,14 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
             return True
         return False
 
-    # Keep ONLY the buckets we expect to be missing, and never overlap the base bars.
     bars_tr["datetime_pt"] = pd.to_datetime(bars_tr["datetime_pt"], errors="coerce")
     bars_tr = bars_tr.dropna(subset=["datetime_pt"]).copy()
 
-    # Ensure tz-aware PT
     if bars_tr["datetime_pt"].dt.tz is None:
         bars_tr["datetime_pt"] = bars_tr["datetime_pt"].dt.tz_localize(pt_tz)
     else:
         bars_tr["datetime_pt"] = bars_tr["datetime_pt"].dt.tz_convert(pt_tz)
 
-    # Filter to expected buckets
     bars_tr = bars_tr[bars_tr["datetime_pt"].isin(expected)].copy()
 
     if bars_tr.empty:
@@ -389,7 +521,6 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
             return True
         return False
 
-    # Extra safety: drop anything that matches an existing base timestamp (prevents the duplicate bar)
     base_set = set(pd.to_datetime(base_ts).to_list())
     bars_tr = bars_tr[~bars_tr["datetime_pt"].isin(base_set)].copy()
 
@@ -401,7 +532,6 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
 
     bars_tr = bars_tr.sort_values("datetime_pt").tail(max(1, LIVE_TRADES_MAX_BARS))
 
-    # Refresh overlay IN-PLACE (avoid remove/add jitter during zoom/pan).
     overlay_idx = None
     try:
         for i, tr in enumerate(fig_obj.data):
@@ -417,7 +547,6 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
     l_new = bars_tr["low"].astype(float).tolist()
     c_new = bars_tr["close"].astype(float).tolist()
 
-    # If we already have an overlay trace and the last bar hasn't changed, do nothing.
     if overlay_idx is not None:
         try:
             tr = fig_obj.data[overlay_idx]
@@ -433,7 +562,6 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
             tr.close = c_new
             return True
         except Exception:
-            # Fallback: rebuild the overlay trace if an in-place update fails
             _remove_traces_by_name_prefix(fig_obj, LIVE_TRADES_TRACE_PREFIX)
             overlay_idx = None
 
@@ -1335,6 +1463,15 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
 
 # ---------- Dash callback registration ----------
 def register_ironbeam_callbacks(app):
+    # ---- Clientside Sync: Crosshair & Zoom ----
+    app.clientside_callback(
+        ClientsideFunction(namespace="ironbeam", function_name="sync_crosshair_and_zoom"),
+        Output({"type": "ib-indicator-panel", "id": MATCH}, "figure", allow_duplicate=True),
+        [Input("ironbeam-chart", "relayoutData"), Input("ironbeam-chart", "hoverData")],
+        [State({"type": "ib-indicator-panel", "id": MATCH}, "figure")],
+        prevent_initial_call=True,
+    )
+
     @app.callback(
         Output("ironbeam-chart", "figure"),
         [
@@ -1840,8 +1977,10 @@ def register_ironbeam_callbacks(app):
         if isinstance(base_interval, str) and base_interval and base_interval != interval:
             raise PreventUpdate
 
-        fig = _sanitize_figure_dict(fig)
-        fig_obj = go.Figure(fig)
+        # Use Patch() to avoid resetting client-side zoom state
+        p = Patch()
+        
+        # We still need to read from 'fig' to check existing traces
         meta = (fig.get("layout") or {}).get("meta") or {}
 
         session_str = meta.get("multi_effective_date") or eff_date.isoformat()
@@ -1889,41 +2028,36 @@ def register_ironbeam_callbacks(app):
                 trace_name = f"ES {session_date.isoformat()} ({interval})"
                 idx_trace = None
                 old_last = None
-                for i, tr in enumerate(fig_obj.data):
-                    try:
-                        if getattr(tr, "type", None) == "candlestick" and getattr(tr, "name", None) == trace_name:
+                
+                # Find trace index in existing figure
+                if "data" in fig and isinstance(fig["data"], list):
+                    for i, tr in enumerate(fig["data"]):
+                        if tr.get("type") == "candlestick" and tr.get("name") == trace_name:
                             idx_trace = i
-                            xs = list(getattr(tr, "x", []) or [])
+                            xs = tr.get("x", [])
                             if xs:
                                 old_last = str(xs[-1])
                             break
-                    except Exception:
-                        continue
 
                 new_last = str(df_live["datetime_pt"].iloc[-1])
                 if old_last != new_last and idx_trace is not None:
-                    tr = fig_obj.data[idx_trace]
-                    tr.x = df_live["datetime_pt"].astype(str).tolist()
-                    setattr(tr, "open", df_live["open"].astype(float).tolist())
-                    tr.high = df_live["high"].astype(float).tolist()
-                    tr.low = df_live["low"].astype(float).tolist()
-                    tr.close = df_live["close"].astype(float).tolist()
+                    # Update existing trace using Patch
+                    p.data[idx_trace].x = df_live["datetime_pt"].astype(str).tolist()
+                    p.data[idx_trace].open = df_live["open"].astype(float).tolist()
+                    p.data[idx_trace].high = df_live["high"].astype(float).tolist()
+                    p.data[idx_trace].low = df_live["low"].astype(float).tolist()
+                    p.data[idx_trace].close = df_live["close"].astype(float).tolist()
                     did_anything = True
 
-                # Refresh live overlay EVERY tick (so the current minute bar "ticks" even if 1m feed hasn't advanced)
+                # Refresh live overlay EVERY tick
                 try:
-                    changed = _apply_live_trades_overlay(fig_obj, df_live, interval, pt_tz)
+                    changed = _apply_live_trades_overlay_patch(p, fig, df_live, interval, pt_tz)
                     if changed:
                         did_anything = True
-                    else:
-                        # Even if unchanged, you may still want to repaint occasionally; keep this False by default.
-                        pass
                 except Exception as e:
                     print(f"[Ironbeam live] overlay error: {e}")
 
         # ---- progressive add of other days ----
-        # Default behavior: ONLY load other days when the current viewport overlaps them.
-        # This keeps zoom/pan smooth and prevents the chart from "jumping" while days stream in.
         view_start = None
         view_end = None
         locked_x_range = meta.get("locked_x_range") if isinstance(meta, dict) else None
@@ -2005,9 +2139,9 @@ def register_ironbeam_callbacks(app):
 
         cmin, cmax = -1.0, 1.0
         try:
-            caxis = getattr(fig_obj.layout, "coloraxis", None)
-            if caxis is not None and getattr(caxis, "cmin", None) is not None and getattr(caxis, "cmax", None) is not None:
-                cmin, cmax = float(caxis.cmin), float(caxis.cmax)
+            caxis = (fig.get("layout") or {}).get("coloraxis")
+            if caxis and caxis.get("cmin") is not None and caxis.get("cmax") is not None:
+                cmin, cmax = float(caxis["cmin"]), float(caxis["cmax"])
         except Exception:
             pass
 
@@ -2032,21 +2166,22 @@ def register_ironbeam_callbacks(app):
                 did_anything = True
                 continue
 
-            fig_obj.add_trace(
-                go.Candlestick(
-                    x=df_bars["datetime_pt"].astype(str).tolist(),
-                    open=df_bars["open"].astype(float).tolist(),
-                    high=df_bars["high"].astype(float).tolist(),
-                    low=df_bars["low"].astype(float).tolist(),
-                    close=df_bars["close"].astype(float).tolist(),
-                    name=f"ES {target_str} ({interval})",
-                    increasing=dict(line=dict(color=CALL_COLOR, width=1.0), fillcolor=CALL_COLOR),
-                    decreasing=dict(line=dict(color=PUT_COLOR, width=1.0), fillcolor=PUT_COLOR),
-                    showlegend=False,
-                    yaxis="y2",
-                    hovertemplate="<extra></extra>",
-                )
+            # Add trace via Patch
+            new_trace = dict(
+                type="candlestick",
+                x=df_bars["datetime_pt"].astype(str).tolist(),
+                open=df_bars["open"].astype(float).tolist(),
+                high=df_bars["high"].astype(float).tolist(),
+                low=df_bars["low"].astype(float).tolist(),
+                close=df_bars["close"].astype(float).tolist(),
+                name=f"ES {target_str} ({interval})",
+                increasing=dict(line=dict(color=CALL_COLOR, width=1.0), fillcolor=CALL_COLOR),
+                decreasing=dict(line=dict(color=PUT_COLOR, width=1.0), fillcolor=PUT_COLOR),
+                showlegend=False,
+                yaxis="y2",
+                hovertemplate="<extra></extra>",
             )
+            p.data.append(new_trace)
 
             low = float(df_bars["low"].min())
             high = float(df_bars["high"].max())
@@ -2077,50 +2212,48 @@ def register_ironbeam_callbacks(app):
                         line_width = min(GEX_LEVEL_LINE_WIDTH_MAX, GEX_LEVEL_LINE_WIDTH + norm * GEX_LEVEL_LINE_WIDTH_SCALE)
                         line_opacity = float(min(1.0, max(0.12, GEX_LEVEL_LINE_OPACITY * (0.40 + 0.60 * norm))))
 
-                        fig_obj.add_trace(
-                            go.Scattergl(
-                                x=[day_start_pt, day_end_pt],
-                                y=[lvl, lvl],
-                                mode="lines",
-                                line=dict(color=color, width=line_width),
-                                opacity=line_opacity,
-                                name=f"GEX {target_str}",
-                                showlegend=False,
-                                hoverinfo="skip",
-                            )
+                        gex_trace = dict(
+                            type="scattergl",
+                            x=[day_start_pt, day_end_pt],
+                            y=[lvl, lvl],
+                            mode="lines",
+                            line=dict(color=color, width=line_width),
+                            opacity=line_opacity,
+                            name=f"GEX {target_str}",
+                            showlegend=False,
+                            hoverinfo="skip",
                         )
+                        p.data.append(gex_trace)
 
             loaded.append(target_str)
             loaded_changed = True
             did_anything = True
 
-        meta["multi_loaded_dates"] = sorted(set(loaded))
-        meta["multi_skip_dates"] = sorted(set(skipped))
-        meta["gex_levels_by_day"] = gex_levels_by_day
-        fig_obj.update_layout(meta=meta)
+        p.layout.meta["multi_loaded_dates"] = sorted(set(loaded))
+        p.layout.meta["multi_skip_dates"] = sorted(set(skipped))
+        p.layout.meta["gex_levels_by_day"] = gex_levels_by_day
 
         locked_y_range = meta.get("locked_y_range")
-        locked_x_range = meta.get("locked_x_range")
+        # We do NOT update locked_x_range here to avoid resetting user zoom.
+        # The client maintains the x-range.
 
         if locked_y_range is not None:
-            try:
-                fig_obj.update_layout(
-                    yaxis=dict(range=locked_y_range, autorange=False),
-                    yaxis2=dict(range=locked_y_range, autorange=False),
-                )
-            except Exception:
-                pass
-
-        if locked_x_range is not None:
-            try:
-                fig_obj.update_layout(xaxis=dict(range=locked_x_range, autorange=False))
-            except Exception:
-                pass
+            # We can update Y range if needed, but usually better to leave it unless we really need to enforce it.
+            # If we don't touch it, client keeps it.
+            pass
 
         # Rebuild hover trigger only when we add days (avoid heavy work every tick)
         if loaded_changed:
-            _remove_traces_by_name_prefix(fig_obj, "__hovergrid__")
-            _remove_traces_by_name_prefix(fig_obj, "__hoverline__")
+            # Remove old hover traces
+            indices_to_remove = []
+            if "data" in fig and isinstance(fig["data"], list):
+                for i, tr in enumerate(fig["data"]):
+                    nm = tr.get("name", "")
+                    if nm.startswith("__hovergrid__") or nm.startswith("__hoverline__"):
+                        indices_to_remove.append(i)
+            
+            for i in sorted(indices_to_remove, reverse=True):
+                del p.data[i]
 
             if USE_HOVERGRID:
                 x_min = None
@@ -2138,9 +2271,16 @@ def register_ironbeam_callbacks(app):
                         y_min, y_max = None, None
 
                 if y_min is None or y_max is None:
-                    y_min, y_max = _infer_price_range_from_fig(fig_obj)
-                if y_min is None or y_max is None:
-                    y_min, y_max = 0.0, 1.0
+                    # Infer from fig data
+                    lows, highs = [], []
+                    for tr in fig.get("data", []):
+                        if tr.get("type") == "candlestick":
+                            if tr.get("low"): lows.extend(tr["low"])
+                            if tr.get("high"): highs.extend(tr["high"])
+                    if lows and highs:
+                        y_min, y_max = float(np.nanmin(lows)), float(np.nanmax(highs))
+                    else:
+                        y_min, y_max = 0.0, 1.0
 
                 pad = max(5.0, 0.04 * (y_max - y_min))
 
@@ -2157,17 +2297,23 @@ def register_ironbeam_callbacks(app):
                     x_min=x_min,
                     x_max=x_max,
                 )
-                fig_obj.add_trace(hb)
-                fig_obj.add_trace(hg)
+                # Convert go objects to dicts for Patch
+                p.data.append(hb.to_plotly_json())
+                p.data.append(hg.to_plotly_json())
             else:
-                # Lightweight hover trigger from already-loaded candle traces.
-                fig_obj.add_trace(_build_hoverline_from_fig(fig_obj, pt_tz))
+                pass
 
         # ---- re-apply selected time-slice highlight so it persists across interval refresh/tab switches ----
         try:
             if selected_times_pt:
                 # Remove any existing highlight trace(s)
-                _remove_traces_by_name_prefix(fig_obj, "Selected slices")
+                indices_to_remove = []
+                if "data" in fig and isinstance(fig["data"], list):
+                    for i, tr in enumerate(fig["data"]):
+                        if tr.get("name", "").startswith("Selected slices"):
+                            indices_to_remove.append(i)
+                for i in sorted(indices_to_remove, reverse=True):
+                    del p.data[i]
 
                 # Prefer already-fetched live bars for the session day; otherwise refetch the day bars
                 df_sel = None
@@ -2183,8 +2329,9 @@ def register_ironbeam_callbacks(app):
                     mask_sel = df_sel['time_hhmm_pt'].isin(selected_times_pt if isinstance(selected_times_pt, list) else [selected_times_pt])
                     df_h = df_sel.loc[mask_sel]
                     if not df_h.empty:
-                        fig_obj.add_trace(
-                            go.Candlestick(
+                        p.data.append(
+                            dict(
+                                type="candlestick",
                                 x=df_h['datetime_pt'],
                                 open=df_h['open'],
                                 high=df_h['high'],
@@ -2206,7 +2353,7 @@ def register_ironbeam_callbacks(app):
         if not did_anything:
             raise PreventUpdate
 
-        return fig_obj
+        return p
 
     # -------------------------------------------------------------------------
     # Step 4: Wire Indicators sidebar -> Store (enabled + settings) and behavior
@@ -2658,36 +2805,24 @@ def register_ironbeam_callbacks(app):
         if pid not in enabled:
             return go.Figure()
 
+        # Determine if we can use Patch optimization (only x-range changed)
+        # We check if 'trade-date' or 'ib-indicator-state' triggered the update.
+        triggered_ids = [t['prop_id'] for t in ctx.triggered]
+        is_config_change = any('trade-date' in t or 'ib-indicator-state' in t for t in triggered_ids)
+        
+        if not is_config_change and 'ib-shared-xrange.data' in triggered_ids:
+             if pid == 'aggressor_flow':
+                 if isinstance(shared_xrange, dict):
+                     x0 = shared_xrange.get("x0")
+                     x1 = shared_xrange.get("x1")
+                     if x0 and x1:
+                         p = Patch()
+                         p.layout.xaxis.range = [x0, x1]
+                         p.layout.xaxis.autorange = False
+                         return p
+                 return no_update
+
         if pid == 'aggressor_flow':
-            # Smooth hover-line sync: if ONLY the hover_x changed, PATCH the existing figure
-            # instead of rebuilding from DB on every mouse move.
-            try:
-                if isinstance(prev_panel_fig, dict) and ctx.triggered_id == "ib-shared-xrange":
-                    hx = (shared_xrange or {}).get("hover_x") if isinstance(shared_xrange, dict) else None
-                    meta = ((prev_panel_fig.get("layout") or {}).get("meta") or {})
-                    last_hx = meta.get("hover_vline_last_x")
-                    hover_idx = meta.get("hover_vline_idx")
-
-                    # If unchanged, do nothing.
-                    if hx is None and last_hx is None:
-                        raise PreventUpdate
-                    if isinstance(hx, str) and isinstance(last_hx, str) and hx == last_hx:
-                        raise PreventUpdate
-
-                    if hover_idx is not None and isinstance(hover_idx, int):
-                        p = Patch()
-                        # Ensure line becomes visible when we have hx, and hidden when we don't.
-                        p["layout"]["shapes"][hover_idx]["x0"] = hx
-                        p["layout"]["shapes"][hover_idx]["x1"] = hx
-                        p["layout"]["shapes"][hover_idx]["line"]["color"] = ("rgba(255,255,255,0.35)" if hx else "rgba(0,0,0,0)")
-                        p["layout"]["meta"]["hover_vline_last_x"] = hx
-                        return p
-            except PreventUpdate:
-                raise
-            except Exception:
-                # Fall back to full rebuild on any unexpected shape/meta issue
-                pass
-
             return build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange)
 
         # Unknown panel plugin: return empty
@@ -2732,19 +2867,15 @@ def register_ironbeam_callbacks(app):
     @app.callback(
         Output("ib-shared-xrange", "data"),
         Input("ironbeam-chart", "relayoutData"),
-        Input("ironbeam-chart", "hoverData"),
         State("ib-shared-xrange", "data"),
         prevent_initial_call=True,
     )
-    def capture_shared_xrange(relayout, hover, current):
+    def capture_shared_xrange(relayout, current):
         """
         Stores:
           - x0/x1 from relayout (zoom/pan)
-          - hover_x from hoverData (for crosshair carry-down)
-
-        NOTE: Dash can trigger both relayoutData and hoverData in the same tick.
-        We handle BOTH (no reliance on triggered order), otherwise pan can fail to
-        propagate the x-range.
+        
+        Note: Hover crosshair sync is now handled clientside to avoid latency.
         """
         data = dict(current or {})
 
@@ -2770,76 +2901,46 @@ def register_ironbeam_callbacks(app):
                 return None
             return ts.isoformat()
 
-        trig_ids = set((ctx.triggered_prop_ids or {}).keys())
+        # We only have relayoutData now
+        if not isinstance(relayout, dict):
+            raise PreventUpdate
 
         changed = False
 
-        # --- Zoom / pan range (relayout) ---
-        if any(t.endswith(".relayoutData") for t in trig_ids):
-            if not isinstance(relayout, dict):
-                raise PreventUpdate
+        # Reset (double click)
+        if relayout.get("xaxis.autorange") or relayout.get("xaxis.autorange") is True:
+            if "x0" in data or "x1" in data:
+                data.pop("x0", None)
+                data.pop("x1", None)
+                changed = True
+        else:
+            # Most common keys
+            x0 = relayout.get("xaxis.range[0]")
+            x1 = relayout.get("xaxis.range[1]")
+            rng = relayout.get("xaxis.range")
 
-            # Reset (double click)
-            if relayout.get("xaxis.autorange") or relayout.get("xaxis.autorange") is True:
-                if "x0" in data or "x1" in data:
-                    data.pop("x0", None)
-                    data.pop("x1", None)
+            # Some plotly updates use list-style range
+            if (x0 is None or x1 is None) and isinstance(rng, (list, tuple)) and len(rng) == 2:
+                x0, x1 = rng[0], rng[1]
+
+            # Fallback: support xaxis2/xaxis3 if present
+            if x0 is None or x1 is None:
+                for ax in ("xaxis", "xaxis2", "xaxis3"):
+                    x0 = relayout.get(f"{ax}.range[0]")
+                    x1 = relayout.get(f"{ax}.range[1]")
+                    rng = relayout.get(f"{ax}.range")
+                    if (x0 is None or x1 is None) and isinstance(rng, (list, tuple)) and len(rng) == 2:
+                        x0, x1 = rng[0], rng[1]
+                    if x0 is not None and x1 is not None:
+                        break
+
+            x0n = _to_pt_iso(x0)
+            x1n = _to_pt_iso(x1)
+            if x0n is not None and x1n is not None:
+                if data.get("x0") != x0n or data.get("x1") != x1n:
+                    data["x0"] = x0n
+                    data["x1"] = x1n
                     changed = True
-            else:
-                # Most common keys
-                x0 = relayout.get("xaxis.range[0]")
-                x1 = relayout.get("xaxis.range[1]")
-                rng = relayout.get("xaxis.range")
-
-                # Some plotly updates use list-style range
-                if (x0 is None or x1 is None) and isinstance(rng, (list, tuple)) and len(rng) == 2:
-                    x0, x1 = rng[0], rng[1]
-
-                # Fallback: support xaxis2/xaxis3 if present
-                if x0 is None or x1 is None:
-                    for ax in ("xaxis", "xaxis2", "xaxis3"):
-                        x0 = relayout.get(f"{ax}.range[0]")
-                        x1 = relayout.get(f"{ax}.range[1]")
-                        rng = relayout.get(f"{ax}.range")
-                        if (x0 is None or x1 is None) and isinstance(rng, (list, tuple)) and len(rng) == 2:
-                            x0, x1 = rng[0], rng[1]
-                        if x0 is not None and x1 is not None:
-                            break
-
-                x0n = _to_pt_iso(x0)
-                x1n = _to_pt_iso(x1)
-                if x0n is not None and x1n is not None:
-                    if data.get("x0") != x0n or data.get("x1") != x1n:
-                        data["x0"] = x0n
-                        data["x1"] = x1n
-                        changed = True
-
-        # --- Hover crosshair x (hoverData) ---
-        if any(t.endswith(".hoverData") for t in trig_ids):
-            if not isinstance(hover, dict):
-                if "hover_x" in data:
-                    data.pop("hover_x", None)
-                    data.pop("last_hover_ms", None)
-                    changed = True
-            else:
-                pts = hover.get("points") or []
-                if not pts or pts[0].get("x") is None:
-                    if "hover_x" in data:
-                        data.pop("hover_x", None)
-                        data.pop("last_hover_ms", None)
-                        changed = True
-                else:
-                    hx = pts[0].get("x")
-                    hxn = _to_pt_iso(hx)
-                    if hxn is None:
-                        if "hover_x" in data:
-                            data.pop("hover_x", None)
-                            changed = True
-                    else:
-                        if data.get("hover_x") != hxn:
-                            data["hover_x"] = hxn
-                            data["last_hover_ms"] = int(time.time() * 1000)
-                            changed = True
 
         if not changed:
             raise PreventUpdate
