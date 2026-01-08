@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 import plotly.colors as pc
 from plotly.subplots import make_subplots
 
-from dash import Input, Output, State, html, dcc, ctx, no_update, MATCH, Patch, ClientsideFunction
+from dash import Input, Output, State, html, dcc, ctx, no_update, MATCH, ALL, Patch, ClientsideFunction
 from dash.exceptions import PreventUpdate
 
 # Indicator plugin registry (Step 6)
@@ -1455,6 +1455,21 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
                 line_dash="dash",
                 line_color="rgba(255,255,255,0.35)",
             )
+    
+    # Check if y-range is locked in shared_xrange (we reuse this store for y-locks too)
+    if isinstance(shared_xrange, dict):
+        y0 = shared_xrange.get(f"y0_{indicator_state.get('enabled', [])[0] if indicator_state.get('enabled') else ''}")
+        y1 = shared_xrange.get(f"y1_{indicator_state.get('enabled', [])[0] if indicator_state.get('enabled') else ''}")
+        # Actually, we need to know the specific panel ID. But here we are building for 'aggressor_flow'.
+        # Let's use a specific key for flow y-range.
+        flow_y0 = shared_xrange.get("flow_y0")
+        flow_y1 = shared_xrange.get("flow_y1")
+        
+        if flow_y0 is not None and flow_y1 is not None:
+            try:
+                fig.update_yaxes(range=[float(flow_y0), float(flow_y1)], autorange=False)
+            except Exception:
+                pass
 
     return fig
 
@@ -1471,6 +1486,66 @@ def register_ironbeam_callbacks(app):
         [State({"type": "ib-indicator-panel", "id": MATCH}, "figure")],
         prevent_initial_call=True,
     )
+    
+    # ---- Capture Indicator Panel Zoom (Y-axis) ----
+    @app.callback(
+        Output("ib-shared-xrange", "data", allow_duplicate=True),
+        Input({"type": "ib-indicator-panel", "id": ALL}, "relayoutData"),
+        State("ib-shared-xrange", "data"),
+        State({"type": "ib-indicator-panel", "id": ALL}, "id"),
+        prevent_initial_call=True,
+    )
+    def capture_indicator_zoom(relayouts, current_shared, panel_ids):
+        if not ctx.triggered:
+            raise PreventUpdate
+            
+        trig_id = ctx.triggered_id
+        if not trig_id or trig_id.get("type") != "ib-indicator-panel":
+            raise PreventUpdate
+            
+        pid = trig_id.get("id")
+        
+        # Find the relayout data for this specific ID
+        try:
+            # panel_ids is a list of dicts like {'id': 'aggressor_flow', 'type': 'ib-indicator-panel'}
+            # We need to find the index where the dict matches trig_id
+            idx = panel_ids.index(trig_id)
+            relayout = relayouts[idx]
+        except (ValueError, IndexError, AttributeError):
+            raise PreventUpdate
+
+        if not relayout or not isinstance(relayout, dict):
+            raise PreventUpdate
+            
+        # Only process for aggressor_flow for now
+        if pid != "aggressor_flow":
+            raise PreventUpdate
+            
+        data = dict(current_shared or {})
+        changed = False
+        
+        # Check for Y-axis zoom/pan
+        y0 = relayout.get("yaxis.range[0]")
+        y1 = relayout.get("yaxis.range[1]")
+        
+        # Handle autorange (reset zoom)
+        if relayout.get("yaxis.autorange") is True:
+            if "flow_y0" in data:
+                del data["flow_y0"]
+                changed = True
+            if "flow_y1" in data:
+                del data["flow_y1"]
+                changed = True
+        elif y0 is not None and y1 is not None:
+            if data.get("flow_y0") != y0 or data.get("flow_y1") != y1:
+                data["flow_y0"] = y0
+                data["flow_y1"] = y1
+                changed = True
+                
+        if not changed:
+            raise PreventUpdate
+            
+        return data
 
     # ---- Clientside Highlight: Click on Candle ----
     app.clientside_callback(
@@ -2797,12 +2872,13 @@ def register_ironbeam_callbacks(app):
             Input('smile-time-input', 'value'),  # heartbeat (value not used)
             Input('ib-indicator-state', 'data'),
             Input('ib-shared-xrange', 'data'),
+            Input('ironbeam-interval', 'n_intervals'),
             State({'type': 'ib-indicator-panel', 'id': MATCH}, 'id'),
             State({'type': 'ib-indicator-panel', 'id': MATCH}, 'figure'),
         ],
         prevent_initial_call=False,
     )
-    def ib_update_indicator_panel(trade_date, _heartbeat, indicator_state, shared_xrange, panel_id, prev_panel_fig):
+    def ib_update_indicator_panel(trade_date, _heartbeat, indicator_state, shared_xrange, n_intervals, panel_id, prev_panel_fig):
         pid = panel_id.get('id') if isinstance(panel_id, dict) else None
         if not pid:
             raise PreventUpdate
@@ -2816,12 +2892,26 @@ def register_ironbeam_callbacks(app):
         if pid not in enabled:
             return go.Figure()
 
+        triggered_ids = [t['prop_id'] for t in ctx.triggered]
+
+        # If triggered by interval, check if we are on the live date.
+        if 'ironbeam-interval.n_intervals' in triggered_ids:
+            try:
+                pt_tz = ZoneInfo("America/Los_Angeles")
+                selected_date = dt.datetime.strptime(trade_date, "%Y-%m-%d").date()
+                curr_session = _current_session_trade_date(pt_tz)
+                eff_date, _ = _effective_trade_date(selected_date, pt_tz)
+                
+                if eff_date != curr_session:
+                    return no_update
+            except Exception:
+                return no_update
+
         # Determine if we can use Patch optimization (only x-range changed)
         # We check if 'trade-date' or 'ib-indicator-state' triggered the update.
-        triggered_ids = [t['prop_id'] for t in ctx.triggered]
         is_config_change = any('trade-date' in t or 'ib-indicator-state' in t for t in triggered_ids)
         
-        if not is_config_change and 'ib-shared-xrange.data' in triggered_ids:
+        if not is_config_change and 'ib-shared-xrange.data' in triggered_ids and 'ironbeam-interval.n_intervals' not in triggered_ids:
              if pid == 'aggressor_flow':
                  if isinstance(shared_xrange, dict):
                      x0 = shared_xrange.get("x0")
