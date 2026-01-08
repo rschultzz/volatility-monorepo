@@ -1243,11 +1243,18 @@ def _bt2_find_similar(n, strategy_name, start_date, end_date, rth_only_value, lo
 
         feat_cols = ["ret", "atmiv_chg", "put_skew_pp_chg", "call_skew_pp_chg", "dist_wall_above", "dist_wall_below"]
         feat_cols = [c for c in feat_cols if c in train_df.columns]
+        REQUIRED = ["atmiv_chg", "put_skew_pp_chg", "call_skew_pp_chg"]
+
         if not feat_cols:
             return [], [], [], "Training examples exist, but no usable feature columns were found."
 
         mu = train_df[feat_cols].mean(numeric_only=True)
         sigma = train_df[feat_cols].std(numeric_only=True, ddof=0).replace(0, 1.0)
+
+        # If training data can't support required fields, stop early with a clear message.
+        for k in REQUIRED:
+            if k not in mu.index or pd.isna(mu[k]):
+                return [], [], [], f"Strategy has accepted examples, but required feature '{k}' is missing/NULL. Save examples with valid skew + ATM IV first."
 
         rth_only = (rth_only_value == "yes")
         lookahead_min = int(lookahead_min or 5)
@@ -1276,6 +1283,11 @@ def _bt2_find_similar(n, strategy_name, start_date, end_date, rth_only_value, lo
                 continue
 
             feats = _bt2_compute_feature_dict(a, e)
+
+            # Require ATM IV change + both skew changes
+            missing_req = [k for k in REQUIRED if feats.get(k) is None or pd.isna(feats.get(k))]
+            if missing_req:
+                continue
 
             zsum = 0.0
             used = 0
