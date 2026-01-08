@@ -27,10 +27,12 @@ from functools import lru_cache
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-from dash import Dash, html, dcc, Input, Output, State
+from dash import Dash, html, dcc, Input, Output, State, no_update
 from dash import dash_table
 from dash.exceptions import PreventUpdate
 import dash_auth
+from zoneinfo import ZoneInfo
+
 
 # ===== Modules =====
 from modules.Skew.components import make_skew_block
@@ -333,6 +335,20 @@ def _save_strategy_instance(strategy_id: int, anchor_ts_utc: str, entry_ts_utc: 
 
 
 
+
+
+def _bt2_list_strategy_options() -> List[dict]:
+    """Return strategies for dropdown as [{'label': name, 'value': name}, ...]."""
+    try:
+        engine = _get_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT name FROM bt_strategies ORDER BY name")).fetchall()
+        opts = [{"label": r[0], "value": r[0]} for r in rows if r and r[0]]
+        return opts if opts else [{"label": "Strategy A", "value": "Strategy A"}]
+    except Exception:
+        # Table may not exist yet in a fresh DB
+        return [{"label": "Strategy A", "value": "Strategy A"}]
+
 # ===== App setup =====
 app = Dash(__name__, suppress_callback_exceptions=True)
 server = app.server
@@ -358,6 +374,10 @@ def serve_layout():
     # Backtests v2 default range
     bt2_end = default_trade_date
     bt2_start = default_trade_date - dt.timedelta(days=3)
+
+    # Backtests v2 strategies
+    bt2_strategy_options = _bt2_list_strategy_options()
+    bt2_strategy_default = bt2_strategy_options[0]["value"] if bt2_strategy_options else "Strategy A"
 
     # ----- DASHBOARD BODY (this matches your original layout) -----
     dashboard_children = [
@@ -606,19 +626,53 @@ def serve_layout():
                     [
                         html.Div(
                             [
-                                html.Label("Strategy name", style=LABEL_STYLE),
-                                dcc.Input(
+                                html.Label("Strategy", style=LABEL_STYLE),
+                                dcc.Dropdown(
                                     id="bt2-strategy-name",
-                                    type="text",
-                                    value="Strategy A",
-                                    style={
-                                        "width": "220px",
-                                        "padding": "6px 8px",
-                                        "borderRadius": "8px",
-                                        "border": "1px solid #1f2937",
-                                        "backgroundColor": "#0b1220",
-                                        "color": "white",
-                                    },
+                                    options=bt2_strategy_options,
+                                    value=bt2_strategy_default,
+                                    clearable=False,
+                                    searchable=True,
+                                    style={"minWidth": "260px"},
+                                ),
+                                html.Div(
+                                    [
+                                        dcc.Input(
+                                            id="bt2-new-strategy-name",
+                                            type="text",
+                                            placeholder="New strategy name…",
+                                            style={
+                                                "width": "220px",
+                                                "padding": "6px 8px",
+                                                "borderRadius": "8px",
+                                                "border": "1px solid #1f2937",
+                                                "backgroundColor": "#0b1220",
+                                                "color": "white",
+                                                "marginTop": "8px",
+                                            },
+                                        ),
+                                        html.Button(
+                                            "Create",
+                                            id="bt2-create-strategy",
+                                            n_clicks=0,
+                                            style={
+                                                "backgroundColor": "#111827",
+                                                "border": "1px solid #60a5fa",
+                                                "color": "#bfdbfe",
+                                                "fontWeight": "900",
+                                                "borderRadius": "10px",
+                                                "padding": "6px 10px",
+                                                "cursor": "pointer",
+                                                "marginLeft": "10px",
+                                                "marginTop": "8px",
+                                            },
+                                        ),
+                                    ],
+                                    style={"display": "flex", "alignItems": "center"},
+                                ),
+                                html.Div(
+                                    id="bt2-strategy-status",
+                                    style={"color": "#94a3b8", "fontSize": "12px", "marginTop": "6px"},
                                 ),
                             ],
                             style={"marginRight": "12px"},
@@ -800,6 +854,22 @@ def serve_layout():
                                 "marginTop": "20px",
                             },
                         ),
+                        html.Button(
+                            "Load Candidate on Dashboard",
+                            id="bt2-load-cand-to-dash",
+                            n_clicks=0,
+                            style={
+                                "backgroundColor": "#111827",
+                                "border": "1px solid #60a5fa",
+                                "color": "#bfdbfe",
+                                "fontWeight": "900",
+                                "borderRadius": "10px",
+                                "padding": "8px 14px",
+                                "cursor": "pointer",
+                                "marginTop": "20px",
+                                "marginLeft": "10px",
+                            },
+                        ),
                         html.Div(id="bt2-find-status", style={"color": "#e5e7eb", "marginTop": "24px", "marginLeft": "14px"}),
                     ],
                     style={"display": "flex", "alignItems": "flex-start", "flexWrap": "wrap"},
@@ -832,6 +902,74 @@ def serve_layout():
                 ),
 
                 html.Div(id="bt2-cand-action-status", style={"color": "#e5e7eb", "marginTop": "8px"}),
+                html.Div(id="bt2-load-cand-status", style={"color": "#e5e7eb", "marginTop": "8px"}),
+                html.Hr(style={"borderColor": "#1f2937", "margin": "12px 0"}),
+
+                html.Div(
+                    [
+                        html.Div("Saved Examples", style={"color": "#e5e7eb", "fontSize": "14px", "fontWeight": "800"}),
+
+                        html.Button(
+                            "Refresh Saved",
+                            id="bt2-refresh-saved",
+                            n_clicks=0,
+                            style={
+                                "backgroundColor": "#111827",
+                                "border": "1px solid #60a5fa",
+                                "color": "#bfdbfe",
+                                "fontWeight": "900",
+                                "borderRadius": "10px",
+                                "padding": "8px 14px",
+                                "cursor": "pointer",
+                            },
+                        ),
+                        html.Button(
+                            "Load on Dashboard",
+                            id="bt2-load-saved-to-dash",
+                            n_clicks=0,
+                            style={
+                                "backgroundColor": "#0b1220",
+                                "border": "1px solid #22c55e",
+                                "color": "#bbf7d0",
+                                "fontWeight": "900",
+                                "borderRadius": "10px",
+                                "padding": "8px 14px",
+                                "cursor": "pointer",
+                                "marginLeft": "10px",
+                            },
+                        ),
+                        html.Div(id="bt2-saved-status", style={"color": "#e5e7eb", "marginLeft": "14px"}),
+                    ],
+                    style={"display": "flex", "alignItems": "center", "gap": "10px", "flexWrap": "wrap"},
+                ),
+
+                dash_table.DataTable(
+                    id="bt2-saved-table",
+                    data=[],
+                    columns=[],
+                    page_size=10,
+                    row_selectable="single",
+                    selected_rows=[],
+                    sort_action="native",
+                    filter_action="native",
+                    style_table={"overflowX": "auto", "maxHeight": "35vh", "overflowY": "auto"},
+                    style_header={
+                        "backgroundColor": "#111827",
+                        "color": "white",
+                        "fontWeight": "700",
+                        "border": "1px solid #1f2937",
+                    },
+                    style_cell={
+                        "backgroundColor": "#0b1220",
+                        "color": "white",
+                        "border": "1px solid #1f2937",
+                        "fontSize": "12px",
+                        "padding": "6px",
+                        "whiteSpace": "nowrap",
+                    },
+                ),
+
+                html.Div(id="bt2-load-dash-status", style={"color": "#e5e7eb", "marginTop": "8px"}),
 
                 dash_table.DataTable(
                     id="bt2-table",
@@ -1002,6 +1140,355 @@ def _bt2_load_rows(n_clicks, start_date, end_date, rth_only_value, limit_rows):
         f"trade_date range: {start_date} → {end_date} | rth_only={rth_only}"
     )
     return df.to_dict("records"), cols, summary
+def _bt2_fetch_training_features(strategy_id: int) -> pd.DataFrame:
+    """
+    Load accepted (label=1) training features for a strategy into a numeric dataframe.
+    """
+    engine = _get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT features
+                FROM bt_strategy_instances
+                WHERE strategy_id = :sid AND label = 1
+                ORDER BY id
+                """
+            ),
+            {"sid": int(strategy_id)},
+        ).fetchall()
+
+    feats = [r[0] for r in rows]  # JSONB -> dict
+    if not feats:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(feats)
+
+    # force numeric where possible
+    for c in df.columns:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    return df
+
+
+def _bt2_compute_feature_dict(anchor_row: dict, entry_row: dict) -> dict:
+    """
+    Compute the same v1 features we store when you Save Example.
+    anchor_row / entry_row are dict rows from the view.
+    """
+    a_close = anchor_row.get("close")
+    e_close = entry_row.get("close")
+
+    # safe return
+    ret = None
+    if a_close not in (None, 0) and e_close is not None:
+        try:
+            ret = (float(e_close) / float(a_close)) - 1.0
+        except Exception:
+            ret = None
+
+    out = {
+        "px_chg": None if (a_close is None or e_close is None) else (float(e_close) - float(a_close)),
+        "ret": ret,
+        "atmiv_chg": None
+        if (anchor_row.get("atmiv") is None or entry_row.get("atmiv") is None)
+        else (float(entry_row["atmiv"]) - float(anchor_row["atmiv"])),
+        "put_skew_pp_chg": None
+        if (anchor_row.get("put_skew_pp_primary") is None or entry_row.get("put_skew_pp_primary") is None)
+        else (float(entry_row["put_skew_pp_primary"]) - float(anchor_row["put_skew_pp_primary"])),
+        "call_skew_pp_chg": None
+        if (anchor_row.get("call_skew_pp_primary") is None or entry_row.get("call_skew_pp_primary") is None)
+        else (float(entry_row["call_skew_pp_primary"]) - float(anchor_row["call_skew_pp_primary"])),
+        "net_gex": entry_row.get("net_gex"),
+        "is_rth": entry_row.get("is_rth"),
+        "dist_wall_above": None
+        if (entry_row.get("gex_wall_above") is None or e_close is None)
+        else (float(entry_row["gex_wall_above"]) - float(e_close)),
+        "dist_wall_below": None
+        if (entry_row.get("gex_wall_below") is None or e_close is None)
+        else (float(e_close) - float(entry_row["gex_wall_below"])),
+        "es_close_entry": e_close,
+        "spx_stock_entry": entry_row.get("stock_price"),
+    }
+    return out
+
+
+@app.callback(
+    Output("bt2-cands-table", "data"),
+    Output("bt2-cands-table", "columns"),
+    Output("bt2-cands-store", "data"),
+    Output("bt2-find-status", "children"),
+    Input("bt2-find-similar", "n_clicks"),
+    State("bt2-strategy-name", "value"),
+    State("bt2-date-range", "start_date"),
+    State("bt2-date-range", "end_date"),
+    State("bt2-rth-only", "value"),
+    State("bt2-lookahead-min", "value"),
+    State("bt2-stride-min", "value"),
+    State("bt2-topn", "value"),
+)
+def _bt2_find_similar(n, strategy_name, start_date, end_date, rth_only_value, lookahead_min, stride_min, topn):
+    if not n:
+        raise PreventUpdate
+
+    try:
+        if not start_date or not end_date:
+            return [], [], [], "Pick a date range first."
+
+        sid = _ensure_strategy_id(strategy_name)
+
+        train_df = _bt2_fetch_training_features(sid)
+        if train_df.empty:
+            return [], [], [], "No saved examples yet for this strategy. Save a couple first."
+
+        feat_cols = ["ret", "atmiv_chg", "put_skew_pp_chg", "call_skew_pp_chg", "dist_wall_above", "dist_wall_below"]
+        feat_cols = [c for c in feat_cols if c in train_df.columns]
+        if not feat_cols:
+            return [], [], [], "Training examples exist, but no usable feature columns were found."
+
+        mu = train_df[feat_cols].mean(numeric_only=True)
+        sigma = train_df[feat_cols].std(numeric_only=True, ddof=0).replace(0, 1.0)
+
+        rth_only = (rth_only_value == "yes")
+        lookahead_min = int(lookahead_min or 5)
+        stride_min = int(stride_min or 1)
+        topn = int(topn or 50)
+
+        df = _bt2_fetch_rows(start_date, end_date, rth_only, limit_rows=50000)
+        if df.empty:
+            return [], [], [], "No rows in that range."
+
+        # Normalize to UTC minute timestamps so entry lookup works
+        df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True).dt.floor("min")
+        df = df.sort_values("ts_utc").reset_index(drop=True)
+
+        rows = df.to_dict("records")
+        by_ts = {r["ts_utc"]: r for r in rows}
+
+        cands = []
+        for i in range(0, len(rows), stride_min):
+            a = rows[i]
+            a_ts = a["ts_utc"]
+            e_ts = (a_ts + pd.Timedelta(minutes=lookahead_min)).floor("min")
+
+            e = by_ts.get(e_ts)
+            if not e:
+                continue
+
+            feats = _bt2_compute_feature_dict(a, e)
+
+            zsum = 0.0
+            used = 0
+            for c in feat_cols:
+                v = feats.get(c)
+                if v is None or pd.isna(v) or pd.isna(mu[c]):
+                    continue
+                z = (float(v) - float(mu[c])) / float(sigma[c])
+                zsum += z * z
+                used += 1
+            if used == 0:
+                continue
+
+            dist = (zsum ** 0.5)
+            score = 100.0 / (1.0 + dist)
+
+            cands.append(
+                {
+                    "score": round(score, 2),
+                    "anchor_ts_utc": a_ts.isoformat(),
+                    "entry_ts_utc": e_ts.isoformat(),
+                    "ret": feats.get("ret"),
+                    "atmiv_chg": feats.get("atmiv_chg"),
+                    "put_skew_pp_chg": feats.get("put_skew_pp_chg"),
+                    "call_skew_pp_chg": feats.get("call_skew_pp_chg"),
+                    "dist_wall_above": feats.get("dist_wall_above"),
+                    "dist_wall_below": feats.get("dist_wall_below"),
+                }
+            )
+
+        if not cands:
+            return [], [], [], "No candidates found. Try stride=1, smaller lookahead, or widen date range."
+
+        cands = sorted(cands, key=lambda x: x["score"], reverse=True)[:topn]
+        cand_df = pd.DataFrame(cands)
+
+        cols = [{"name": c, "id": c} for c in cand_df.columns]
+        status = f"Found {len(cands)} candidates | strategy_id={sid} | lookahead={lookahead_min}m | stride={stride_min}m"
+
+        return cand_df.to_dict("records"), cols, cands, status
+
+    except Exception as ex:
+        return [], [], [], f"Find Similar error: {ex}"
+
+_PT = ZoneInfo("America/Los_Angeles")
+
+
+def _utc_to_pt_hhmm(ts_utc_val) -> str:
+    ts = pd.to_datetime(ts_utc_val, utc=True)
+    ts_pt = ts.tz_convert(_PT)
+    return ts_pt.strftime("%H:%M")
+
+def _utc_to_pt_date(ts_utc_val) -> str:
+    ts = pd.to_datetime(ts_utc_val, utc=True).tz_convert(_PT)
+    return ts.date().isoformat()
+
+
+
+def _bt2_fetch_saved_instances(strategy_id: int, limit_rows: int = 100) -> pd.DataFrame:
+    engine = _get_engine()
+    with engine.connect() as conn:
+        df = pd.read_sql(
+            text(
+                """
+                SELECT
+                  id,
+                  label,
+                  trade_date,
+                  anchor_ts_utc,
+                  entry_ts_utc,
+                  created_at,
+                  features->>'ret' AS ret,
+                  features->>'atmiv_chg' AS atmiv_chg,
+                  features->>'put_skew_pp_chg' AS put_skew_pp_chg,
+                  features->>'call_skew_pp_chg' AS call_skew_pp_chg,
+                  features->>'dist_wall_above' AS dist_wall_above,
+                  features->>'dist_wall_below' AS dist_wall_below
+                FROM bt_strategy_instances
+                WHERE strategy_id = :sid AND label IN (0, 1)
+                ORDER BY id DESC
+                LIMIT :lim
+                """
+            ),
+            conn,
+            params={"sid": int(strategy_id), "lim": int(limit_rows)},
+        )
+    return df
+
+@app.callback(
+    Output("bt2-strategy-name", "options"),
+    Output("bt2-strategy-name", "value"),
+    Output("bt2-strategy-status", "children"),
+    Input("bt2-create-strategy", "n_clicks"),
+    State("bt2-new-strategy-name", "value"),
+    prevent_initial_call=True,
+)
+def _bt2_create_strategy(n, new_name):
+    if not n:
+        raise PreventUpdate
+
+    name = (new_name or "").strip()
+    if not name:
+        return no_update, no_update, "Enter a name and click Create."
+
+    try:
+        _ensure_strategy_id(name)
+        opts = _bt2_list_strategy_options()
+        return opts, name, f"Selected strategy: {name}"
+    except Exception as ex:
+        return no_update, no_update, f"Create strategy error: {ex}"
+
+
+
+
+@app.callback(
+    Output("bt2-saved-table", "data"),
+    Output("bt2-saved-table", "columns"),
+    Output("bt2-saved-status", "children"),
+    Input("bt2-strategy-name", "value"),
+    Input("bt2-refresh-saved", "n_clicks"),
+)
+def _bt2_refresh_saved(strategy_name, n):
+    try:
+        if not (strategy_name or '').strip():
+            return [], [], "Select a strategy."
+        sid = _ensure_strategy_id(strategy_name)
+        df = _bt2_fetch_saved_instances(sid, limit_rows=200)
+        if df.empty:
+            return [], [], f"No saved instances yet for '{strategy_name}'."
+
+        cols = [{"name": c, "id": c} for c in df.columns]
+        return df.to_dict("records"), cols, f"Loaded {len(df)} saved instances for '{strategy_name}' (strategy_id={sid})."
+    except Exception as ex:
+        return [], [], f"Refresh Saved error: {ex}"
+
+
+@app.callback(
+    Output(MAIN_TABS_ID, "value", allow_duplicate=True),
+    Output(TRADE_DATE_PICK, "date", allow_duplicate=True),
+    Output(SMILE_TIME_INPUT, "value", allow_duplicate=True),
+    Output("bt2-load-dash-status", "children"),
+    Input("bt2-load-saved-to-dash", "n_clicks"),
+    State("bt2-saved-table", "data"),
+    State("bt2-saved-table", "selected_rows"),
+    prevent_initial_call=True,
+)
+def _bt2_load_saved_to_dashboard(n, rows, selected_rows):
+    # If no row is selected, show a message (don't silently do nothing)
+    if not rows or not selected_rows:
+        return no_update, no_update, no_update, "Select a saved example row first, then click Load on Dashboard."
+
+    try:
+        r = rows[selected_rows[0]]
+
+        trade_date = r.get("trade_date")
+        anchor_ts = r.get("anchor_ts_utc")
+        entry_ts = r.get("entry_ts_utc")
+
+        if not trade_date or not anchor_ts or not entry_ts:
+            return no_update, no_update, no_update, "Selected saved row is missing trade_date/anchor/entry."
+
+        trade_date_str = pd.to_datetime(trade_date).date().isoformat()
+
+        a_hhmm = _utc_to_pt_hhmm(anchor_ts)
+        e_hhmm = _utc_to_pt_hhmm(entry_ts)
+
+        times = sorted(list({a_hhmm, e_hhmm}))
+
+        status = f"Loaded saved id={r.get('id')} → trade_date={trade_date_str}, times={times} (PT)."
+        return TAB_DASHBOARD, trade_date_str, times, status
+
+    except Exception as ex:
+        return no_update, no_update, no_update, f"Load on Dashboard error: {ex}"
+
+
+@app.callback(
+    Output(MAIN_TABS_ID, "value", allow_duplicate=True),
+    Output(TRADE_DATE_PICK, "date", allow_duplicate=True),
+    Output(SMILE_TIME_INPUT, "value", allow_duplicate=True),
+    Output("bt2-load-cand-status", "children"),
+    Input("bt2-load-cand-to-dash", "n_clicks"),
+    State("bt2-cands-table", "data"),
+    State("bt2-cands-table", "selected_rows"),
+    prevent_initial_call=True,
+)
+def _bt2_load_candidate_to_dashboard(n, rows, selected_rows):
+    if not rows or not selected_rows:
+        return no_update, no_update, no_update, "Select a candidate row first, then click Load Candidate on Dashboard."
+
+    try:
+        r = rows[selected_rows[0]]
+        anchor_ts = r.get("anchor_ts_utc")
+        entry_ts = r.get("entry_ts_utc")
+        if not anchor_ts or not entry_ts:
+            return no_update, no_update, no_update, "Selected candidate missing anchor_ts_utc/entry_ts_utc."
+
+        # Derive trade date from anchor timestamp in PT
+        trade_date_str = _utc_to_pt_date(anchor_ts)
+
+        a_hhmm = _utc_to_pt_hhmm(anchor_ts)
+        e_hhmm = _utc_to_pt_hhmm(entry_ts)
+
+        times = sorted(list({a_hhmm, e_hhmm}))
+
+        status = f"Loaded candidate → trade_date={trade_date_str}, times={times} (PT)."
+        return TAB_DASHBOARD, trade_date_str, times, status
+
+    except Exception as ex:
+        return no_update, no_update, no_update, f"Load Candidate error: {ex}"
+
+
+
+
 
 
 # Register module callbacks
@@ -1012,7 +1499,55 @@ register_term_metrics(app)
 register_ironbeam_callbacks(app)
 register_backtests(app, expected_toggle_id=EXPECTED_TOGGLE_ID)
 
-from dash import callback_context  # add this import near your other dash imports if missing
+from dash import callback_context  # if not already imported
+
+
+@app.callback(
+    Output("bt2-cand-action-status", "children"),
+    Input("bt2-accept-cand", "n_clicks"),
+    Input("bt2-reject-cand", "n_clicks"),
+    State("bt2-cands-table", "data"),
+    State("bt2-cands-table", "selected_rows"),
+    State("bt2-strategy-name", "value"),
+    prevent_initial_call=True,
+)
+def _bt2_accept_reject_candidate(n_acc, n_rej, rows, selected_rows, strategy_name):
+    trig = callback_context.triggered[0]["prop_id"].split(".")[0] if callback_context.triggered else None
+    if not rows or not selected_rows:
+        return "Select a candidate row first."
+
+    r = rows[selected_rows[0]]
+    anchor_ts = r.get("anchor_ts_utc")
+    entry_ts = r.get("entry_ts_utc")
+    if not anchor_ts or not entry_ts:
+        return "Selected candidate missing anchor_ts_utc/entry_ts_utc."
+
+    # Decide label
+    if trig == "bt2-accept-cand":
+        label = 1
+    elif trig == "bt2-reject-cand":
+        label = -1
+    else:
+        raise PreventUpdate
+
+    try:
+        sid = _ensure_strategy_id(strategy_name)
+
+        # Ensure ordering
+        a = pd.to_datetime(anchor_ts, utc=True)
+        e = pd.to_datetime(entry_ts, utc=True)
+        if e < a:
+            a, e = e, a
+        anchor_ts = a.isoformat()
+        entry_ts = e.isoformat()
+
+        new_id = _save_strategy_instance(sid, anchor_ts, entry_ts, label=label)
+        action = "ACCEPTED ✅" if label == 1 else "REJECTED ❌"
+        return f"{action} candidate saved as instance_id={new_id} (strategy_id={sid})."
+
+    except Exception as ex:
+        return f"Accept/Reject error: {ex}"
+
 
 
 @app.callback(
