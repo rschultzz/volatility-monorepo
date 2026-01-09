@@ -1029,7 +1029,7 @@ def _build_hovergrid_traces(
     x_gex_parts, y_gex_parts = [], []
 
     for (d_str, lo, hi) in overlaps:
-        x_day = pd.date_range(lo, hi, freq=f"{step_sec}S", inclusive="both").to_pydatetime().tolist()
+        x_day = pd.date_range(lo, hi, freq=f"{step_sec}s", inclusive="both").to_pydatetime().tolist()
         if not x_day:
             continue
 
@@ -1291,16 +1291,16 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
             df[col] = 0.0
 
     # Continuous 1s index (fills missing seconds with 0)
-    full_idx = pd.date_range(start=start_utc, end=end_utc, freq="1S", tz="UTC", inclusive="left")
+    full_idx = pd.date_range(start=start_utc, end=end_utc, freq="1s", tz="UTC", inclusive="left")
     df = df.reindex(full_idx)
     df[["buy_vol", "sell_vol", "unknown_vol"]] = (
         df[["buy_vol", "sell_vol", "unknown_vol"]].fillna(0.0).astype(float)
     )
 
     # Optional resample
-    rule_map = {"1s": "1S", "5s": "5S", "15s": "15S", "1m": "1T", "60s": "1T"}
-    rule = rule_map.get((resample_mode or "1s").lower(), "1S")
-    if rule != "1S":
+    rule_map = {"1s": "1s", "5s": "5s", "15s": "15s", "1m": "1min", "60s": "1min"}
+    rule = rule_map.get((resample_mode or "1s").lower(), "1s")
+    if rule != "1s":
         df = df.resample(rule).sum()
 
     buy = df["buy_vol"].astype(float)
