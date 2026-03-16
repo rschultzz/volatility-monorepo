@@ -43,12 +43,23 @@ MARKET_TIMEZONE = pytz.timezone("US/Eastern")
 # ----------------- Time / bucket utils -----------------
 def _years_to_exp(ts_et: dt.datetime, expiration_iso: str) -> float:
     """
-    Match the original smile callback: time to expiry in years using an ET
-    timestamp and midnight on the expiration date.
+    Time to expiry in years using an Eastern timestamp and a 4:00 PM ET expiry
+    cutoff for expiring PM-settled contracts (appropriate for SPXW / 0DTE use).
+
+    Note: standard AM-settled monthly SPX would need separate handling later.
     """
+    if ts_et.tzinfo is None:
+        ts_et = MARKET_TIMEZONE.localize(ts_et)
+    else:
+        ts_et = ts_et.astimezone(MARKET_TIMEZONE)
+
     exp_date = dt.date.fromisoformat(expiration_iso)
-    rem = dt.datetime.combine(exp_date, dt.time(0, 0)) - ts_et.replace(tzinfo=None)
-    T = max(0.0, rem.days / 365.0 + rem.seconds / (365.0 * 24 * 3600))
+    exp_dt_et = MARKET_TIMEZONE.localize(
+        dt.datetime.combine(exp_date, dt.time(16, 0))
+    )
+
+    rem = exp_dt_et - ts_et
+    T = max(0.0, rem.total_seconds() / (365.0 * 24 * 3600))
     return max(T, EPS_T)
 
 

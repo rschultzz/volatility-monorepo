@@ -33,6 +33,10 @@ MIN_SKEW_DENOM_PP = 0.25
 BETA_VOLPTS_PER_1PCT = 4.5
 BETA_MAX_SHIFT_PP = 6.0
 
+# Pass 1 only: small ATM theta-roll term in vol points per Δ√T-year.
+# Start small and tune gradually for 0DTE.
+THETA_ATM_PP_PER_SQRT_YEAR = 0.10
+
 MARKET_TIMEZONE = pytz.timezone("US/Eastern")
 
 
@@ -298,7 +302,17 @@ def register_callbacks(app):
                                     (-ret_frac) * 100.0 * BETA_VOLPTS_PER_1PCT,
                                 ),
                             )
-                            atm_exp = exp_atm_shape + (level_shift_pp / 100.0)
+                            droot = max(
+                                0.0,
+                                math.sqrt(max(prev_T, EPS_T))
+                                - math.sqrt(max(T_now, EPS_T)),
+                            )
+                            atm_theta_pp = THETA_ATM_PP_PER_SQRT_YEAR * droot
+                            atm_exp = (
+                                exp_atm_shape
+                                + (level_shift_pp / 100.0)
+                                + (atm_theta_pp / 100.0)
+                            )
                             atm_exp_pct = round(atm_exp * 100.0, 2)
                             atm_res_bp = int(
                                 round((atm_now - atm_exp) * 10000.0)
@@ -432,7 +446,17 @@ def register_callbacks(app):
                                 (-ret_frac) * 100.0 * BETA_VOLPTS_PER_1PCT,
                             ),
                         )
-                        atm_exp = exp_atm_shape + (level_shift_pp / 100.0)
+                        droot = max(
+                            0.0,
+                            math.sqrt(max(prev_T, EPS_T))
+                            - math.sqrt(max(T_live, EPS_T)),
+                        )
+                        atm_theta_pp = THETA_ATM_PP_PER_SQRT_YEAR * droot
+                        atm_exp = (
+                            exp_atm_shape
+                            + (level_shift_pp / 100.0)
+                            + (atm_theta_pp / 100.0)
+                        )
                         atm_exp_pct = round(atm_exp * 100.0, 2)
                         atm_res_bp = int(
                             round((atm_live - atm_exp) * 10000.0)
