@@ -233,7 +233,7 @@ def aggregate_1s(df_trades: pd.DataFrame) -> pd.DataFrame:
     df["unknown_count"] = (~(is_buy | is_sell)).astype("int64")
 
     df["notional"] = df["price"] * df["size"]
-    df["ts_ms"] = (df["ts_utc"].view("int64") // 1_000_000).astype("int64")
+    df["ts_ms"] = (df["ts_utc"].astype("int64") // 1_000_000).astype("int64")
 
     gb = df.groupby(["symbol", "ts_sec"], sort=False)
 
