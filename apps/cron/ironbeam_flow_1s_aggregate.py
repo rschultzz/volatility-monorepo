@@ -333,6 +333,8 @@ def main() -> None:
     state_table = os.getenv("IRONBEAM_FLOW_STATE_TABLE", "ironbeam_flow_agg_state").strip()
 
     symbols = _parse_symbols()
+    print(f"[flow_1s] startup IRONBEAM_SYMBOL={os.getenv('IRONBEAM_SYMBOL')!r} IRONBEAM_SYMBOLS={os.getenv('IRONBEAM_SYMBOLS')!r}")
+    print(f"[flow_1s] startup parsed symbols={symbols}")
 
     initial_lookback_min = _parse_int("IRONBEAM_FLOW_INITIAL_LOOKBACK_MIN", 15)
     max_lateness_sec = _parse_int("IRONBEAM_FLOW_MAX_LATENESS_SEC", 2)
