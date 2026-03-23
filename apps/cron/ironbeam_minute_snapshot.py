@@ -367,7 +367,13 @@ def main():
     engine = _get_engine()
 
     token = authenticate()
-    es_symbol = discover_es_front_month(token)
+    sym_override = (os.getenv("IRONBEAM_SYMBOL") or "").strip()
+    if sym_override:
+        es_symbol = sym_override
+        print(f"[SYMBOL] Using ES symbol from env: {es_symbol}")
+    else:
+        es_symbol = discover_es_front_month(token)
+
     stream_id = create_stream(token)
 
     ws_url = f"{WS_BASE}/{stream_id}?token={token}"
