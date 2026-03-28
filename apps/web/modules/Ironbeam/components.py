@@ -9,7 +9,7 @@ from dash import html, dcc
 import os
 
 
-REACT_PREVIEW_URL = os.getenv("IRONBEAM_REACT_PREVIEW_URL", "http://localhost:5173")
+REACT_PREVIEW_URL = os.getenv("IRONBEAM_REACT_PREVIEW_URL", "/react-preview")
 
 
 def ironbeam_layout():

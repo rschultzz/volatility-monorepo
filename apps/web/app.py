@@ -32,6 +32,8 @@ from dash import dash_table
 from dash.exceptions import PreventUpdate
 import dash_auth
 from zoneinfo import ZoneInfo
+from flask import send_from_directory
+
 
 
 # ===== Modules =====
@@ -361,6 +363,39 @@ VALID_USERNAME_PASSWORD_PAIRS = {
     "sara": "ChangeThisPassword123!",
 }
 auth = dash_auth.BasicAuth(app, VALID_USERNAME_PASSWORD_PAIRS)
+
+
+REACT_PREVIEW_DIST_DIR = (REPO_ROOT / "react_price_preview" / "dist").resolve()
+
+
+def _react_preview_build_ready() -> bool:
+    return REACT_PREVIEW_DIST_DIR.exists() and (REACT_PREVIEW_DIST_DIR / "index.html").exists()
+
+
+@server.route("/react-preview")
+@server.route("/react-preview/")
+def react_preview_index():
+    if not _react_preview_build_ready():
+        return (
+            "React preview build not found. Build react_price_preview/dist before starting Dash.",
+            503,
+        )
+    return send_from_directory(str(REACT_PREVIEW_DIST_DIR), "index.html")
+
+
+@server.route("/react-preview/<path:path>")
+def react_preview_assets(path):
+    if not _react_preview_build_ready():
+        return (
+            "React preview build not found. Build react_price_preview/dist before starting Dash.",
+            503,
+        )
+
+    candidate = (REACT_PREVIEW_DIST_DIR / path).resolve()
+    if candidate.exists() and candidate.is_file():
+        return send_from_directory(str(REACT_PREVIEW_DIST_DIR), path)
+
+    return send_from_directory(str(REACT_PREVIEW_DIST_DIR), "index.html")
 
 
 def serve_layout():

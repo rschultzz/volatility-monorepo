@@ -3382,7 +3382,7 @@ def register_ironbeam_callbacks(app):
         Input("ib-indicator-state", "data"),
     )
     def ib_update_react_preview_src(trade_date, bar_interval, chart_mode, indicator_state):
-        base = os.getenv("IRONBEAM_REACT_PREVIEW_URL", "http://localhost:5173").rstrip("/")
+        base = os.getenv("IRONBEAM_REACT_PREVIEW_URL", "/react-preview").rstrip("/")
         td = trade_date or dt.date.today().isoformat()
         interval = (bar_interval or "1min").strip()
         if interval not in {"1min", "5min"}:
