@@ -1,0 +1,124 @@
+:root {
+  color: #e2e8f0;
+  background: #020617;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  min-height: 100%;
+  color: #e2e8f0;
+  background: #020617;
+}
+
+body {
+  overflow: hidden;
+}
+
+.app-shell {
+  min-height: 100vh;
+  height: 100vh;
+  background: #020617;
+}
+
+.compact-shell {
+  padding: 0;
+}
+
+.card {
+  border: 1px solid #1f2937;
+  border-radius: 16px;
+  background: #0b1220;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+
+.compact-card {
+  height: 100vh;
+  min-height: 100vh;
+  border-radius: 0;
+  border: 0;
+  box-shadow: none;
+}
+
+.status-card {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 24px;
+}
+
+.status-card-error {
+  color: #fecaca;
+}
+
+.status-title {
+  font-size: 20px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+
+.status-text {
+  font-size: 14px;
+  color: #94a3b8;
+  max-width: 760px;
+  line-height: 1.5;
+}
+
+.chart-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.chart-shell-compact {
+  height: 100vh;
+  min-height: 100vh;
+}
+
+.chart-frame {
+  padding: 14px;
+}
+
+.chart-frame-compact {
+  padding: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.chart-stage {
+  position: relative;
+  height: 620px;
+}
+
+.chart-stage-compact {
+  height: 100vh;
+  min-height: 100vh;
+}
+
+.chart-host {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.session-band {
+  position: absolute;
+  top: 0;
+  bottom: 24px;
+  z-index: 3;
+  pointer-events: none;
+  background: rgba(148, 163, 184, 0.12);
+  border-left: 1px solid rgba(191, 219, 254, 0.28);
+  border-right: 1px solid rgba(191, 219, 254, 0.28);
+}

@@ -473,7 +473,7 @@ def serve_layout():
     ironbeam_children = [
         html.Div(
             [
-                # Controls row (Bar Interval only)
+                # Controls row
                 html.Div(
                     [
                         html.Div(
@@ -502,6 +502,37 @@ def serve_layout():
                             ],
                             style={
                                 "minWidth": "180px",
+                                "flex": "0 0 auto",
+                                "display": "flex",
+                                "flexDirection": "column",
+                            },
+                        ),
+                        html.Div(
+                            [
+                                html.Label(
+                                    "Chart Mode",
+                                    style={
+                                        "color": "white",
+                                        "marginBottom": "6px",
+                                        "fontSize": "13px",
+                                        "fontWeight": "500",
+                                    },
+                                ),
+                                dcc.RadioItems(
+                                    id="ib-chart-mode-toggle",
+                                    options=[
+                                        {"label": "Classic", "value": "classic"},
+                                        {"label": "React Preview", "value": "react_preview"},
+                                    ],
+                                    value="classic",
+                                    inline=True,
+                                    labelStyle={"marginRight": "16px", "color": "white", "fontSize": "13px"},
+                                    inputStyle={"marginRight": "6px"},
+                                    style={"paddingTop": "4px"},
+                                ),
+                            ],
+                            style={
+                                "minWidth": "220px",
                                 "flex": "0 0 auto",
                                 "display": "flex",
                                 "flexDirection": "column",

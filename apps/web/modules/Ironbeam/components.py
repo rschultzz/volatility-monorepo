@@ -141,35 +141,6 @@ def ironbeam_layout():
                     html.Div(
                         [
                             html.Div(
-                                [
-                                    html.Div(
-                                        "Chart Mode",
-                                        style={
-                                            "color": "#cbd5e1",
-                                            "fontSize": "12px",
-                                            "fontWeight": "700",
-                                            "marginBottom": "6px",
-                                        },
-                                    ),
-                                    dcc.RadioItems(
-                                        id="ib-chart-mode-toggle",
-                                        options=[
-                                            {"label": "Classic", "value": "classic"},
-                                            {"label": "React Preview", "value": "react_preview"},
-                                        ],
-                                        value="classic",
-                                        inline=True,
-                                        labelStyle={
-                                            "marginRight": "16px",
-                                            "color": "white",
-                                            "fontSize": "13px",
-                                        },
-                                        inputStyle={"marginRight": "6px"},
-                                    ),
-                                ],
-                                style={"marginBottom": "10px"},
-                            ),
-                            html.Div(
                                 id="ib-classic-chart-wrap",
                                 children=[
                                     dcc.Graph(
@@ -202,43 +173,18 @@ def ironbeam_layout():
                             html.Div(
                                 id="ib-react-preview-wrap",
                                 children=[
-                                    html.Div(
-                                        [
-                                            html.Div(
-                                                [
-                                                    html.Div(
-                                                        "React Preview",
-                                                        style={
-                                                            "color": "#e5e7eb",
-                                                            "fontSize": "18px",
-                                                            "fontWeight": "800",
-                                                        },
-                                                    ),
-                                                    html.Div(
-                                                        f"Loading preview from {REACT_PREVIEW_URL}",
-                                                        style={
-                                                            "color": "#94a3b8",
-                                                            "fontSize": "13px",
-                                                            "marginTop": "4px",
-                                                        },
-                                                    ),
-                                                ],
-                                                style={"marginBottom": "10px"},
-                                            ),
-                                            html.Iframe(
-                                                id="ib-react-preview-frame",
-                                                src=REACT_PREVIEW_URL,
-                                                style={
-                                                    "width": "100%",
-                                                    "height": "calc(100vh - 265px)",
-                                                    "minHeight": "620px",
-                                                    "border": "1px solid #1f2937",
-                                                    "borderRadius": "14px",
-                                                    "backgroundColor": "#020617",
-                                                },
-                                            ),
-                                        ]
-                                    )
+                                    html.Iframe(
+                                        id="ib-react-preview-frame",
+                                        src=REACT_PREVIEW_URL,
+                                        style={
+                                            "width": "100%",
+                                            "height": "calc(100vh - 265px)",
+                                            "minHeight": "620px",
+                                            "border": "1px solid #1f2937",
+                                            "borderRadius": "14px",
+                                            "backgroundColor": "#020617",
+                                        },
+                                    ),
                                 ],
                                 style={"display": "none"},
                             ),
