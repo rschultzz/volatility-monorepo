@@ -334,6 +334,28 @@ function normalizeGexSegments(value) {
   return out
 }
 
+function computeCenterLogicalRange(candles) {
+  if (!Array.isArray(candles) || !candles.length) return null
+
+  let firstIdx = -1
+  let lastIdx = -1
+
+  for (let i = 0; i < candles.length; i += 1) {
+    if (candles[i]?.is_center === true) {
+      if (firstIdx === -1) firstIdx = i
+      lastIdx = i
+    }
+  }
+
+  if (firstIdx === -1 || lastIdx === -1) return null
+
+  const from = firstIdx - 0.5
+  const to = lastIdx + 0.5
+  const key = `${firstIdx}:${lastIdx}:${candles.length}`
+
+  return { from, to, key }
+}
+
 export default function PriceChart({
   candles,
   interval,
@@ -349,6 +371,9 @@ export default function PriceChart({
   const intervalRef = useRef(interval)
   const shiftedCandlesRef = useRef([])
   const dragRef = useRef({ active: false, lastY: 0 })
+  const hasUserInteractedRef = useRef(false)
+  const currentCenterKeyRef = useRef('')
+  const appliedInitialRangeKeyRef = useRef('')
 
   const tooltipRef = useRef(null)
   const tooltipTimeRef = useRef(null)
@@ -377,9 +402,23 @@ export default function PriceChart({
     [gexSegments]
   )
 
+  const centerLogicalRange = useMemo(
+    () => computeCenterLogicalRange(shiftedCandles),
+    [shiftedCandles]
+  )
+
   useEffect(() => {
     shiftedCandlesRef.current = shiftedCandles
   }, [shiftedCandles])
+
+  useEffect(() => {
+    const nextKey = centerLogicalRange?.key || ''
+    if (nextKey && nextKey !== currentCenterKeyRef.current) {
+      currentCenterKeyRef.current = nextKey
+      appliedInitialRangeKeyRef.current = ''
+      hasUserInteractedRef.current = false
+    }
+  }, [centerLogicalRange])
 
   const selectedSet = useMemo(() => new Set(selectedTimes), [selectedTimes])
 
@@ -635,6 +674,7 @@ export default function PriceChart({
     }
 
     const handleWheel = (evt) => {
+      hasUserInteractedRef.current = true
       const info = pointerInfo(evt, stage)
       if (!info || info.overTimeAxis || !info.overPriceAxis) return
       evt.preventDefault()
@@ -644,6 +684,7 @@ export default function PriceChart({
 
     const handleMouseDown = (evt) => {
       if (evt.button !== 0) return
+      hasUserInteractedRef.current = true
       const info = pointerInfo(evt, stage)
       if (!info || info.overTimeAxis || info.overPriceAxis) return
       dragRef.current = { active: true, lastY: evt.clientY }
@@ -714,18 +755,31 @@ export default function PriceChart({
   useEffect(() => {
     if (!seriesRef.current || !chartRef.current) return
     seriesRef.current.setData(displayCandles)
+
     requestAnimationFrame(() => {
-      if (chartRef.current) {
-        setSessionBands(
-          computeSessionBands(
-            chartRef.current,
-            shiftedCandles,
-            stageRef.current?.clientWidth || 0
-          )
+      if (!chartRef.current) return
+
+      setSessionBands(
+        computeSessionBands(
+          chartRef.current,
+          shiftedCandles,
+          stageRef.current?.clientWidth || 0
         )
+      )
+
+      if (centerLogicalRange && !hasUserInteractedRef.current) {
+        if (appliedInitialRangeKeyRef.current !== centerLogicalRange.key) {
+          chartRef.current.timeScale().setVisibleLogicalRange({
+            from: centerLogicalRange.from,
+            to: centerLogicalRange.to,
+          })
+          appliedInitialRangeKeyRef.current = centerLogicalRange.key
+        }
+      } else if (!centerLogicalRange && !hasUserInteractedRef.current) {
+        chartRef.current.timeScale().fitContent()
       }
     })
-  }, [displayCandles, shiftedCandles])
+  }, [displayCandles, shiftedCandles, centerLogicalRange])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -782,11 +836,6 @@ export default function PriceChart({
 
     gexSeriesRefs.current = nextRefs
   }, [normalizedGexSegments, gexEnabled])
-
-  useEffect(() => {
-    if (!chartRef.current) return
-    chartRef.current.timeScale().fitContent()
-  }, [shiftedCandles, interval])
 
   return (
     <div className="chart-shell chart-shell-compact">
