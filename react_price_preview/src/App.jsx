@@ -1,17 +1,29 @@
 import { useEffect, useMemo, useState } from 'react'
 import PriceChart from './components/PriceChart'
 
+function cleanBaseUrl(value) {
+  const s = String(value || '').trim()
+  if (!s) return ''
+  return s.replace(/\/+$/, '')
+}
+
 function inferApiBase() {
   const params = new URLSearchParams(window.location.search)
-  const explicit = params.get('api_base')
-  if (explicit) return explicit.replace(/\/$/, '')
+
+  const explicit = cleanBaseUrl(params.get('api_base'))
+  if (explicit) return explicit
+
+  const envBase = cleanBaseUrl(
+    import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE
+  )
+  if (envBase) return envBase
 
   try {
     if (document.referrer) {
-      return new URL(document.referrer).origin
+      return cleanBaseUrl(new URL(document.referrer).origin)
     }
   } catch (err) {
-    // ignore and fall back below
+    // ignore and fall through
   }
 
   return 'http://127.0.0.1:8060'
@@ -69,14 +81,19 @@ export default function App() {
           method: 'GET',
           credentials: 'include',
           signal: controller.signal,
+          cache: 'no-store',
         })
 
         if (response.status === 401) {
-          throw new Error('Unauthorized from Dash backend. Open the Dash app first and make sure you are logged in there.')
+          throw new Error(
+            `Unauthorized from Dash backend at ${apiBase}. Open the Dash app first and make sure you are logged in there.`
+          )
         }
 
         if (!response.ok) {
-          throw new Error(`Backend returned ${response.status}`)
+          throw new Error(
+            `Backend returned ${response.status} ${response.statusText || ''}`.trim()
+          )
         }
 
         const payload = await response.json()
@@ -86,7 +103,7 @@ export default function App() {
         if (err?.name === 'AbortError') return
         setBars([])
         setMeta(null)
-        setError(err?.message || 'Could not load bars')
+        setError(err?.message || `Could not load bars from ${url.toString()}`)
       } finally {
         setLoading(false)
       }
@@ -103,6 +120,9 @@ export default function App() {
           <div className="status-card status-card-error">
             <div className="status-title">React preview could not load data</div>
             <div className="status-text">{error}</div>
+            <div className="status-text" style={{ marginTop: '6px', opacity: 0.8 }}>
+              Requested from {apiBase}/api/ironbeam/bars
+            </div>
           </div>
         ) : loading ? (
           <div className="status-card">
@@ -112,7 +132,12 @@ export default function App() {
         ) : bars.length === 0 ? (
           <div className="status-card">
             <div className="status-title">No bars returned</div>
-            <div className="status-text">The backend responded, but this session did not return any ES bars.</div>
+            <div className="status-text">
+              The backend responded, but this session did not return any ES bars.
+            </div>
+            <div className="status-text" style={{ marginTop: '6px', opacity: 0.8 }}>
+              Source: {apiBase}/api/ironbeam/bars
+            </div>
           </div>
         ) : (
           <PriceChart

@@ -1638,11 +1638,19 @@ def register_ironbeam_callbacks(app):
             resp = jsonify(payload)
 
             origin = request.headers.get("Origin")
+
             allowed = {
                 "http://localhost:5173",
                 "http://127.0.0.1:5173",
                 "http://0.0.0.0:5173",
             }
+
+            extra_allowed = os.getenv("IRONBEAM_REACT_ALLOWED_ORIGINS", "")
+            for item in extra_allowed.split(","):
+                item = item.strip()
+                if item:
+                    allowed.add(item)
+
             if origin in allowed:
                 resp.headers["Access-Control-Allow-Origin"] = origin
                 resp.headers["Access-Control-Allow-Credentials"] = "true"
