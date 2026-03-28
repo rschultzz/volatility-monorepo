@@ -4,6 +4,7 @@ import {
   CrosshairMode,
   ColorType,
   CandlestickSeries,
+  LineSeries,
 } from 'lightweight-charts'
 
 const ETH_BG_COLOR = '#1f2937'
@@ -130,38 +131,75 @@ function isRthShiftedEpoch(epochSec) {
   return hhmm >= '06:30' && hhmm <= '13:00'
 }
 
-function computeSessionBand(chart, shiftedCandles) {
+function shiftedDateKey(epochSec) {
+  const dt = shiftedEpochToDate(epochSec)
+  const yyyy = dt.getUTCFullYear()
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(dt.getUTCDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
+
+function computeSessionBands(chart, shiftedCandles, viewportWidth) {
   if (!chart || !Array.isArray(shiftedCandles) || !shiftedCandles.length) {
-    return { visible: false, left: 0, width: 0, startX: 0, endX: 0 }
+    return []
   }
 
-  const rthBars = shiftedCandles.filter(
-    (bar) => typeof bar?.time === 'number' && isRthShiftedEpoch(bar.time)
-  )
-  if (!rthBars.length) {
-    return { visible: false, left: 0, width: 0, startX: 0, endX: 0 }
+  const width = Math.max(0, Number(viewportWidth) || 0)
+  if (!width) return []
+
+  const groups = []
+  let current = null
+
+  for (const bar of shiftedCandles) {
+    if (typeof bar?.time !== 'number') continue
+    if (!isRthShiftedEpoch(bar.time)) continue
+
+    const key = shiftedDateKey(bar.time)
+
+    if (!current || current.key !== key) {
+      current = { key, bars: [bar] }
+      groups.push(current)
+    } else {
+      current.bars.push(bar)
+    }
   }
 
-  const firstTime = rthBars[0].time
-  const lastTime = rthBars[rthBars.length - 1].time
-  const startX = chart.timeScale().timeToCoordinate(firstTime)
-  const endX = chart.timeScale().timeToCoordinate(lastTime)
+  if (!groups.length) return []
+
   const barSpacing = chart.timeScale().options().barSpacing || 6
+  const out = []
 
-  if (startX == null || endX == null) {
-    return { visible: false, left: 0, width: 0, startX: 0, endX: 0 }
+  for (const group of groups) {
+    const firstTime = group.bars[0].time
+    const lastTime = group.bars[group.bars.length - 1].time
+    const startX = chart.timeScale().timeToCoordinate(firstTime)
+    const endX = chart.timeScale().timeToCoordinate(lastTime)
+
+    if (startX == null || endX == null) continue
+
+    const rawLeft = Math.min(startX, endX) - barSpacing * 0.5
+    const rawRight = Math.max(startX, endX) + barSpacing * 0.5
+
+    if (!Number.isFinite(rawLeft) || !Number.isFinite(rawRight)) continue
+    if (rawRight <= 0 || rawLeft >= width) continue
+
+    const clippedLeft = Math.max(0, rawLeft)
+    const clippedRight = Math.min(width, rawRight)
+    const clippedWidth = clippedRight - clippedLeft
+
+    if (!(clippedWidth > 0)) continue
+
+    out.push({
+      key: group.key,
+      visible: true,
+      left: clippedLeft,
+      width: clippedWidth,
+      startX,
+      endX,
+    })
   }
 
-  const left = Math.min(startX, endX) - barSpacing * 0.5
-  const right = Math.max(startX, endX) + barSpacing * 0.5
-
-  return {
-    visible: true,
-    left: Math.max(0, left),
-    width: Math.max(2, right - left),
-    startX,
-    endX,
-  }
+  return out
 }
 
 function getPlotHeight(container) {
@@ -270,18 +308,44 @@ function interpolateShiftedEpoch(logical, candles, interval) {
   return null
 }
 
+function normalizeGexSegments(value) {
+  if (!Array.isArray(value)) return []
+  const out = []
+  for (const seg of value) {
+    const level = Number(seg?.level)
+    const startTime = Number(seg?.start_time)
+    const endTime = Number(seg?.end_time)
+    if (!Number.isFinite(level) || !Number.isFinite(startTime) || !Number.isFinite(endTime)) {
+      continue
+    }
+
+    const shiftedStart = utcEpochShowingZoneTime(startTime, 'America/Los_Angeles')
+    const shiftedEnd = utcEpochShowingZoneTime(endTime, 'America/Los_Angeles')
+
+    out.push({
+      ...seg,
+      level,
+      start_time: startTime,
+      end_time: endTime,
+      shiftedStart,
+      shiftedEnd,
+    })
+  }
+  return out
+}
+
 export default function PriceChart({
   candles,
   interval,
   initialSelectedTimes,
-  gexLevels,
+  gexSegments,
   gexEnabled,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
   const chartRef = useRef(null)
   const seriesRef = useRef(null)
-  const gexLineRefs = useRef([])
+  const gexSeriesRefs = useRef([])
   const intervalRef = useRef(interval)
   const shiftedCandlesRef = useRef([])
   const dragRef = useRef({ active: false, lastY: 0 })
@@ -291,13 +355,7 @@ export default function PriceChart({
   const tooltipPriceRef = useRef(null)
 
   const [selectedTimes, setSelectedTimes] = useState(normalizeTimes(initialSelectedTimes || []))
-  const [sessionBand, setSessionBand] = useState({
-    visible: false,
-    left: 0,
-    width: 0,
-    startX: 0,
-    endX: 0,
-  })
+  const [sessionBands, setSessionBands] = useState([])
 
   useEffect(() => {
     setSelectedTimes(normalizeTimes(initialSelectedTimes || []))
@@ -313,6 +371,11 @@ export default function PriceChart({
       time: utcEpochShowingZoneTime(Number(bar.time), 'America/Los_Angeles'),
     }))
   }, [candles])
+
+  const normalizedGexSegments = useMemo(
+    () => normalizeGexSegments(gexSegments),
+    [gexSegments]
+  )
 
   useEffect(() => {
     shiftedCandlesRef.current = shiftedCandles
@@ -479,8 +542,12 @@ export default function PriceChart({
     }
 
     const updateBand = () => {
-      const next = computeSessionBand(chart, shiftedCandlesRef.current)
-      setSessionBand(next)
+      const next = computeSessionBands(
+        chart,
+        shiftedCandlesRef.current,
+        stageRef.current?.clientWidth || 0
+      )
+      setSessionBands(next)
     }
 
     const updateFloatingTooltip = (param) => {
@@ -628,7 +695,7 @@ export default function PriceChart({
       chart.remove()
       chartRef.current = null
       seriesRef.current = null
-      gexLineRefs.current = []
+      gexSeriesRefs.current = []
       dragRef.current.active = false
     }
   }, [])
@@ -649,47 +716,72 @@ export default function PriceChart({
     seriesRef.current.setData(displayCandles)
     requestAnimationFrame(() => {
       if (chartRef.current) {
-        setSessionBand(computeSessionBand(chartRef.current, shiftedCandles))
+        setSessionBands(
+          computeSessionBands(
+            chartRef.current,
+            shiftedCandles,
+            stageRef.current?.clientWidth || 0
+          )
+        )
       }
     })
   }, [displayCandles, shiftedCandles])
 
   useEffect(() => {
-    if (!seriesRef.current) return
+    const chart = chartRef.current
+    if (!chart) return
 
-    for (const line of gexLineRefs.current) {
+    for (const series of gexSeriesRefs.current) {
       try {
-        seriesRef.current.removePriceLine(line)
+        chart.removeSeries(series)
       } catch (err) {
         // ignore stale references
       }
     }
-    gexLineRefs.current = []
+    gexSeriesRefs.current = []
 
-    if (!gexEnabled || !Array.isArray(gexLevels) || !gexLevels.length) {
+    if (!gexEnabled || !Array.isArray(normalizedGexSegments) || !normalizedGexSegments.length) {
       return
     }
 
-    const nextLines = []
-    for (const level of gexLevels) {
-      const price = Number(level?.level)
-      if (!Number.isFinite(price)) continue
+    const nextRefs = []
+
+    for (const seg of normalizedGexSegments) {
+      const level = Number(seg?.level)
+      const shiftedStart = Number(seg?.shiftedStart)
+      const shiftedEnd = Number(seg?.shiftedEnd)
+
+      if (
+        !Number.isFinite(level) ||
+        !Number.isFinite(shiftedStart) ||
+        !Number.isFinite(shiftedEnd)
+      ) {
+        continue
+      }
+
       try {
-        const line = seriesRef.current.createPriceLine({
-          price,
-          color: level?.color || 'rgba(148,163,184,0.55)',
-          lineWidth: safeLineWidth(level?.line_width),
-          lineStyle: 0,
-          axisLabelVisible: false,
-          title: '',
+        const lineSeries = chart.addSeries(LineSeries, {
+          color: seg?.color || 'rgba(148,163,184,0.55)',
+          lineWidth: safeLineWidth(seg?.line_width),
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          pointMarkersVisible: false,
         })
-        nextLines.push(line)
+
+        lineSeries.setData([
+          { time: shiftedStart, value: level },
+          { time: shiftedEnd, value: level },
+        ])
+
+        nextRefs.push(lineSeries)
       } catch (err) {
-        // ignore bad line
+        // ignore bad segment
       }
     }
-    gexLineRefs.current = nextLines
-  }, [gexLevels, gexEnabled])
+
+    gexSeriesRefs.current = nextRefs
+  }, [normalizedGexSegments, gexEnabled])
 
   useEffect(() => {
     if (!chartRef.current) return
@@ -704,12 +796,13 @@ export default function PriceChart({
           className="chart-stage chart-stage-compact"
           style={{ position: 'relative' }}
         >
-          {sessionBand.visible && (
+          {sessionBands.map((band) => (
             <div
+              key={band.key}
               className="session-band"
-              style={{ left: `${sessionBand.left}px`, width: `${sessionBand.width}px` }}
+              style={{ left: `${band.left}px`, width: `${band.width}px` }}
             />
-          )}
+          ))}
 
           <div
             ref={tooltipRef}

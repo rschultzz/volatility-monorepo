@@ -780,64 +780,15 @@ def _effective_trade_date(selected_date: dt.date, pt_tz: ZoneInfo) -> tuple[dt.d
         pass
     return selected_date, None
 
-
-def _build_react_preview_bars_payload(
-        trade_date: str | None,
-        interval: str | None,
+def _bars_df_to_payload_rows(
+        df_bars: pd.DataFrame,
+        pt_tz: ZoneInfo,
         *,
-        gex_enabled: bool = True,
-        gex_min_abs_b: float | None = None,
-) -> tuple[dict, int]:
-    interval = str(interval or "1min").strip()
-    if interval not in ("1min", "5min"):
-        interval = "1min"
-
-    if not trade_date:
-        return {
-            "error": "trade_date is required",
-            "bars": [],
-            "gex_levels": [],
-            "interval": interval,
-        }, 400
-
-    try:
-        selected_date = dt.datetime.strptime(str(trade_date), "%Y-%m-%d").date()
-    except (TypeError, ValueError):
-        return {
-            "error": "Invalid trade date",
-            "bars": [],
-            "gex_levels": [],
-            "interval": interval,
-        }, 400
-
-    pt_tz = ZoneInfo("America/Los_Angeles")
-    session_date, session_note = _effective_trade_date(selected_date, pt_tz)
-    day_start_pt, day_end_pt = _session_window_pt(session_date, pt_tz)
-
-    try:
-        df_bars = _fetch_bars_pt(day_start_pt, day_end_pt, interval, pt_tz)
-    except Exception as e:
-        return {
-            "error": f"Database error when loading bars: {e}",
-            "bars": [],
-            "gex_levels": [],
-            "trade_date": str(trade_date),
-            "effective_trade_date": session_date.isoformat(),
-            "interval": interval,
-        }, 500
-
+        session_date: dt.date,
+        is_center: bool,
+) -> list[dict]:
     if df_bars is None or df_bars.empty:
-        return {
-            "bars": [],
-            "gex_levels": [],
-            "trade_date": str(trade_date),
-            "effective_trade_date": session_date.isoformat(),
-            "interval": interval,
-            "session_note": session_note,
-            "symbol": TRADES_SYMBOL,
-            "gex_enabled": bool(gex_enabled),
-            "gex_min_abs_b": float(gex_min_abs_b) if gex_min_abs_b is not None else None,
-        }, 200
+        return []
 
     if "datetime" in df_bars.columns:
         ts_utc = pd.to_datetime(df_bars["datetime"], utc=True, errors="coerce")
@@ -851,7 +802,7 @@ def _build_react_preview_bars_payload(
         except Exception:
             ts_utc = pd.to_datetime([], utc=True)
 
-    bars = []
+    rows: list[dict] = []
     for i, row in df_bars.reset_index(drop=True).iterrows():
         try:
             ts = ts_utc.iloc[i]
@@ -859,25 +810,206 @@ def _build_react_preview_bars_payload(
             continue
         if pd.isna(ts):
             continue
+
         try:
-            bars.append({
+            rows.append({
                 "time": int(pd.Timestamp(ts).timestamp()),
                 "open": float(row["open"]),
                 "high": float(row["high"]),
                 "low": float(row["low"]),
                 "close": float(row["close"]),
+                "session_date": session_date.isoformat(),
+                "is_center": bool(is_center),
             })
         except Exception:
             continue
 
-    gex_levels: list[dict] = []
+    return rows
+def _build_gex_segments_for_session(
+        session_date: dt.date,
+        df_bars: pd.DataFrame,
+        pt_tz: ZoneInfo,
+        *,
+        gex_min_abs_b: float | None = None,
+) -> list[dict]:
+    if df_bars is None or df_bars.empty:
+        return []
+
+    try:
+        df_gex = _fetch_gex_grouped_by_level(session_date)
+    except Exception:
+        return []
+
+    if df_gex is None or df_gex.empty:
+        return []
+
+    try:
+        band_min = float(df_bars["low"].min()) - float(GEX_LEVEL_PADDING)
+        band_max = float(df_bars["high"].max()) + float(GEX_LEVEL_PADDING)
+    except Exception:
+        return []
+
+    threshold_abs = (
+        float(gex_min_abs_b) * 1e9
+        if gex_min_abs_b is not None
+        else float(GEX_ABS_THRESHOLD_DEFAULT)
+    )
+
+    df_day = _select_levels(df_gex, band_min, band_max, threshold_abs)
+    if df_day is None or df_day.empty:
+        return []
+
+    net_g = df_day["net_gamma"].to_numpy(dtype=float)
+    cmin, cmax = _compute_color_span(net_g)
+    denom = float(max(abs(cmin), abs(cmax), 1.0))
+
+    start_pt, end_pt = _session_window_pt(session_date, pt_tz)
+    start_utc = int(start_pt.astimezone(ZoneInfo("UTC")).timestamp())
+    end_utc = int(end_pt.astimezone(ZoneInfo("UTC")).timestamp())
+
+    out: list[dict] = []
+    for _, r in df_day.iterrows():
+        lvl = float(r["level"])
+        net_val = float(r["net_gamma"])
+        color = _color_for_net_gex(net_val, cmin, cmax)
+        norm = float(min(1.0, abs(net_val) / denom))
+        line_width = float(
+            min(
+                GEX_LEVEL_LINE_WIDTH_MAX,
+                GEX_LEVEL_LINE_WIDTH + norm * GEX_LEVEL_LINE_WIDTH_SCALE,
+            )
+        )
+        line_opacity = float(
+            min(1.0, max(0.12, GEX_LEVEL_LINE_OPACITY * (0.40 + 0.60 * norm)))
+        )
+
+        out.append({
+            "session_date": session_date.isoformat(),
+            "start_time": start_utc,
+            "end_time": end_utc,
+            "level": lvl,
+            "net_gamma": net_val,
+            "call_gamma": float(r["call_gamma"]),
+            "put_gamma": float(r["put_gamma"]),
+            "color": _hex_to_rgba(color, line_opacity),
+            "line_width": line_width,
+            "opacity": line_opacity,
+        })
+
+    return out
+
+def _build_react_preview_bars_payload(
+        trade_date: str | None,
+        interval: str | None,
+        *,
+        gex_enabled: bool = True,
+        gex_min_abs_b: float | None = None,
+        phase: str = "center",
+        days_either_side: int | None = None,
+) -> tuple[dict, int]:
+    interval = str(interval or "1min").strip()
+    if interval not in ("1min", "5min"):
+        interval = "1min"
+
+    phase = str(phase or "center").strip().lower()
+    if phase not in {"center", "multi"}:
+        phase = "center"
+
+    if not trade_date:
+        return {
+            "error": "trade_date is required",
+            "bars": [],
+            "gex_levels": [],
+            "gex_segments": [],
+            "interval": interval,
+            "phase": phase,
+        }, 400
+
+    try:
+        selected_date = dt.datetime.strptime(str(trade_date), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return {
+            "error": "Invalid trade date",
+            "bars": [],
+            "gex_levels": [],
+            "gex_segments": [],
+            "interval": interval,
+            "phase": phase,
+        }, 400
+
+    pt_tz = ZoneInfo("America/Los_Angeles")
+    session_date, session_note = _effective_trade_date(selected_date, pt_tz)
+
+    if phase == "multi":
+        n_each_side = DAYS_EITHER_SIDE if days_either_side is None else max(0, int(days_either_side))
+        target_dates = [d for d in _window_trade_dates(session_date, n_each_side) if d != session_date]
+    else:
+        n_each_side = 0
+        target_dates = [session_date]
+
+    loaded_frames: list[tuple[dt.date, pd.DataFrame]] = []
+
+    for load_date in target_dates:
+        day_start_pt, day_end_pt = _session_window_pt(load_date, pt_tz)
+        try:
+            df_day = _fetch_bars_pt(day_start_pt, day_end_pt, interval, pt_tz)
+        except Exception as e:
+            return {
+                "error": f"Database error when loading bars: {e}",
+                "bars": [],
+                "gex_levels": [],
+                "gex_segments": [],
+                "trade_date": str(trade_date),
+                "effective_trade_date": session_date.isoformat(),
+                "interval": interval,
+                "phase": phase,
+                "days_either_side": n_each_side,
+            }, 500
+
+        if df_day is not None and not df_day.empty:
+            loaded_frames.append((load_date, df_day))
+
+    bars: list[dict] = []
+    for load_date, df_day in loaded_frames:
+        bars.extend(
+            _bars_df_to_payload_rows(
+                df_day,
+                pt_tz,
+                session_date=load_date,
+                is_center=(load_date == session_date),
+            )
+        )
+    bars.sort(key=lambda x: x["time"])
+
+    gex_segments: list[dict] = []
     if gex_enabled:
+        for load_date, df_day in loaded_frames:
+            try:
+                gex_segments.extend(
+                    _build_gex_segments_for_session(
+                        load_date,
+                        df_day,
+                        pt_tz,
+                        gex_min_abs_b=gex_min_abs_b,
+                    )
+                )
+            except Exception:
+                continue
+
+    # Keep center-day gex_levels for backward compatibility if needed
+    gex_levels: list[dict] = []
+    if phase == "center" and gex_enabled and loaded_frames:
+        df_bars = loaded_frames[0][1]
         try:
             df_gex = _fetch_gex_grouped_by_level(session_date)
             if df_gex is not None and not df_gex.empty:
                 band_min = float(df_bars["low"].min()) - float(GEX_LEVEL_PADDING)
                 band_max = float(df_bars["high"].max()) + float(GEX_LEVEL_PADDING)
-                threshold_abs = float(gex_min_abs_b) * 1e9 if gex_min_abs_b is not None else float(GEX_ABS_THRESHOLD_DEFAULT)
+                threshold_abs = (
+                    float(gex_min_abs_b) * 1e9
+                    if gex_min_abs_b is not None
+                    else float(GEX_ABS_THRESHOLD_DEFAULT)
+                )
                 df_day = _select_levels(df_gex, band_min, band_max, threshold_abs)
                 if df_day is not None and not df_day.empty:
                     net_g = df_day["net_gamma"].to_numpy(dtype=float)
@@ -888,8 +1020,15 @@ def _build_react_preview_bars_payload(
                         net_val = float(r["net_gamma"])
                         color = _color_for_net_gex(net_val, cmin, cmax)
                         norm = float(min(1.0, abs(net_val) / denom))
-                        line_width = float(min(GEX_LEVEL_LINE_WIDTH_MAX, GEX_LEVEL_LINE_WIDTH + norm * GEX_LEVEL_LINE_WIDTH_SCALE))
-                        line_opacity = float(min(1.0, max(0.12, GEX_LEVEL_LINE_OPACITY * (0.40 + 0.60 * norm))))
+                        line_width = float(
+                            min(
+                                GEX_LEVEL_LINE_WIDTH_MAX,
+                                GEX_LEVEL_LINE_WIDTH + norm * GEX_LEVEL_LINE_WIDTH_SCALE,
+                            )
+                        )
+                        line_opacity = float(
+                            min(1.0, max(0.12, GEX_LEVEL_LINE_OPACITY * (0.40 + 0.60 * norm)))
+                        )
                         gex_levels.append({
                             "level": lvl,
                             "net_gamma": net_val,
@@ -905,6 +1044,7 @@ def _build_react_preview_bars_payload(
     return {
         "bars": bars,
         "gex_levels": gex_levels,
+        "gex_segments": gex_segments,
         "trade_date": str(trade_date),
         "effective_trade_date": session_date.isoformat(),
         "interval": interval,
@@ -912,6 +1052,10 @@ def _build_react_preview_bars_payload(
         "symbol": TRADES_SYMBOL,
         "gex_enabled": bool(gex_enabled),
         "gex_min_abs_b": float(gex_min_abs_b) if gex_min_abs_b is not None else None,
+        "phase": phase,
+        "days_either_side": n_each_side,
+        "requested_dates": [d.isoformat() for d in target_dates],
+        "loaded_dates": [d.isoformat() for d, _ in loaded_frames],
     }, 200
 
 
@@ -1621,19 +1765,31 @@ def register_ironbeam_callbacks(app):
         @app.server.route("/api/ironbeam/bars", methods=["GET"])
         def ironbeam_react_bars_api():
             trade_date = request.args.get("trade_date")
-            interval = request.args.get("interval") or "1min"
-            gex_enabled_raw = str(request.args.get("gex_enabled") or "1").strip().lower()
+            interval = request.args.get("interval")
+            phase = (request.args.get("phase") or "center").strip().lower()
+
+            gex_enabled_raw = (request.args.get("gex_enabled") or "1").strip().lower()
             gex_enabled = gex_enabled_raw not in {"0", "false", "no", "off"}
+
             gex_min_abs_b_raw = request.args.get("gex_min_abs_b")
             try:
                 gex_min_abs_b = float(gex_min_abs_b_raw) if gex_min_abs_b_raw not in (None, "") else None
             except Exception:
                 gex_min_abs_b = None
+
+            days_either_side_raw = request.args.get("days_either_side")
+            try:
+                days_either_side = int(days_either_side_raw) if days_either_side_raw not in (None, "") else None
+            except Exception:
+                days_either_side = None
+
             payload, status = _build_react_preview_bars_payload(
                 trade_date,
                 interval,
                 gex_enabled=gex_enabled,
                 gex_min_abs_b=gex_min_abs_b,
+                phase=phase,
+                days_either_side=days_either_side,
             )
             resp = jsonify(payload)
 
@@ -3409,6 +3565,7 @@ def register_ironbeam_callbacks(app):
             f"trade_date={td}",
             f"interval={interval}",
             f"gex_enabled={1 if gex_enabled else 0}",
+            f"days_either_side={max(0, DAYS_EITHER_SIDE)}",
         ]
         if gex_min_abs_b is not None:
             params.append(f"gex_min_abs_b={gex_min_abs_b}")
