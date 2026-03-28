@@ -1,6 +1,8 @@
 # apps/web/modules/Ironbeam/callbacks.py
 
 import os
+import re
+import json
 import math
 import datetime as dt
 import time
@@ -19,6 +21,7 @@ from dash.exceptions import PreventUpdate
 from modules.Ironbeam.indicators.registry import PLUGIN_MAP as IB_PLUGIN_MAP, options as ib_indicator_options
 from modules.Ironbeam.indicators.gex_overlay import build_gex_overlay_traces as _build_gex_overlay_traces_plugin
 from sqlalchemy import create_engine, text
+from flask import jsonify, request
 
 
 def _indicator_state_token(state: object) -> str:
@@ -330,7 +333,7 @@ def _apply_live_trades_overlay_patch(patch_obj: Patch, fig_dict: dict, df_base_b
         return False
 
     expected = pd.date_range(start=start_bucket, end=current_bucket, freq=freq)
-    
+
     buffer = max(dt.timedelta(seconds=10), dt.timedelta(minutes=1) if freq == "1min" else dt.timedelta(minutes=5))
     fetch_start_pt = (expected[0].to_pydatetime() - buffer)
     fetch_end_pt = (expected[-1].to_pydatetime() + buffer)
@@ -389,11 +392,11 @@ def _apply_live_trades_overlay_patch(patch_obj: Patch, fig_dict: dict, df_base_b
         tr = fig_dict["data"][overlay_idx]
         old_x = tr.get("x", [])
         old_c = tr.get("close", [])
-        
+
         # Simple check: if last point matches, assume no change (optimization)
         if old_x and old_c and len(old_x) == len(x_new):
-             if str(old_x[-1]) == str(x_new[-1]) and float(old_c[-1]) == float(c_new[-1]):
-                 return False
+            if str(old_x[-1]) == str(x_new[-1]) and float(old_c[-1]) == float(c_new[-1]):
+                return False
 
         patch_obj.data[overlay_idx].x = x_new
         patch_obj.data[overlay_idx].open = o_new
@@ -484,7 +487,7 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
         return False
 
     expected = pd.date_range(start=start_bucket, end=current_bucket, freq=freq)
-    
+
     buffer = max(dt.timedelta(seconds=10), dt.timedelta(minutes=1) if freq == "1min" else dt.timedelta(minutes=5))
     fetch_start_pt = (expected[0].to_pydatetime() - buffer)
     fetch_end_pt = (expected[-1].to_pydatetime() + buffer)
@@ -776,6 +779,140 @@ def _effective_trade_date(selected_date: dt.date, pt_tz: ZoneInfo) -> tuple[dt.d
     except Exception:
         pass
     return selected_date, None
+
+
+def _build_react_preview_bars_payload(
+        trade_date: str | None,
+        interval: str | None,
+        *,
+        gex_enabled: bool = True,
+        gex_min_abs_b: float | None = None,
+) -> tuple[dict, int]:
+    interval = str(interval or "1min").strip()
+    if interval not in ("1min", "5min"):
+        interval = "1min"
+
+    if not trade_date:
+        return {
+            "error": "trade_date is required",
+            "bars": [],
+            "gex_levels": [],
+            "interval": interval,
+        }, 400
+
+    try:
+        selected_date = dt.datetime.strptime(str(trade_date), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return {
+            "error": "Invalid trade date",
+            "bars": [],
+            "gex_levels": [],
+            "interval": interval,
+        }, 400
+
+    pt_tz = ZoneInfo("America/Los_Angeles")
+    session_date, session_note = _effective_trade_date(selected_date, pt_tz)
+    day_start_pt, day_end_pt = _session_window_pt(session_date, pt_tz)
+
+    try:
+        df_bars = _fetch_bars_pt(day_start_pt, day_end_pt, interval, pt_tz)
+    except Exception as e:
+        return {
+            "error": f"Database error when loading bars: {e}",
+            "bars": [],
+            "gex_levels": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+        }, 500
+
+    if df_bars is None or df_bars.empty:
+        return {
+            "bars": [],
+            "gex_levels": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+            "session_note": session_note,
+            "symbol": TRADES_SYMBOL,
+            "gex_enabled": bool(gex_enabled),
+            "gex_min_abs_b": float(gex_min_abs_b) if gex_min_abs_b is not None else None,
+        }, 200
+
+    if "datetime" in df_bars.columns:
+        ts_utc = pd.to_datetime(df_bars["datetime"], utc=True, errors="coerce")
+    else:
+        ts_pt = pd.to_datetime(df_bars["datetime_pt"], errors="coerce")
+        try:
+            if getattr(ts_pt.dt, "tz", None) is None:
+                ts_utc = ts_pt.dt.tz_localize(pt_tz).dt.tz_convert("UTC")
+            else:
+                ts_utc = ts_pt.dt.tz_convert("UTC")
+        except Exception:
+            ts_utc = pd.to_datetime([], utc=True)
+
+    bars = []
+    for i, row in df_bars.reset_index(drop=True).iterrows():
+        try:
+            ts = ts_utc.iloc[i]
+        except Exception:
+            continue
+        if pd.isna(ts):
+            continue
+        try:
+            bars.append({
+                "time": int(pd.Timestamp(ts).timestamp()),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+            })
+        except Exception:
+            continue
+
+    gex_levels: list[dict] = []
+    if gex_enabled:
+        try:
+            df_gex = _fetch_gex_grouped_by_level(session_date)
+            if df_gex is not None and not df_gex.empty:
+                band_min = float(df_bars["low"].min()) - float(GEX_LEVEL_PADDING)
+                band_max = float(df_bars["high"].max()) + float(GEX_LEVEL_PADDING)
+                threshold_abs = float(gex_min_abs_b) * 1e9 if gex_min_abs_b is not None else float(GEX_ABS_THRESHOLD_DEFAULT)
+                df_day = _select_levels(df_gex, band_min, band_max, threshold_abs)
+                if df_day is not None and not df_day.empty:
+                    net_g = df_day["net_gamma"].to_numpy(dtype=float)
+                    cmin, cmax = _compute_color_span(net_g)
+                    denom = float(max(abs(cmin), abs(cmax), 1.0))
+                    for _, r in df_day.iterrows():
+                        lvl = float(r["level"])
+                        net_val = float(r["net_gamma"])
+                        color = _color_for_net_gex(net_val, cmin, cmax)
+                        norm = float(min(1.0, abs(net_val) / denom))
+                        line_width = float(min(GEX_LEVEL_LINE_WIDTH_MAX, GEX_LEVEL_LINE_WIDTH + norm * GEX_LEVEL_LINE_WIDTH_SCALE))
+                        line_opacity = float(min(1.0, max(0.12, GEX_LEVEL_LINE_OPACITY * (0.40 + 0.60 * norm))))
+                        gex_levels.append({
+                            "level": lvl,
+                            "net_gamma": net_val,
+                            "call_gamma": float(r["call_gamma"]),
+                            "put_gamma": float(r["put_gamma"]),
+                            "color": _hex_to_rgba(color, line_opacity),
+                            "line_width": line_width,
+                            "opacity": line_opacity,
+                        })
+        except Exception:
+            gex_levels = []
+
+    return {
+        "bars": bars,
+        "gex_levels": gex_levels,
+        "trade_date": str(trade_date),
+        "effective_trade_date": session_date.isoformat(),
+        "interval": interval,
+        "session_note": session_note,
+        "symbol": TRADES_SYMBOL,
+        "gex_enabled": bool(gex_enabled),
+        "gex_min_abs_b": float(gex_min_abs_b) if gex_min_abs_b is not None else None,
+    }, 200
 
 
 def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
@@ -1372,7 +1509,7 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
             )
 
     _add_hist_segments(diff_arr >= 0, pos_line, pos_hist_fill)
-    _add_hist_segments(diff_arr < 0,  neg_line, neg_hist_fill)
+    _add_hist_segments(diff_arr < 0, neg_line, neg_hist_fill)
 
     # Zero line
     fig.add_hline(y=0, line_width=1, line_dash="solid", line_color="rgba(255,255,255,0.25)")
@@ -1455,7 +1592,7 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
                 line_dash="dash",
                 line_color="rgba(255,255,255,0.35)",
             )
-    
+
     # Check if y-range is locked in shared_xrange (we reuse this store for y-locks too)
     if isinstance(shared_xrange, dict):
         y0 = shared_xrange.get(f"y0_{indicator_state.get('enabled', [])[0] if indicator_state.get('enabled') else ''}")
@@ -1464,7 +1601,7 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
         # Let's use a specific key for flow y-range.
         flow_y0 = shared_xrange.get("flow_y0")
         flow_y1 = shared_xrange.get("flow_y1")
-        
+
         if flow_y0 is not None and flow_y1 is not None:
             try:
                 fig.update_yaxes(range=[float(flow_y0), float(flow_y1)], autorange=False)
@@ -1474,10 +1611,47 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
     return fig
 
 
-
-
 # ---------- Dash callback registration ----------
 def register_ironbeam_callbacks(app):
+    # -------------------------
+    # React Preview: lightweight bars API for the standalone React chart
+    # -------------------------
+    if not getattr(app.server, "_ironbeam_react_bars_route_registered", False):
+
+        @app.server.route("/api/ironbeam/bars", methods=["GET"])
+        def ironbeam_react_bars_api():
+            trade_date = request.args.get("trade_date")
+            interval = request.args.get("interval") or "1min"
+            gex_enabled_raw = str(request.args.get("gex_enabled") or "1").strip().lower()
+            gex_enabled = gex_enabled_raw not in {"0", "false", "no", "off"}
+            gex_min_abs_b_raw = request.args.get("gex_min_abs_b")
+            try:
+                gex_min_abs_b = float(gex_min_abs_b_raw) if gex_min_abs_b_raw not in (None, "") else None
+            except Exception:
+                gex_min_abs_b = None
+            payload, status = _build_react_preview_bars_payload(
+                trade_date,
+                interval,
+                gex_enabled=gex_enabled,
+                gex_min_abs_b=gex_min_abs_b,
+            )
+            resp = jsonify(payload)
+
+            origin = request.headers.get("Origin")
+            allowed = {
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                "http://0.0.0.0:5173",
+            }
+            if origin in allowed:
+                resp.headers["Access-Control-Allow-Origin"] = origin
+                resp.headers["Access-Control-Allow-Credentials"] = "true"
+                resp.headers["Vary"] = "Origin"
+
+            return resp, status
+
+        app.server._ironbeam_react_bars_route_registered = True
+
     # ---- Clientside Sync: Crosshair & Zoom ----
     app.clientside_callback(
         ClientsideFunction(namespace="ironbeam", function_name="sync_crosshair_and_zoom"),
@@ -1486,7 +1660,7 @@ def register_ironbeam_callbacks(app):
         [State({"type": "ib-indicator-panel", "id": MATCH}, "figure")],
         prevent_initial_call=True,
     )
-    
+
     # ---- Capture Indicator Panel Zoom (Y-axis) ----
     @app.callback(
         Output("ib-shared-xrange", "data", allow_duplicate=True),
@@ -1498,13 +1672,13 @@ def register_ironbeam_callbacks(app):
     def capture_indicator_zoom(relayouts, current_shared, panel_ids):
         if not ctx.triggered:
             raise PreventUpdate
-            
+
         trig_id = ctx.triggered_id
         if not trig_id or trig_id.get("type") != "ib-indicator-panel":
             raise PreventUpdate
-            
+
         pid = trig_id.get("id")
-        
+
         # Find the relayout data for this specific ID
         try:
             # panel_ids is a list of dicts like {'id': 'aggressor_flow', 'type': 'ib-indicator-panel'}
@@ -1516,18 +1690,18 @@ def register_ironbeam_callbacks(app):
 
         if not relayout or not isinstance(relayout, dict):
             raise PreventUpdate
-            
+
         # Only process for aggressor_flow for now
         if pid != "aggressor_flow":
             raise PreventUpdate
-            
+
         data = dict(current_shared or {})
         changed = False
-        
+
         # Check for Y-axis zoom/pan
         y0 = relayout.get("yaxis.range[0]")
         y1 = relayout.get("yaxis.range[1]")
-        
+
         # Handle autorange (reset zoom)
         if relayout.get("yaxis.autorange") is True:
             if "flow_y0" in data:
@@ -1541,10 +1715,10 @@ def register_ironbeam_callbacks(app):
                 data["flow_y0"] = y0
                 data["flow_y1"] = y1
                 changed = True
-                
+
         if not changed:
             raise PreventUpdate
-            
+
         return data
 
     # ---- Clientside Highlight: Click on Candle ----
@@ -1994,7 +2168,7 @@ def register_ironbeam_callbacks(app):
 
         meta["indicator_state_token"] = _indicator_state_token(indicator_state)
         meta["last_relayout_ms"] = int(time.time() * 1000)
-        
+
         # Use Patch to update meta without sending full figure
         p = Patch()
         p.layout.meta = meta
@@ -2065,7 +2239,7 @@ def register_ironbeam_callbacks(app):
 
         # Use Patch() to avoid resetting client-side zoom state
         p = Patch()
-        
+
         # We still need to read from 'fig' to check existing traces
         meta = (fig.get("layout") or {}).get("meta") or {}
 
@@ -2114,7 +2288,7 @@ def register_ironbeam_callbacks(app):
                 trace_name = f"ES {session_date.isoformat()} ({interval})"
                 idx_trace = None
                 old_last = None
-                
+
                 # Find trace index in existing figure
                 if "data" in fig and isinstance(fig["data"], list):
                     for i, tr in enumerate(fig["data"]):
@@ -2192,7 +2366,6 @@ def register_ironbeam_callbacks(app):
         # If hovering, skip all figure mutations for this tick to prevent crosshair flicker.
         if hover_cooldown_active:
             raise PreventUpdate
-
 
         needed: list[str] = []
         if (not MULTIDAY_PREFETCH) and view_start and view_end:
@@ -2337,7 +2510,7 @@ def register_ironbeam_callbacks(app):
                     nm = tr.get("name", "")
                     if nm.startswith("__hovergrid__") or nm.startswith("__hoverline__"):
                         indices_to_remove.append(i)
-            
+
             for i in sorted(indices_to_remove, reverse=True):
                 del p.data[i]
 
@@ -2901,7 +3074,7 @@ def register_ironbeam_callbacks(app):
                 selected_date = dt.datetime.strptime(trade_date, "%Y-%m-%d").date()
                 curr_session = _current_session_trade_date(pt_tz)
                 eff_date, _ = _effective_trade_date(selected_date, pt_tz)
-                
+
                 if eff_date != curr_session:
                     return no_update
             except Exception:
@@ -2910,18 +3083,18 @@ def register_ironbeam_callbacks(app):
         # Determine if we can use Patch optimization (only x-range changed)
         # We check if 'trade-date' or 'ib-indicator-state' triggered the update.
         is_config_change = any('trade-date' in t or 'ib-indicator-state' in t for t in triggered_ids)
-        
+
         if not is_config_change and 'ib-shared-xrange.data' in triggered_ids and 'ironbeam-interval.n_intervals' not in triggered_ids:
-             if pid == 'aggressor_flow':
-                 if isinstance(shared_xrange, dict):
-                     x0 = shared_xrange.get("x0")
-                     x1 = shared_xrange.get("x1")
-                     if x0 and x1:
-                         p = Patch()
-                         p.layout.xaxis.range = [x0, x1]
-                         p.layout.xaxis.autorange = False
-                         return p
-                 return no_update
+            if pid == 'aggressor_flow':
+                if isinstance(shared_xrange, dict):
+                    x0 = shared_xrange.get("x0")
+                    x1 = shared_xrange.get("x1")
+                    if x0 and x1:
+                        p = Patch()
+                        p.layout.xaxis.range = [x0, x1]
+                        p.layout.xaxis.autorange = False
+                        return p
+                return no_update
 
         if pid == 'aggressor_flow':
             return build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange)
@@ -2975,7 +3148,7 @@ def register_ironbeam_callbacks(app):
         """
         Stores:
           - x0/x1 from relayout (zoom/pan)
-        
+
         Note: Hover crosshair sync is now handled clientside to avoid latency.
         """
         data = dict(current or {})
@@ -3048,7 +3221,6 @@ def register_ironbeam_callbacks(app):
 
         return data or None
 
-
     # ---- Click a price bar to set global Time Slices (PT) ----
     # This restores the old behavior: clicking a candle sets the "Time Slices (PT)" dropdown
     # (id="smile-time-input") and the selected bar is highlighted in red by the main chart builder.
@@ -3089,7 +3261,7 @@ def register_ironbeam_callbacks(app):
         # Adjust for 1-minute bars: select the next minute (end of bar)
         # This fixes the "selecting bars a minute behind" issue.
         if (bar_interval or "1min") == "1min":
-             ts = ts + pd.Timedelta(minutes=1)
+            ts = ts + pd.Timedelta(minutes=1)
 
         try:
             hhmm = ts.strftime("%H:%M")
@@ -3187,3 +3359,140 @@ def register_ironbeam_callbacks(app):
             toggle_style["left"] = "303px"  # 320 - (34/2)
 
         return sidebar_style, content_style, btn, row_style, toggle_style
+
+    # -------------------------
+    # UI: Chart mode toggle (Classic vs React Preview)
+    # NOTE: do not round-trip toggle -> store -> toggle, because Dash treats that as a
+    # circular dependency. For step 1 we let the radio value drive visibility directly.
+    # -------------------------
+
+    @app.callback(
+        Output("ib-react-preview-frame", "src"),
+        Input("trade-date", "date"),
+        Input("ironbeam-bar-interval", "value"),
+        Input("ib-chart-mode-toggle", "value"),
+        Input("ib-indicator-state", "data"),
+    )
+    def ib_update_react_preview_src(trade_date, bar_interval, chart_mode, indicator_state):
+        base = os.getenv("IRONBEAM_REACT_PREVIEW_URL", "http://localhost:5173").rstrip("/")
+        td = trade_date or dt.date.today().isoformat()
+        interval = (bar_interval or "1min").strip()
+        if interval not in {"1min", "5min"}:
+            interval = "1min"
+
+        enabled = []
+        gex_min_abs_b = None
+        if isinstance(indicator_state, dict):
+            enabled = indicator_state.get("enabled") or []
+            if not isinstance(enabled, list):
+                enabled = [enabled] if enabled else []
+            cfg_all = indicator_state.get("cfg") if isinstance(indicator_state.get("cfg"), dict) else {}
+            gex_cfg = cfg_all.get("gex_overlay") if isinstance(cfg_all.get("gex_overlay"), dict) else {}
+            raw_min_abs_b = gex_cfg.get("min_abs_b")
+            try:
+                if raw_min_abs_b not in (None, ""):
+                    gex_min_abs_b = float(raw_min_abs_b)
+            except Exception:
+                gex_min_abs_b = None
+
+        gex_enabled = "gex_overlay" in enabled if enabled else True
+
+        params = [
+            f"trade_date={td}",
+            f"interval={interval}",
+            f"gex_enabled={1 if gex_enabled else 0}",
+        ]
+        if gex_min_abs_b is not None:
+            params.append(f"gex_min_abs_b={gex_min_abs_b}")
+
+        return f"{base}/?{'&'.join(params)}"
+
+    @app.callback(
+        Output("smile-time-input", "value", allow_duplicate=True),
+        Input("ib-react-timeslice-bridge", "value"),
+        State("smile-time-input", "value"),
+        prevent_initial_call=True,
+    )
+    def ib_apply_react_timeslice_bridge(raw_value, current_value):
+        if raw_value in (None, ""):
+            raise PreventUpdate
+
+        try:
+            payload = json.loads(raw_value)
+        except Exception:
+            raise PreventUpdate
+
+        if isinstance(payload, dict):
+            times = payload.get("times") or []
+        else:
+            times = payload
+
+        if not isinstance(times, list):
+            raise PreventUpdate
+
+        cleaned = []
+        seen = set()
+        for item in times:
+            s = str(item or "").strip()
+            if not s:
+                continue
+            if not re.match(r"^\d{2}:\d{2}$", s):
+                continue
+            if s not in seen:
+                cleaned.append(s)
+                seen.add(s)
+
+        current = current_value or []
+        if not isinstance(current, list):
+            current = [current] if current else []
+
+        if cleaned == current:
+            raise PreventUpdate
+
+        return cleaned
+
+    @app.callback(
+        Output("ib-react-timeslice-parent", "value"),
+        Input("smile-time-input", "value"),
+    )
+    def ib_publish_parent_timeslices_to_react(times_value):
+        times = times_value or []
+        if not isinstance(times, list):
+            times = [times] if times else []
+
+        cleaned = []
+        seen = set()
+        for item in times:
+            s = str(item or "").strip()
+            if not s:
+                continue
+            if not re.match(r"^\d{2}:\d{2}$", s):
+                continue
+            if s not in seen:
+                cleaned.append(s)
+                seen.add(s)
+
+        return json.dumps({"times": cleaned})
+
+    @app.callback(
+        Output("ib-classic-chart-wrap", "style"),
+        Output("ib-react-preview-wrap", "style"),
+        Input("ib-chart-mode-toggle", "value"),
+    )
+    def ib_apply_chart_mode(chart_mode):
+        mode = (chart_mode or "classic").strip()
+        if mode == "react_preview":
+            return (
+                {"display": "none"},
+                {"display": "block", "flex": "1 1 auto", "minHeight": 0},
+            )
+
+        return (
+            {
+                "display": "flex",
+                "flexDirection": "column",
+                "flex": "1 1 auto",
+                "minHeight": 0,
+            },
+            {"display": "none"},
+        )

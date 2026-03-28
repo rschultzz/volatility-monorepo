@@ -357,6 +357,7 @@ server.secret_key = os.getenv("SECRET_KEY", "dev-secret-key")
 
 VALID_USERNAME_PASSWORD_PAIRS = {
     "ryan": "ChangeThisPassword123!",
+    "noah": "ChangeThisPassword123!",
     "sara": "ChangeThisPassword123!",
 }
 auth = dash_auth.BasicAuth(app, VALID_USERNAME_PASSWORD_PAIRS)
