@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import PriceChart from './components/PriceChart'
+import AggressorFlowPanel from './components/AggressorFlowPanel'
+
+const BOTTOM_PANEL_HEIGHT = 220
 
 function cleanBaseUrl(value) {
   const s = String(value || '').trim()
@@ -92,6 +95,13 @@ export default function App() {
   const gexEnabled = parseBool(params.get('gex_enabled'), true)
   const gexMinAbsB = parseFloatOrNull(params.get('gex_min_abs_b'))
   const daysEitherSide = Math.max(0, parseIntOrDefault(params.get('days_either_side'), 5))
+
+  const flowEnabled = parseBool(params.get('flow_enabled'), true)
+  const flowSession = (params.get('flow_session') || 'FULL').toUpperCase()
+  const flowResample = (params.get('flow_resample') || '1s').toLowerCase()
+  const flowEmaLen = Math.max(1, parseIntOrDefault(params.get('flow_ema_len'), 840))
+  const flowHistAlpha = parseFloatOrNull(params.get('flow_hist_alpha')) ?? 0.30
+
   const apiBase = useMemo(() => inferApiBase(), [])
   const initialSelectedTimes = useMemo(() => parseSelectedTimes(params), [params])
 
@@ -100,6 +110,10 @@ export default function App() {
   const [centerGexSegments, setCenterGexSegments] = useState([])
   const [extraGexSegments, setExtraGexSegments] = useState([])
   const [meta, setMeta] = useState(null)
+
+  const [flowPoints, setFlowPoints] = useState([])
+  const [flowLoading, setFlowLoading] = useState(false)
+  const [flowError, setFlowError] = useState('')
 
   const [loadingCenter, setLoadingCenter] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -229,6 +243,61 @@ export default function App() {
     return () => controller.abort()
   }, [apiBase, tradeDate, interval, daysEitherSide, loadingCenter, error, gexEnabled, gexMinAbsB])
 
+  useEffect(() => {
+    if (!flowEnabled || loadingCenter || error) {
+      setFlowPoints([])
+      setFlowError('')
+      setFlowLoading(false)
+      return
+    }
+
+    const controller = new AbortController()
+    const url = new URL(`${apiBase}/api/ironbeam/flow`)
+    url.searchParams.set('trade_date', tradeDate)
+    url.searchParams.set('session', flowSession)
+    url.searchParams.set('resample', flowResample)
+    url.searchParams.set('ema_len', String(flowEmaLen))
+
+    async function loadFlow() {
+      try {
+        setFlowLoading(true)
+        setFlowError('')
+        setFlowPoints([])
+
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          credentials: 'include',
+          signal: controller.signal,
+          cache: 'no-store',
+        })
+
+        if (response.status === 401) {
+          throw new Error(
+            `Unauthorized from Dash backend at ${apiBase}. Open the Dash app first and make sure you are logged in there.`
+          )
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            `Backend returned ${response.status} ${response.statusText || ''}`.trim()
+          )
+        }
+
+        const payload = await response.json()
+        setFlowPoints(Array.isArray(payload.flow_points) ? payload.flow_points : [])
+      } catch (err) {
+        if (err?.name === 'AbortError') return
+        setFlowPoints([])
+        setFlowError(err?.message || `Could not load flow from ${url.toString()}`)
+      } finally {
+        setFlowLoading(false)
+      }
+    }
+
+    loadFlow()
+    return () => controller.abort()
+  }, [apiBase, tradeDate, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error])
+
   return (
     <div className="app-shell compact-shell">
       <div className="card compact-card">
@@ -256,20 +325,32 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <>
-            {loadingMore && (
-              <div className="status-text" style={{ marginBottom: '8px', opacity: 0.8 }}>
-                Loading surrounding sessions…
+          <div className="react-preview-layout">
+            <div className="react-top-pane">
+              {loadingMore && (
+                <div className="top-pane-status">Loading surrounding sessions…</div>
+              )}
+              <PriceChart
+                candles={mergedBars}
+                interval={interval}
+                initialSelectedTimes={initialSelectedTimes}
+                gexSegments={mergedGexSegments}
+                gexEnabled={Boolean(meta?.gex_enabled ?? gexEnabled)}
+              />
+            </div>
+
+            {flowEnabled && (
+              <div className="react-bottom-pane" style={{ height: `${BOTTOM_PANEL_HEIGHT}px` }}>
+                <AggressorFlowPanel
+                  dataPoints={flowPoints}
+                  height={BOTTOM_PANEL_HEIGHT}
+                  loading={flowLoading}
+                  error={flowError}
+                  histAlpha={flowHistAlpha}
+                />
               </div>
             )}
-            <PriceChart
-              candles={mergedBars}
-              interval={interval}
-              initialSelectedTimes={initialSelectedTimes}
-              gexSegments={mergedGexSegments}
-              gexEnabled={Boolean(meta?.gex_enabled ?? gexEnabled)}
-            />
-          </>
+          </div>
         )}
       </div>
     </div>

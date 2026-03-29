@@ -1058,6 +1058,136 @@ def _build_react_preview_bars_payload(
         "loaded_dates": [d.isoformat() for d, _ in loaded_frames],
     }, 200
 
+def _build_react_flow_payload(
+        trade_date: str | None,
+        *,
+        session: str | None = None,
+        resample: str | None = None,
+        ema_len: int | None = None,
+) -> tuple[dict, int]:
+    if not trade_date:
+        return {
+            "error": "trade_date is required",
+            "flow_points": [],
+        }, 400
+
+    try:
+        selected_date = dt.datetime.strptime(str(trade_date), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return {
+            "error": "Invalid trade date",
+            "flow_points": [],
+        }, 400
+
+    pt_tz = ZoneInfo("America/Los_Angeles")
+    session_date, session_note = _effective_trade_date(selected_date, pt_tz)
+
+    session_mode = str(session or FLOW_SESSION or "RTH").upper().strip()
+    if session_mode not in {"RTH", "FULL"}:
+        session_mode = "RTH"
+
+    resample_mode = str(resample or FLOW_RESAMPLE or "1s").lower().strip()
+    if resample_mode not in {"1s", "5s", "15s", "1m", "60s"}:
+        resample_mode = "1s"
+
+    try:
+        span = max(1, int(ema_len if ema_len is not None else FLOW_EMA_LEN))
+    except Exception:
+        span = FLOW_EMA_LEN
+
+    full_start_pt, full_end_pt = _session_window_pt(session_date, pt_tz)
+
+    if session_mode == "RTH":
+        view_start_pt = dt.datetime.combine(session_date, dt.time(6, 30), tzinfo=pt_tz)
+        view_end_pt = dt.datetime.combine(session_date, dt.time(13, 0), tzinfo=pt_tz)
+    else:
+        view_start_pt = full_start_pt
+        view_end_pt = full_end_pt
+
+    start_utc = view_start_pt.astimezone(ZoneInfo("UTC"))
+    end_utc = view_end_pt.astimezone(ZoneInfo("UTC"))
+
+    try:
+        df = _fetch_flow_utc(start_utc, end_utc, symbol=FLOW_SYMBOL)
+    except Exception as e:
+        return {
+            "error": f"Database error when loading flow: {e}",
+            "flow_points": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "session": session_mode,
+            "resample": resample_mode,
+            "ema_len": span,
+        }, 500
+
+    if df is None or df.empty:
+        return {
+            "flow_points": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "session_note": session_note,
+            "session": session_mode,
+            "resample": resample_mode,
+            "ema_len": span,
+            "symbol": FLOW_SYMBOL,
+            "point_count": 0,
+        }, 200
+
+    df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True, errors="coerce")
+    df = df.dropna(subset=["ts_utc"]).set_index("ts_utc").sort_index()
+
+    for col in ["buy_vol", "sell_vol", "unknown_vol"]:
+        if col not in df.columns:
+            df[col] = 0.0
+
+    full_idx = pd.date_range(
+        start=start_utc,
+        end=end_utc,
+        freq="1s",
+        tz="UTC",
+        inclusive="left",
+    )
+    df = df.reindex(full_idx)
+    df[["buy_vol", "sell_vol", "unknown_vol"]] = (
+        df[["buy_vol", "sell_vol", "unknown_vol"]].fillna(0.0).astype(float)
+    )
+
+    rule_map = {"1s": "1s", "5s": "5s", "15s": "15s", "1m": "1min", "60s": "1min"}
+    rule = rule_map.get(resample_mode, "1s")
+    if rule != "1s":
+        df = df.resample(rule).sum()
+
+    buy = df["buy_vol"].astype(float)
+    sell = df["sell_vol"].astype(float)
+
+    ema_buy = buy.ewm(span=span, adjust=False).mean()
+    ema_sell = sell.ewm(span=span, adjust=False).mean()
+    diff = (ema_buy - ema_sell).astype(float)
+
+    flow_points: list[dict] = []
+    for ts, val in diff.items():
+        try:
+            if pd.isna(ts) or not np.isfinite(float(val)):
+                continue
+            flow_points.append({
+                "time": int(pd.Timestamp(ts).timestamp()),
+                "value": float(val),
+            })
+        except Exception:
+            continue
+
+    return {
+        "flow_points": flow_points,
+        "trade_date": str(trade_date),
+        "effective_trade_date": session_date.isoformat(),
+        "session_note": session_note,
+        "session": session_mode,
+        "resample": resample_mode,
+        "ema_len": span,
+        "symbol": FLOW_SYMBOL,
+        "point_count": len(flow_points),
+    }, 200
+
 
 def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
     dialect = engine.dialect.name
@@ -1815,6 +1945,44 @@ def register_ironbeam_callbacks(app):
             return resp, status
 
         app.server._ironbeam_react_bars_route_registered = True
+
+        if not getattr(app.server, "_ironbeam_react_flow_route_registered", False):
+
+            @app.server.route("/api/ironbeam/flow", methods=["GET"])
+            def ironbeam_react_flow_api():
+                trade_date = request.args.get("trade_date")
+                session = request.args.get("session", FLOW_SESSION)
+                resample = request.args.get("resample", FLOW_RESAMPLE)
+                raw_ema_len = request.args.get("ema_len", str(FLOW_EMA_LEN))
+
+                try:
+                    ema_len = max(1, int(raw_ema_len))
+                except Exception:
+                    ema_len = FLOW_EMA_LEN
+
+                payload, status = _build_react_flow_payload(
+                    trade_date,
+                    session=session,
+                    resample=resample,
+                    ema_len=ema_len,
+                )
+
+                resp = jsonify(payload)
+
+                origin = request.headers.get("Origin")
+                allowed = {
+                    "http://localhost:5173",
+                    "http://127.0.0.1:5173",
+                    "http://0.0.0.0:5173",
+                }
+                if origin in allowed:
+                    resp.headers["Access-Control-Allow-Origin"] = origin
+                    resp.headers["Access-Control-Allow-Credentials"] = "true"
+                    resp.headers["Vary"] = "Origin"
+
+                return resp, status
+
+            app.server._ironbeam_react_flow_route_registered = True
 
     # ---- Clientside Sync: Crosshair & Zoom ----
     app.clientside_callback(
