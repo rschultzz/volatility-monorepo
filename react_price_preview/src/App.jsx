@@ -7,6 +7,7 @@ const FLOW_EMA_MINUTES_STORAGE_KEY = 'ib-react-flow-ema-minutes'
 const GEX_MIN_ABS_B_STORAGE_KEY = 'ib-react-gex-min-abs-b'
 const FLOW_MIN_HEIGHT = 140
 const FLOW_MAX_HEIGHT = 520
+const LIVE_POLL_MS = 3000
 
 function cleanBaseUrl(value) {
   const s = String(value || '').trim()
@@ -165,6 +166,183 @@ function clampFlowHeight(value) {
   return Math.max(FLOW_MIN_HEIGHT, Math.min(FLOW_MAX_HEIGHT, Math.round(n)))
 }
 
+function normalizeTradeDateKey(value) {
+  const s = String(value || '').trim()
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : ''
+}
+
+function zonedDateParts(date, timeZone = 'America/Los_Angeles') {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(date)
+
+  const out = {}
+  for (const part of parts) {
+    if (part.type !== 'literal') out[part.type] = part.value
+  }
+
+  return {
+    year: Number(out.year),
+    month: Number(out.month),
+    day: Number(out.day),
+    hour: Number(out.hour),
+    minute: Number(out.minute),
+    second: Number(out.second),
+  }
+}
+
+function dateKeyFromParts(parts) {
+  const yyyy = String(parts?.year || '').padStart(4, '0')
+  const mm = String(parts?.month || '').padStart(2, '0')
+  const dd = String(parts?.day || '').padStart(2, '0')
+  if (!/^\d{4}$/.test(yyyy) || !/^\d{2}$/.test(mm) || !/^\d{2}$/.test(dd)) return ''
+  return `${yyyy}-${mm}-${dd}`
+}
+
+function parseDateKey(value) {
+  const key = normalizeTradeDateKey(value)
+  if (!key) return null
+  const [year, month, day] = key.split('-').map((part) => Number(part))
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null
+  return { year, month, day }
+}
+
+function shiftDateKey(value, days) {
+  const parsed = parseDateKey(value)
+  if (!parsed) return ''
+  const base = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day + Number(days || 0), 12, 0, 0))
+  return dateKeyFromParts({
+    year: base.getUTCFullYear(),
+    month: base.getUTCMonth() + 1,
+    day: base.getUTCDate(),
+  })
+}
+
+function rollForwardToWeekdayKey(value) {
+  let key = normalizeTradeDateKey(value)
+  if (!key) return ''
+
+  for (let i = 0; i < 7; i += 1) {
+    const parsed = parseDateKey(key)
+    if (!parsed) return ''
+    const weekday = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day, 12, 0, 0)).getUTCDay()
+    if (weekday !== 0 && weekday !== 6) return key
+    key = shiftDateKey(key, 1)
+  }
+
+  return key
+}
+
+function currentSessionTradeDateKey(timeZone = 'America/Los_Angeles') {
+  const parts = zonedDateParts(new Date(), timeZone)
+  let key = dateKeyFromParts(parts)
+  if (!key) return ''
+
+  if (parts.hour > 15 || (parts.hour === 15 && parts.minute >= 0)) {
+    key = shiftDateKey(key, 1)
+  }
+
+  return rollForwardToWeekdayKey(key)
+}
+
+function zonedLocalToUtcEpochSec(parts, timeZone = 'America/Los_Angeles') {
+  const year = Number(parts?.year)
+  const month = Number(parts?.month)
+  const day = Number(parts?.day)
+  const hour = Number(parts?.hour || 0)
+  const minute = Number(parts?.minute || 0)
+  const second = Number(parts?.second || 0)
+
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day) ||
+    !Number.isFinite(hour) ||
+    !Number.isFinite(minute) ||
+    !Number.isFinite(second)
+  ) {
+    return null
+  }
+
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second))
+  const zoned = zonedDateParts(utcGuess, timeZone)
+  const zonedAsUtc = Date.UTC(
+    Number(zoned.year),
+    Number(zoned.month) - 1,
+    Number(zoned.day),
+    Number(zoned.hour),
+    Number(zoned.minute),
+    Number(zoned.second)
+  )
+  const targetAsUtc = Date.UTC(year, month - 1, day, hour, minute, second)
+  return Math.round((utcGuess.getTime() + (targetAsUtc - zonedAsUtc)) / 1000)
+}
+
+function sessionWindowUtcRangeForTradeDate(tradeDate, timeZone = 'America/Los_Angeles') {
+  const current = parseDateKey(tradeDate)
+  const priorKey = shiftDateKey(tradeDate, -1)
+  const prior = parseDateKey(priorKey)
+  if (!current || !prior) return null
+
+  const from = zonedLocalToUtcEpochSec({ ...prior, hour: 15, minute: 0, second: 0 }, timeZone)
+  const to = zonedLocalToUtcEpochSec({ ...current, hour: 13, minute: 0, second: 0 }, timeZone)
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null
+  return { from, to }
+}
+
+function replaceFlowPointsForTradeDate(existingPoints, replacementPoints, tradeDate) {
+  const sessionRange = sessionWindowUtcRangeForTradeDate(tradeDate)
+  if (!sessionRange) {
+    return dedupeAndSortFlowPoints(replacementPoints)
+  }
+
+  const preserved = (Array.isArray(existingPoints) ? existingPoints : []).filter((point) => {
+    const t = Number(point?.time)
+    if (!Number.isFinite(t)) return false
+    return t < sessionRange.from || t >= sessionRange.to
+  })
+
+  return dedupeAndSortFlowPoints([
+    ...preserved,
+    ...(Array.isArray(replacementPoints) ? replacementPoints : []),
+  ])
+}
+
+function barsPayloadSignature(payload) {
+  const bars = Array.isArray(payload?.bars) ? payload.bars : []
+  const segs = Array.isArray(payload?.gex_segments) ? payload.gex_segments : []
+  const lastBar = bars.length ? bars[bars.length - 1] : null
+  const lastSeg = segs.length ? segs[segs.length - 1] : null
+  return [
+    bars.length,
+    lastBar?.time ?? '',
+    lastBar?.open ?? '',
+    lastBar?.high ?? '',
+    lastBar?.low ?? '',
+    lastBar?.close ?? '',
+    lastBar?.volume ?? lastBar?.vol ?? lastBar?.size ?? '',
+    segs.length,
+    lastSeg?.session_date ?? '',
+    lastSeg?.level ?? '',
+    lastSeg?.start_time ?? '',
+    lastSeg?.end_time ?? '',
+    lastSeg?.net_gamma ?? '',
+  ].join('|')
+}
+
+function flowPointsSignature(points) {
+  const list = Array.isArray(points) ? points : []
+  const last = list.length ? list[list.length - 1] : null
+  return [list.length, last?.time ?? '', last?.value ?? ''].join('|')
+}
+
 function normalizeLogicalRange(range) {
   if (!range) return null
   const from = Number(range.from)
@@ -254,10 +432,32 @@ export default function App() {
     }
   })
 
+  const [liveSessionKey, setLiveSessionKey] = useState(() => currentSessionTradeDateKey())
+
+  const lastLiveBarsSignatureRef = useRef('')
+  const lastLiveFlowSignatureRef = useRef('')
+
   const flowEmaLen = useMemo(() => {
     const stepSeconds = flowResampleToSeconds(flowResample)
     return Math.max(1, Math.round((flowEmaMinutes * 60) / stepSeconds))
   }, [flowEmaMinutes, flowResample])
+
+  useEffect(() => {
+    const tick = () => {
+      setLiveSessionKey((prev) => {
+        const next = currentSessionTradeDateKey()
+        return next && next !== prev ? next : prev
+      })
+    }
+
+    const id = window.setInterval(tick, 30000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const isLiveTradeDate = useMemo(() => {
+    const selected = normalizeTradeDateKey(tradeDate)
+    return Boolean(selected) && selected === normalizeTradeDateKey(liveSessionKey)
+  }, [tradeDate, liveSessionKey])
 
   const mergedBars = useMemo(
     () => dedupeAndSortBars([...centerBars, ...extraBars]),
@@ -332,6 +532,8 @@ export default function App() {
         setExtraLoadedDates([])
         setMeta(null)
         setSharedLogicalRange(null)
+        lastLiveBarsSignatureRef.current = ''
+        lastLiveFlowSignatureRef.current = ''
 
         const response = await fetch(url.toString(), {
           method: 'GET',
@@ -372,6 +574,8 @@ export default function App() {
         setCenterLoadedDates([])
         setExtraLoadedDates([])
         setMeta(null)
+        lastLiveBarsSignatureRef.current = ''
+        lastLiveFlowSignatureRef.current = ''
         setError(err?.message || `Could not load bars from ${url.toString()}`)
       } finally {
         setLoadingCenter(false)
@@ -513,6 +717,164 @@ export default function App() {
     loadFlow()
     return () => controller.abort()
   }, [apiBase, tradeDate, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error, loadedFlowDates])
+
+  useEffect(() => {
+    if (!isLiveTradeDate || loadingCenter || error) return undefined
+
+    let disposed = false
+    let inFlight = false
+    let activeController = null
+
+    const tick = async () => {
+      if (disposed || inFlight) return
+      inFlight = true
+      const controller = new AbortController()
+      activeController = controller
+
+      try {
+        const url = new URL(`${apiBase}/api/ironbeam/bars`)
+        url.searchParams.set('trade_date', tradeDate)
+        url.searchParams.set('interval', interval)
+        url.searchParams.set('gex_enabled', gexEnabled ? '1' : '0')
+        url.searchParams.set('phase', 'center')
+        if (gexMinAbsB != null) {
+          url.searchParams.set('gex_min_abs_b', String(gexMinAbsB))
+        }
+
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          credentials: 'include',
+          signal: controller.signal,
+          cache: 'no-store',
+        })
+
+        if (response.status === 401) {
+          throw new Error(
+            `Unauthorized from Dash backend at ${apiBase}. Open the Dash app first and make sure you are logged in there.`
+          )
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            `Backend returned ${response.status} ${response.statusText || ''}`.trim()
+          )
+        }
+
+        const payload = await response.json()
+        if (disposed) return
+
+        const nextSignature = barsPayloadSignature(payload)
+        if (nextSignature !== lastLiveBarsSignatureRef.current) {
+          lastLiveBarsSignatureRef.current = nextSignature
+          setCenterBars(Array.isArray(payload.bars) ? payload.bars : [])
+          setCenterGexSegments(Array.isArray(payload.gex_segments) ? payload.gex_segments : [])
+          setCenterLoadedDates(
+            normalizeDateList(
+              Array.isArray(payload.loaded_dates) && payload.loaded_dates.length
+                ? payload.loaded_dates
+                : [payload?.effective_trade_date || payload?.trade_date || tradeDate]
+            )
+          )
+          setMeta((prev) => {
+            const prevSig = prev ? barsPayloadSignature(prev) : ''
+            return prevSig === nextSignature ? prev : payload
+          })
+        }
+      } catch (err) {
+        if (err?.name !== 'AbortError') {
+          console.error('React preview live bars refresh failed', err)
+        }
+      } finally {
+        if (activeController === controller) {
+          activeController = null
+        }
+        inFlight = false
+      }
+    }
+
+    tick()
+    const timer = window.setInterval(tick, LIVE_POLL_MS)
+
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+      if (activeController) {
+        activeController.abort()
+      }
+    }
+  }, [apiBase, tradeDate, interval, gexEnabled, gexMinAbsB, loadingCenter, error, isLiveTradeDate])
+
+  useEffect(() => {
+    if (!isLiveTradeDate || !flowEnabled || loadingCenter || error) return undefined
+
+    let disposed = false
+    let inFlight = false
+    let activeController = null
+
+    const tick = async () => {
+      if (disposed || inFlight) return
+      inFlight = true
+      const controller = new AbortController()
+      activeController = controller
+
+      try {
+        const url = new URL(`${apiBase}/api/ironbeam/flow`)
+        url.searchParams.set('trade_date', tradeDate)
+        url.searchParams.set('session', flowSession)
+        url.searchParams.set('resample', flowResample)
+        url.searchParams.set('ema_len', String(flowEmaLen))
+
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          credentials: 'include',
+          signal: controller.signal,
+          cache: 'no-store',
+        })
+
+        if (response.status === 401) {
+          throw new Error(
+            `Unauthorized from Dash backend at ${apiBase}. Open the Dash app first and make sure you are logged in there.`
+          )
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            `Flow request failed for ${tradeDate}: ${response.status} ${response.statusText || ''}`.trim()
+          )
+        }
+
+        const payload = await response.json()
+        if (disposed) return
+
+        const nextPoints = Array.isArray(payload.flow_points) ? payload.flow_points : []
+        const nextSignature = flowPointsSignature(nextPoints)
+        if (nextSignature !== lastLiveFlowSignatureRef.current) {
+          lastLiveFlowSignatureRef.current = nextSignature
+          setFlowPoints((prev) => replaceFlowPointsForTradeDate(prev, nextPoints, tradeDate))
+        }
+      } catch (err) {
+        if (err?.name !== 'AbortError') {
+          console.error('React preview live flow refresh failed', err)
+        }
+      } finally {
+        if (activeController === controller) {
+          activeController = null
+        }
+        inFlight = false
+      }
+    }
+
+    tick()
+    const timer = window.setInterval(tick, LIVE_POLL_MS)
+
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+      if (activeController) {
+        activeController.abort()
+      }
+    }
+  }, [apiBase, tradeDate, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error, isLiveTradeDate])
 
   useEffect(() => {
     const handleMove = (event) => {
