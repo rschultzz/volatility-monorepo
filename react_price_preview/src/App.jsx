@@ -96,7 +96,7 @@ function clampFlowHeight(value) {
   return Math.max(FLOW_MIN_HEIGHT, Math.min(FLOW_MAX_HEIGHT, Math.round(n)))
 }
 
-function normalizeTimeRange(range) {
+function normalizeLogicalRange(range) {
   if (!range) return null
   const from = Number(range.from)
   const to = Number(range.to)
@@ -119,8 +119,10 @@ export default function App() {
 
   const flowEnabled = parseBool(params.get('flow_enabled'), true)
   const flowSession = (params.get('flow_session') || 'FULL').toUpperCase()
-  const flowResample = (params.get('flow_resample') || '1s').toLowerCase()
-  const flowEmaLen = Math.max(1, parseIntOrDefault(params.get('flow_ema_len'), 840))
+  const defaultFlowResample = '1m'
+  const flowResample = (params.get('flow_resample') || defaultFlowResample).toLowerCase()
+  const defaultFlowEmaLen = flowResample === '1m' || flowResample === '60s' ? 14 : 840
+  const flowEmaLen = Math.max(1, parseIntOrDefault(params.get('flow_ema_len'), defaultFlowEmaLen))
   const flowHistAlpha = parseFloatOrNull(params.get('flow_hist_alpha')) ?? 0.30
 
   const effectiveDaysEitherSide = flowEnabled ? 0 : daysEitherSide
@@ -144,7 +146,7 @@ export default function App() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState('')
 
-  const [sharedTimeRange, setSharedTimeRange] = useState(null)
+  const [sharedLogicalRange, setSharedLogicalRange] = useState(null)
 
   const [flowPanelHeight, setFlowPanelHeight] = useState(() => {
     try {
@@ -193,7 +195,7 @@ export default function App() {
         setCenterGexSegments([])
         setExtraGexSegments([])
         setMeta(null)
-        setSharedTimeRange(null)
+        setSharedLogicalRange(null)
 
         const response = await fetch(url.toString(), {
           method: 'GET',
@@ -375,10 +377,10 @@ export default function App() {
     event.preventDefault()
   }
 
-  const handleSharedTimeRangeChange = useCallback((nextRange) => {
-    const next = normalizeTimeRange(nextRange)
+  const handleSharedLogicalRangeChange = useCallback((nextRange) => {
+    const next = normalizeLogicalRange(nextRange)
     if (!next) return
-    setSharedTimeRange((prev) => (rangesClose(prev, next) ? prev : next))
+    setSharedLogicalRange((prev) => (rangesClose(prev, next) ? prev : next))
   }, [])
 
   return (
@@ -419,7 +421,7 @@ export default function App() {
                 initialSelectedTimes={initialSelectedTimes}
                 gexSegments={mergedGexSegments}
                 gexEnabled={Boolean(meta?.gex_enabled ?? gexEnabled)}
-                onVisibleTimeRangeChange={handleSharedTimeRangeChange}
+                onVisibleLogicalRangeChange={handleSharedLogicalRangeChange}
               />
             </div>
 
@@ -433,7 +435,8 @@ export default function App() {
                 <div className="react-bottom-pane" style={{ height: `${flowPanelHeight}px` }}>
                   <AggressorFlowPanel
                     dataPoints={flowPoints}
-                    visibleTimeRange={sharedTimeRange}
+                    candles={mergedBars}
+                    visibleLogicalRange={sharedLogicalRange}
                     height={flowPanelHeight}
                     loading={flowLoading}
                     error={flowError}

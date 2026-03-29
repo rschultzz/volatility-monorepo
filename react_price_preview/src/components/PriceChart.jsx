@@ -225,7 +225,7 @@ function clampVisibleRange(range) {
   return { from, to }
 }
 
-function normalizeTimeRange(range) {
+function normalizeLogicalRange(range) {
   if (!range) return null
   const from = Number(range.from)
   const to = Number(range.to)
@@ -377,7 +377,7 @@ export default function PriceChart({
   initialSelectedTimes,
   gexSegments,
   gexEnabled,
-  onVisibleTimeRangeChange,
+  onVisibleLogicalRangeChange,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -607,13 +607,13 @@ export default function PriceChart({
       setSessionBands(next)
     }
 
-    const reportVisibleRange = (range) => {
-      if (typeof onVisibleTimeRangeChange !== 'function') return
-      const next = normalizeTimeRange(range)
+    const reportLogicalRange = (range) => {
+      if (typeof onVisibleLogicalRangeChange !== 'function') return
+      const next = normalizeLogicalRange(range)
       if (!next) return
       if (rangesClose(lastReportedRangeRef.current, next)) return
       lastReportedRangeRef.current = next
-      onVisibleTimeRangeChange(next)
+      onVisibleLogicalRangeChange(next)
     }
 
     const updateFloatingTooltip = (param) => {
@@ -677,8 +677,8 @@ export default function PriceChart({
       hideTooltip()
       requestAnimationFrame(updateBand)
       requestAnimationFrame(() => {
-        const vr = normalizeTimeRange(chart.timeScale().getVisibleRange?.())
-        reportVisibleRange(vr)
+        const vr = normalizeLogicalRange(chart.timeScale().getVisibleLogicalRange?.())
+        reportLogicalRange(vr)
       })
     }
 
@@ -700,7 +700,7 @@ export default function PriceChart({
 
     const handleVisibleRange = (range) => {
       requestAnimationFrame(updateBand)
-      reportVisibleRange(range)
+      reportLogicalRange(range)
     }
 
     const handleCrosshairMove = (param) => {
@@ -744,7 +744,7 @@ export default function PriceChart({
 
     chart.subscribeClick(handleClick)
     chart.subscribeCrosshairMove(handleCrosshairMove)
-    chart.timeScale().subscribeVisibleTimeRangeChange(handleVisibleRange)
+    chart.timeScale().subscribeVisibleLogicalRangeChange(handleVisibleRange)
 
     window.addEventListener('resize', handleResize)
     stage.addEventListener('wheel', handleWheel, { passive: false, capture: true })
@@ -765,7 +765,7 @@ export default function PriceChart({
 
       chart.unsubscribeClick(handleClick)
       chart.unsubscribeCrosshairMove(handleCrosshairMove)
-      chart.timeScale().unsubscribeVisibleTimeRangeChange(handleVisibleRange)
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleRange)
 
       chart.remove()
       chartRef.current = null
@@ -773,7 +773,7 @@ export default function PriceChart({
       gexSeriesRefs.current = []
       dragRef.current.active = false
     }
-  }, [onVisibleTimeRangeChange])
+  }, [onVisibleLogicalRangeChange])
 
   useEffect(() => {
     function handleParentMessage(event) {
@@ -809,27 +809,27 @@ export default function PriceChart({
           })
           appliedInitialRangeKeyRef.current = centerLogicalRange.key
 
-          const vr = normalizeTimeRange(chartRef.current.timeScale().getVisibleRange?.())
-          if (vr && typeof onVisibleTimeRangeChange === 'function') {
+          const vr = normalizeLogicalRange(chartRef.current.timeScale().getVisibleLogicalRange?.())
+          if (vr && typeof onVisibleLogicalRangeChange === 'function') {
             if (!rangesClose(lastReportedRangeRef.current, vr)) {
               lastReportedRangeRef.current = vr
-              onVisibleTimeRangeChange(vr)
+              onVisibleLogicalRangeChange(vr)
             }
           }
         }
       } else if (!centerLogicalRange && !hasUserInteractedRef.current) {
         chartRef.current.timeScale().fitContent()
 
-        const vr = normalizeTimeRange(chartRef.current.timeScale().getVisibleRange?.())
-        if (vr && typeof onVisibleTimeRangeChange === 'function') {
+        const vr = normalizeLogicalRange(chartRef.current.timeScale().getVisibleLogicalRange?.())
+        if (vr && typeof onVisibleLogicalRangeChange === 'function') {
           if (!rangesClose(lastReportedRangeRef.current, vr)) {
             lastReportedRangeRef.current = vr
-            onVisibleTimeRangeChange(vr)
+            onVisibleLogicalRangeChange(vr)
           }
         }
       }
     })
-  }, [displayCandles, shiftedCandles, centerLogicalRange, onVisibleTimeRangeChange])
+  }, [displayCandles, shiftedCandles, centerLogicalRange, onVisibleLogicalRangeChange])
 
   useEffect(() => {
     const chart = chartRef.current

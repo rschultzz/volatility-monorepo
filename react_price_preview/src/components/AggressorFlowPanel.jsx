@@ -9,8 +9,9 @@ import {
 
 const BG_COLOR = '#1f2937'
 const ZERO_COLOR = 'rgba(255,255,255,0.20)'
-const ANCHOR_COLOR = 'rgba(0,0,0,0)'
 const MIN_PANEL_HEIGHT = 140
+const POS_RGBA = (alpha) => `rgba(96,165,250,${alpha})`
+const NEG_RGBA = (alpha) => `rgba(229,231,235,${alpha})`
 
 function partsForZone(epochSec, timeZone = 'America/Los_Angeles') {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -56,7 +57,7 @@ function formatShiftedHHMM(epochSec) {
   return `${hh}:${mm}`
 }
 
-function normalizeRange(range) {
+function normalizeLogicalRange(range) {
   if (!range) return null
   const from = Number(range.from)
   const to = Number(range.to)
@@ -64,7 +65,7 @@ function normalizeRange(range) {
   return { from, to }
 }
 
-function rangesClose(a, b, eps = 1) {
+function rangesClose(a, b, eps = 0.001) {
   if (!a || !b) return false
   return (
     Math.abs(Number(a.from) - Number(b.from)) <= eps &&
@@ -72,35 +73,107 @@ function rangesClose(a, b, eps = 1) {
   )
 }
 
-function normalizePoints(points, histAlpha) {
-  const alpha = Number.isFinite(Number(histAlpha))
-    ? Math.max(0.05, Math.min(1, Number(histAlpha)))
-    : 0.30
-
+function normalizeShiftedFlowPoints(points) {
   return (Array.isArray(points) ? points : [])
     .map((pt) => {
       const rawTime = Number(pt?.time)
       const value = Number(pt?.value)
       if (!Number.isFinite(rawTime) || !Number.isFinite(value)) return null
-
-      const shiftedTime = utcEpochShowingZoneTime(rawTime, 'America/Los_Angeles')
-      const color =
-        value >= 0
-          ? `rgba(96,165,250,${alpha})`
-          : `rgba(229,231,235,${alpha})`
-
       return {
-        time: shiftedTime,
+        time: utcEpochShowingZoneTime(rawTime, 'America/Los_Angeles'),
         value,
-        color,
       }
     })
     .filter(Boolean)
+    .sort((a, b) => a.time - b.time)
+}
+
+function normalizeShiftedCandleTimes(candles) {
+  const seen = new Set()
+  const out = []
+
+  for (const bar of Array.isArray(candles) ? candles : []) {
+    const rawTime = Number(bar?.time)
+    if (!Number.isFinite(rawTime)) continue
+    const shifted = utcEpochShowingZoneTime(rawTime, 'America/Los_Angeles')
+    if (seen.has(shifted)) continue
+    seen.add(shifted)
+    out.push(shifted)
+  }
+
+  out.sort((a, b) => a - b)
+  return out
+}
+
+function inferStepSeconds(times, fallback = 60) {
+  if (!Array.isArray(times) || times.length < 2) return fallback
+
+  const diffs = []
+  for (let i = 1; i < times.length && diffs.length < 24; i += 1) {
+    const diff = Number(times[i]) - Number(times[i - 1])
+    if (Number.isFinite(diff) && diff > 0) diffs.push(diff)
+  }
+
+  if (!diffs.length) return fallback
+  diffs.sort((a, b) => a - b)
+  return diffs[Math.floor(diffs.length / 2)]
+}
+
+function bucketFlowToCandles(flowPoints, candleTimes, histAlpha) {
+  const alpha = Number.isFinite(Number(histAlpha))
+    ? Math.max(0.05, Math.min(1, Number(histAlpha)))
+    : 0.30
+
+  const points = normalizeShiftedFlowPoints(flowPoints)
+  const times = normalizeShiftedCandleTimes(candleTimes)
+
+  if (!times.length) {
+    return points.map((pt) => ({
+      time: pt.time,
+      value: pt.value,
+      color: pt.value >= 0 ? POS_RGBA(alpha) : NEG_RGBA(alpha),
+    }))
+  }
+
+  const step = inferStepSeconds(times, 60)
+  const out = []
+  let pointIdx = 0
+
+  for (let i = 0; i < times.length; i += 1) {
+    const bucketStart = times[i]
+    const bucketEnd = i + 1 < times.length ? times[i + 1] : bucketStart + step
+
+    while (pointIdx < points.length && points[pointIdx].time < bucketStart) {
+      pointIdx += 1
+    }
+
+    let sum = 0
+    let count = 0
+    let scanIdx = pointIdx
+
+    while (scanIdx < points.length && points[scanIdx].time < bucketEnd) {
+      sum += points[scanIdx].value
+      count += 1
+      scanIdx += 1
+    }
+
+    pointIdx = scanIdx
+
+    const value = count > 0 ? sum / count : 0
+    out.push({
+      time: bucketStart,
+      value,
+      color: value >= 0 ? POS_RGBA(alpha) : NEG_RGBA(alpha),
+    })
+  }
+
+  return out
 }
 
 export default function AggressorFlowPanel({
+  candles,
   dataPoints,
-  visibleTimeRange,
+  visibleLogicalRange,
   height = 220,
   loading = false,
   error = '',
@@ -110,15 +183,14 @@ export default function AggressorFlowPanel({
   const chartRef = useRef(null)
   const histSeriesRef = useRef(null)
   const zeroSeriesRef = useRef(null)
-  const anchorSeriesRef = useRef(null)
-  const lastAppliedRangeRef = useRef(null)
+  const lastAppliedLogicalRef = useRef(null)
 
-  const normalizedPoints = useMemo(
-    () => normalizePoints(dataPoints, histAlpha),
-    [dataPoints, histAlpha]
+  const alignedPoints = useMemo(
+    () => bucketFlowToCandles(dataPoints, candles, histAlpha),
+    [dataPoints, candles, histAlpha]
   )
 
-  const hasRenderablePoints = normalizedPoints.length >= 2
+  const hasRenderablePoints = alignedPoints.length >= 2
 
   useEffect(() => {
     if (!hostRef.current) return undefined
@@ -191,19 +263,9 @@ export default function AggressorFlowPanel({
       pointMarkersVisible: false,
     })
 
-    const anchorSeries = chart.addSeries(LineSeries, {
-      color: ANCHOR_COLOR,
-      lineWidth: 1,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: false,
-      pointMarkersVisible: false,
-    })
-
     chartRef.current = chart
     histSeriesRef.current = histSeries
     zeroSeriesRef.current = zeroSeries
-    anchorSeriesRef.current = anchorSeries
 
     const handleResize = () => {
       chart.applyOptions({
@@ -220,64 +282,51 @@ export default function AggressorFlowPanel({
       chartRef.current = null
       histSeriesRef.current = null
       zeroSeriesRef.current = null
-      anchorSeriesRef.current = null
+      lastAppliedLogicalRef.current = null
     }
   }, [])
 
   useEffect(() => {
-    if (!histSeriesRef.current || !zeroSeriesRef.current || !anchorSeriesRef.current) return
+    if (!histSeriesRef.current || !zeroSeriesRef.current) return
 
-    histSeriesRef.current.setData(normalizedPoints)
+    histSeriesRef.current.setData(alignedPoints)
 
-    const nextVisible = normalizeRange(visibleTimeRange)
-
-    if (nextVisible) {
+    if (hasRenderablePoints) {
       zeroSeriesRef.current.setData([
-        { time: nextVisible.from, value: 0 },
-        { time: nextVisible.to, value: 0 },
-      ])
-      anchorSeriesRef.current.setData([
-        { time: nextVisible.from, value: 0 },
-        { time: nextVisible.to, value: 0 },
-      ])
-    } else if (hasRenderablePoints) {
-      zeroSeriesRef.current.setData([
-        { time: normalizedPoints[0].time, value: 0 },
-        { time: normalizedPoints[normalizedPoints.length - 1].time, value: 0 },
-      ])
-      anchorSeriesRef.current.setData([
-        { time: normalizedPoints[0].time, value: 0 },
-        { time: normalizedPoints[normalizedPoints.length - 1].time, value: 0 },
+        { time: alignedPoints[0].time, value: 0 },
+        { time: alignedPoints[alignedPoints.length - 1].time, value: 0 },
       ])
     } else {
       zeroSeriesRef.current.setData([])
-      anchorSeriesRef.current.setData([])
     }
 
-    if (chartRef.current && hasRenderablePoints && !nextVisible) {
+    if (chartRef.current && hasRenderablePoints && !visibleLogicalRange) {
       chartRef.current.timeScale().fitContent()
+      lastAppliedLogicalRef.current = normalizeLogicalRange(
+        chartRef.current.timeScale().getVisibleLogicalRange?.()
+      )
     }
-  }, [normalizedPoints, visibleTimeRange, hasRenderablePoints])
+  }, [alignedPoints, hasRenderablePoints, visibleLogicalRange])
 
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
 
-    const next = normalizeRange(visibleTimeRange)
+    const next = normalizeLogicalRange(visibleLogicalRange)
     if (!next) return
 
-    const current = normalizeRange(chart.timeScale().getVisibleRange?.())
-    if (rangesClose(current, next) || rangesClose(lastAppliedRangeRef.current, next)) return
+    const current = normalizeLogicalRange(chart.timeScale().getVisibleLogicalRange?.())
+    if (rangesClose(current, next) || rangesClose(lastAppliedLogicalRef.current, next)) return
 
     requestAnimationFrame(() => {
       try {
-        chart.timeScale().setVisibleRange(next)
-        lastAppliedRangeRef.current = next
+        chart.timeScale().setVisibleLogicalRange(next)
+        lastAppliedLogicalRef.current = next
       } catch (err) {
         // ignore sync errors
       }
     })
-  }, [visibleTimeRange])
+  }, [visibleLogicalRange])
 
   return (
     <div className="flow-shell" style={{ height: `${height}px` }}>
@@ -286,7 +335,7 @@ export default function AggressorFlowPanel({
       </div>
       <div className="flow-stage">
         <div ref={hostRef} className="flow-host" />
-        {(loading || error || !normalizedPoints.length) && (
+        {(loading || error || !alignedPoints.length) && (
           <div className="flow-overlay">
             <div className="flow-overlay-title">
               {error
