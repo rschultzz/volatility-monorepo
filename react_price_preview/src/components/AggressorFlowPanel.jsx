@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   createChart,
   CrosshairMode,
@@ -12,6 +12,7 @@ const ZERO_COLOR = 'rgba(255,255,255,0.20)'
 const MIN_PANEL_HEIGHT = 140
 const POS_RGBA = (alpha) => `rgba(96,165,250,${alpha})`
 const NEG_RGBA = (alpha) => `rgba(229,231,235,${alpha})`
+const LINKED_CROSSHAIR_COLOR = 'rgba(191, 219, 254, 0.45)'
 
 function partsForZone(epochSec, timeZone = 'America/Los_Angeles') {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -178,20 +179,119 @@ function hasFlowValues(points) {
   return (Array.isArray(points) ? points : []).some((pt) => Number.isFinite(Number(pt?.value)))
 }
 
+function isRthShiftedEpoch(epochSec) {
+  const hhmm = formatShiftedHHMM(epochSec)
+  return hhmm >= '06:30' && hhmm <= '13:00'
+}
+
+function shiftedDateKey(epochSec) {
+  const dt = shiftedEpochToDate(epochSec)
+  const yyyy = dt.getUTCFullYear()
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(dt.getUTCDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
+
+function computeSessionBands(chart, shiftedTimes, viewportWidth) {
+  if (!chart || !Array.isArray(shiftedTimes) || !shiftedTimes.length) {
+    return []
+  }
+
+  const width = Math.max(0, Number(viewportWidth) || 0)
+  if (!width) return []
+
+  const groups = []
+  let current = null
+
+  for (const time of shiftedTimes) {
+    if (typeof time !== 'number') continue
+    if (!isRthShiftedEpoch(time)) continue
+
+    const key = shiftedDateKey(time)
+
+    if (!current || current.key !== key) {
+      current = { key, times: [time] }
+      groups.push(current)
+    } else {
+      current.times.push(time)
+    }
+  }
+
+  if (!groups.length) return []
+
+  const barSpacing = chart.timeScale().options().barSpacing || 6
+  const out = []
+
+  for (const group of groups) {
+    const firstTime = group.times[0]
+    const lastTime = group.times[group.times.length - 1]
+    const startX = chart.timeScale().timeToCoordinate(firstTime)
+    const endX = chart.timeScale().timeToCoordinate(lastTime)
+
+    if (startX == null || endX == null) continue
+
+    const rawLeft = Math.min(startX, endX) - barSpacing * 0.5
+    const rawRight = Math.max(startX, endX) + barSpacing * 0.5
+
+    if (!Number.isFinite(rawLeft) || !Number.isFinite(rawRight)) continue
+    if (rawRight <= 0 || rawLeft >= width) continue
+
+    const clippedLeft = Math.max(0, rawLeft)
+    const clippedRight = Math.min(width, rawRight)
+    const clippedWidth = clippedRight - clippedLeft
+
+    if (!(clippedWidth > 0)) continue
+
+    out.push({
+      key: group.key,
+      left: clippedLeft,
+      width: clippedWidth,
+    })
+  }
+
+  return out
+}
+
+function coordinateForLinkedCrosshair(chart, linkedCrosshair) {
+  if (!chart || !linkedCrosshair) return null
+
+  const logical = Number(linkedCrosshair.logical)
+  if (Number.isFinite(logical) && typeof chart.timeScale().logicalToCoordinate === 'function') {
+    const x = chart.timeScale().logicalToCoordinate(logical)
+    if (Number.isFinite(x)) return x
+  }
+
+  const shiftedTime = Number(linkedCrosshair.shiftedTime)
+  if (Number.isFinite(shiftedTime)) {
+    const x = chart.timeScale().timeToCoordinate(shiftedTime)
+    if (Number.isFinite(x)) return x
+  }
+
+  return null
+}
+
 export default function AggressorFlowPanel({
   candles,
   dataPoints,
   visibleLogicalRange,
+  linkedCrosshair,
   height = 220,
   loading = false,
   error = '',
   histAlpha = 0.30,
 }) {
+  const stageRef = useRef(null)
   const hostRef = useRef(null)
   const chartRef = useRef(null)
   const histSeriesRef = useRef(null)
   const zeroSeriesRef = useRef(null)
   const lastAppliedLogicalRef = useRef(null)
+  const candleTimesRef = useRef([])
+  const linkedCrosshairRef = useRef(null)
+  const refreshDecorationsRef = useRef(() => {})
+
+  const [sessionBands, setSessionBands] = useState([])
+  const [linkedCrosshairX, setLinkedCrosshairX] = useState(null)
 
   const candleTimes = useMemo(() => normalizeShiftedCandleTimes(candles), [candles])
 
@@ -204,7 +304,15 @@ export default function AggressorFlowPanel({
   const hasAnyFlowValue = useMemo(() => hasFlowValues(alignedPoints), [alignedPoints])
 
   useEffect(() => {
-    if (!hostRef.current) return undefined
+    candleTimesRef.current = candleTimes
+  }, [candleTimes])
+
+  useEffect(() => {
+    linkedCrosshairRef.current = linkedCrosshair || null
+  }, [linkedCrosshair])
+
+  useEffect(() => {
+    if (!hostRef.current || !stageRef.current) return undefined
 
     const container = hostRef.current
     const chart = createChart(container, {
@@ -234,16 +342,12 @@ export default function AggressorFlowPanel({
       crosshair: {
         mode: CrosshairMode.Normal,
         vertLine: {
-          color: 'rgba(191, 219, 254, 0.45)',
-          width: 1,
-          style: 2,
-          labelBackgroundColor: '#1e293b',
+          visible: false,
+          labelVisible: false,
         },
         horzLine: {
-          color: 'rgba(191, 219, 254, 0.45)',
-          width: 1,
-          style: 2,
-          labelBackgroundColor: '#1e293b',
+          visible: false,
+          labelVisible: false,
         },
       },
       handleScroll: {
@@ -278,11 +382,31 @@ export default function AggressorFlowPanel({
     histSeriesRef.current = histSeries
     zeroSeriesRef.current = zeroSeries
 
+    const refreshDecorations = () => {
+      const stageWidth = stageRef.current?.clientWidth || 0
+      const nextBands = computeSessionBands(chart, candleTimesRef.current, stageWidth)
+      setSessionBands(nextBands)
+
+      const x = coordinateForLinkedCrosshair(chart, linkedCrosshairRef.current)
+      if (!Number.isFinite(x) || x < 0 || x > stageWidth) {
+        setLinkedCrosshairX(null)
+      } else {
+        setLinkedCrosshairX(x)
+      }
+    }
+
+    refreshDecorationsRef.current = refreshDecorations
+
     const handleResize = () => {
       chart.applyOptions({
         width: container.clientWidth || 900,
         height: Math.max(container.clientHeight || MIN_PANEL_HEIGHT, MIN_PANEL_HEIGHT),
       })
+      requestAnimationFrame(refreshDecorations)
+    }
+
+    const handleVisibleLogicalRangeChange = () => {
+      requestAnimationFrame(refreshDecorations)
     }
 
     const resizeObserver =
@@ -296,10 +420,12 @@ export default function AggressorFlowPanel({
       resizeObserver.observe(container)
     }
 
+    chart.timeScale().subscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange)
     window.addEventListener('resize', handleResize)
 
     return () => {
       window.removeEventListener('resize', handleResize)
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange)
       if (resizeObserver) {
         resizeObserver.disconnect()
       }
@@ -308,6 +434,7 @@ export default function AggressorFlowPanel({
       histSeriesRef.current = null
       zeroSeriesRef.current = null
       lastAppliedLogicalRef.current = null
+      refreshDecorationsRef.current = () => {}
     }
   }, [])
 
@@ -331,6 +458,10 @@ export default function AggressorFlowPanel({
         chartRef.current.timeScale().getVisibleLogicalRange?.()
       )
     }
+
+    requestAnimationFrame(() => {
+      refreshDecorationsRef.current()
+    })
   }, [alignedPoints, candleTimes, visibleLogicalRange])
 
   useEffect(() => {
@@ -338,10 +469,20 @@ export default function AggressorFlowPanel({
     if (!chart) return
 
     const next = normalizeLogicalRange(visibleLogicalRange)
-    if (!next) return
+    if (!next) {
+      requestAnimationFrame(() => {
+        refreshDecorationsRef.current()
+      })
+      return
+    }
 
     const current = normalizeLogicalRange(chart.timeScale().getVisibleLogicalRange?.())
-    if (rangesClose(current, next) || rangesClose(lastAppliedLogicalRef.current, next)) return
+    if (rangesClose(current, next) || rangesClose(lastAppliedLogicalRef.current, next)) {
+      requestAnimationFrame(() => {
+        refreshDecorationsRef.current()
+      })
+      return
+    }
 
     requestAnimationFrame(() => {
       try {
@@ -350,16 +491,44 @@ export default function AggressorFlowPanel({
       } catch (err) {
         // ignore sync errors
       }
+      refreshDecorationsRef.current()
     })
   }, [visibleLogicalRange])
+
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      refreshDecorationsRef.current()
+    })
+  }, [linkedCrosshair, candleTimes])
 
   return (
     <div className="flow-shell" style={{ height: `${height}px` }}>
       <div className="flow-panel-header">
         <div className="flow-panel-title">Aggressor Flow</div>
       </div>
-      <div className="flow-stage">
+      <div ref={stageRef} className="flow-stage">
         <div ref={hostRef} className="flow-host" />
+        {sessionBands.map((band) => (
+          <div
+            key={band.key}
+            className="session-band"
+            style={{ left: `${band.left}px`, width: `${band.width}px` }}
+          />
+        ))}
+        {Number.isFinite(linkedCrosshairX) && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left: `${Math.round(linkedCrosshairX)}px`,
+              width: 0,
+              borderLeft: '1px dashed rgba(191, 219, 254, 0.45)',
+              pointerEvents: 'none',
+              zIndex: 4,
+            }}
+          />
+        )}
         {(loading || error || !hasRenderablePoints || !hasAnyFlowValue) && (
           <div className="flow-overlay">
             <div className="flow-overlay-title">

@@ -379,6 +379,7 @@ export default function PriceChart({
   gexSegments,
   gexEnabled,
   onVisibleLogicalRangeChange,
+  onLinkedCrosshairChange,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -617,9 +618,15 @@ export default function PriceChart({
       onVisibleLogicalRangeChange(next)
     }
 
+    const reportLinkedCrosshair = (nextValue) => {
+      if (typeof onLinkedCrosshairChange !== 'function') return
+      onLinkedCrosshairChange(nextValue || null)
+    }
+
     const updateFloatingTooltip = (param) => {
       if (!param?.point || !stageRef.current || !seriesRef.current || !chartRef.current) {
         hideTooltip()
+        reportLinkedCrosshair(null)
         return
       }
 
@@ -637,6 +644,7 @@ export default function PriceChart({
         y > plotHeight
       ) {
         hideTooltip()
+        reportLinkedCrosshair(null)
         return
       }
 
@@ -657,6 +665,7 @@ export default function PriceChart({
 
       if (!Number.isFinite(price) || !Number.isFinite(shiftedEpoch)) {
         hideTooltip()
+        reportLinkedCrosshair(null)
         return
       }
 
@@ -668,6 +677,7 @@ export default function PriceChart({
 
       const timeText = formatShiftedTimestamp(shiftedEpoch)
       showTooltipAtPoint(x, y, priceText, timeText)
+      reportLinkedCrosshair({ logical, shiftedTime: shiftedEpoch })
     }
 
     const handleResize = () => {
@@ -751,6 +761,7 @@ export default function PriceChart({
 
     const handleMouseLeave = () => {
       hideTooltip()
+      reportLinkedCrosshair(null)
       dragRef.current.active = false
     }
 
@@ -787,6 +798,7 @@ export default function PriceChart({
       seriesRef.current = null
       gexSeriesRefs.current = []
       dragRef.current.active = false
+      reportLinkedCrosshair(null)
     }
   }, [onVisibleLogicalRangeChange])
 

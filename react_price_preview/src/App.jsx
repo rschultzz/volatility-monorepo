@@ -173,6 +173,7 @@ export default function App() {
   const [error, setError] = useState('')
 
   const [sharedLogicalRange, setSharedLogicalRange] = useState(null)
+  const [linkedCrosshair, setLinkedCrosshair] = useState(null)
 
   const [flowPanelHeight, setFlowPanelHeight] = useState(() => {
     try {
@@ -450,6 +451,36 @@ export default function App() {
     setSharedLogicalRange((prev) => (rangesClose(prev, next) ? prev : next))
   }, [])
 
+  const handleLinkedCrosshairChange = useCallback((nextValue) => {
+    if (!nextValue) {
+      setLinkedCrosshair(null)
+      return
+    }
+
+    const logical = Number(nextValue.logical)
+    const shiftedTime = Number(nextValue.shiftedTime)
+    if (!Number.isFinite(logical) && !Number.isFinite(shiftedTime)) {
+      setLinkedCrosshair(null)
+      return
+    }
+
+    const next = {
+      logical: Number.isFinite(logical) ? logical : null,
+      shiftedTime: Number.isFinite(shiftedTime) ? shiftedTime : null,
+    }
+
+    setLinkedCrosshair((prev) => {
+      if (
+        prev &&
+        prev.logical === next.logical &&
+        prev.shiftedTime === next.shiftedTime
+      ) {
+        return prev
+      }
+      return next
+    })
+  }, [])
+
   return (
     <div className="app-shell compact-shell">
       <div className="card compact-card">
@@ -489,6 +520,7 @@ export default function App() {
                 gexSegments={mergedGexSegments}
                 gexEnabled={Boolean(meta?.gex_enabled ?? gexEnabled)}
                 onVisibleLogicalRangeChange={handleSharedLogicalRangeChange}
+                onLinkedCrosshairChange={handleLinkedCrosshairChange}
               />
             </div>
 
@@ -508,6 +540,7 @@ export default function App() {
                     loading={flowLoading}
                     error={flowError}
                     histAlpha={flowHistAlpha}
+                    linkedCrosshair={linkedCrosshair}
                   />
                 </div>
               </>
