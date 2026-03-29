@@ -3,7 +3,7 @@ import {
   createChart,
   CrosshairMode,
   ColorType,
-  HistogramSeries,
+  BaselineSeries,
   LineSeries,
 } from 'lightweight-charts'
 
@@ -12,7 +12,6 @@ const ZERO_COLOR = 'rgba(255,255,255,0.20)'
 const MIN_PANEL_HEIGHT = 140
 const POS_RGBA = (alpha) => `rgba(96,165,250,${alpha})`
 const NEG_RGBA = (alpha) => `rgba(229,231,235,${alpha})`
-const LINKED_CROSSHAIR_COLOR = 'rgba(191, 219, 254, 0.45)'
 
 function partsForZone(epochSec, timeZone = 'America/Los_Angeles') {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -120,11 +119,7 @@ function inferStepSeconds(times, fallback = 60) {
   return diffs[Math.floor(diffs.length / 2)]
 }
 
-function bucketFlowToCandles(flowPoints, candleTimes, histAlpha) {
-  const alpha = Number.isFinite(Number(histAlpha))
-    ? Math.max(0.05, Math.min(1, Number(histAlpha)))
-    : 0.30
-
+function bucketFlowToCandles(flowPoints, candleTimes) {
   const points = normalizeShiftedFlowPoints(flowPoints)
   const times = normalizeShiftedCandleTimes(candleTimes)
 
@@ -132,7 +127,6 @@ function bucketFlowToCandles(flowPoints, candleTimes, histAlpha) {
     return points.map((pt) => ({
       time: pt.time,
       value: pt.value,
-      color: pt.value >= 0 ? POS_RGBA(alpha) : NEG_RGBA(alpha),
     }))
   }
 
@@ -161,11 +155,9 @@ function bucketFlowToCandles(flowPoints, candleTimes, histAlpha) {
     pointIdx = scanIdx
 
     if (count > 0) {
-      const value = sum / count
       out.push({
         time: bucketStart,
-        value,
-        color: value >= 0 ? POS_RGBA(alpha) : NEG_RGBA(alpha),
+        value: sum / count,
       })
     } else {
       out.push({ time: bucketStart })
@@ -283,7 +275,7 @@ export default function AggressorFlowPanel({
   const stageRef = useRef(null)
   const hostRef = useRef(null)
   const chartRef = useRef(null)
-  const histSeriesRef = useRef(null)
+  const flowSeriesRef = useRef(null)
   const zeroSeriesRef = useRef(null)
   const lastAppliedLogicalRef = useRef(null)
   const candleTimesRef = useRef([])
@@ -296,8 +288,8 @@ export default function AggressorFlowPanel({
   const candleTimes = useMemo(() => normalizeShiftedCandleTimes(candles), [candles])
 
   const alignedPoints = useMemo(
-    () => bucketFlowToCandles(dataPoints, candles, histAlpha),
-    [dataPoints, candles, histAlpha]
+    () => bucketFlowToCandles(dataPoints, candles),
+    [dataPoints, candles]
   )
 
   const hasRenderablePoints = candleTimes.length >= 2
@@ -363,10 +355,23 @@ export default function AggressorFlowPanel({
       },
     })
 
-    const histSeries = chart.addSeries(HistogramSeries, {
+    const fillAlpha = Number.isFinite(Number(histAlpha))
+      ? Math.max(0.05, Math.min(1, Number(histAlpha)))
+      : 0.30
+
+    const flowSeries = chart.addSeries(BaselineSeries, {
+      baseValue: { type: 'price', price: 0 },
+      topLineColor: POS_RGBA(0.95),
+      topFillColor1: POS_RGBA(fillAlpha),
+      topFillColor2: POS_RGBA(fillAlpha * 0.65),
+      bottomLineColor: NEG_RGBA(0.95),
+      bottomFillColor1: NEG_RGBA(fillAlpha),
+      bottomFillColor2: NEG_RGBA(fillAlpha * 0.65),
+      lineWidth: 2,
       priceLineVisible: false,
       lastValueVisible: false,
-      base: 0,
+      crosshairMarkerVisible: false,
+      pointMarkersVisible: false,
     })
 
     const zeroSeries = chart.addSeries(LineSeries, {
@@ -379,7 +384,7 @@ export default function AggressorFlowPanel({
     })
 
     chartRef.current = chart
-    histSeriesRef.current = histSeries
+    flowSeriesRef.current = flowSeries
     zeroSeriesRef.current = zeroSeries
 
     const refreshDecorations = () => {
@@ -431,17 +436,17 @@ export default function AggressorFlowPanel({
       }
       chart.remove()
       chartRef.current = null
-      histSeriesRef.current = null
+      flowSeriesRef.current = null
       zeroSeriesRef.current = null
       lastAppliedLogicalRef.current = null
       refreshDecorationsRef.current = () => {}
     }
-  }, [])
+  }, [histAlpha])
 
   useEffect(() => {
-    if (!histSeriesRef.current || !zeroSeriesRef.current) return
+    if (!flowSeriesRef.current || !zeroSeriesRef.current) return
 
-    histSeriesRef.current.setData(alignedPoints)
+    flowSeriesRef.current.setData(alignedPoints)
 
     if (candleTimes.length >= 2) {
       zeroSeriesRef.current.setData([
