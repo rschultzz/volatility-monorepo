@@ -159,15 +159,23 @@ function bucketFlowToCandles(flowPoints, candleTimes, histAlpha) {
 
     pointIdx = scanIdx
 
-    const value = count > 0 ? sum / count : 0
-    out.push({
-      time: bucketStart,
-      value,
-      color: value >= 0 ? POS_RGBA(alpha) : NEG_RGBA(alpha),
-    })
+    if (count > 0) {
+      const value = sum / count
+      out.push({
+        time: bucketStart,
+        value,
+        color: value >= 0 ? POS_RGBA(alpha) : NEG_RGBA(alpha),
+      })
+    } else {
+      out.push({ time: bucketStart })
+    }
   }
 
   return out
+}
+
+function hasFlowValues(points) {
+  return (Array.isArray(points) ? points : []).some((pt) => Number.isFinite(Number(pt?.value)))
 }
 
 export default function AggressorFlowPanel({
@@ -185,12 +193,15 @@ export default function AggressorFlowPanel({
   const zeroSeriesRef = useRef(null)
   const lastAppliedLogicalRef = useRef(null)
 
+  const candleTimes = useMemo(() => normalizeShiftedCandleTimes(candles), [candles])
+
   const alignedPoints = useMemo(
     () => bucketFlowToCandles(dataPoints, candles, histAlpha),
     [dataPoints, candles, histAlpha]
   )
 
-  const hasRenderablePoints = alignedPoints.length >= 2
+  const hasRenderablePoints = candleTimes.length >= 2
+  const hasAnyFlowValue = useMemo(() => hasFlowValues(alignedPoints), [alignedPoints])
 
   useEffect(() => {
     if (!hostRef.current) return undefined
@@ -274,10 +285,24 @@ export default function AggressorFlowPanel({
       })
     }
 
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            handleResize()
+          })
+        : null
+
+    if (resizeObserver) {
+      resizeObserver.observe(container)
+    }
+
     window.addEventListener('resize', handleResize)
 
     return () => {
       window.removeEventListener('resize', handleResize)
+      if (resizeObserver) {
+        resizeObserver.disconnect()
+      }
       chart.remove()
       chartRef.current = null
       histSeriesRef.current = null
@@ -291,22 +316,22 @@ export default function AggressorFlowPanel({
 
     histSeriesRef.current.setData(alignedPoints)
 
-    if (hasRenderablePoints) {
+    if (candleTimes.length >= 2) {
       zeroSeriesRef.current.setData([
-        { time: alignedPoints[0].time, value: 0 },
-        { time: alignedPoints[alignedPoints.length - 1].time, value: 0 },
+        { time: candleTimes[0], value: 0 },
+        { time: candleTimes[candleTimes.length - 1], value: 0 },
       ])
     } else {
       zeroSeriesRef.current.setData([])
     }
 
-    if (chartRef.current && hasRenderablePoints && !visibleLogicalRange) {
+    if (chartRef.current && candleTimes.length >= 2 && !visibleLogicalRange) {
       chartRef.current.timeScale().fitContent()
       lastAppliedLogicalRef.current = normalizeLogicalRange(
         chartRef.current.timeScale().getVisibleLogicalRange?.()
       )
     }
-  }, [alignedPoints, hasRenderablePoints, visibleLogicalRange])
+  }, [alignedPoints, candleTimes, visibleLogicalRange])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -335,7 +360,7 @@ export default function AggressorFlowPanel({
       </div>
       <div className="flow-stage">
         <div ref={hostRef} className="flow-host" />
-        {(loading || error || !alignedPoints.length) && (
+        {(loading || error || !hasRenderablePoints || !hasAnyFlowValue) && (
           <div className="flow-overlay">
             <div className="flow-overlay-title">
               {error
@@ -345,7 +370,7 @@ export default function AggressorFlowPanel({
                   : 'No flow data returned'}
             </div>
             <div className="flow-overlay-text">
-              {error || 'The backend responded, but this session did not return any flow data.'}
+              {error || 'The loaded sessions did not return any aggressor flow data.'}
             </div>
           </div>
         )}

@@ -11,6 +11,7 @@ const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
 const TIME_AXIS_HEIGHT = 24
 const MIN_PRICE_RANGE = 0.25
+const MIN_CHART_HEIGHT = 180
 
 const TOOLTIP_OFFSET_X = 14
 const TOOLTIP_OFFSET_Y = 14
@@ -492,7 +493,7 @@ export default function PriceChart({
 
     const chart = createChart(container, {
       width: container.clientWidth || 900,
-      height: Math.max(container.clientHeight || 720, 720),
+      height: Math.max(container.clientHeight || 0, MIN_CHART_HEIGHT),
       layout: {
         background: { type: ColorType.Solid, color: ETH_BG_COLOR },
         textColor: '#cbd5e1',
@@ -672,7 +673,7 @@ export default function PriceChart({
     const handleResize = () => {
       chart.applyOptions({
         width: container.clientWidth || 900,
-        height: Math.max(container.clientHeight || 720, 720),
+        height: Math.max(container.clientHeight || 0, MIN_CHART_HEIGHT),
       })
       hideTooltip()
       requestAnimationFrame(updateBand)
@@ -680,6 +681,17 @@ export default function PriceChart({
         const vr = normalizeLogicalRange(chart.timeScale().getVisibleLogicalRange?.())
         reportLogicalRange(vr)
       })
+    }
+
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            handleResize()
+          })
+        : null
+
+    if (resizeObserver) {
+      resizeObserver.observe(container)
     }
 
     const handleClick = (param) => {
@@ -757,6 +769,9 @@ export default function PriceChart({
 
     return () => {
       window.removeEventListener('resize', handleResize)
+      if (resizeObserver) {
+        resizeObserver.disconnect()
+      }
       stage.removeEventListener('wheel', handleWheel, { capture: true })
       stage.removeEventListener('mousedown', handleMouseDown)
       stage.removeEventListener('mouseleave', handleMouseLeave)

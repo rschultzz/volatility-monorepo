@@ -90,6 +90,30 @@ function dedupeSegments(values) {
   return Array.from(byKey.values())
 }
 
+function dedupeAndSortFlowPoints(values) {
+  const byTime = new Map()
+  for (const point of Array.isArray(values) ? values : []) {
+    const t = Number(point?.time)
+    const value = Number(point?.value)
+    if (!Number.isFinite(t) || !Number.isFinite(value)) continue
+    byTime.set(t, { ...point, time: t, value })
+  }
+  return Array.from(byTime.values()).sort((a, b) => a.time - b.time)
+}
+
+function normalizeDateList(values) {
+  const seen = new Set()
+  const out = []
+  for (const item of Array.isArray(values) ? values : []) {
+    const s = String(item || '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) continue
+    if (seen.has(s)) continue
+    seen.add(s)
+    out.push(s)
+  }
+  return out.sort()
+}
+
 function clampFlowHeight(value) {
   const n = Number(value)
   if (!Number.isFinite(n)) return 220
@@ -125,7 +149,7 @@ export default function App() {
   const flowEmaLen = Math.max(1, parseIntOrDefault(params.get('flow_ema_len'), defaultFlowEmaLen))
   const flowHistAlpha = parseFloatOrNull(params.get('flow_hist_alpha')) ?? 0.30
 
-  const effectiveDaysEitherSide = flowEnabled ? 0 : daysEitherSide
+  const effectiveDaysEitherSide = daysEitherSide
 
   const apiBase = useMemo(() => inferApiBase(), [])
   const initialSelectedTimes = useMemo(() => parseSelectedTimes(params), [params])
@@ -136,6 +160,8 @@ export default function App() {
   const [extraBars, setExtraBars] = useState([])
   const [centerGexSegments, setCenterGexSegments] = useState([])
   const [extraGexSegments, setExtraGexSegments] = useState([])
+  const [centerLoadedDates, setCenterLoadedDates] = useState([])
+  const [extraLoadedDates, setExtraLoadedDates] = useState([])
   const [meta, setMeta] = useState(null)
 
   const [flowPoints, setFlowPoints] = useState([])
@@ -166,6 +192,11 @@ export default function App() {
     [centerGexSegments, extraGexSegments]
   )
 
+  const loadedFlowDates = useMemo(
+    () => normalizeDateList([...centerLoadedDates, ...extraLoadedDates]),
+    [centerLoadedDates, extraLoadedDates]
+  )
+
   useEffect(() => {
     try {
       window.localStorage.setItem(FLOW_HEIGHT_STORAGE_KEY, String(flowPanelHeight))
@@ -194,6 +225,8 @@ export default function App() {
         setExtraBars([])
         setCenterGexSegments([])
         setExtraGexSegments([])
+        setCenterLoadedDates([])
+        setExtraLoadedDates([])
         setMeta(null)
         setSharedLogicalRange(null)
 
@@ -219,6 +252,13 @@ export default function App() {
         const payload = await response.json()
         setCenterBars(Array.isArray(payload.bars) ? payload.bars : [])
         setCenterGexSegments(Array.isArray(payload.gex_segments) ? payload.gex_segments : [])
+        setCenterLoadedDates(
+          normalizeDateList(
+            Array.isArray(payload.loaded_dates) && payload.loaded_dates.length
+              ? payload.loaded_dates
+              : [payload?.effective_trade_date || payload?.trade_date || tradeDate]
+          )
+        )
         setMeta(payload)
       } catch (err) {
         if (err?.name === 'AbortError') return
@@ -226,6 +266,8 @@ export default function App() {
         setExtraBars([])
         setCenterGexSegments([])
         setExtraGexSegments([])
+        setCenterLoadedDates([])
+        setExtraLoadedDates([])
         setMeta(null)
         setError(err?.message || `Could not load bars from ${url.toString()}`)
       } finally {
@@ -277,6 +319,7 @@ export default function App() {
         const payload = await response.json()
         setExtraBars(Array.isArray(payload.bars) ? payload.bars : [])
         setExtraGexSegments(Array.isArray(payload.gex_segments) ? payload.gex_segments : [])
+        setExtraLoadedDates(normalizeDateList(payload.loaded_dates))
       } catch (err) {
         if (err?.name === 'AbortError') return
         console.error('React preview multi-day load failed', err)
@@ -298,11 +341,7 @@ export default function App() {
     }
 
     const controller = new AbortController()
-    const url = new URL(`${apiBase}/api/ironbeam/flow`)
-    url.searchParams.set('trade_date', tradeDate)
-    url.searchParams.set('session', flowSession)
-    url.searchParams.set('resample', flowResample)
-    url.searchParams.set('ema_len', String(flowEmaLen))
+    const datesToLoad = loadedFlowDates.length ? loadedFlowDates : [tradeDate]
 
     async function loadFlow() {
       try {
@@ -310,31 +349,59 @@ export default function App() {
         setFlowError('')
         setFlowPoints([])
 
-        const response = await fetch(url.toString(), {
-          method: 'GET',
-          credentials: 'include',
-          signal: controller.signal,
-          cache: 'no-store',
-        })
+        const settled = await Promise.allSettled(
+          datesToLoad.map(async (dateStr) => {
+            const url = new URL(`${apiBase}/api/ironbeam/flow`)
+            url.searchParams.set('trade_date', dateStr)
+            url.searchParams.set('session', flowSession)
+            url.searchParams.set('resample', flowResample)
+            url.searchParams.set('ema_len', String(flowEmaLen))
 
-        if (response.status === 401) {
-          throw new Error(
-            `Unauthorized from Dash backend at ${apiBase}. Open the Dash app first and make sure you are logged in there.`
-          )
+            const response = await fetch(url.toString(), {
+              method: 'GET',
+              credentials: 'include',
+              signal: controller.signal,
+              cache: 'no-store',
+            })
+
+            if (response.status === 401) {
+              throw new Error(
+                `Unauthorized from Dash backend at ${apiBase}. Open the Dash app first and make sure you are logged in there.`
+              )
+            }
+
+            if (!response.ok) {
+              throw new Error(
+                `Flow request failed for ${dateStr}: ${response.status} ${response.statusText || ''}`.trim()
+              )
+            }
+
+            const payload = await response.json()
+            return Array.isArray(payload.flow_points) ? payload.flow_points : []
+          })
+        )
+
+        const merged = []
+        const failures = []
+
+        for (const result of settled) {
+          if (result.status === 'fulfilled') {
+            merged.push(...result.value)
+          } else if (result.reason?.name !== 'AbortError') {
+            failures.push(result.reason?.message || 'Unknown flow load error')
+          }
         }
 
-        if (!response.ok) {
-          throw new Error(
-            `Backend returned ${response.status} ${response.statusText || ''}`.trim()
-          )
+        if (!merged.length && failures.length) {
+          throw new Error(failures[0])
         }
 
-        const payload = await response.json()
-        setFlowPoints(Array.isArray(payload.flow_points) ? payload.flow_points : [])
+        setFlowPoints(dedupeAndSortFlowPoints(merged))
+        setFlowError('')
       } catch (err) {
         if (err?.name === 'AbortError') return
         setFlowPoints([])
-        setFlowError(err?.message || `Could not load flow from ${url.toString()}`)
+        setFlowError(err?.message || 'Could not load multi-day flow')
       } finally {
         setFlowLoading(false)
       }
@@ -342,7 +409,7 @@ export default function App() {
 
     loadFlow()
     return () => controller.abort()
-  }, [apiBase, tradeDate, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error])
+  }, [apiBase, tradeDate, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error, loadedFlowDates])
 
   useEffect(() => {
     const handleMove = (event) => {
