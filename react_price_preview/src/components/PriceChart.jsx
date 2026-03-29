@@ -255,6 +255,92 @@ function pointerInfo(evt, container) {
   return { rect, x, y, overTimeAxis, overPriceAxis }
 }
 
+
+function normalizeIntervalValue(value, fallback = '1min') {
+  const s = String(value || '').trim().toLowerCase()
+  if (s === '5min' || s === '5m') return '5min'
+  if (s === '1min' || s === '1m') return '1min'
+  return fallback
+}
+
+function normalizeChartModeValue(value, fallback = 'react_preview') {
+  const s = String(value || '').trim().toLowerCase()
+  if (s === 'classic') return 'classic'
+  if (s === 'react_preview' || s === 'react' || s === 'preview') return 'react_preview'
+  return fallback
+}
+
+function findParentControlRoot(controlId) {
+  try {
+    const parentWin = window.parent
+    if (!parentWin || parentWin === window) return null
+    return parentWin.document.getElementById(controlId)
+  } catch (err) {
+    return null
+  }
+}
+
+function findParentControlGroup(controlId, labelText) {
+  const root = findParentControlRoot(controlId)
+  if (!root) return null
+
+  let node = root
+  const normalizedLabel = String(labelText || '').trim().toLowerCase()
+
+  for (let depth = 0; depth < 5 && node; depth += 1) {
+    const text = String(node.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase()
+    if (normalizedLabel && text.includes(normalizedLabel)) {
+      return node
+    }
+    node = node.parentElement
+  }
+
+  return root.parentElement || root
+}
+
+function setParentRadioValue(controlId, nextValue) {
+  try {
+    const root = findParentControlRoot(controlId)
+    if (!root) return false
+
+    const selector = `input[type="radio"][value="${String(nextValue)}"]`
+    const input = root.querySelector(selector)
+    if (!input) return false
+
+    if (!input.checked) {
+      input.click()
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    }
+    return true
+  } catch (err) {
+    return false
+  }
+}
+
+function setParentControlGroupVisibility(controlId, labelText, visible) {
+  try {
+    const group = findParentControlGroup(controlId, labelText)
+    if (!group) return false
+    group.style.display = visible ? '' : 'none'
+    group.style.visibility = visible ? '' : 'hidden'
+    group.style.pointerEvents = visible ? '' : 'none'
+    return true
+  } catch (err) {
+    return false
+  }
+}
+
+function hideParentTopControls() {
+  setParentControlGroupVisibility('ironbeam-bar-interval', 'Bar Interval', false)
+  setParentControlGroupVisibility('ib-chart-mode-toggle', 'Chart Mode', false)
+}
+
+function showParentTopControls() {
+  setParentControlGroupVisibility('ironbeam-bar-interval', 'Bar Interval', true)
+  setParentControlGroupVisibility('ib-chart-mode-toggle', 'Chart Mode', true)
+}
+
 function intervalToSeconds(interval) {
   const s = String(interval || '').trim().toLowerCase()
   if (!s) return null
@@ -474,6 +560,7 @@ export default function PriceChart({
   gexEnabled,
   gexMinAbsB = 10,
   onApplyGexMinAbsB,
+  onApplyIntervalChange,
   onVisibleLogicalRangeChange,
   onLinkedCrosshairChange,
 }) {
@@ -501,6 +588,8 @@ export default function PriceChart({
   const [sessionBands, setSessionBands] = useState([])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [draftGexMinAbsB, setDraftGexMinAbsB] = useState(() => coerceGexMinAbsB(gexMinAbsB, 10))
+  const [draftInterval, setDraftInterval] = useState(() => normalizeIntervalValue(interval, '1min'))
+  const [draftChartMode, setDraftChartMode] = useState('react_preview')
   const [settingsError, setSettingsError] = useState('')
 
   useEffect(() => {
@@ -510,9 +599,18 @@ export default function PriceChart({
   useEffect(() => {
     if (!settingsOpen) {
       setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
+      setDraftInterval(normalizeIntervalValue(interval, '1min'))
+      setDraftChartMode('react_preview')
       setSettingsError('')
     }
-  }, [gexMinAbsB, settingsOpen])
+  }, [gexMinAbsB, interval, settingsOpen])
+
+  useEffect(() => {
+    hideParentTopControls()
+    return () => {
+      showParentTopControls()
+    }
+  }, [])
 
   useEffect(() => {
     intervalRef.current = interval
@@ -1136,6 +1234,8 @@ export default function PriceChart({
 
   function openSettings() {
     setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
+    setDraftInterval(normalizeIntervalValue(interval, '1min'))
+    setDraftChartMode('react_preview')
     setSettingsError('')
     setSettingsOpen(true)
   }
@@ -1144,6 +1244,8 @@ export default function PriceChart({
     setSettingsOpen(false)
     setSettingsError('')
     setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
+    setDraftInterval(normalizeIntervalValue(interval, '1min'))
+    setDraftChartMode('react_preview')
   }
 
   function applySettings(event) {
@@ -1154,9 +1256,36 @@ export default function PriceChart({
       return
     }
 
+    const nextInterval = normalizeIntervalValue(draftInterval, '1min')
+    const nextChartMode = normalizeChartModeValue(draftChartMode, 'react_preview')
+
     if (typeof onApplyGexMinAbsB === 'function') {
       onApplyGexMinAbsB(next)
     }
+    if (typeof onApplyIntervalChange === 'function') {
+      onApplyIntervalChange(nextInterval)
+    }
+
+    if (nextChartMode === 'classic') {
+      showParentTopControls()
+    } else {
+      hideParentTopControls()
+    }
+
+    const intervalOk = setParentRadioValue('ironbeam-bar-interval', nextInterval)
+    const modeOk = setParentRadioValue('ib-chart-mode-toggle', nextChartMode)
+
+    if (!intervalOk || !modeOk) {
+      const missing = []
+      if (!intervalOk) missing.push('bar interval')
+      if (!modeOk) missing.push('chart mode')
+      setSettingsError(`Could not sync ${missing.join(' and ')} with the parent Dash controls.`)
+      if (nextChartMode !== 'classic') {
+        hideParentTopControls()
+      }
+      return
+    }
+
     setSettingsOpen(false)
     setSettingsError('')
   }
@@ -1290,6 +1419,64 @@ export default function PriceChart({
               >
                 <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '14px' }}>
                   Price chart settings
+                </div>
+
+
+                <div style={{ fontSize: '12px', color: '#cbd5e1', marginBottom: '8px' }}>
+                  Bar Interval
+                </div>
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+                  {['1min', '5min'].map((value) => {
+                    const active = draftInterval === value
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setDraftInterval(value)}
+                        style={{
+                          borderRadius: '10px',
+                          border: `1px solid ${active ? '#3b82f6' : '#334155'}`,
+                          background: active ? 'rgba(37, 99, 235, 0.20)' : '#020617',
+                          color: active ? '#dbeafe' : '#cbd5e1',
+                          padding: '8px 12px',
+                          cursor: 'pointer',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {value === '1min' ? '1 min' : '5 min'}
+                      </button>
+                    )
+                  })}
+                </div>
+
+                <div style={{ fontSize: '12px', color: '#cbd5e1', marginBottom: '8px' }}>
+                  Chart Mode
+                </div>
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+                  {[
+                    { value: 'react_preview', label: 'React Preview' },
+                    { value: 'classic', label: 'Classic' },
+                  ].map((item) => {
+                    const active = draftChartMode === item.value
+                    return (
+                      <button
+                        key={item.value}
+                        type="button"
+                        onClick={() => setDraftChartMode(item.value)}
+                        style={{
+                          borderRadius: '10px',
+                          border: `1px solid ${active ? '#3b82f6' : '#334155'}`,
+                          background: active ? 'rgba(37, 99, 235, 0.20)' : '#020617',
+                          color: active ? '#dbeafe' : '#cbd5e1',
+                          padding: '8px 12px',
+                          cursor: 'pointer',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {item.label}
+                      </button>
+                    )
+                  })}
                 </div>
 
                 <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e1', marginBottom: '8px' }}>

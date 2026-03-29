@@ -3757,7 +3757,7 @@ def register_ironbeam_callbacks(app):
         Input("ib-chart-mode-toggle", "value"),
     )
     def ib_apply_chart_mode(chart_mode):
-        mode = (chart_mode or "classic").strip()
+        mode = (chart_mode or "react_preview").strip()
         if mode == "react_preview":
             return (
                 {"display": "none"},
@@ -3773,3 +3773,24 @@ def register_ironbeam_callbacks(app):
             },
             {"display": "none"},
         )
+
+
+    @app.callback(
+        Output("ib-chart-mode-toggle", "value", allow_duplicate=True),
+        Input("ib-react-preview-frame", "id"),
+        prevent_initial_call="initial_duplicate",
+    )
+    def ib_default_chart_mode(_frame_id):
+        return "react_preview"
+
+    @app.callback(
+        Output("ironbeam-bar-interval", "style"),
+        Output("ib-chart-mode-toggle", "style"),
+        Input("ib-chart-mode-toggle", "value"),
+    )
+    def ib_toggle_external_chart_controls(chart_mode):
+        mode = (chart_mode or "react_preview").strip()
+        if mode == "react_preview":
+            hidden = {"display": "none"}
+            return hidden, hidden
+        return {}, {}

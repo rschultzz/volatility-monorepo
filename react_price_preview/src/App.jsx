@@ -181,7 +181,7 @@ function rangesClose(a, b, eps = 1) {
 export default function App() {
   const params = useMemo(() => new URLSearchParams(window.location.search), [])
   const tradeDate = params.get('trade_date') || new Date().toISOString().slice(0, 10)
-  const interval = params.get('interval') || '1min'
+  const initialInterval = params.get('interval') || '1min'
   const gexEnabled = parseBool(params.get('gex_enabled'), true)
   const initialGexMinAbsB = parseFloatOrNull(params.get('gex_min_abs_b'))
   const daysEitherSide = Math.max(0, parseIntOrDefault(params.get('days_either_side'), 5))
@@ -197,6 +197,10 @@ export default function App() {
 
   const apiBase = useMemo(() => inferApiBase(), [])
   const initialSelectedTimes = useMemo(() => parseSelectedTimes(params), [params])
+
+  const [interval, setInterval] = useState(() =>
+    String(initialInterval || '').trim() === '5min' ? '5min' : '1min'
+  )
 
   const dragStateRef = useRef(null)
 
@@ -293,6 +297,16 @@ export default function App() {
       // ignore
     }
   }, [gexMinAbsB])
+
+  useEffect(() => {
+    try {
+      const nextUrl = new URL(window.location.href)
+      nextUrl.searchParams.set('interval', interval)
+      window.history.replaceState(null, '', nextUrl.toString())
+    } catch (err) {
+      // ignore
+    }
+  }, [interval])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -553,6 +567,11 @@ export default function App() {
     })
   }, [])
 
+  const handleIntervalChange = useCallback((nextValue) => {
+    const next = String(nextValue || '').trim() === '5min' ? '5min' : '1min'
+    setInterval((prev) => (prev === next ? prev : next))
+  }, [])
+
   const handleLinkedCrosshairChange = useCallback((nextValue) => {
     if (!nextValue) {
       setLinkedCrosshair(null)
@@ -624,6 +643,7 @@ export default function App() {
                 gexEnabled={Boolean(meta?.gex_enabled ?? gexEnabled)}
                 gexMinAbsB={gexMinAbsB}
                 onApplyGexMinAbsB={handleGexMinAbsBChange}
+                onApplyIntervalChange={handleIntervalChange}
                 onVisibleLogicalRangeChange={handleSharedLogicalRangeChange}
                 onLinkedCrosshairChange={handleLinkedCrosshairChange}
               />
