@@ -11,6 +11,7 @@ const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
 const TIME_AXIS_HEIGHT = 24
 const MIN_PRICE_RANGE = 0.25
+const MIN_CHART_HEIGHT = 180
 
 const TOOLTIP_OFFSET_X = 14
 const TOOLTIP_OFFSET_Y = 14
@@ -356,12 +357,27 @@ function computeCenterLogicalRange(candles) {
   return { from, to, key }
 }
 
+function normalizeTimeRange(range) {
+  if (!range) return null
+  const from = Number(range.from)
+  const to = Number(range.to)
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null
+  return { from, to }
+}
+
+function rangesClose(a, b, eps = 1) {
+  if (!a || !b) return false
+  return Math.abs(Number(a.from) - Number(b.from)) <= eps && Math.abs(Number(a.to) - Number(b.to)) <= eps
+}
+
 export default function PriceChart({
   candles,
   interval,
   initialSelectedTimes,
   gexSegments,
   gexEnabled,
+  visibleTimeRange,
+  onVisibleTimeRangeChange,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -374,6 +390,7 @@ export default function PriceChart({
   const hasUserInteractedRef = useRef(false)
   const currentCenterKeyRef = useRef('')
   const appliedInitialRangeKeyRef = useRef('')
+  const lastAppliedExternalTimeRangeRef = useRef(null)
 
   const tooltipRef = useRef(null)
   const tooltipTimeRef = useRef(null)
@@ -474,7 +491,7 @@ export default function PriceChart({
 
     const chart = createChart(container, {
       width: container.clientWidth || 900,
-      height: Math.max(container.clientHeight || 720, 720),
+      height: Math.max(container.clientHeight || MIN_CHART_HEIGHT, MIN_CHART_HEIGHT),
       layout: {
         background: { type: ColorType.Solid, color: ETH_BG_COLOR },
         textColor: '#cbd5e1',
@@ -645,7 +662,7 @@ export default function PriceChart({
     const handleResize = () => {
       chart.applyOptions({
         width: container.clientWidth || 900,
-        height: Math.max(container.clientHeight || 720, 720),
+        height: Math.max(container.clientHeight || MIN_CHART_HEIGHT, MIN_CHART_HEIGHT),
       })
       hideTooltip()
       requestAnimationFrame(updateBand)
@@ -667,7 +684,13 @@ export default function PriceChart({
       })
     }
 
-    const handleVisibleRange = () => requestAnimationFrame(updateBand)
+    const handleVisibleRange = (range) => {
+      requestAnimationFrame(updateBand)
+      const next = normalizeTimeRange(range || chart.timeScale().getVisibleRange?.())
+      if (next && typeof onVisibleTimeRangeChange === 'function') {
+        onVisibleTimeRangeChange(next)
+      }
+    }
 
     const handleCrosshairMove = (param) => {
       updateFloatingTooltip(param)
@@ -739,7 +762,7 @@ export default function PriceChart({
       gexSeriesRefs.current = []
       dragRef.current.active = false
     }
-  }, [])
+  }, [onVisibleTimeRangeChange])
 
   useEffect(() => {
     function handleParentMessage(event) {
@@ -780,6 +803,26 @@ export default function PriceChart({
       }
     })
   }, [displayCandles, shiftedCandles, centerLogicalRange])
+
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+
+    const next = normalizeTimeRange(visibleTimeRange)
+    if (!next) return
+
+    const current = normalizeTimeRange(chart.timeScale().getVisibleRange?.())
+    if (rangesClose(current, next) || rangesClose(lastAppliedExternalTimeRangeRef.current, next)) {
+      return
+    }
+
+    try {
+      chart.timeScale().setVisibleRange(next)
+      lastAppliedExternalTimeRangeRef.current = next
+    } catch (err) {
+      // ignore sync errors
+    }
+  }, [visibleTimeRange])
 
   useEffect(() => {
     const chart = chartRef.current
