@@ -2960,9 +2960,10 @@ def register_ironbeam_callbacks(app):
         """Populate sidebar indicator options from the plugin registry."""
         opts = ib_indicator_options()
 
-        # Keep the options stable; just return everything in the registry.
-        # (We still limit selection to enabled indicators in ib_sync_indicator_sidebar.)
-        return opts, opts
+        # Keep the enabled checklist stable. For sidebar settings, Aggressor Flow is now edited
+        # from the React panel gear instead of the left settings form.
+        settings_opts = [o for o in opts if isinstance(o, dict) and o.get("value") != "aggressor_flow"]
+        return opts, settings_opts
 
     @app.callback(
         Output("ib-indicator-state", "data", allow_duplicate=True),
@@ -3017,9 +3018,11 @@ def register_ironbeam_callbacks(app):
         # Filter to known plugins (in case localStorage contains old ids)
         enabled = [pid for pid in enabled if pid in IB_PLUGIN_MAP]
 
+        settings_enabled = [pid for pid in enabled if pid != "aggressor_flow"]
+
         sel = current_settings_selection
-        if sel not in enabled:
-            sel = enabled[0] if enabled else None
+        if sel not in settings_enabled:
+            sel = settings_enabled[0] if settings_enabled else None
 
         # If only configs changed (not enabled list / selection), don't push updates.
         cur_enabled = current_enabled_value
@@ -3066,11 +3069,23 @@ def register_ironbeam_callbacks(app):
         """Render settings controls for the selected indicator (schema-driven)."""
         if not selected_indicator or selected_indicator not in IB_PLUGIN_MAP:
             return html.Div(
-                "Select an indicator to edit settings.",
+                "Aggressor Flow settings now live in the panel gear inside React Preview. Select another indicator to edit sidebar settings.",
                 style={"color": "#9ca3af", "fontSize": "12px", "marginTop": "6px"},
             )
 
         plugin = IB_PLUGIN_MAP[selected_indicator]
+
+        if selected_indicator == "aggressor_flow":
+            return html.Div(
+                "Aggressor Flow settings now live in the panel gear inside React Preview.",
+                style={"color": "#9ca3af", "fontSize": "12px", "lineHeight": "1.5"},
+            )
+
+        if selected_indicator == "gex_overlay":
+            return html.Div(
+                "GEX overlay settings now live in the price chart gear inside React Preview.",
+                style={"color": "#9ca3af", "fontSize": "12px", "lineHeight": "1.5"},
+            )
 
         state = state if isinstance(state, dict) else {}
         cfg_all = state.get("cfg") or {}
@@ -3080,42 +3095,6 @@ def register_ironbeam_callbacks(app):
         cfg = dict(getattr(plugin, "default_config", lambda: {})() or {})
         if isinstance(persisted, dict):
             cfg.update(persisted)
-
-        # Special-case: GEX overlay settings
-        if selected_indicator == "gex_overlay":
-            val = cfg.get("min_abs_b")
-            try:
-                val = float(val) if val is not None else 10.0
-            except Exception:
-                val = 10.0
-
-            return html.Div(
-                [
-                    html.Label("Min |GEX| (B)", style={"color": "white", "fontSize": "12px"}),
-                    dcc.Slider(
-                        id="ib-gex-min-abs-b",
-                        min=0,
-                        max=200,
-                        step=1,
-                        value=val,
-                        updatemode="mouseup",
-                        marks={
-                            0: {"label": "0", "style": {"fontSize": "11px"}},
-                            10: {"label": "10", "style": {"fontSize": "11px"}},
-                            25: {"label": "25", "style": {"fontSize": "11px"}},
-                            50: {"label": "50", "style": {"fontSize": "11px"}},
-                            100: {"label": "100", "style": {"fontSize": "11px"}},
-                            150: {"label": "150", "style": {"fontSize": "11px"}},
-                            200: {"label": "200", "style": {"fontSize": "11px"}},
-                        },
-                        tooltip={"placement": "bottom", "always_visible": False},
-                    ),
-                    html.Div(
-                        "Only plot levels with |Net GEX| at or above this threshold (in billions).",
-                        style={"color": "#9ca3af", "fontSize": "11px", "marginTop": "6px"},
-                    ),
-                ]
-            )
         schema = dict(getattr(plugin, "schema", lambda: {})() or {})
 
         # Back-compat: keep your existing flow controls, even if the plugin schema is minimal.
@@ -3623,7 +3602,7 @@ def register_ironbeam_callbacks(app):
         return new_val
 
     # -------------------------
-    # UI: Collapsible indicator sidebar (left)
+    # UI: Sidebar hidden in React-preview-first layout
     # -------------------------
     @app.callback(
         Output("ib-ui-state", "data"),
@@ -3632,10 +3611,7 @@ def register_ironbeam_callbacks(app):
         prevent_initial_call=True,
     )
     def ib_toggle_sidebar(n_clicks, ui_state):
-        ui_state = ui_state or {}
-        collapsed = bool(ui_state.get("sidebar_collapsed", False))
-        ui_state["sidebar_collapsed"] = not collapsed
-        return ui_state
+        raise PreventUpdate
 
     @app.callback(
         Output("ib-indicator-sidebar", "style"),
@@ -3646,50 +3622,18 @@ def register_ironbeam_callbacks(app):
         Input("ib-ui-state", "data"),
     )
     def ib_apply_sidebar_styles(ui_state):
-        ui_state = ui_state or {}
-        collapsed = bool(ui_state.get("sidebar_collapsed", False))
-
-        base = {
-            "border": "1px solid #1f2937",
-            "borderRadius": "12px",
-            "backgroundColor": "#0b1220",
-            "transition": "width 0.18s ease, min-width 0.18s ease, padding 0.18s ease",
+        sidebar_style = {
+            "width": "0px",
+            "minWidth": "0px",
+            "padding": "0px",
+            "border": "0px",
             "overflow": "hidden",
+            "display": "none",
         }
-
-        row_style = {"display": "flex", "alignItems": "flex-start", "gap": "12px"}
-
-        # Base toggle style (we only move `left`)
-        toggle_style = {
-            "position": "absolute",
-            "top": "10px",
-            "zIndex": 2000,
-            "width": "34px",
-            "height": "34px",
-            "borderRadius": "10px",
-            "border": "1px solid #1f2937",
-            "backgroundColor": "#111827",
-            "color": "#bfdbfe",
-            "cursor": "pointer",
-            "fontWeight": "900",
-            "lineHeight": "32px",
-            "transition": "left 0.18s ease",
-        }
-
-        if collapsed:
-            # Fully hidden sidebar; charts reclaim space
-            sidebar_style = {**base, "width": "0px", "minWidth": "0px", "padding": "0px", "border": "0px"}
-            content_style = {"display": "none"}
-            btn = "»"
-            row_style["gap"] = "0px"
-            toggle_style["left"] = "8px"
-        else:
-            sidebar_style = {**base, "width": "320px", "minWidth": "320px", "padding": "12px"}
-            content_style = {"display": "block"}
-            btn = "«"
-            # Dock the button to the RIGHT edge of the sidebar (overlapping by half its width)
-            toggle_style["left"] = "303px"  # 320 - (34/2)
-
+        content_style = {"display": "none"}
+        btn = "«"
+        row_style = {"display": "flex", "alignItems": "flex-start", "gap": "0px"}
+        toggle_style = {"display": "none"}
         return sidebar_style, content_style, btn, row_style, toggle_style
 
     # -------------------------

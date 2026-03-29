@@ -3,6 +3,8 @@ import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
 
 const FLOW_HEIGHT_STORAGE_KEY = 'ib-react-flow-panel-height'
+const FLOW_EMA_MINUTES_STORAGE_KEY = 'ib-react-flow-ema-minutes'
+const GEX_MIN_ABS_B_STORAGE_KEY = 'ib-react-gex-min-abs-b'
 const FLOW_MIN_HEIGHT = 140
 const FLOW_MAX_HEIGHT = 520
 
@@ -64,6 +66,49 @@ function parseFloatOrNull(value) {
 function parseIntOrDefault(value, fallback) {
   const num = Number.parseInt(String(value ?? ''), 10)
   return Number.isFinite(num) ? num : fallback
+}
+
+function coerceGexMinAbsB(value, fallback = 10) {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return fallback
+  return Math.max(0, Math.min(200, Math.round(num)))
+}
+
+function coercePositiveInt(value, fallback) {
+  const num = Number.parseInt(String(value ?? ''), 10)
+  if (!Number.isFinite(num) || num < 1) return fallback
+  return num
+}
+
+function flowResampleToSeconds(value) {
+  const s = String(value || '').trim().toLowerCase()
+  if (!s) return 60
+
+  if (s === '1m' || s === '1min' || s === '60s') return 60
+
+  const secMatch = s.match(/^(\d+)\s*s$/)
+  if (secMatch) return Math.max(1, Number(secMatch[1]))
+
+  const minMatch = s.match(/^(\d+)\s*(m|min)$/)
+  if (minMatch) return Math.max(60, Number(minMatch[1]) * 60)
+
+  return 60
+}
+
+function deriveDefaultFlowEmaMinutes(params, flowResample) {
+  const explicitMinutes = coercePositiveInt(
+    params.get('flow_ema_minutes') || params.get('flow_ema_min'),
+    NaN
+  )
+  if (Number.isFinite(explicitMinutes)) return explicitMinutes
+
+  const legacyBars = coercePositiveInt(params.get('flow_ema_len'), NaN)
+  if (Number.isFinite(legacyBars)) {
+    const stepSeconds = flowResampleToSeconds(flowResample)
+    return Math.max(1, Math.round((legacyBars * stepSeconds) / 60))
+  }
+
+  return 14
 }
 
 function dedupeAndSortBars(values) {
@@ -138,15 +183,14 @@ export default function App() {
   const tradeDate = params.get('trade_date') || new Date().toISOString().slice(0, 10)
   const interval = params.get('interval') || '1min'
   const gexEnabled = parseBool(params.get('gex_enabled'), true)
-  const gexMinAbsB = parseFloatOrNull(params.get('gex_min_abs_b'))
+  const initialGexMinAbsB = parseFloatOrNull(params.get('gex_min_abs_b'))
   const daysEitherSide = Math.max(0, parseIntOrDefault(params.get('days_either_side'), 5))
 
   const flowEnabled = parseBool(params.get('flow_enabled'), true)
   const flowSession = (params.get('flow_session') || 'FULL').toUpperCase()
   const defaultFlowResample = '1m'
   const flowResample = (params.get('flow_resample') || defaultFlowResample).toLowerCase()
-  const defaultFlowEmaLen = flowResample === '1m' || flowResample === '60s' ? 14 : 840
-  const flowEmaLen = Math.max(1, parseIntOrDefault(params.get('flow_ema_len'), defaultFlowEmaLen))
+  const defaultFlowEmaMinutes = deriveDefaultFlowEmaMinutes(params, flowResample)
   const flowHistAlpha = parseFloatOrNull(params.get('flow_hist_alpha')) ?? 0.30
 
   const effectiveDaysEitherSide = daysEitherSide
@@ -183,6 +227,34 @@ export default function App() {
     }
   })
 
+  const [flowEmaMinutes, setFlowEmaMinutes] = useState(() => {
+    try {
+      return coercePositiveInt(
+        window.localStorage.getItem(FLOW_EMA_MINUTES_STORAGE_KEY),
+        defaultFlowEmaMinutes
+      )
+    } catch (err) {
+      return defaultFlowEmaMinutes
+    }
+  })
+
+  const [gexMinAbsB, setGexMinAbsB] = useState(() => {
+    const fallback = coerceGexMinAbsB(initialGexMinAbsB, 10)
+    try {
+      return coerceGexMinAbsB(
+        window.localStorage.getItem(GEX_MIN_ABS_B_STORAGE_KEY),
+        fallback
+      )
+    } catch (err) {
+      return fallback
+    }
+  })
+
+  const flowEmaLen = useMemo(() => {
+    const stepSeconds = flowResampleToSeconds(flowResample)
+    return Math.max(1, Math.round((flowEmaMinutes * 60) / stepSeconds))
+  }, [flowEmaMinutes, flowResample])
+
   const mergedBars = useMemo(
     () => dedupeAndSortBars([...centerBars, ...extraBars]),
     [centerBars, extraBars]
@@ -205,6 +277,22 @@ export default function App() {
       // ignore
     }
   }, [flowPanelHeight])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(FLOW_EMA_MINUTES_STORAGE_KEY, String(flowEmaMinutes))
+    } catch (err) {
+      // ignore
+    }
+  }, [flowEmaMinutes])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(GEX_MIN_ABS_B_STORAGE_KEY, String(gexMinAbsB))
+    } catch (err) {
+      // ignore
+    }
+  }, [gexMinAbsB])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -451,6 +539,20 @@ export default function App() {
     setSharedLogicalRange((prev) => (rangesClose(prev, next) ? prev : next))
   }, [])
 
+  const handleFlowEmaMinutesChange = useCallback((nextValue) => {
+    setFlowEmaMinutes((prev) => {
+      const next = coercePositiveInt(nextValue, prev)
+      return next === prev ? prev : next
+    })
+  }, [])
+
+  const handleGexMinAbsBChange = useCallback((nextValue) => {
+    setGexMinAbsB((prev) => {
+      const next = coerceGexMinAbsB(nextValue, prev)
+      return next === prev ? prev : next
+    })
+  }, [])
+
   const handleLinkedCrosshairChange = useCallback((nextValue) => {
     if (!nextValue) {
       setLinkedCrosshair(null)
@@ -520,6 +622,8 @@ export default function App() {
                 initialSelectedTimes={initialSelectedTimes}
                 gexSegments={mergedGexSegments}
                 gexEnabled={Boolean(meta?.gex_enabled ?? gexEnabled)}
+                gexMinAbsB={gexMinAbsB}
+                onApplyGexMinAbsB={handleGexMinAbsBChange}
                 onVisibleLogicalRangeChange={handleSharedLogicalRangeChange}
                 onLinkedCrosshairChange={handleLinkedCrosshairChange}
               />
@@ -542,6 +646,8 @@ export default function App() {
                     error={flowError}
                     histAlpha={flowHistAlpha}
                     linkedCrosshair={linkedCrosshair}
+                    emaMinutes={flowEmaMinutes}
+                    onApplyEmaMinutes={handleFlowEmaMinutesChange}
                   />
                 </div>
               </>

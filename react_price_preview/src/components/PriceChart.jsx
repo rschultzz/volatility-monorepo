@@ -17,6 +17,12 @@ const TOOLTIP_OFFSET_X = 14
 const TOOLTIP_OFFSET_Y = 14
 const TOOLTIP_EDGE_PAD = 8
 
+function coerceGexMinAbsB(value, fallback = 10) {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return fallback
+  return Math.max(0, Math.min(200, Math.round(num)))
+}
+
 function partsForZone(epochSec, timeZone = 'America/Los_Angeles') {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,
@@ -466,6 +472,8 @@ export default function PriceChart({
   initialSelectedTimes,
   gexSegments,
   gexEnabled,
+  gexMinAbsB = 10,
+  onApplyGexMinAbsB,
   onVisibleLogicalRangeChange,
   onLinkedCrosshairChange,
 }) {
@@ -491,10 +499,20 @@ export default function PriceChart({
 
   const [selectedTimes, setSelectedTimes] = useState(normalizeTimes(initialSelectedTimes || []))
   const [sessionBands, setSessionBands] = useState([])
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [draftGexMinAbsB, setDraftGexMinAbsB] = useState(() => coerceGexMinAbsB(gexMinAbsB, 10))
+  const [settingsError, setSettingsError] = useState('')
 
   useEffect(() => {
     setSelectedTimes(normalizeTimes(initialSelectedTimes || []))
   }, [initialSelectedTimes])
+
+  useEffect(() => {
+    if (!settingsOpen) {
+      setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
+      setSettingsError('')
+    }
+  }, [gexMinAbsB, settingsOpen])
 
   useEffect(() => {
     intervalRef.current = interval
@@ -1103,6 +1121,47 @@ export default function PriceChart({
   }, [displayCandles, shiftedCandles, sessionTimeRange, centerLogicalRange, onVisibleLogicalRangeChange])
 
   useEffect(() => {
+    if (!settingsOpen) return undefined
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setSettingsOpen(false)
+        setSettingsError('')
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [settingsOpen])
+
+  function openSettings() {
+    setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
+    setSettingsError('')
+    setSettingsOpen(true)
+  }
+
+  function closeSettings() {
+    setSettingsOpen(false)
+    setSettingsError('')
+    setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
+  }
+
+  function applySettings(event) {
+    if (event) event.preventDefault()
+    const next = coerceGexMinAbsB(draftGexMinAbsB, NaN)
+    if (!Number.isFinite(next) || next < 0) {
+      setSettingsError('Choose a value from 0 to 200.')
+      return
+    }
+
+    if (typeof onApplyGexMinAbsB === 'function') {
+      onApplyGexMinAbsB(next)
+    }
+    setSettingsOpen(false)
+    setSettingsError('')
+  }
+
+  useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
 
@@ -1166,6 +1225,184 @@ export default function PriceChart({
           className="chart-stage chart-stage-compact"
           style={{ position: 'relative' }}
         >
+          <div
+            style={{
+              position: 'absolute',
+              top: '8px',
+              left: '12px',
+              zIndex: 6,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+          >
+            <button
+              type="button"
+              onClick={openSettings}
+              title="Price chart settings"
+              aria-label="Open price chart settings"
+              style={{
+                width: '24px',
+                height: '24px',
+                borderRadius: '8px',
+                border: '1px solid rgba(148, 163, 184, 0.22)',
+                background: 'rgba(15, 23, 42, 0.96)',
+                color: '#cbd5e1',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '14px',
+                lineHeight: 1,
+                padding: 0,
+              }}
+            >
+              ⚙
+            </button>
+          </div>
+
+          {settingsOpen && (
+            <div
+              onClick={closeSettings}
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(2, 6, 23, 0.58)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 1200,
+                padding: '24px',
+              }}
+            >
+              <form
+                onSubmit={applySettings}
+                onClick={(event) => event.stopPropagation()}
+                style={{
+                  width: 'min(420px, calc(100vw - 32px))',
+                  borderRadius: '16px',
+                  border: '1px solid #1f2937',
+                  background: '#0b1220',
+                  boxShadow: '0 20px 60px rgba(0, 0, 0, 0.42)',
+                  padding: '18px',
+                  color: '#e2e8f0',
+                }}
+              >
+                <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '14px' }}>
+                  Price chart settings
+                </div>
+
+                <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e1', marginBottom: '8px' }}>
+                  Min |GEX| (B)
+                </label>
+
+                <input
+                  type="range"
+                  min={0}
+                  max={200}
+                  step={1}
+                  value={draftGexMinAbsB}
+                  onChange={(event) => {
+                    setDraftGexMinAbsB(event.target.value)
+                    if (settingsError) setSettingsError('')
+                  }}
+                  style={{ width: '100%', marginBottom: '8px' }}
+                />
+
+                <div
+                  style={{
+                    position: 'relative',
+                    height: '16px',
+                    marginBottom: '8px',
+                    color: '#94a3b8',
+                    fontSize: '11px',
+                  }}
+                >
+                  {[0, 10, 25, 50, 100, 150, 200].map((mark) => {
+                    const left = `${(mark / 200) * 100}%`
+                    let transform = 'translateX(-50%)'
+                    if (mark === 0) transform = 'translateX(0)'
+                    if (mark === 200) transform = 'translateX(-100%)'
+                    return (
+                      <span
+                        key={mark}
+                        style={{
+                          position: 'absolute',
+                          left,
+                          top: 0,
+                          transform,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {mark}
+                      </span>
+                    )
+                  })}
+                </div>
+
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    minWidth: '72px',
+                    padding: '8px 12px',
+                    borderRadius: '10px',
+                    background: '#020617',
+                    border: '1px solid #334155',
+                    fontSize: '18px',
+                    fontWeight: 800,
+                    fontVariantNumeric: 'tabular-nums',
+                    marginBottom: '10px',
+                  }}
+                >
+                  {coerceGexMinAbsB(draftGexMinAbsB, 10)}
+                </div>
+
+                <div style={{ fontSize: '11px', color: '#94a3b8', lineHeight: 1.45 }}>
+                  Only plot GEX levels whose absolute net gamma is at or above this threshold, in billions.
+                </div>
+
+                {settingsError && (
+                  <div style={{ marginTop: '10px', fontSize: '12px', color: '#fca5a5' }}>
+                    {settingsError}
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '18px' }}>
+                  <button
+                    type="button"
+                    onClick={closeSettings}
+                    style={{
+                      borderRadius: '10px',
+                      border: '1px solid #334155',
+                      background: 'transparent',
+                      color: '#cbd5e1',
+                      padding: '8px 12px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    style={{
+                      borderRadius: '10px',
+                      border: '1px solid #2563eb',
+                      background: '#1d4ed8',
+                      color: 'white',
+                      padding: '8px 12px',
+                      cursor: 'pointer',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Apply
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
           {sessionBands.map((band) => (
             <div
               key={band.key}

@@ -13,6 +13,12 @@ const MIN_PANEL_HEIGHT = 140
 const POS_RGBA = (alpha) => `rgba(96,165,250,${alpha})`
 const NEG_RGBA = (alpha) => `rgba(229,231,235,${alpha})`
 
+function coercePositiveInt(value, fallback = 14) {
+  const num = Number.parseInt(String(value ?? ''), 10)
+  if (!Number.isFinite(num) || num < 1) return fallback
+  return num
+}
+
 function partsForZone(epochSec, timeZone = 'America/Los_Angeles') {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,
@@ -267,6 +273,8 @@ export default function AggressorFlowPanel({
   dataPoints,
   visibleLogicalRange,
   linkedCrosshair,
+  emaMinutes = 14,
+  onApplyEmaMinutes,
   height = 220,
   loading = false,
   error = '',
@@ -284,6 +292,9 @@ export default function AggressorFlowPanel({
 
   const [sessionBands, setSessionBands] = useState([])
   const [linkedCrosshairX, setLinkedCrosshairX] = useState(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [draftEmaMinutes, setDraftEmaMinutes] = useState(() => coercePositiveInt(emaMinutes, 14))
+  const [settingsError, setSettingsError] = useState('')
 
   const candleTimes = useMemo(() => normalizeShiftedCandleTimes(candles), [candles])
 
@@ -298,6 +309,13 @@ export default function AggressorFlowPanel({
   useEffect(() => {
     candleTimesRef.current = candleTimes
   }, [candleTimes])
+
+  useEffect(() => {
+    if (!settingsOpen) {
+      setDraftEmaMinutes(coercePositiveInt(emaMinutes, 14))
+      setSettingsError('')
+    }
+  }, [emaMinutes, settingsOpen])
 
   useEffect(() => {
     linkedCrosshairRef.current = linkedCrosshair || null
@@ -506,11 +524,175 @@ export default function AggressorFlowPanel({
     })
   }, [linkedCrosshair, candleTimes])
 
+  useEffect(() => {
+    if (!settingsOpen) return undefined
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setSettingsOpen(false)
+        setSettingsError('')
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [settingsOpen])
+
+  function openSettings() {
+    setDraftEmaMinutes(coercePositiveInt(emaMinutes, 14))
+    setSettingsError('')
+    setSettingsOpen(true)
+  }
+
+  function closeSettings() {
+    setSettingsOpen(false)
+    setSettingsError('')
+    setDraftEmaMinutes(coercePositiveInt(emaMinutes, 14))
+  }
+
+  function applySettings(event) {
+    if (event) event.preventDefault()
+    const next = coercePositiveInt(draftEmaMinutes, NaN)
+    if (!Number.isFinite(next) || next < 1) {
+      setSettingsError('Enter a whole number of minutes greater than 0.')
+      return
+    }
+
+    if (typeof onApplyEmaMinutes === 'function') {
+      onApplyEmaMinutes(next)
+    }
+    setSettingsOpen(false)
+    setSettingsError('')
+  }
+
   return (
-    <div className="flow-shell" style={{ height: `${height}px` }}>
-      <div className="flow-panel-header">
+    <div className="flow-shell" style={{ height: `${height}px`, position: 'relative' }}>
+      <div
+        className="flow-panel-header"
+        style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'flex-start' }}
+      >
+        <button
+          type="button"
+          onClick={openSettings}
+          title="Aggressor Flow settings"
+          aria-label="Open Aggressor Flow settings"
+          style={{
+            width: '24px',
+            height: '24px',
+            borderRadius: '8px',
+            border: '1px solid rgba(148, 163, 184, 0.22)',
+            background: 'rgba(15, 23, 42, 0.96)',
+            color: '#cbd5e1',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '14px',
+            lineHeight: 1,
+            padding: 0,
+          }}
+        >
+          ⚙
+        </button>
         <div className="flow-panel-title">Aggressor Flow</div>
       </div>
+      {settingsOpen && (
+        <div
+          onClick={closeSettings}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(2, 6, 23, 0.58)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1200,
+            padding: '24px',
+          }}
+        >
+          <form
+            onSubmit={applySettings}
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: 'min(360px, calc(100vw - 32px))',
+              borderRadius: '16px',
+              border: '1px solid #1f2937',
+              background: '#0b1220',
+              boxShadow: '0 20px 60px rgba(0, 0, 0, 0.42)',
+              padding: '18px',
+              color: '#e2e8f0',
+            }}
+          >
+            <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '14px' }}>
+              Aggressor Flow settings
+            </div>
+
+            <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e1', marginBottom: '6px' }}>
+              EMA lookback (minutes)
+            </label>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={draftEmaMinutes}
+              onChange={(event) => {
+                setDraftEmaMinutes(event.target.value)
+                if (settingsError) setSettingsError('')
+              }}
+              style={{
+                width: '100%',
+                background: '#020617',
+                color: '#e2e8f0',
+                border: '1px solid #334155',
+                borderRadius: '10px',
+                padding: '10px 12px',
+                fontSize: '14px',
+                marginBottom: '8px',
+              }}
+            />
+            <div style={{ fontSize: '11px', color: '#94a3b8', lineHeight: 1.45 }}>
+              The flow panel is using minute buckets, so this value controls the EMA lookback in minutes.
+            </div>
+
+            {settingsError && (
+              <div style={{ marginTop: '10px', fontSize: '12px', color: '#fca5a5' }}>
+                {settingsError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '18px' }}>
+              <button
+                type="button"
+                onClick={closeSettings}
+                style={{
+                  borderRadius: '10px',
+                  border: '1px solid #334155',
+                  background: 'transparent',
+                  color: '#cbd5e1',
+                  padding: '8px 12px',
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                style={{
+                  borderRadius: '10px',
+                  border: '1px solid #2563eb',
+                  background: '#1d4ed8',
+                  color: 'white',
+                  padding: '8px 12px',
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                }}
+              >
+                Apply
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
       <div ref={stageRef} className="flow-stage">
         <div ref={hostRef} className="flow-host" />
         {sessionBands.map((band) => (
