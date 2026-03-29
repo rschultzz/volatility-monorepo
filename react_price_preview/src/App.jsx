@@ -515,6 +515,7 @@ export default function App() {
               )}
               <PriceChart
                 candles={mergedBars}
+                tradeDate={tradeDate}
                 interval={interval}
                 initialSelectedTimes={initialSelectedTimes}
                 gexSegments={mergedGexSegments}
