@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
 
-const BOTTOM_PANEL_HEIGHT = 220
+const FLOW_HEIGHT_STORAGE_KEY = 'ib-react-flow-panel-height'
+const FLOW_MIN_HEIGHT = 140
+const FLOW_MAX_HEIGHT = 520
 
 function cleanBaseUrl(value) {
   const s = String(value || '').trim()
@@ -26,7 +28,7 @@ function inferApiBase() {
       return cleanBaseUrl(new URL(document.referrer).origin)
     }
   } catch (err) {
-    // ignore and continue
+    // ignore
   }
 
   try {
@@ -34,7 +36,7 @@ function inferApiBase() {
       return cleanBaseUrl(window.location.origin)
     }
   } catch (err) {
-    // ignore and continue
+    // ignore
   }
 
   return 'http://127.0.0.1:8060'
@@ -88,6 +90,25 @@ function dedupeSegments(values) {
   return Array.from(byKey.values())
 }
 
+function clampFlowHeight(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 220
+  return Math.max(FLOW_MIN_HEIGHT, Math.min(FLOW_MAX_HEIGHT, Math.round(n)))
+}
+
+function normalizeTimeRange(range) {
+  if (!range) return null
+  const from = Number(range.from)
+  const to = Number(range.to)
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null
+  return { from, to }
+}
+
+function rangesClose(a, b, eps = 1) {
+  if (!a || !b) return false
+  return Math.abs(Number(a.from) - Number(b.from)) <= eps && Math.abs(Number(a.to) - Number(b.to)) <= eps
+}
+
 export default function App() {
   const params = useMemo(() => new URLSearchParams(window.location.search), [])
   const tradeDate = params.get('trade_date') || new Date().toISOString().slice(0, 10)
@@ -102,8 +123,12 @@ export default function App() {
   const flowEmaLen = Math.max(1, parseIntOrDefault(params.get('flow_ema_len'), 840))
   const flowHistAlpha = parseFloatOrNull(params.get('flow_hist_alpha')) ?? 0.30
 
+  const effectiveDaysEitherSide = flowEnabled ? 0 : daysEitherSide
+
   const apiBase = useMemo(() => inferApiBase(), [])
   const initialSelectedTimes = useMemo(() => parseSelectedTimes(params), [params])
+
+  const dragStateRef = useRef(null)
 
   const [centerBars, setCenterBars] = useState([])
   const [extraBars, setExtraBars] = useState([])
@@ -119,6 +144,16 @@ export default function App() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState('')
 
+  const [sharedTimeRange, setSharedTimeRange] = useState(null)
+
+  const [flowPanelHeight, setFlowPanelHeight] = useState(() => {
+    try {
+      return clampFlowHeight(window.localStorage.getItem(FLOW_HEIGHT_STORAGE_KEY) || 220)
+    } catch (err) {
+      return 220
+    }
+  })
+
   const mergedBars = useMemo(
     () => dedupeAndSortBars([...centerBars, ...extraBars]),
     [centerBars, extraBars]
@@ -128,6 +163,14 @@ export default function App() {
     () => dedupeSegments([...centerGexSegments, ...extraGexSegments]),
     [centerGexSegments, extraGexSegments]
   )
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(FLOW_HEIGHT_STORAGE_KEY, String(flowPanelHeight))
+    } catch (err) {
+      // ignore
+    }
+  }, [flowPanelHeight])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -150,6 +193,7 @@ export default function App() {
         setCenterGexSegments([])
         setExtraGexSegments([])
         setMeta(null)
+        setSharedTimeRange(null)
 
         const response = await fetch(url.toString(), {
           method: 'GET',
@@ -192,7 +236,7 @@ export default function App() {
   }, [apiBase, tradeDate, interval, gexEnabled, gexMinAbsB])
 
   useEffect(() => {
-    if (loadingCenter || error || daysEitherSide <= 0) return
+    if (loadingCenter || error || effectiveDaysEitherSide <= 0) return
 
     const controller = new AbortController()
     const url = new URL(`${apiBase}/api/ironbeam/bars`)
@@ -200,7 +244,7 @@ export default function App() {
     url.searchParams.set('interval', interval)
     url.searchParams.set('gex_enabled', gexEnabled ? '1' : '0')
     url.searchParams.set('phase', 'multi')
-    url.searchParams.set('days_either_side', String(daysEitherSide))
+    url.searchParams.set('days_either_side', String(effectiveDaysEitherSide))
     if (gexMinAbsB != null) {
       url.searchParams.set('gex_min_abs_b', String(gexMinAbsB))
     }
@@ -241,7 +285,7 @@ export default function App() {
 
     loadMore()
     return () => controller.abort()
-  }, [apiBase, tradeDate, interval, daysEitherSide, loadingCenter, error, gexEnabled, gexMinAbsB])
+  }, [apiBase, tradeDate, interval, effectiveDaysEitherSide, loadingCenter, error, gexEnabled, gexMinAbsB])
 
   useEffect(() => {
     if (!flowEnabled || loadingCenter || error) {
@@ -298,6 +342,45 @@ export default function App() {
     return () => controller.abort()
   }, [apiBase, tradeDate, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error])
 
+  useEffect(() => {
+    const handleMove = (event) => {
+      const state = dragStateRef.current
+      if (!state) return
+      const delta = state.startY - event.clientY
+      setFlowPanelHeight(clampFlowHeight(state.startHeight + delta))
+      document.body.classList.add('resizing-panels')
+    }
+
+    const handleUp = () => {
+      dragStateRef.current = null
+      document.body.classList.remove('resizing-panels')
+    }
+
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+      document.body.classList.remove('resizing-panels')
+    }
+  }, [])
+
+  function beginResize(event) {
+    dragStateRef.current = {
+      startY: event.clientY,
+      startHeight: flowPanelHeight,
+    }
+    document.body.classList.add('resizing-panels')
+    event.preventDefault()
+  }
+
+  const handleSharedTimeRangeChange = useCallback((nextRange) => {
+    const next = normalizeTimeRange(nextRange)
+    if (!next) return
+    setSharedTimeRange((prev) => (rangesClose(prev, next) ? prev : next))
+  }, [])
+
   return (
     <div className="app-shell compact-shell">
       <div className="card compact-card">
@@ -336,19 +419,28 @@ export default function App() {
                 initialSelectedTimes={initialSelectedTimes}
                 gexSegments={mergedGexSegments}
                 gexEnabled={Boolean(meta?.gex_enabled ?? gexEnabled)}
+                onVisibleTimeRangeChange={handleSharedTimeRangeChange}
               />
             </div>
 
             {flowEnabled && (
-              <div className="react-bottom-pane" style={{ height: `${BOTTOM_PANEL_HEIGHT}px` }}>
-                <AggressorFlowPanel
-                  dataPoints={flowPoints}
-                  height={BOTTOM_PANEL_HEIGHT}
-                  loading={flowLoading}
-                  error={flowError}
-                  histAlpha={flowHistAlpha}
+              <>
+                <div
+                  className="panel-splitter"
+                  onMouseDown={beginResize}
+                  title="Drag to resize panels"
                 />
-              </div>
+                <div className="react-bottom-pane" style={{ height: `${flowPanelHeight}px` }}>
+                  <AggressorFlowPanel
+                    dataPoints={flowPoints}
+                    visibleTimeRange={sharedTimeRange}
+                    height={flowPanelHeight}
+                    loading={flowLoading}
+                    error={flowError}
+                    histAlpha={flowHistAlpha}
+                  />
+                </div>
+              </>
             )}
           </div>
         )}

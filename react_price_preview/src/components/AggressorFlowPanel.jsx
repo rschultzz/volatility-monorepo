@@ -9,6 +9,7 @@ import {
 
 const BG_COLOR = '#1f2937'
 const ZERO_COLOR = 'rgba(255,255,255,0.20)'
+const ANCHOR_COLOR = 'rgba(0,0,0,0)'
 const MIN_PANEL_HEIGHT = 140
 
 function partsForZone(epochSec, timeZone = 'America/Los_Angeles') {
@@ -65,7 +66,10 @@ function normalizeRange(range) {
 
 function rangesClose(a, b, eps = 1) {
   if (!a || !b) return false
-  return Math.abs(Number(a.from) - Number(b.from)) <= eps && Math.abs(Number(a.to) - Number(b.to)) <= eps
+  return (
+    Math.abs(Number(a.from) - Number(b.from)) <= eps &&
+    Math.abs(Number(a.to) - Number(b.to)) <= eps
+  )
 }
 
 function normalizePoints(points, histAlpha) {
@@ -78,9 +82,18 @@ function normalizePoints(points, histAlpha) {
       const rawTime = Number(pt?.time)
       const value = Number(pt?.value)
       if (!Number.isFinite(rawTime) || !Number.isFinite(value)) return null
-      const time = utcEpochShowingZoneTime(rawTime, 'America/Los_Angeles')
-      const color = value >= 0 ? `rgba(96,165,250,${alpha})` : `rgba(229,231,235,${alpha})`
-      return { time, value, color }
+
+      const shiftedTime = utcEpochShowingZoneTime(rawTime, 'America/Los_Angeles')
+      const color =
+        value >= 0
+          ? `rgba(96,165,250,${alpha})`
+          : `rgba(229,231,235,${alpha})`
+
+      return {
+        time: shiftedTime,
+        value,
+        color,
+      }
     })
     .filter(Boolean)
 }
@@ -97,6 +110,7 @@ export default function AggressorFlowPanel({
   const chartRef = useRef(null)
   const histSeriesRef = useRef(null)
   const zeroSeriesRef = useRef(null)
+  const anchorSeriesRef = useRef(null)
   const lastAppliedRangeRef = useRef(null)
 
   const normalizedPoints = useMemo(
@@ -150,15 +164,15 @@ export default function AggressorFlowPanel({
         },
       },
       handleScroll: {
-        mouseWheel: true,
-        pressedMouseMove: true,
-        horzTouchDrag: true,
+        mouseWheel: false,
+        pressedMouseMove: false,
+        horzTouchDrag: false,
         vertTouchDrag: false,
       },
       handleScale: {
         axisPressedMouseMove: false,
-        mouseWheel: true,
-        pinch: true,
+        mouseWheel: false,
+        pinch: false,
       },
     })
 
@@ -177,9 +191,19 @@ export default function AggressorFlowPanel({
       pointMarkersVisible: false,
     })
 
+    const anchorSeries = chart.addSeries(LineSeries, {
+      color: ANCHOR_COLOR,
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+      pointMarkersVisible: false,
+    })
+
     chartRef.current = chart
     histSeriesRef.current = histSeries
     zeroSeriesRef.current = zeroSeries
+    anchorSeriesRef.current = anchorSeries
 
     const handleResize = () => {
       chart.applyOptions({
@@ -196,31 +220,48 @@ export default function AggressorFlowPanel({
       chartRef.current = null
       histSeriesRef.current = null
       zeroSeriesRef.current = null
+      anchorSeriesRef.current = null
     }
   }, [])
 
   useEffect(() => {
-    if (!histSeriesRef.current || !zeroSeriesRef.current) return
+    if (!histSeriesRef.current || !zeroSeriesRef.current || !anchorSeriesRef.current) return
 
     histSeriesRef.current.setData(normalizedPoints)
 
-    if (hasRenderablePoints) {
+    const nextVisible = normalizeRange(visibleTimeRange)
+
+    if (nextVisible) {
       zeroSeriesRef.current.setData([
+        { time: nextVisible.from, value: 0 },
+        { time: nextVisible.to, value: 0 },
+      ])
+      anchorSeriesRef.current.setData([
+        { time: nextVisible.from, value: 0 },
+        { time: nextVisible.to, value: 0 },
+      ])
+    } else if (hasRenderablePoints) {
+      zeroSeriesRef.current.setData([
+        { time: normalizedPoints[0].time, value: 0 },
+        { time: normalizedPoints[normalizedPoints.length - 1].time, value: 0 },
+      ])
+      anchorSeriesRef.current.setData([
         { time: normalizedPoints[0].time, value: 0 },
         { time: normalizedPoints[normalizedPoints.length - 1].time, value: 0 },
       ])
     } else {
       zeroSeriesRef.current.setData([])
+      anchorSeriesRef.current.setData([])
     }
 
-    if (chartRef.current && hasRenderablePoints && !visibleTimeRange) {
+    if (chartRef.current && hasRenderablePoints && !nextVisible) {
       chartRef.current.timeScale().fitContent()
     }
   }, [normalizedPoints, visibleTimeRange, hasRenderablePoints])
 
   useEffect(() => {
     const chart = chartRef.current
-    if (!chart || !hasRenderablePoints) return
+    if (!chart) return
 
     const next = normalizeRange(visibleTimeRange)
     if (!next) return
@@ -228,13 +269,15 @@ export default function AggressorFlowPanel({
     const current = normalizeRange(chart.timeScale().getVisibleRange?.())
     if (rangesClose(current, next) || rangesClose(lastAppliedRangeRef.current, next)) return
 
-    try {
-      chart.timeScale().setVisibleRange(next)
-      lastAppliedRangeRef.current = next
-    } catch (err) {
-      // ignore sync errors
-    }
-  }, [visibleTimeRange, hasRenderablePoints])
+    requestAnimationFrame(() => {
+      try {
+        chart.timeScale().setVisibleRange(next)
+        lastAppliedRangeRef.current = next
+      } catch (err) {
+        // ignore sync errors
+      }
+    })
+  }, [visibleTimeRange])
 
   return (
     <div className="flow-shell" style={{ height: `${height}px` }}>

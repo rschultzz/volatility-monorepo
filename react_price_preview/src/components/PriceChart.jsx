@@ -11,7 +11,6 @@ const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
 const TIME_AXIS_HEIGHT = 24
 const MIN_PRICE_RANGE = 0.25
-const MIN_CHART_HEIGHT = 180
 
 const TOOLTIP_OFFSET_X = 14
 const TOOLTIP_OFFSET_Y = 14
@@ -226,6 +225,19 @@ function clampVisibleRange(range) {
   return { from, to }
 }
 
+function normalizeTimeRange(range) {
+  if (!range) return null
+  const from = Number(range.from)
+  const to = Number(range.to)
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null
+  return { from, to }
+}
+
+function rangesClose(a, b, eps = 1) {
+  if (!a || !b) return false
+  return Math.abs(Number(a.from) - Number(b.from)) <= eps && Math.abs(Number(a.to) - Number(b.to)) <= eps
+}
+
 function pointerInfo(evt, container) {
   if (!evt || !container) return null
   const rect = container.getBoundingClientRect()
@@ -340,7 +352,6 @@ function computeCenterLogicalRange(candles) {
 
   let firstIdx = -1
   let lastIdx = -1
-
   for (let i = 0; i < candles.length; i += 1) {
     if (candles[i]?.is_center === true) {
       if (firstIdx === -1) firstIdx = i
@@ -348,26 +359,16 @@ function computeCenterLogicalRange(candles) {
     }
   }
 
-  if (firstIdx === -1 || lastIdx === -1) return null
+  if (firstIdx === -1 || lastIdx === -1) {
+    firstIdx = 0
+    lastIdx = candles.length - 1
+  }
 
-  const from = firstIdx - 0.5
-  const to = lastIdx + 0.5
-  const key = `${firstIdx}:${lastIdx}:${candles.length}`
-
-  return { from, to, key }
-}
-
-function normalizeTimeRange(range) {
-  if (!range) return null
-  const from = Number(range.from)
-  const to = Number(range.to)
-  if (!Number.isFinite(from) || !Number.isFinite(to)) return null
-  return { from, to }
-}
-
-function rangesClose(a, b, eps = 1) {
-  if (!a || !b) return false
-  return Math.abs(Number(a.from) - Number(b.from)) <= eps && Math.abs(Number(a.to) - Number(b.to)) <= eps
+  return {
+    from: firstIdx - 0.5,
+    to: lastIdx + 0.5,
+    key: `${firstIdx}:${lastIdx}:${candles.length}`,
+  }
 }
 
 export default function PriceChart({
@@ -376,7 +377,6 @@ export default function PriceChart({
   initialSelectedTimes,
   gexSegments,
   gexEnabled,
-  visibleTimeRange,
   onVisibleTimeRangeChange,
 }) {
   const stageRef = useRef(null)
@@ -390,7 +390,7 @@ export default function PriceChart({
   const hasUserInteractedRef = useRef(false)
   const currentCenterKeyRef = useRef('')
   const appliedInitialRangeKeyRef = useRef('')
-  const lastAppliedExternalTimeRangeRef = useRef(null)
+  const lastReportedRangeRef = useRef(null)
 
   const tooltipRef = useRef(null)
   const tooltipTimeRef = useRef(null)
@@ -434,6 +434,7 @@ export default function PriceChart({
       currentCenterKeyRef.current = nextKey
       appliedInitialRangeKeyRef.current = ''
       hasUserInteractedRef.current = false
+      lastReportedRangeRef.current = null
     }
   }, [centerLogicalRange])
 
@@ -491,7 +492,7 @@ export default function PriceChart({
 
     const chart = createChart(container, {
       width: container.clientWidth || 900,
-      height: Math.max(container.clientHeight || MIN_CHART_HEIGHT, MIN_CHART_HEIGHT),
+      height: Math.max(container.clientHeight || 720, 720),
       layout: {
         background: { type: ColorType.Solid, color: ETH_BG_COLOR },
         textColor: '#cbd5e1',
@@ -606,6 +607,15 @@ export default function PriceChart({
       setSessionBands(next)
     }
 
+    const reportVisibleRange = (range) => {
+      if (typeof onVisibleTimeRangeChange !== 'function') return
+      const next = normalizeTimeRange(range)
+      if (!next) return
+      if (rangesClose(lastReportedRangeRef.current, next)) return
+      lastReportedRangeRef.current = next
+      onVisibleTimeRangeChange(next)
+    }
+
     const updateFloatingTooltip = (param) => {
       if (!param?.point || !stageRef.current || !seriesRef.current || !chartRef.current) {
         hideTooltip()
@@ -662,10 +672,14 @@ export default function PriceChart({
     const handleResize = () => {
       chart.applyOptions({
         width: container.clientWidth || 900,
-        height: Math.max(container.clientHeight || MIN_CHART_HEIGHT, MIN_CHART_HEIGHT),
+        height: Math.max(container.clientHeight || 720, 720),
       })
       hideTooltip()
       requestAnimationFrame(updateBand)
+      requestAnimationFrame(() => {
+        const vr = normalizeTimeRange(chart.timeScale().getVisibleRange?.())
+        reportVisibleRange(vr)
+      })
     }
 
     const handleClick = (param) => {
@@ -686,10 +700,7 @@ export default function PriceChart({
 
     const handleVisibleRange = (range) => {
       requestAnimationFrame(updateBand)
-      const next = normalizeTimeRange(range || chart.timeScale().getVisibleRange?.())
-      if (next && typeof onVisibleTimeRangeChange === 'function') {
-        onVisibleTimeRangeChange(next)
-      }
+      reportVisibleRange(range)
     }
 
     const handleCrosshairMove = (param) => {
@@ -797,32 +808,28 @@ export default function PriceChart({
             to: centerLogicalRange.to,
           })
           appliedInitialRangeKeyRef.current = centerLogicalRange.key
+
+          const vr = normalizeTimeRange(chartRef.current.timeScale().getVisibleRange?.())
+          if (vr && typeof onVisibleTimeRangeChange === 'function') {
+            if (!rangesClose(lastReportedRangeRef.current, vr)) {
+              lastReportedRangeRef.current = vr
+              onVisibleTimeRangeChange(vr)
+            }
+          }
         }
       } else if (!centerLogicalRange && !hasUserInteractedRef.current) {
         chartRef.current.timeScale().fitContent()
+
+        const vr = normalizeTimeRange(chartRef.current.timeScale().getVisibleRange?.())
+        if (vr && typeof onVisibleTimeRangeChange === 'function') {
+          if (!rangesClose(lastReportedRangeRef.current, vr)) {
+            lastReportedRangeRef.current = vr
+            onVisibleTimeRangeChange(vr)
+          }
+        }
       }
     })
-  }, [displayCandles, shiftedCandles, centerLogicalRange])
-
-  useEffect(() => {
-    const chart = chartRef.current
-    if (!chart) return
-
-    const next = normalizeTimeRange(visibleTimeRange)
-    if (!next) return
-
-    const current = normalizeTimeRange(chart.timeScale().getVisibleRange?.())
-    if (rangesClose(current, next) || rangesClose(lastAppliedExternalTimeRangeRef.current, next)) {
-      return
-    }
-
-    try {
-      chart.timeScale().setVisibleRange(next)
-      lastAppliedExternalTimeRangeRef.current = next
-    } catch (err) {
-      // ignore sync errors
-    }
-  }, [visibleTimeRange])
+  }, [displayCandles, shiftedCandles, centerLogicalRange, onVisibleTimeRangeChange])
 
   useEffect(() => {
     const chart = chartRef.current
