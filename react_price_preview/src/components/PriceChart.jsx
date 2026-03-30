@@ -17,6 +17,11 @@ const TOOLTIP_OFFSET_X = 14
 const TOOLTIP_OFFSET_Y = 14
 const TOOLTIP_EDGE_PAD = 8
 
+const LIVE_OVERLAY_UP_BORDER = '#60a5fa'
+const LIVE_OVERLAY_DOWN_BORDER = '#e5e7eb'
+const LIVE_OVERLAY_UP_FILL = 'rgba(96,165,250,0.18)'
+const LIVE_OVERLAY_DOWN_FILL = 'rgba(229,231,235,0.18)'
+
 function coerceGexMinAbsB(value, fallback = 10) {
   const num = Number(value)
   if (!Number.isFinite(num)) return fallback
@@ -455,6 +460,15 @@ function shiftLogicalRange(range, delta) {
   }
 }
 
+function clampLogicalToData(logical, candles) {
+  const value = Number(logical)
+  if (!Number.isFinite(value) || !Array.isArray(candles) || !candles.length) return null
+  const lastIndex = candles.length - 1
+  if (value < 0) return 0
+  if (value > lastIndex) return lastIndex
+  return value
+}
+
 function normalizeGexSegments(value) {
   if (!Array.isArray(value)) return []
   const out = []
@@ -553,6 +567,7 @@ function computeCenterLogicalRange(candles, sessionTimeRange) {
 
 export default function PriceChart({
   candles,
+  liveTradeCandles,
   tradeDate,
   interval,
   initialSelectedTimes,
@@ -568,6 +583,7 @@ export default function PriceChart({
   const hostRef = useRef(null)
   const chartRef = useRef(null)
   const seriesRef = useRef(null)
+  const liveTradeSeriesRef = useRef(null)
   const gexSeriesRefs = useRef([])
   const intervalRef = useRef(interval)
   const shiftedCandlesRef = useRef([])
@@ -622,6 +638,13 @@ export default function PriceChart({
       time: utcEpochShowingZoneTime(Number(bar.time), 'America/Los_Angeles'),
     }))
   }, [candles])
+
+  const shiftedLiveTradeCandles = useMemo(() => {
+    return (Array.isArray(liveTradeCandles) ? liveTradeCandles : []).map((bar) => ({
+      ...bar,
+      time: utcEpochShowingZoneTime(Number(bar.time), 'America/Los_Angeles'),
+    }))
+  }, [liveTradeCandles])
 
   const normalizedGexSegments = useMemo(
     () => normalizeGexSegments(gexSegments),
@@ -771,8 +794,21 @@ export default function PriceChart({
       lastValueVisible: true,
     })
 
+    const liveTradeSeries = chart.addSeries(CandlestickSeries, {
+      upColor: LIVE_OVERLAY_UP_FILL,
+      downColor: LIVE_OVERLAY_DOWN_FILL,
+      wickUpColor: LIVE_OVERLAY_UP_BORDER,
+      wickDownColor: LIVE_OVERLAY_DOWN_BORDER,
+      borderUpColor: LIVE_OVERLAY_UP_BORDER,
+      borderDownColor: LIVE_OVERLAY_DOWN_BORDER,
+      borderVisible: true,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    })
+
     chartRef.current = chart
     seriesRef.current = candleSeries
+    liveTradeSeriesRef.current = liveTradeSeries
 
     const setManualPriceScale = () => {
       try {
@@ -900,13 +936,14 @@ export default function PriceChart({
         logical = chartRef.current.timeScale().coordinateToLogical(x)
       }
 
+      const clampedLogical = clampLogicalToData(logical, shiftedCandlesRef.current)
       const shiftedEpoch = interpolateShiftedEpoch(
-        logical,
+        clampedLogical,
         shiftedCandlesRef.current,
         intervalRef.current
       )
 
-      if (!Number.isFinite(price) || !Number.isFinite(shiftedEpoch)) {
+      if (!Number.isFinite(price) || !Number.isFinite(shiftedEpoch) || !Number.isFinite(clampedLogical)) {
         hideTooltip()
         reportLinkedCrosshair(null)
         return
@@ -920,7 +957,7 @@ export default function PriceChart({
 
       const timeText = formatShiftedTimestamp(shiftedEpoch)
       showTooltipAtPoint(x, y, priceText, timeText)
-      reportLinkedCrosshair({ logical, shiftedTime: shiftedEpoch })
+      reportLinkedCrosshair({ logical: clampedLogical, shiftedTime: shiftedEpoch })
     }
 
     const handleResize = () => {
@@ -1062,6 +1099,7 @@ export default function PriceChart({
       chart.remove()
       chartRef.current = null
       seriesRef.current = null
+      liveTradeSeriesRef.current = null
       gexSeriesRefs.current = []
       dragRef.current.active = false
       reportLinkedCrosshair(null)
@@ -1289,6 +1327,23 @@ export default function PriceChart({
     setSettingsOpen(false)
     setSettingsError('')
   }
+
+  useEffect(() => {
+    if (!liveTradeSeriesRef.current || !chartRef.current) return
+
+    liveTradeSeriesRef.current.setData(shiftedLiveTradeCandles)
+
+    requestAnimationFrame(() => {
+      if (!chartRef.current) return
+      setSessionBands(
+        computeSessionBands(
+          chartRef.current,
+          shiftedCandlesRef.current,
+          stageRef.current?.clientWidth || 0
+        )
+      )
+    })
+  }, [shiftedLiveTradeCandles])
 
   useEffect(() => {
     const chart = chartRef.current

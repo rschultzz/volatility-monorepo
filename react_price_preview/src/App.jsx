@@ -337,6 +337,19 @@ function barsPayloadSignature(payload) {
   ].join('|')
 }
 
+function overlayBarsSignature(bars) {
+  const list = Array.isArray(bars) ? bars : []
+  const last = list.length ? list[list.length - 1] : null
+  return [
+    list.length,
+    last?.time ?? '',
+    last?.open ?? '',
+    last?.high ?? '',
+    last?.low ?? '',
+    last?.close ?? '',
+  ].join('|')
+}
+
 function flowPointsSignature(points) {
   const list = Array.isArray(points) ? points : []
   const last = list.length ? list[list.length - 1] : null
@@ -389,6 +402,7 @@ export default function App() {
   const [centerLoadedDates, setCenterLoadedDates] = useState([])
   const [extraLoadedDates, setExtraLoadedDates] = useState([])
   const [meta, setMeta] = useState(null)
+  const [liveTradeBars, setLiveTradeBars] = useState([])
 
   const [flowPoints, setFlowPoints] = useState([])
   const [flowLoading, setFlowLoading] = useState(false)
@@ -434,7 +448,14 @@ export default function App() {
 
   const [liveSessionKey, setLiveSessionKey] = useState(() => currentSessionTradeDateKey())
 
+  const selectedSessionTradeDateKey = useMemo(() => {
+    const effective = normalizeTradeDateKey(meta?.effective_trade_date)
+    if (effective) return effective
+    return normalizeTradeDateKey(tradeDate)
+  }, [meta, tradeDate])
+
   const lastLiveBarsSignatureRef = useRef('')
+  const lastLiveOverlaySignatureRef = useRef('')
   const lastLiveFlowSignatureRef = useRef('')
 
   const flowEmaLen = useMemo(() => {
@@ -455,13 +476,18 @@ export default function App() {
   }, [])
 
   const isLiveTradeDate = useMemo(() => {
-    const selected = normalizeTradeDateKey(tradeDate)
+    const selected = normalizeTradeDateKey(selectedSessionTradeDateKey)
     return Boolean(selected) && selected === normalizeTradeDateKey(liveSessionKey)
-  }, [tradeDate, liveSessionKey])
+  }, [selectedSessionTradeDateKey, liveSessionKey])
 
   const mergedBars = useMemo(
     () => dedupeAndSortBars([...centerBars, ...extraBars]),
     [centerBars, extraBars]
+  )
+
+  const mergedBarsWithLive = useMemo(
+    () => dedupeAndSortBars([...centerBars, ...extraBars, ...liveTradeBars]),
+    [centerBars, extraBars, liveTradeBars]
   )
 
   const mergedGexSegments = useMemo(
@@ -531,8 +557,10 @@ export default function App() {
         setCenterLoadedDates([])
         setExtraLoadedDates([])
         setMeta(null)
+        setLiveTradeBars([])
         setSharedLogicalRange(null)
         lastLiveBarsSignatureRef.current = ''
+        lastLiveOverlaySignatureRef.current = ''
         lastLiveFlowSignatureRef.current = ''
 
         const response = await fetch(url.toString(), {
@@ -574,7 +602,9 @@ export default function App() {
         setCenterLoadedDates([])
         setExtraLoadedDates([])
         setMeta(null)
+        setLiveTradeBars([])
         lastLiveBarsSignatureRef.current = ''
+        lastLiveOverlaySignatureRef.current = ''
         lastLiveFlowSignatureRef.current = ''
         setError(err?.message || `Could not load bars from ${url.toString()}`)
       } finally {
@@ -718,6 +748,13 @@ export default function App() {
     return () => controller.abort()
   }, [apiBase, tradeDate, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error, loadedFlowDates])
 
+
+  useEffect(() => {
+    if (isLiveTradeDate) return
+    setLiveTradeBars([])
+    lastLiveOverlaySignatureRef.current = ''
+  }, [isLiveTradeDate, selectedSessionTradeDateKey])
+
   useEffect(() => {
     if (!isLiveTradeDate || loadingCenter || error) return undefined
 
@@ -733,7 +770,7 @@ export default function App() {
 
       try {
         const url = new URL(`${apiBase}/api/ironbeam/bars`)
-        url.searchParams.set('trade_date', tradeDate)
+        url.searchParams.set('trade_date', selectedSessionTradeDateKey || tradeDate)
         url.searchParams.set('interval', interval)
         url.searchParams.set('gex_enabled', gexEnabled ? '1' : '0')
         url.searchParams.set('phase', 'center')
@@ -802,7 +839,77 @@ export default function App() {
         activeController.abort()
       }
     }
-  }, [apiBase, tradeDate, interval, gexEnabled, gexMinAbsB, loadingCenter, error, isLiveTradeDate])
+  }, [apiBase, tradeDate, selectedSessionTradeDateKey, interval, gexEnabled, gexMinAbsB, loadingCenter, error, isLiveTradeDate])
+
+  useEffect(() => {
+    if (!isLiveTradeDate || loadingCenter || error) return undefined
+
+    let disposed = false
+    let inFlight = false
+    let activeController = null
+
+    const tick = async () => {
+      if (disposed || inFlight) return
+      inFlight = true
+      const controller = new AbortController()
+      activeController = controller
+
+      try {
+        const url = new URL(`${apiBase}/api/ironbeam/live-trades-overlay`)
+        url.searchParams.set('trade_date', selectedSessionTradeDateKey || tradeDate)
+        url.searchParams.set('interval', interval)
+
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          credentials: 'include',
+          signal: controller.signal,
+          cache: 'no-store',
+        })
+
+        if (response.status === 401) {
+          throw new Error(
+            `Unauthorized from Dash backend at ${apiBase}. Open the Dash app first and make sure you are logged in there.`
+          )
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            `Live overlay request failed: ${response.status} ${response.statusText || ''}`.trim()
+          )
+        }
+
+        const payload = await response.json()
+        if (disposed) return
+
+        const nextBars = Array.isArray(payload.bars) ? payload.bars : []
+        const nextSignature = overlayBarsSignature(nextBars)
+        if (nextSignature !== lastLiveOverlaySignatureRef.current) {
+          lastLiveOverlaySignatureRef.current = nextSignature
+          setLiveTradeBars(nextBars)
+        }
+      } catch (err) {
+        if (err?.name !== 'AbortError') {
+          console.error('React preview live trades overlay refresh failed', err)
+        }
+      } finally {
+        if (activeController === controller) {
+          activeController = null
+        }
+        inFlight = false
+      }
+    }
+
+    tick()
+    const timer = window.setInterval(tick, LIVE_POLL_MS)
+
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+      if (activeController) {
+        activeController.abort()
+      }
+    }
+  }, [apiBase, tradeDate, selectedSessionTradeDateKey, interval, loadingCenter, error, isLiveTradeDate])
 
   useEffect(() => {
     if (!isLiveTradeDate || !flowEnabled || loadingCenter || error) return undefined
@@ -819,7 +926,7 @@ export default function App() {
 
       try {
         const url = new URL(`${apiBase}/api/ironbeam/flow`)
-        url.searchParams.set('trade_date', tradeDate)
+        url.searchParams.set('trade_date', selectedSessionTradeDateKey || tradeDate)
         url.searchParams.set('session', flowSession)
         url.searchParams.set('resample', flowResample)
         url.searchParams.set('ema_len', String(flowEmaLen))
@@ -850,7 +957,7 @@ export default function App() {
         const nextSignature = flowPointsSignature(nextPoints)
         if (nextSignature !== lastLiveFlowSignatureRef.current) {
           lastLiveFlowSignatureRef.current = nextSignature
-          setFlowPoints((prev) => replaceFlowPointsForTradeDate(prev, nextPoints, tradeDate))
+          setFlowPoints((prev) => replaceFlowPointsForTradeDate(prev, nextPoints, selectedSessionTradeDateKey || tradeDate))
         }
       } catch (err) {
         if (err?.name !== 'AbortError') {
@@ -874,7 +981,7 @@ export default function App() {
         activeController.abort()
       }
     }
-  }, [apiBase, tradeDate, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error, isLiveTradeDate])
+  }, [apiBase, tradeDate, selectedSessionTradeDateKey, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error, isLiveTradeDate])
 
   useEffect(() => {
     const handleMove = (event) => {
@@ -1000,6 +1107,7 @@ export default function App() {
                 candles={mergedBars}
                 tradeDate={tradeDate}
                 interval={interval}
+                liveTradeCandles={liveTradeBars}
                 initialSelectedTimes={initialSelectedTimes}
                 gexSegments={mergedGexSegments}
                 gexEnabled={Boolean(meta?.gex_enabled ?? gexEnabled)}
@@ -1021,7 +1129,7 @@ export default function App() {
                 <div className="react-bottom-pane" style={{ height: `${flowPanelHeight}px` }}>
                   <AggressorFlowPanel
                     dataPoints={flowPoints}
-                    candles={mergedBars}
+                    candles={mergedBarsWithLive}
                     visibleLogicalRange={sharedLogicalRange}
                     height={flowPanelHeight}
                     loading={flowLoading}

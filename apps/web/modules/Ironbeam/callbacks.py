@@ -1058,6 +1058,264 @@ def _build_react_preview_bars_payload(
         "loaded_dates": [d.isoformat() for d, _ in loaded_frames],
     }, 200
 
+def _build_react_live_trades_overlay_payload(
+        trade_date: str | None,
+        interval: str | None,
+) -> tuple[dict, int]:
+    interval = str(interval or "1min").strip()
+    if interval not in ("1min", "5min"):
+        interval = "1min"
+
+    if not trade_date:
+        return {
+            "error": "trade_date is required",
+            "bars": [],
+            "interval": interval,
+            "is_live_day": False,
+        }, 400
+
+    try:
+        selected_date = dt.datetime.strptime(str(trade_date), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return {
+            "error": "Invalid trade date",
+            "bars": [],
+            "interval": interval,
+            "is_live_day": False,
+        }, 400
+
+    pt_tz = ZoneInfo("America/Los_Angeles")
+    session_date, session_note = _effective_trade_date(selected_date, pt_tz)
+
+    try:
+        is_live_day = (session_date == _current_session_trade_date(pt_tz))
+    except Exception:
+        is_live_day = False
+
+    if not is_live_day:
+        return {
+            "bars": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+            "session_note": session_note,
+            "symbol": TRADES_SYMBOL,
+            "is_live_day": False,
+            "source": "live_trades_overlay",
+        }, 200
+
+    day_start_pt, day_end_pt = _session_window_pt(session_date, pt_tz)
+
+    try:
+        df_base_bars = _fetch_bars_pt(day_start_pt, day_end_pt, interval, pt_tz)
+    except Exception as e:
+        return {
+            "error": f"Database error when loading base bars for live overlay: {e}",
+            "bars": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+            "session_note": session_note,
+            "symbol": TRADES_SYMBOL,
+            "is_live_day": True,
+            "source": "live_trades_overlay",
+        }, 500
+
+    if df_base_bars is None or df_base_bars.empty:
+        return {
+            "bars": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+            "session_note": session_note,
+            "symbol": TRADES_SYMBOL,
+            "is_live_day": True,
+            "source": "live_trades_overlay",
+        }, 200
+
+    if interval == "1min":
+        freq = "1min"
+        label_mode = "left"
+    else:
+        freq = "5min"
+        label_mode = "right"
+
+    base_ts = pd.to_datetime(df_base_bars.get("datetime_pt"), errors="coerce").dropna()
+    if base_ts.empty:
+        return {
+            "bars": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+            "session_note": session_note,
+            "symbol": TRADES_SYMBOL,
+            "is_live_day": True,
+            "source": "live_trades_overlay",
+        }, 200
+
+    try:
+        if base_ts.dt.tz is None:
+            base_ts = base_ts.dt.tz_localize(pt_tz)
+        else:
+            base_ts = base_ts.dt.tz_convert(pt_tz)
+    except Exception as e:
+        return {
+            "error": f"Could not normalize base-bar timestamps for live overlay: {e}",
+            "bars": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+            "session_note": session_note,
+            "symbol": TRADES_SYMBOL,
+            "is_live_day": True,
+            "source": "live_trades_overlay",
+        }, 500
+
+    base_ts = base_ts.sort_values()
+    last_base_ts = base_ts.iloc[-1]
+
+    now_pt = dt.datetime.now(tz=pt_tz)
+    now_ts = pd.Timestamp(now_pt)
+    if label_mode == "left":
+        current_bucket = now_ts.floor(freq)
+    else:
+        current_bucket = now_ts.ceil(freq)
+
+    step = pd.Timedelta(freq)
+    start_bucket = last_base_ts + step
+
+    if start_bucket > current_bucket:
+        return {
+            "bars": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+            "session_note": session_note,
+            "symbol": TRADES_SYMBOL,
+            "is_live_day": True,
+            "source": "live_trades_overlay",
+        }, 200
+
+    expected = pd.date_range(start=start_bucket, end=current_bucket, freq=freq)
+    if expected.empty:
+        return {
+            "bars": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+            "session_note": session_note,
+            "symbol": TRADES_SYMBOL,
+            "is_live_day": True,
+            "source": "live_trades_overlay",
+        }, 200
+
+    buffer = max(
+        dt.timedelta(seconds=10),
+        dt.timedelta(minutes=1) if freq == "1min" else dt.timedelta(minutes=5),
+    )
+    fetch_start_pt = expected[0].to_pydatetime() - buffer
+    fetch_end_pt = expected[-1].to_pydatetime() + buffer
+
+    start_utc = fetch_start_pt.astimezone(ZoneInfo("UTC"))
+    end_utc = fetch_end_pt.astimezone(ZoneInfo("UTC"))
+
+    try:
+        df_trades = _fetch_trades_utc(start_utc, end_utc, symbol=TRADES_SYMBOL)
+    except Exception as e:
+        return {
+            "error": f"Database error when loading live trades: {e}",
+            "bars": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+            "session_note": session_note,
+            "symbol": TRADES_SYMBOL,
+            "is_live_day": True,
+            "source": "live_trades_overlay",
+        }, 500
+
+    overlay_df = _trades_to_ohlc(df_trades, freq=freq, pt_tz=pt_tz, label_mode=label_mode)
+    if overlay_df is None or overlay_df.empty:
+        return {
+            "bars": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+            "session_note": session_note,
+            "symbol": TRADES_SYMBOL,
+            "is_live_day": True,
+            "source": "live_trades_overlay",
+        }, 200
+
+    overlay_df["datetime_pt"] = pd.to_datetime(overlay_df["datetime_pt"], errors="coerce")
+    overlay_df = overlay_df.dropna(subset=["datetime_pt"]).copy()
+    if overlay_df.empty:
+        return {
+            "bars": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+            "session_note": session_note,
+            "symbol": TRADES_SYMBOL,
+            "is_live_day": True,
+            "source": "live_trades_overlay",
+        }, 200
+
+    if overlay_df["datetime_pt"].dt.tz is None:
+        overlay_df["datetime_pt"] = overlay_df["datetime_pt"].dt.tz_localize(pt_tz)
+    else:
+        overlay_df["datetime_pt"] = overlay_df["datetime_pt"].dt.tz_convert(pt_tz)
+
+    overlay_df = overlay_df[overlay_df["datetime_pt"].isin(expected)].copy()
+    if overlay_df.empty:
+        return {
+            "bars": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+            "session_note": session_note,
+            "symbol": TRADES_SYMBOL,
+            "is_live_day": True,
+            "source": "live_trades_overlay",
+        }, 200
+
+    base_set = set(pd.to_datetime(base_ts).to_list())
+    overlay_df = overlay_df[~overlay_df["datetime_pt"].isin(base_set)].copy()
+    if overlay_df.empty:
+        return {
+            "bars": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+            "session_note": session_note,
+            "symbol": TRADES_SYMBOL,
+            "is_live_day": True,
+            "source": "live_trades_overlay",
+        }, 200
+
+    overlay_df = overlay_df.sort_values("datetime_pt").tail(max(1, LIVE_TRADES_MAX_BARS)).copy()
+
+    rows = _bars_df_to_payload_rows(
+        overlay_df,
+        pt_tz,
+        session_date=session_date,
+        is_center=True,
+    )
+    for row in rows:
+        row["is_live_overlay"] = True
+
+    return {
+        "bars": rows,
+        "trade_date": str(trade_date),
+        "effective_trade_date": session_date.isoformat(),
+        "interval": interval,
+        "session_note": session_note,
+        "symbol": TRADES_SYMBOL,
+        "is_live_day": True,
+        "source": "live_trades_overlay",
+        "max_bars": int(LIVE_TRADES_MAX_BARS),
+    }, 200
+
 def _build_react_flow_payload(
         trade_date: str | None,
         *,
@@ -1945,6 +2203,42 @@ def register_ironbeam_callbacks(app):
             return resp, status
 
         app.server._ironbeam_react_bars_route_registered = True
+
+        if not getattr(app.server, "_ironbeam_react_live_trades_overlay_route_registered", False):
+
+            @app.server.route("/api/ironbeam/live-trades-overlay", methods=["GET"])
+            def ironbeam_react_live_trades_overlay_api():
+                trade_date = request.args.get("trade_date")
+                interval = request.args.get("interval")
+
+                payload, status = _build_react_live_trades_overlay_payload(
+                    trade_date,
+                    interval,
+                )
+
+                resp = jsonify(payload)
+
+                origin = request.headers.get("Origin")
+                allowed = {
+                    "http://localhost:5173",
+                    "http://127.0.0.1:5173",
+                    "http://0.0.0.0:5173",
+                }
+
+                extra_allowed = os.getenv("IRONBEAM_REACT_ALLOWED_ORIGINS", "")
+                for item in extra_allowed.split(","):
+                    item = item.strip()
+                    if item:
+                        allowed.add(item)
+
+                if origin in allowed:
+                    resp.headers["Access-Control-Allow-Origin"] = origin
+                    resp.headers["Access-Control-Allow-Credentials"] = "true"
+                    resp.headers["Vary"] = "Origin"
+
+                return resp, status
+
+            app.server._ironbeam_react_live_trades_overlay_route_registered = True
 
         if not getattr(app.server, "_ironbeam_react_flow_route_registered", False):
 
