@@ -7,7 +7,9 @@ const FLOW_EMA_MINUTES_STORAGE_KEY = 'ib-react-flow-ema-minutes'
 const GEX_MIN_ABS_B_STORAGE_KEY = 'ib-react-gex-min-abs-b'
 const FLOW_MIN_HEIGHT = 140
 const FLOW_MAX_HEIGHT = 520
-const LIVE_POLL_MS = 3000
+const FULL_BARS_LIVE_POLL_MS = 30000
+const LIVE_OVERLAY_POLL_MS = 1000
+const FLOW_LIVE_POLL_MS = 3000
 
 function cleanBaseUrl(value) {
   const s = String(value || '').trim()
@@ -414,6 +416,7 @@ export default function App() {
 
   const [sharedLogicalRange, setSharedLogicalRange] = useState(null)
   const [linkedCrosshair, setLinkedCrosshair] = useState(null)
+  const [isChartInteracting, setIsChartInteracting] = useState(false)
 
   const [flowPanelHeight, setFlowPanelHeight] = useState(() => {
     try {
@@ -485,9 +488,21 @@ export default function App() {
     [centerBars, extraBars]
   )
 
-  const mergedBarsWithLive = useMemo(
-    () => dedupeAndSortBars([...centerBars, ...extraBars, ...liveTradeBars]),
-    [centerBars, extraBars, liveTradeBars]
+  const liveTradeTimelineSignature = useMemo(
+    () => (Array.isArray(liveTradeBars) ? liveTradeBars : []).map((bar) => Number(bar?.time) || '').join('|'),
+    [liveTradeBars]
+  )
+
+  const mergedBarsWithLiveTimeline = useMemo(
+    () => dedupeAndSortBars([
+      ...centerBars,
+      ...extraBars,
+      ...(Array.isArray(liveTradeBars) ? liveTradeBars : []).map((bar) => ({
+        time: Number(bar?.time),
+        is_center: bar?.is_center,
+      })),
+    ]),
+    [centerBars, extraBars, liveTradeTimelineSignature]
   )
 
   const mergedGexSegments = useMemo(
@@ -756,7 +771,7 @@ export default function App() {
   }, [isLiveTradeDate, selectedSessionTradeDateKey])
 
   useEffect(() => {
-    if (!isLiveTradeDate || loadingCenter || error) return undefined
+    if (!isLiveTradeDate || loadingCenter || error || isChartInteracting) return undefined
 
     let disposed = false
     let inFlight = false
@@ -830,7 +845,7 @@ export default function App() {
     }
 
     tick()
-    const timer = window.setInterval(tick, LIVE_POLL_MS)
+    const timer = window.setInterval(tick, FULL_BARS_LIVE_POLL_MS)
 
     return () => {
       disposed = true
@@ -839,7 +854,7 @@ export default function App() {
         activeController.abort()
       }
     }
-  }, [apiBase, tradeDate, selectedSessionTradeDateKey, interval, gexEnabled, gexMinAbsB, loadingCenter, error, isLiveTradeDate])
+  }, [apiBase, tradeDate, selectedSessionTradeDateKey, interval, gexEnabled, gexMinAbsB, loadingCenter, error, isLiveTradeDate, isChartInteracting])
 
   useEffect(() => {
     if (!isLiveTradeDate || loadingCenter || error) return undefined
@@ -900,7 +915,7 @@ export default function App() {
     }
 
     tick()
-    const timer = window.setInterval(tick, LIVE_POLL_MS)
+    const timer = window.setInterval(tick, LIVE_OVERLAY_POLL_MS)
 
     return () => {
       disposed = true
@@ -912,7 +927,7 @@ export default function App() {
   }, [apiBase, tradeDate, selectedSessionTradeDateKey, interval, loadingCenter, error, isLiveTradeDate])
 
   useEffect(() => {
-    if (!isLiveTradeDate || !flowEnabled || loadingCenter || error) return undefined
+    if (!isLiveTradeDate || !flowEnabled || loadingCenter || error || isChartInteracting) return undefined
 
     let disposed = false
     let inFlight = false
@@ -972,7 +987,7 @@ export default function App() {
     }
 
     tick()
-    const timer = window.setInterval(tick, LIVE_POLL_MS)
+    const timer = window.setInterval(tick, FLOW_LIVE_POLL_MS)
 
     return () => {
       disposed = true
@@ -1039,6 +1054,11 @@ export default function App() {
   const handleIntervalChange = useCallback((nextValue) => {
     const next = String(nextValue || '').trim() === '5min' ? '5min' : '1min'
     setInterval((prev) => (prev === next ? prev : next))
+  }, [])
+
+  const handleInteractionActiveChange = useCallback((nextValue) => {
+    const next = Boolean(nextValue)
+    setIsChartInteracting((prev) => (prev === next ? prev : next))
   }, [])
 
   const handleLinkedCrosshairChange = useCallback((nextValue) => {
@@ -1116,6 +1136,7 @@ export default function App() {
                 onApplyIntervalChange={handleIntervalChange}
                 onVisibleLogicalRangeChange={handleSharedLogicalRangeChange}
                 onLinkedCrosshairChange={handleLinkedCrosshairChange}
+                onInteractionActiveChange={handleInteractionActiveChange}
               />
             </div>
 
@@ -1129,7 +1150,7 @@ export default function App() {
                 <div className="react-bottom-pane" style={{ height: `${flowPanelHeight}px` }}>
                   <AggressorFlowPanel
                     dataPoints={flowPoints}
-                    candles={mergedBarsWithLive}
+                    candles={mergedBarsWithLiveTimeline}
                     visibleLogicalRange={sharedLogicalRange}
                     height={flowPanelHeight}
                     loading={flowLoading}

@@ -578,6 +578,7 @@ export default function PriceChart({
   onApplyIntervalChange,
   onVisibleLogicalRangeChange,
   onLinkedCrosshairChange,
+  onInteractionActiveChange,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -599,6 +600,9 @@ export default function PriceChart({
   const tooltipRef = useRef(null)
   const tooltipTimeRef = useRef(null)
   const tooltipPriceRef = useRef(null)
+  const interactionReleaseTimerRef = useRef(null)
+  const interactionActiveRef = useRef(false)
+  const previousLiveTradeCandlesRef = useRef([])
 
   const [selectedTimes, setSelectedTimes] = useState(normalizeTimes(initialSelectedTimes || []))
   const [sessionBands, setSessionBands] = useState([])
@@ -1022,23 +1026,60 @@ export default function PriceChart({
       updateFloatingTooltip(param)
     }
 
+    const setInteractionActive = (active, releaseDelay = 0) => {
+      if (interactionReleaseTimerRef.current) {
+        window.clearTimeout(interactionReleaseTimerRef.current)
+        interactionReleaseTimerRef.current = null
+      }
+
+      if (active) {
+        if (!interactionActiveRef.current) {
+          interactionActiveRef.current = true
+          if (typeof onInteractionActiveChange === 'function') {
+            onInteractionActiveChange(true)
+          }
+        }
+        return
+      }
+
+      const release = () => {
+        if (!interactionActiveRef.current) return
+        interactionActiveRef.current = false
+        if (typeof onInteractionActiveChange === 'function') {
+          onInteractionActiveChange(false)
+        }
+      }
+
+      if (releaseDelay > 0) {
+        interactionReleaseTimerRef.current = window.setTimeout(release, releaseDelay)
+      } else {
+        release()
+      }
+    }
+
     const handleWheel = (evt) => {
       hasUserInteractedRef.current = true
+      setInteractionActive(true)
       lastManualTimeRangeRef.current = logicalRangeToShiftedTimeRange(
         chart.timeScale().getVisibleLogicalRange?.(),
         shiftedCandlesRef.current,
         intervalRef.current
       )
       const info = pointerInfo(evt, stage)
-      if (!info || info.overTimeAxis || !info.overPriceAxis) return
+      if (!info || info.overTimeAxis || !info.overPriceAxis) {
+        setInteractionActive(false, 180)
+        return
+      }
       evt.preventDefault()
       evt.stopPropagation()
       zoomPriceAtY(evt.deltaY, info.y)
+      setInteractionActive(false, 180)
     }
 
     const handleMouseDown = (evt) => {
       if (evt.button !== 0) return
       hasUserInteractedRef.current = true
+      setInteractionActive(true)
       lastManualTimeRangeRef.current = logicalRangeToShiftedTimeRange(
         chart.timeScale().getVisibleLogicalRange?.(),
         shiftedCandlesRef.current,
@@ -1051,6 +1092,7 @@ export default function PriceChart({
 
     const handleMouseMove = (evt) => {
       if (!dragRef.current.active) return
+      setInteractionActive(true)
       const deltaY = evt.clientY - dragRef.current.lastY
       dragRef.current.lastY = evt.clientY
       if (deltaY !== 0) {
@@ -1060,12 +1102,14 @@ export default function PriceChart({
 
     const handleMouseUp = () => {
       dragRef.current.active = false
+      setInteractionActive(false, 180)
     }
 
     const handleMouseLeave = () => {
       hideTooltip()
       reportLinkedCrosshair(null)
       dragRef.current.active = false
+      setInteractionActive(false, 180)
     }
 
     chart.subscribeClick(handleClick)
@@ -1103,8 +1147,16 @@ export default function PriceChart({
       gexSeriesRefs.current = []
       dragRef.current.active = false
       reportLinkedCrosshair(null)
+      if (interactionReleaseTimerRef.current) {
+        window.clearTimeout(interactionReleaseTimerRef.current)
+        interactionReleaseTimerRef.current = null
+      }
+      interactionActiveRef.current = false
+      if (typeof onInteractionActiveChange === 'function') {
+        onInteractionActiveChange(false)
+      }
     }
-  }, [onVisibleLogicalRangeChange])
+  }, [onVisibleLogicalRangeChange, onInteractionActiveChange])
 
   useEffect(() => {
     function handleParentMessage(event) {
@@ -1329,20 +1381,32 @@ export default function PriceChart({
   }
 
   useEffect(() => {
-    if (!liveTradeSeriesRef.current || !chartRef.current) return
+    if (!liveTradeSeriesRef.current) return
 
-    liveTradeSeriesRef.current.setData(shiftedLiveTradeCandles)
+    const next = Array.isArray(shiftedLiveTradeCandles) ? shiftedLiveTradeCandles : []
+    const prev = Array.isArray(previousLiveTradeCandlesRef.current)
+      ? previousLiveTradeCandlesRef.current
+      : []
 
-    requestAnimationFrame(() => {
-      if (!chartRef.current) return
-      setSessionBands(
-        computeSessionBands(
-          chartRef.current,
-          shiftedCandlesRef.current,
-          stageRef.current?.clientWidth || 0
-        )
-      )
-    })
+    const canIncremental =
+      prev.length > 0 &&
+      next.length > 0 &&
+      next.length >= prev.length &&
+      prev
+        .slice(0, Math.max(0, prev.length - 1))
+        .every((bar, idx) => Number(bar?.time) === Number(next[idx]?.time))
+
+    if (!canIncremental) {
+      liveTradeSeriesRef.current.setData(next)
+      previousLiveTradeCandlesRef.current = next
+      return
+    }
+
+    const startIdx = Math.max(0, prev.length - 1)
+    for (let i = startIdx; i < next.length; i += 1) {
+      liveTradeSeriesRef.current.update(next[i])
+    }
+    previousLiveTradeCandlesRef.current = next
   }, [shiftedLiveTradeCandles])
 
   useEffect(() => {
