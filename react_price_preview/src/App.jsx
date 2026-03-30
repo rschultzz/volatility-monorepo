@@ -377,7 +377,11 @@ export default function App() {
   const initialInterval = params.get('interval') || '1min'
   const gexEnabled = parseBool(params.get('gex_enabled'), true)
   const initialGexMinAbsB = parseFloatOrNull(params.get('gex_min_abs_b'))
-  const daysEitherSide = Math.max(0, parseIntOrDefault(params.get('days_either_side'), 5))
+  const explicitDaysEitherSideRaw = params.get('days_either_side')
+  const explicitDaysEitherSide =
+    explicitDaysEitherSideRaw == null || explicitDaysEitherSideRaw === ''
+      ? null
+      : Math.max(0, parseIntOrDefault(explicitDaysEitherSideRaw, 0))
 
   const flowEnabled = parseBool(params.get('flow_enabled'), true)
   const flowSession = (params.get('flow_session') || 'FULL').toUpperCase()
@@ -386,14 +390,17 @@ export default function App() {
   const defaultFlowEmaMinutes = deriveDefaultFlowEmaMinutes(params, flowResample)
   const flowHistAlpha = parseFloatOrNull(params.get('flow_hist_alpha')) ?? 0.30
 
-  const effectiveDaysEitherSide = daysEitherSide
-
   const apiBase = useMemo(() => inferApiBase(), [])
   const initialSelectedTimes = useMemo(() => parseSelectedTimes(params), [params])
 
   const [interval, setInterval] = useState(() =>
     String(initialInterval || '').trim() === '5min' ? '5min' : '1min'
   )
+
+  const effectiveDaysEitherSide = useMemo(() => {
+    if (explicitDaysEitherSide != null) return explicitDaysEitherSide
+    return interval === '5min' ? 10 : 1
+  }, [explicitDaysEitherSide, interval])
 
   const dragStateRef = useRef(null)
 
