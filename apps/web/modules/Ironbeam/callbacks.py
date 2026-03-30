@@ -84,7 +84,11 @@ GEX_ABS_THRESHOLD_DEFAULT = float(os.getenv("GEX_ABS_THRESHOLD", "1e10"))
 GEX_COLOR_ABS_MAX = float(os.getenv("GEX_COLOR_ABS_MAX", "0"))
 GEX_COLOR_PERCENTILE = float(os.getenv("GEX_COLOR_PERCENTILE", "95"))
 
-# DAYS_EITHER_SIDE = int(os.getenv("IRONBEAM_DAYS_EITHER_SIDE", "2"))
+# Legacy Plotly "classic" chart is no longer the primary path. Keep its multi-day
+# scope isolated so React preview can choose its own load window per interval.
+CLASSIC_DAYS_EITHER_SIDE = int(os.getenv("IRONBEAM_CLASSIC_DAYS_EITHER_SIDE", "0"))
+REACT_PREVIEW_1MIN_DAYS_EITHER_SIDE = int(os.getenv("IRONBEAM_REACT_1MIN_DAYS_EITHER_SIDE", "1"))
+REACT_PREVIEW_5MIN_DAYS_EITHER_SIDE = int(os.getenv("IRONBEAM_REACT_5MIN_DAYS_EITHER_SIDE", "10"))
 MULTI_LOAD_DAYS_PER_TICK = int(os.getenv("IRONBEAM_MULTI_LOAD_DAYS_PER_TICK", "1"))
 
 # --- Smoothness toggles (render-only; safe defaults) ---
@@ -729,6 +733,13 @@ def _window_trade_dates(center: dt.date, n_each_side: int) -> list[dt.date]:
     return left + [center] + right
 
 
+def _react_preview_days_either_side(interval: str | None) -> int:
+    interval = str(interval or "1min").strip().lower()
+    if interval == "5min":
+        return max(0, int(REACT_PREVIEW_5MIN_DAYS_EITHER_SIDE))
+    return max(0, int(REACT_PREVIEW_1MIN_DAYS_EITHER_SIDE))
+
+
 def _roll_forward_to_weekday(d: dt.date) -> dt.date:
     while d.weekday() >= 5:
         d += dt.timedelta(days=1)
@@ -941,7 +952,7 @@ def _build_react_preview_bars_payload(
     session_date, session_note = _effective_trade_date(selected_date, pt_tz)
 
     if phase == "multi":
-        n_each_side = DAYS_EITHER_SIDE if days_either_side is None else max(0, int(days_either_side))
+        n_each_side = _react_preview_days_either_side(interval) if days_either_side is None else max(0, int(days_either_side))
         target_dates = [d for d in _window_trade_dates(session_date, n_each_side) if d != session_date]
     else:
         n_each_side = 0
@@ -2424,7 +2435,7 @@ def register_ironbeam_callbacks(app):
             locked_y_range = None
 
         # ---- multi-day targets ----
-        target_dates = _window_trade_dates(session_date, DAYS_EITHER_SIDE)
+        target_dates = _window_trade_dates(session_date, CLASSIC_DAYS_EITHER_SIDE)
         target_dates_str = [d.isoformat() for d in target_dates]
 
         day_start_pt, day_end_pt = _session_window_pt(session_date, pt_tz)
@@ -3967,11 +3978,12 @@ def register_ironbeam_callbacks(app):
 
         gex_enabled = "gex_overlay" in enabled if enabled else True
 
+        react_days_either_side = _react_preview_days_either_side(interval)
         params = [
             f"trade_date={td}",
             f"interval={interval}",
             f"gex_enabled={1 if gex_enabled else 0}",
-            f"days_either_side={max(0, DAYS_EITHER_SIDE)}",
+            f"days_either_side={react_days_either_side}",
         ]
         if gex_min_abs_b is not None:
             params.append(f"gex_min_abs_b={gex_min_abs_b}")

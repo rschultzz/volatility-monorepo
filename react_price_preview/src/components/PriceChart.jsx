@@ -260,18 +260,10 @@ function pointerInfo(evt, container) {
   return { rect, x, y, overTimeAxis, overPriceAxis }
 }
 
-
 function normalizeIntervalValue(value, fallback = '1min') {
   const s = String(value || '').trim().toLowerCase()
   if (s === '5min' || s === '5m') return '5min'
   if (s === '1min' || s === '1m') return '1min'
-  return fallback
-}
-
-function normalizeChartModeValue(value, fallback = 'react_preview') {
-  const s = String(value || '').trim().toLowerCase()
-  if (s === 'classic') return 'classic'
-  if (s === 'react_preview' || s === 'react' || s === 'preview') return 'react_preview'
   return fallback
 }
 
@@ -343,7 +335,6 @@ function hideParentTopControls() {
 
 function showParentTopControls() {
   setParentControlGroupVisibility('ironbeam-bar-interval', 'Bar Interval', true)
-  setParentControlGroupVisibility('ib-chart-mode-toggle', 'Chart Mode', true)
 }
 
 function intervalToSeconds(interval) {
@@ -609,7 +600,6 @@ export default function PriceChart({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [draftGexMinAbsB, setDraftGexMinAbsB] = useState(() => coerceGexMinAbsB(gexMinAbsB, 10))
   const [draftInterval, setDraftInterval] = useState(() => normalizeIntervalValue(interval, '1min'))
-  const [draftChartMode, setDraftChartMode] = useState('react_preview')
   const [settingsError, setSettingsError] = useState('')
 
   useEffect(() => {
@@ -620,7 +610,6 @@ export default function PriceChart({
     if (!settingsOpen) {
       setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
       setDraftInterval(normalizeIntervalValue(interval, '1min'))
-      setDraftChartMode('react_preview')
       setSettingsError('')
     }
   }, [gexMinAbsB, interval, settingsOpen])
@@ -1325,7 +1314,6 @@ export default function PriceChart({
   function openSettings() {
     setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
     setDraftInterval(normalizeIntervalValue(interval, '1min'))
-    setDraftChartMode('react_preview')
     setSettingsError('')
     setSettingsOpen(true)
   }
@@ -1335,7 +1323,6 @@ export default function PriceChart({
     setSettingsError('')
     setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
     setDraftInterval(normalizeIntervalValue(interval, '1min'))
-    setDraftChartMode('react_preview')
   }
 
   function applySettings(event) {
@@ -1347,7 +1334,6 @@ export default function PriceChart({
     }
 
     const nextInterval = normalizeIntervalValue(draftInterval, '1min')
-    const nextChartMode = normalizeChartModeValue(draftChartMode, 'react_preview')
 
     if (typeof onApplyGexMinAbsB === 'function') {
       onApplyGexMinAbsB(next)
@@ -1356,26 +1342,15 @@ export default function PriceChart({
       onApplyIntervalChange(nextInterval)
     }
 
-    if (nextChartMode === 'classic') {
-      showParentTopControls()
-    } else {
-      hideParentTopControls()
-    }
-
     const intervalOk = setParentRadioValue('ironbeam-bar-interval', nextInterval)
-    const modeOk = setParentRadioValue('ib-chart-mode-toggle', nextChartMode)
 
-    if (!intervalOk || !modeOk) {
-      const missing = []
-      if (!intervalOk) missing.push('bar interval')
-      if (!modeOk) missing.push('chart mode')
-      setSettingsError(`Could not sync ${missing.join(' and ')} with the parent Dash controls.`)
-      if (nextChartMode !== 'classic') {
-        hideParentTopControls()
-      }
+    if (!intervalOk) {
+      setSettingsError('Could not sync bar interval with the parent Dash controls.')
+      hideParentTopControls()
       return
     }
 
+    hideParentTopControls()
     setSettingsOpen(false)
     setSettingsError('')
   }
@@ -1540,7 +1515,6 @@ export default function PriceChart({
                   Price chart settings
                 </div>
 
-
                 <div style={{ fontSize: '12px', color: '#cbd5e1', marginBottom: '8px' }}>
                   Bar Interval
                 </div>
@@ -1563,36 +1537,6 @@ export default function PriceChart({
                         }}
                       >
                         {value === '1min' ? '1 min' : '5 min'}
-                      </button>
-                    )
-                  })}
-                </div>
-
-                <div style={{ fontSize: '12px', color: '#cbd5e1', marginBottom: '8px' }}>
-                  Chart Mode
-                </div>
-                <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-                  {[
-                    { value: 'react_preview', label: 'React Preview' },
-                    { value: 'classic', label: 'Classic' },
-                  ].map((item) => {
-                    const active = draftChartMode === item.value
-                    return (
-                      <button
-                        key={item.value}
-                        type="button"
-                        onClick={() => setDraftChartMode(item.value)}
-                        style={{
-                          borderRadius: '10px',
-                          border: `1px solid ${active ? '#3b82f6' : '#334155'}`,
-                          background: active ? 'rgba(37, 99, 235, 0.20)' : '#020617',
-                          color: active ? '#dbeafe' : '#cbd5e1',
-                          padding: '8px 12px',
-                          cursor: 'pointer',
-                          fontWeight: 700,
-                        }}
-                      >
-                        {item.label}
                       </button>
                     )
                   })}

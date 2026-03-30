@@ -559,7 +559,7 @@ def serve_layout():
                                         {"label": "Classic", "value": "classic"},
                                         {"label": "React Preview", "value": "react_preview"},
                                     ],
-                                    value="classic",
+                                    value="react_preview",
                                     inline=True,
                                     labelStyle={"marginRight": "16px", "color": "white", "fontSize": "13px"},
                                     inputStyle={"marginRight": "6px"},

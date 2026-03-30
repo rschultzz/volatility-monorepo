@@ -71,6 +71,17 @@ function parseIntOrDefault(value, fallback) {
   return Number.isFinite(num) ? num : fallback
 }
 
+function normalizeIntervalValue(value, fallback = '1min') {
+  const s = String(value || '').trim().toLowerCase()
+  if (s === '5min' || s === '5m') return '5min'
+  if (s === '1min' || s === '1m') return '1min'
+  return fallback
+}
+
+function defaultDaysEitherSideForInterval(interval) {
+  return normalizeIntervalValue(interval, '1min') === '5min' ? 10 : 1
+}
+
 function coerceGexMinAbsB(value, fallback = 10) {
   const num = Number(value)
   if (!Number.isFinite(num)) return fallback
@@ -374,7 +385,7 @@ function rangesClose(a, b, eps = 1) {
 export default function App() {
   const params = useMemo(() => new URLSearchParams(window.location.search), [])
   const tradeDate = params.get('trade_date') || new Date().toISOString().slice(0, 10)
-  const initialInterval = params.get('interval') || '1min'
+  const initialInterval = normalizeIntervalValue(params.get('interval') || '1min', '1min')
   const gexEnabled = parseBool(params.get('gex_enabled'), true)
   const initialGexMinAbsB = parseFloatOrNull(params.get('gex_min_abs_b'))
   const explicitDaysEitherSideRaw = params.get('days_either_side')
@@ -393,14 +404,13 @@ export default function App() {
   const apiBase = useMemo(() => inferApiBase(), [])
   const initialSelectedTimes = useMemo(() => parseSelectedTimes(params), [params])
 
-  const [interval, setInterval] = useState(() =>
-    String(initialInterval || '').trim() === '5min' ? '5min' : '1min'
-  )
+  const [interval, setInterval] = useState(() => initialInterval)
 
   const effectiveDaysEitherSide = useMemo(() => {
-    if (explicitDaysEitherSide != null) return explicitDaysEitherSide
-    return interval === '5min' ? 10 : 1
-  }, [explicitDaysEitherSide, interval])
+    const defaultDays = defaultDaysEitherSideForInterval(interval)
+    if (explicitDaysEitherSide == null) return defaultDays
+    return interval === initialInterval ? explicitDaysEitherSide : defaultDays
+  }, [explicitDaysEitherSide, initialInterval, interval])
 
   const dragStateRef = useRef(null)
 
@@ -550,11 +560,12 @@ export default function App() {
     try {
       const nextUrl = new URL(window.location.href)
       nextUrl.searchParams.set('interval', interval)
+      nextUrl.searchParams.set('days_either_side', String(effectiveDaysEitherSide))
       window.history.replaceState(null, '', nextUrl.toString())
     } catch (err) {
       // ignore
     }
-  }, [interval])
+  }, [interval, effectiveDaysEitherSide])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -1059,7 +1070,7 @@ export default function App() {
   }, [])
 
   const handleIntervalChange = useCallback((nextValue) => {
-    const next = String(nextValue || '').trim() === '5min' ? '5min' : '1min'
+    const next = normalizeIntervalValue(nextValue, '1min')
     setInterval((prev) => (prev === next ? prev : next))
   }, [])
 
