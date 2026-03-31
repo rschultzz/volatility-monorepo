@@ -64,8 +64,6 @@ HIGHLIGHT_COLOR = os.getenv("IRONBEAM_HIGHLIGHT_COLOR", "#ef4444")
 # Flow aggregation table (1s) for aggressor-based indicators
 FLOW_TABLE_NAME = os.environ.get("IRONBEAM_FLOW_TABLE", "ironbeam_es_flow_1s")
 FLOW_SYMBOL = os.environ.get("IRONBEAM_FLOW_SYMBOL", TRADES_SYMBOL)
-AUTO_RESOLVE_TRADE_SYMBOLS = os.getenv("IRONBEAM_AUTO_RESOLVE_TRADE_SYMBOLS", "1").strip().lower() in ("1", "true", "yes", "y")
-AUTO_RESOLVE_FLOW_SYMBOLS = os.getenv("IRONBEAM_AUTO_RESOLVE_FLOW_SYMBOLS", "1").strip().lower() in ("1", "true", "yes", "y")
 
 FLOW_EMA_LEN = int(os.getenv("IRONBEAM_FLOW_EMA_LEN", "840"))  # smoothing length
 FLOW_RESAMPLE = os.getenv("IRONBEAM_FLOW_RESAMPLE", "1s").lower()  # 1s, 5s, 15s, 1m
@@ -86,12 +84,15 @@ GEX_ABS_THRESHOLD_DEFAULT = float(os.getenv("GEX_ABS_THRESHOLD", "1e10"))
 GEX_COLOR_ABS_MAX = float(os.getenv("GEX_COLOR_ABS_MAX", "0"))
 GEX_COLOR_PERCENTILE = float(os.getenv("GEX_COLOR_PERCENTILE", "95"))
 
-# Legacy Plotly "classic" chart is no longer the primary path. Keep its multi-day
-# scope isolated so React preview can choose its own load window per interval.
-CLASSIC_DAYS_EITHER_SIDE = int(os.getenv("IRONBEAM_CLASSIC_DAYS_EITHER_SIDE", "0"))
-REACT_PREVIEW_1MIN_DAYS_EITHER_SIDE = int(os.getenv("IRONBEAM_REACT_1MIN_DAYS_EITHER_SIDE", "1"))
-REACT_PREVIEW_5MIN_DAYS_EITHER_SIDE = int(os.getenv("IRONBEAM_REACT_5MIN_DAYS_EITHER_SIDE", "10"))
+LEGACY_CLASSIC_DAYS_EITHER_SIDE = int(os.getenv("IRONBEAM_DAYS_EITHER_SIDE", "2"))
+REACT_DAYS_EITHER_SIDE_1MIN = int(os.getenv("IRONBEAM_REACT_DAYS_EITHER_SIDE_1MIN", "1"))
+REACT_DAYS_EITHER_SIDE_5MIN = int(os.getenv("IRONBEAM_REACT_DAYS_EITHER_SIDE_5MIN", "10"))
 MULTI_LOAD_DAYS_PER_TICK = int(os.getenv("IRONBEAM_MULTI_LOAD_DAYS_PER_TICK", "1"))
+
+
+def _react_days_either_side_for_interval(interval: str) -> int:
+    iv = str(interval or "1min").strip().lower()
+    return max(0, REACT_DAYS_EITHER_SIDE_5MIN if iv == "5min" else REACT_DAYS_EITHER_SIDE_1MIN)
 
 # --- Smoothness toggles (render-only; safe defaults) ---
 USE_HOVERGRID = os.getenv("IRONBEAM_USE_HOVERGRID", "1").strip().lower() in ("1", "true", "yes", "y")
@@ -197,114 +198,43 @@ def _hex_to_rgba(color: str, alpha: float) -> str:
 
 
 def _fetch_flow_utc(start_utc: dt.datetime, end_utc: dt.datetime, symbol: str) -> pd.DataFrame:
-    q = text(
-        f"""
-        SELECT ts_utc, symbol, buy_vol, sell_vol, unknown_vol
-        FROM {FLOW_TABLE_NAME}
-        WHERE symbol = :sym
-          AND ts_utc >= :start_utc
-          AND ts_utc <  :end_utc
-        ORDER BY ts_utc ASC
-        """
-    )
-    with engine.connect() as conn:
-        df = pd.read_sql(
-            q,
-            conn,
-            params={"sym": symbol, "start_utc": start_utc, "end_utc": end_utc},
-            parse_dates=["ts_utc"],
+    """
+    Fetch flow data. If 'symbol' returns no rows, discovery logic finds the 
+    dominant symbol in the time range to support historical contracts.
+    """
+    def _do_query(s: str | None) -> pd.DataFrame:
+        params = {"start_utc": start_utc, "end_utc": end_utc}
+        where_sym = ""
+        if s:
+            where_sym = "AND symbol = :sym"
+            params["sym"] = s
+            
+        q = text(
+            f"""
+            SELECT ts_utc, symbol, buy_vol, sell_vol, unknown_vol
+            FROM {FLOW_TABLE_NAME}
+            WHERE ts_utc >= :start_utc
+              AND ts_utc <  :end_utc
+              {where_sym}
+            ORDER BY ts_utc ASC
+            """
         )
-    return df
+        with engine.connect() as conn:
+            return pd.read_sql(q, conn, params=params, parse_dates=["ts_utc"])
 
-
-def _resolve_symbol_for_window(
-        table_name: str,
-        ts_column: str,
-        start_utc: dt.datetime,
-        end_utc: dt.datetime,
-        *,
-        preferred_symbol: str | None = None,
-) -> str | None:
-    """
-    Pick the dominant symbol actually present in the DB for the requested window.
-
-    This lets historical days automatically use the contract that was ingested for
-    that session instead of a single hard-coded current front-month symbol.
-    """
-    q = text(
-        f"""
-        SELECT
-          symbol,
-          COUNT(*) AS row_count,
-          MAX({ts_column}) AS max_ts
-        FROM {table_name}
-        WHERE {ts_column} >= :start_utc
-          AND {ts_column} <  :end_utc
-          AND symbol IS NOT NULL
-          AND symbol <> ''
-        GROUP BY symbol
-        ORDER BY
-          COUNT(*) DESC,
-          CASE WHEN symbol = :preferred_symbol THEN 0 ELSE 1 END,
-          MAX({ts_column}) DESC,
-          symbol ASC
-        LIMIT 1
-        """
-    )
-
-    with engine.connect() as conn:
-        row = conn.execute(
-            q,
-            {
-                "start_utc": start_utc,
-                "end_utc": end_utc,
-                "preferred_symbol": preferred_symbol or "",
-            },
-        ).fetchone()
-
-    if not row:
-        return None
-
-    symbol = row[0]
-    return str(symbol).strip() if symbol else None
-
-
-def _resolve_trades_symbol_for_window(
-        start_utc: dt.datetime,
-        end_utc: dt.datetime,
-        *,
-        preferred_symbol: str | None = None,
-) -> str:
-    if not AUTO_RESOLVE_TRADE_SYMBOLS:
-        return str(preferred_symbol or TRADES_SYMBOL)
-
-    resolved = _resolve_symbol_for_window(
-        DB_TRADES_TABLE,
-        "ts_utc",
-        start_utc,
-        end_utc,
-        preferred_symbol=preferred_symbol or TRADES_SYMBOL,
-    )
-    return str(resolved or preferred_symbol or TRADES_SYMBOL)
-
-
-def _resolve_flow_symbol_for_window(
-        start_utc: dt.datetime,
-        end_utc: dt.datetime,
-        *,
-        preferred_symbol: str | None = None,
-) -> str:
-    if not AUTO_RESOLVE_FLOW_SYMBOLS:
-        return str(preferred_symbol or FLOW_SYMBOL)
-
-    resolved = _resolve_symbol_for_window(
-        FLOW_TABLE_NAME,
-        "ts_utc",
-        start_utc,
-        end_utc,
-        preferred_symbol=preferred_symbol or FLOW_SYMBOL,
-    )
-    return str(resolved or preferred_symbol or FLOW_SYMBOL)
+    # 1. Try with provided symbol (usually current front)
+    df = _do_query(symbol)
+    if not df.empty:
+        return df
+        
+    # 2. If empty, discovery: find whatever symbol is there
+    df_all = _do_query(None)
+    if df_all.empty:
+        return df_all
+        
+    # 3. Pick the dominant symbol to avoid roll overlap issues
+    top_sym = df_all['symbol'].value_counts().idxmax()
+    return df_all[df_all['symbol'] == top_sym].copy()
 
 
 def _floor_to_sec(ts: dt.datetime) -> dt.datetime:
@@ -438,8 +368,7 @@ def _apply_live_trades_overlay_patch(patch_obj: Patch, fig_dict: dict, df_base_b
     end_utc = fetch_end_pt.astimezone(ZoneInfo("UTC"))
 
     try:
-        resolved_trades_symbol = _resolve_trades_symbol_for_window(start_utc, end_utc, preferred_symbol=TRADES_SYMBOL)
-        df_tr = _fetch_trades_utc(start_utc, end_utc, symbol=resolved_trades_symbol)
+        df_tr = _fetch_trades_utc(start_utc, end_utc, symbol=TRADES_SYMBOL)
     except Exception as e:
         print(f"[live trades] fetch error: {e}")
         return False
@@ -510,7 +439,7 @@ def _apply_live_trades_overlay_patch(patch_obj: Patch, fig_dict: dict, df_base_b
             high=h_new,
             low=l_new,
             close=c_new,
-            name=f"{LIVE_TRADES_TRACE_PREFIX} {resolved_trades_symbol}",
+            name=f"{LIVE_TRADES_TRACE_PREFIX} {TRADES_SYMBOL}",
             increasing=dict(line=dict(color=LIVE_UP_COLOR, width=2.0), fillcolor="rgba(96,165,250,0.18)"),
             decreasing=dict(line=dict(color=LIVE_DOWN_COLOR, width=2.0), fillcolor="rgba(229,231,235,0.18)"),
             showlegend=False,
@@ -593,8 +522,7 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
     end_utc = fetch_end_pt.astimezone(ZoneInfo("UTC"))
 
     try:
-        resolved_trades_symbol = _resolve_trades_symbol_for_window(start_utc, end_utc, preferred_symbol=TRADES_SYMBOL)
-        df_tr = _fetch_trades_utc(start_utc, end_utc, symbol=resolved_trades_symbol)
+        df_tr = _fetch_trades_utc(start_utc, end_utc, symbol=TRADES_SYMBOL)
     except Exception as e:
         print(f"[live trades] fetch error: {e}")
         return False
@@ -673,7 +601,7 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
             high=h_new,
             low=l_new,
             close=c_new,
-            name=f"{LIVE_TRADES_TRACE_PREFIX} {resolved_trades_symbol}",
+            name=f"{LIVE_TRADES_TRACE_PREFIX} {TRADES_SYMBOL}",
             increasing=dict(line=dict(color=LIVE_UP_COLOR, width=2.0), fillcolor="rgba(96,165,250,0.18)"),
             decreasing=dict(line=dict(color=LIVE_DOWN_COLOR, width=2.0), fillcolor="rgba(229,231,235,0.18)"),
             showlegend=False,
@@ -825,13 +753,6 @@ def _window_trade_dates(center: dt.date, n_each_side: int) -> list[dt.date]:
     left = dates[max(0, idx - n_each_side): idx]
     right = dates[idx + 1: idx + 1 + n_each_side]
     return left + [center] + right
-
-
-def _react_preview_days_either_side(interval: str | None) -> int:
-    interval = str(interval or "1min").strip().lower()
-    if interval == "5min":
-        return max(0, int(REACT_PREVIEW_5MIN_DAYS_EITHER_SIDE))
-    return max(0, int(REACT_PREVIEW_1MIN_DAYS_EITHER_SIDE))
 
 
 def _roll_forward_to_weekday(d: dt.date) -> dt.date:
@@ -1046,7 +967,7 @@ def _build_react_preview_bars_payload(
     session_date, session_note = _effective_trade_date(selected_date, pt_tz)
 
     if phase == "multi":
-        n_each_side = _react_preview_days_either_side(interval) if days_either_side is None else max(0, int(days_either_side))
+        n_each_side = _react_days_either_side_for_interval(interval) if days_either_side is None else max(0, int(days_either_side))
         target_dates = [d for d in _window_trade_dates(session_date, n_each_side) if d != session_date]
     else:
         n_each_side = 0
@@ -1324,14 +1245,8 @@ def _build_react_live_trades_overlay_payload(
     start_utc = fetch_start_pt.astimezone(ZoneInfo("UTC"))
     end_utc = fetch_end_pt.astimezone(ZoneInfo("UTC"))
 
-    resolved_trades_symbol = _resolve_trades_symbol_for_window(
-        start_utc,
-        end_utc,
-        preferred_symbol=TRADES_SYMBOL,
-    )
-
     try:
-        df_trades = _fetch_trades_utc(start_utc, end_utc, symbol=resolved_trades_symbol)
+        df_trades = _fetch_trades_utc(start_utc, end_utc, symbol=TRADES_SYMBOL)
     except Exception as e:
         return {
             "error": f"Database error when loading live trades: {e}",
@@ -1421,7 +1336,7 @@ def _build_react_live_trades_overlay_payload(
         "effective_trade_date": session_date.isoformat(),
         "interval": interval,
         "session_note": session_note,
-        "symbol": resolved_trades_symbol,
+        "symbol": TRADES_SYMBOL,
         "is_live_day": True,
         "source": "live_trades_overlay",
         "max_bars": int(LIVE_TRADES_MAX_BARS),
@@ -1476,14 +1391,8 @@ def _build_react_flow_payload(
     start_utc = view_start_pt.astimezone(ZoneInfo("UTC"))
     end_utc = view_end_pt.astimezone(ZoneInfo("UTC"))
 
-    resolved_flow_symbol = _resolve_flow_symbol_for_window(
-        start_utc,
-        end_utc,
-        preferred_symbol=FLOW_SYMBOL,
-    )
-
     try:
-        df = _fetch_flow_utc(start_utc, end_utc, symbol=resolved_flow_symbol)
+        df = _fetch_flow_utc(start_utc, end_utc, symbol=FLOW_SYMBOL)
     except Exception as e:
         return {
             "error": f"Database error when loading flow: {e}",
@@ -1504,7 +1413,7 @@ def _build_react_flow_payload(
             "session": session_mode,
             "resample": resample_mode,
             "ema_len": span,
-            "symbol": resolved_flow_symbol,
+            "symbol": FLOW_SYMBOL,
             "point_count": 0,
         }, 200
 
@@ -1559,7 +1468,7 @@ def _build_react_flow_payload(
         "session": session_mode,
         "resample": resample_mode,
         "ema_len": span,
-        "symbol": resolved_flow_symbol,
+        "symbol": FLOW_SYMBOL,
         "point_count": len(flow_points),
     }, 200
 
@@ -2062,7 +1971,7 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
         return go.Figure(layout_title_text="Aggressor Flow: empty time range.")
 
     try:
-        df = _fetch_flow_utc(start_utc, end_utc, symbol=_resolve_flow_symbol_for_window(start_utc, end_utc, preferred_symbol=FLOW_SYMBOL))
+        df = _fetch_flow_utc(start_utc, end_utc, symbol=FLOW_SYMBOL)
     except Exception as e:
         return go.Figure(layout_title_text=f"Aggressor Flow DB error: {e}")
 
@@ -2541,7 +2450,7 @@ def register_ironbeam_callbacks(app):
             locked_y_range = None
 
         # ---- multi-day targets ----
-        target_dates = _window_trade_dates(session_date, CLASSIC_DAYS_EITHER_SIDE)
+        target_dates = _window_trade_dates(session_date, LEGACY_CLASSIC_DAYS_EITHER_SIDE)
         target_dates_str = [d.isoformat() for d in target_dates]
 
         day_start_pt, day_end_pt = _session_window_pt(session_date, pt_tz)
@@ -3515,7 +3424,8 @@ def register_ironbeam_callbacks(app):
                 "resample",
                 {"type": "select", "options": ["1s", "5s", "15s", "1m"], "label": "Resample"},
             )
-            schema.setdefault("session", {"type": "select", "options": ["RTH", "FULL"], "label": "Session"})
+            schema.setdefault("session", {"type": "select", "options": ["RTH", "FULL"], "label": "Session"},
+            )
             schema.setdefault(
                 "hist_alpha",
                 {"type": "float", "min": 0.05, "max": 1.0, "step": 0.05, "label": "Histogram opacity"},
@@ -4043,7 +3953,7 @@ def register_ironbeam_callbacks(app):
         }
         content_style = {"display": "none"}
         btn = "«"
-        row_style = {"display": "flex", "alignItems": "flex-start", "gap": "0px"}
+        row_style = {"display": "flex", "alignItems": "stretch", "gap": "0px", "width": "100%", "minWidth": 0, "flex": "1 1 auto", "minHeight": 0}
         toggle_style = {"display": "none"}
         return sidebar_style, content_style, btn, row_style, toggle_style
 
@@ -4084,12 +3994,11 @@ def register_ironbeam_callbacks(app):
 
         gex_enabled = "gex_overlay" in enabled if enabled else True
 
-        react_days_either_side = _react_preview_days_either_side(interval)
         params = [
             f"trade_date={td}",
             f"interval={interval}",
             f"gex_enabled={1 if gex_enabled else 0}",
-            f"days_either_side={react_days_either_side}",
+            f"days_either_side={_react_days_either_side_for_interval(interval)}",
         ]
         if gex_min_abs_b is not None:
             params.append(f"gex_min_abs_b={gex_min_abs_b}")
@@ -4172,8 +4081,16 @@ def register_ironbeam_callbacks(app):
         mode = (chart_mode or "react_preview").strip()
         if mode == "react_preview":
             return (
-                {"display": "none"},
-                {"display": "block", "flex": "1 1 auto", "minHeight": 0},
+                {"display": "none", "width": "100%", "minWidth": 0, "minHeight": 0},
+                {
+                    "display": "flex",
+                    "flexDirection": "column",
+                    "flex": "1 1 auto",
+                    "width": "100%",
+                    "minWidth": 0,
+                    "minHeight": 0,
+                    "height": "100%",
+                },
             )
 
         return (
@@ -4181,9 +4098,12 @@ def register_ironbeam_callbacks(app):
                 "display": "flex",
                 "flexDirection": "column",
                 "flex": "1 1 auto",
+                "width": "100%",
+                "minWidth": 0,
                 "minHeight": 0,
+                "height": "100%",
             },
-            {"display": "none"},
+            {"display": "none", "width": "100%", "minWidth": 0, "minHeight": 0},
         )
 
 

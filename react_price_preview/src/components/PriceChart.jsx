@@ -723,8 +723,8 @@ export default function PriceChart({
     }
 
     const chart = createChart(container, {
-      width: container.clientWidth || 900,
-      height: Math.max(container.clientHeight || 0, MIN_CHART_HEIGHT),
+      width: container.clientWidth || stage.clientWidth || 900,
+      height: Math.max(container.clientHeight || stage.clientHeight || 0, MIN_CHART_HEIGHT),
       layout: {
         background: { type: ColorType.Solid, color: ETH_BG_COLOR },
         textColor: '#cbd5e1',
@@ -954,10 +954,15 @@ export default function PriceChart({
     }
 
     const handleResize = () => {
-      chart.applyOptions({
-        width: container.clientWidth || 900,
-        height: Math.max(container.clientHeight || 0, MIN_CHART_HEIGHT),
-      })
+      if (!chart || !container) return
+      const w = container.clientWidth || stage.clientWidth
+      const h = container.clientHeight || stage.clientHeight
+      if (w > 0 && h > 0) {
+        chart.applyOptions({
+          width: w,
+          height: Math.max(h, MIN_CHART_HEIGHT),
+        })
+      }
       hideTooltip()
       requestAnimationFrame(updateBand)
       requestAnimationFrame(() => {
@@ -974,7 +979,7 @@ export default function PriceChart({
         : null
 
     if (resizeObserver) {
-      resizeObserver.observe(container)
+      resizeObserver.observe(stage)
     }
 
     const handleClick = (param) => {
@@ -1695,7 +1700,7 @@ export default function PriceChart({
             </div>
           </div>
 
-          <div ref={hostRef} className="chart-host" />
+          <div ref={hostRef} className="chart-host" style={{ width: '100%', height: '100%' }} />
         </div>
       </div>
     </div>

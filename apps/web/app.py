@@ -584,7 +584,14 @@ def serve_layout():
                 ),
                 # Ironbeam chart block
                 ironbeam_layout(),
-            ]
+            ],
+            style={
+                "display": "flex",
+                "flexDirection": "column",
+                "height": "100%",
+                "width": "100%",
+                "minHeight": 0,
+            },
         )
     ]
 
@@ -1130,15 +1137,25 @@ def serve_layout():
                 style=TABS_WRAP_STYLE,
             ),
             # ===== Dashboard container =====
-            html.Div(id="dashboard-container", children=dashboard_children, style={"display": "block"}),
+            html.Div(id="dashboard-container", children=dashboard_children, style={"display": "block", "flex": "1 1 auto", "minHeight": 0, "overflowY": "auto"}),
             # ===== Ironbeam container =====
-            html.Div(id="ironbeam-container", children=ironbeam_children, style={"display": "none"}),
+            html.Div(id="ironbeam-container", children=ironbeam_children, style={"display": "none", "flex": "1 1 auto", "minHeight": 0, "width": "100%"}),
             # ===== Backtests container (existing) =====
-            html.Div(id="backtests-container", children=make_backtests_tab(bt_start, bt_end), style={"display": "none"}),
+            html.Div(id="backtests-container", children=make_backtests_tab(bt_start, bt_end), style={"display": "none", "flex": "1 1 auto", "minHeight": 0, "overflowY": "auto"}),
             # ===== Backtests v2 container (new) =====
-            html.Div(id="backtests-v2-container", children=backtests_v2_children, style={"display": "none"}),
+            html.Div(id="backtests-v2-container", children=backtests_v2_children, style={"display": "none", "flex": "1 1 auto", "minHeight": 0, "overflowY": "auto"}),
         ],
-        style={"backgroundColor": "black", "color": "white", "minHeight": "100vh", "padding": "0 80px 30px"},
+        style={
+            "backgroundColor": "black",
+            "color": "white",
+            "height": "100vh",
+            "minHeight": "100vh",
+            "padding": "0 24px 12px", # reduced from 80px to 24px
+            "display": "flex",
+            "flexDirection": "column",
+            "overflow": "hidden",
+            "width": "100%",
+        },
     )
 
 
@@ -1161,13 +1178,17 @@ def sync_expiration_with_trade(trade_date):
     Input(MAIN_TABS_ID, "value"),
 )
 def _switch_main_tab(tab_value):
+    hidden = {"display": "none"}
+    scrollable = {"display": "block", "flex": "1 1 auto", "minHeight": 0, "overflowY": "auto"}
+    price_chart = {"display": "flex", "flex": "1 1 auto", "minHeight": 0, "overflow": "hidden", "width": "100%"}
+
     if tab_value == TAB_BACKTESTS:
-        return {"display": "none"}, {"display": "none"}, {"display": "block"}, {"display": "none"}
+        return hidden, hidden, scrollable, hidden
     if tab_value == TAB_BACKTESTS_V2:
-        return {"display": "none"}, {"display": "none"}, {"display": "none"}, {"display": "block"}
+        return hidden, hidden, hidden, scrollable
     if tab_value == TAB_PRICE_CHART:
-        return {"display": "none"}, {"display": "block"}, {"display": "none"}, {"display": "none"}
-    return {"display": "block"}, {"display": "none"}, {"display": "none"}, {"display": "none"}
+        return hidden, price_chart, hidden, hidden
+    return scrollable, hidden, hidden, hidden
 
 
 # ===== Backtests v2 loader callback (NEW) =====

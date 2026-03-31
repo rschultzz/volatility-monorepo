@@ -325,9 +325,14 @@ export default function AggressorFlowPanel({
     if (!hostRef.current || !stageRef.current) return undefined
 
     const container = hostRef.current
+    const stage = stageRef.current
+
+    const initialW = stage.clientWidth || 900
+    const initialH = Math.max(stage.clientHeight || MIN_PANEL_HEIGHT, MIN_PANEL_HEIGHT)
+
     const chart = createChart(container, {
-      width: container.clientWidth || 900,
-      height: Math.max(container.clientHeight || MIN_PANEL_HEIGHT, MIN_PANEL_HEIGHT),
+      width: initialW,
+      height: initialH,
       layout: {
         background: { type: ColorType.Solid, color: BG_COLOR },
         textColor: '#cbd5e1',
@@ -421,10 +426,15 @@ export default function AggressorFlowPanel({
     refreshDecorationsRef.current = refreshDecorations
 
     const handleResize = () => {
-      chart.applyOptions({
-        width: container.clientWidth || 900,
-        height: Math.max(container.clientHeight || MIN_PANEL_HEIGHT, MIN_PANEL_HEIGHT),
-      })
+      if (!chart || !stageRef.current) return
+      const w = stageRef.current.clientWidth
+      const h = stageRef.current.clientHeight
+      if (w > 0 && h > 0) {
+        chart.applyOptions({
+          width: w,
+          height: Math.max(h, MIN_PANEL_HEIGHT),
+        })
+      }
       requestAnimationFrame(refreshDecorations)
     }
 
@@ -440,7 +450,7 @@ export default function AggressorFlowPanel({
         : null
 
     if (resizeObserver) {
-      resizeObserver.observe(container)
+      resizeObserver.observe(stage)
     }
 
     chart.timeScale().subscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange)
@@ -566,7 +576,7 @@ export default function AggressorFlowPanel({
   }
 
   return (
-    <div className="flow-shell" style={{ height: `${height}px`, position: 'relative' }}>
+    <div className="flow-shell" style={{ height: `${height}px`, position: 'relative', width: '100%' }}>
       <div
         className="flow-panel-header"
         style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'flex-start' }}
@@ -693,8 +703,8 @@ export default function AggressorFlowPanel({
           </form>
         </div>
       )}
-      <div ref={stageRef} className="flow-stage">
-        <div ref={hostRef} className="flow-host" />
+      <div ref={stageRef} className="flow-stage" style={{ width: '100%' }}>
+        <div ref={hostRef} className="flow-host" style={{ width: '100%', height: '100%' }} />
         {sessionBands.map((band) => (
           <div
             key={band.key}
