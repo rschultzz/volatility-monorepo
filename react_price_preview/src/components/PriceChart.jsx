@@ -1364,6 +1364,19 @@ export default function PriceChart({
     if (!liveTradeSeriesRef.current) return
 
     const next = Array.isArray(shiftedLiveTradeCandles) ? shiftedLiveTradeCandles : []
+    const hasLive = next.length > 0
+
+    if (seriesRef.current) {
+      seriesRef.current.applyOptions({
+        lastValueVisible: !hasLive,
+      })
+    }
+
+    liveTradeSeriesRef.current.applyOptions({
+      lastValueVisible: hasLive,
+      priceLineVisible: false,
+    })
+
     const prev = Array.isArray(previousLiveTradeCandlesRef.current)
       ? previousLiveTradeCandlesRef.current
       : []
