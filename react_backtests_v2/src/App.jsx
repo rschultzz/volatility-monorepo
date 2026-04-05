@@ -13,14 +13,17 @@ const DEFAULT_SETTINGS = {
   startDate: isoDateOffset(-14),
   endDate: isoDateOffset(0),
   minLevelGexBn: 50,
-  minMovePoints: 20,
-  touchBufferPoints: 1,
+  zoneMergeDistancePts: 10,
+  minCleanMovePoints: 20,
+  targetProximityPts: 5,
+  maxZoneBreachPts: 5,
+  pivotStrengthBars: 3,
   levelFamily: 'primary',
   maxResults: 2500,
 };
 
 function summaryText(settings) {
-  return `${settings.startDate} → ${settings.endDate} | min GEX ${settings.minLevelGexBn} BN | min move ${settings.minMovePoints} pts | ${settings.levelFamily}`;
+  return `${settings.startDate} → ${settings.endDate} | min GEX ${settings.minLevelGexBn} BN | merge ${settings.zoneMergeDistancePts} pts | clean move ${settings.minCleanMovePoints} pts | target ±${settings.targetProximityPts}`;
 }
 
 function rowKey(row, idx) {
@@ -44,7 +47,7 @@ export default function App() {
       { label: 'Source View', value: sourceView || '—' },
       { label: 'Instances Found', value: summary?.instances_found ?? rows.length },
       { label: 'Bars Scanned', value: summary?.bars_scanned ?? '—' },
-      { label: 'Days Scanned', value: summary?.days_scanned ?? '—' },
+      { label: 'Zones Built', value: summary?.zones_total ?? '—' },
     ];
   }, [rows.length, sourceView, summary]);
 
@@ -60,8 +63,11 @@ export default function App() {
       const payload = {
         ...nextSettings,
         minLevelGexBn: Number(nextSettings.minLevelGexBn),
-        minMovePoints: Number(nextSettings.minMovePoints),
-        touchBufferPoints: Number(nextSettings.touchBufferPoints),
+        zoneMergeDistancePts: Number(nextSettings.zoneMergeDistancePts),
+        minCleanMovePoints: Number(nextSettings.minCleanMovePoints),
+        targetProximityPts: Number(nextSettings.targetProximityPts),
+        maxZoneBreachPts: Number(nextSettings.maxZoneBreachPts),
+        pivotStrengthBars: Number(nextSettings.pivotStrengthBars),
         maxResults: Number(nextSettings.maxResults),
       };
 
@@ -124,7 +130,7 @@ export default function App() {
             <div className="eyebrow">Surface Dynamics</div>
             <h1>Backtests</h1>
             <p className="lead">
-              First framework for scanning same-day RTH moves from one qualifying GEX level to another.
+              Zone-based scan: source GEX zone → last pivot → clean space → target proximity.
             </p>
           </div>
 
@@ -141,7 +147,8 @@ export default function App() {
         <div className="toolbar-row">
           <div className="pill">RTH only</div>
           <div className="pill">Same day only</div>
-          <div className="pill">Opening prices on start/target bars</div>
+          <div className="pill">Transitive GEX zones</div>
+          <div className="pill">Last pivot inside source zone</div>
           <div className="pill pill-wide">{summaryText(settings)}</div>
         </div>
 

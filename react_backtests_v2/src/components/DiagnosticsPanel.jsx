@@ -17,9 +17,8 @@ function StatCell({ label, value }) {
 export default function DiagnosticsPanel({ diagnostics }) {
   if (!diagnostics) return null;
 
-  const columnStats = diagnostics.column_stats || {};
-  const columnRows = Object.entries(columnStats);
-  const sampleRows = diagnostics.sample_qualifying_rows || [];
+  const sampleZones = diagnostics.sample_zones || [];
+  const sampleResults = diagnostics.sample_results || [];
 
   return (
     <div className="diag-card">
@@ -27,46 +26,50 @@ export default function DiagnosticsPanel({ diagnostics }) {
         <div>
           <h2>Diagnostics</h2>
           <p>
-            This tells us whether the issue is missing wall data, GEX threshold units, or touch logic being too strict.
+            This version diagnoses the zone model: qualifying levels, transitive zones, clean-target zones, and valid zone episodes.
           </p>
         </div>
       </div>
 
       <div className="diag-stat-grid">
-        <StatCell label="Rows with any wall" value={diagnostics.rows_with_any_level ?? '—'} />
-        <StatCell label="Rows meeting GEX threshold" value={diagnostics.rows_with_any_qualifying_level ?? '—'} />
-        <StatCell label="Bars touching qualifying wall" value={diagnostics.bars_touching_qualifying_level ?? '—'} />
-        <StatCell label="Start candidates" value={diagnostics.start_candidates ?? '—'} />
-        <StatCell label="Within 1 pt of a qualifying wall" value={diagnostics.bars_within_1_pt ?? '—'} />
-        <StatCell label="Within 5 pts of a qualifying wall" value={diagnostics.bars_within_5_pts ?? '—'} />
+        <StatCell label="Bars total" value={diagnostics.bars_total ?? '—'} />
+        <StatCell label="Days total" value={diagnostics.days_total ?? '—'} />
+        <StatCell label="Qualifying levels seen" value={diagnostics.qualifying_levels_seen ?? '—'} />
+        <StatCell label="Zones built" value={diagnostics.zones_total ?? '—'} />
+        <StatCell label="Clean-target zones" value={diagnostics.source_zones_with_clean_targets ?? '—'} />
+        <StatCell label="Zone episodes considered" value={diagnostics.zone_episodes_considered ?? '—'} />
       </div>
 
       <div className="diag-two-col">
         <div className="diag-panel">
-          <div className="diag-panel-title">Wall Column Stats</div>
+          <div className="diag-panel-title">Sample Zones</div>
           <div className="table-wrap diag-table-wrap">
             <table className="results-table diag-table">
               <thead>
                 <tr>
-                  <th>Column</th>
-                  <th>Rows With Level</th>
-                  <th>Rows ≥ Threshold</th>
+                  <th>Date</th>
+                  <th>Range</th>
+                  <th>Levels</th>
+                  <th>Width</th>
+                  <th>Count</th>
                   <th>Max Abs GEX BN</th>
                 </tr>
               </thead>
               <tbody>
-                {columnRows.length ? (
-                  columnRows.map(([label, stats]) => (
-                    <tr key={label}>
-                      <td>{label}</td>
-                      <td>{stats.rows_with_level ?? '—'}</td>
-                      <td>{stats.rows_meeting_gex_threshold ?? '—'}</td>
-                      <td>{fmt(stats.max_abs_gex_bn)}</td>
+                {sampleZones.length ? (
+                  sampleZones.map((row, idx) => (
+                    <tr key={`${row.trade_date}-${row.range}-${idx}`}>
+                      <td>{row.trade_date}</td>
+                      <td>{row.range}</td>
+                      <td className="wrap-cell">{row.levels}</td>
+                      <td>{fmt(row.width)}</td>
+                      <td>{row.count}</td>
+                      <td>{fmt(row.max_abs_gex_bn)}</td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={4}>No diagnostic column stats yet.</td>
+                    <td colSpan={6}>No zones found.</td>
                   </tr>
                 )}
               </tbody>
@@ -75,38 +78,36 @@ export default function DiagnosticsPanel({ diagnostics }) {
         </div>
 
         <div className="diag-panel">
-          <div className="diag-panel-title">Sample Qualifying Rows</div>
+          <div className="diag-panel-title">Sample Results</div>
           <div className="table-wrap diag-table-wrap">
             <table className="results-table diag-table">
               <thead>
                 <tr>
                   <th>Date</th>
-                  <th>Time</th>
-                  <th>Close</th>
-                  <th>Nearest Dist</th>
-                  <th>Levels</th>
+                  <th>Dir</th>
+                  <th>Source Zone</th>
+                  <th>Target</th>
+                  <th>Start</th>
+                  <th>Target Time</th>
+                  <th>Clean Space</th>
                 </tr>
               </thead>
               <tbody>
-                {sampleRows.length ? (
-                  sampleRows.map((row, idx) => (
-                    <tr key={`${row.trade_date}-${row.ts_pt}-${idx}`}>
+                {sampleResults.length ? (
+                  sampleResults.map((row, idx) => (
+                    <tr key={`${row.trade_date}-${row.start_ts_pt}-${idx}`}>
                       <td>{row.trade_date}</td>
-                      <td>{row.ts_pt}</td>
-                      <td>{fmt(row.close)}</td>
-                      <td>{fmt(row.nearest_distance)}</td>
-                      <td>
-                        <div className="diag-level-list">
-                          {(row.levels || []).map((levelText, levelIdx) => (
-                            <div key={levelIdx}>{levelText}</div>
-                          ))}
-                        </div>
-                      </td>
+                      <td>{row.direction}</td>
+                      <td>{row.source_zone}</td>
+                      <td>{fmt(row.target_level)}</td>
+                      <td>{row.start_ts_pt}</td>
+                      <td>{row.target_ts_pt}</td>
+                      <td>{fmt(row.clean_space_points)}</td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={5}>No qualifying rows found for the current threshold.</td>
+                    <td colSpan={7}>No valid instances found yet.</td>
                   </tr>
                 )}
               </tbody>

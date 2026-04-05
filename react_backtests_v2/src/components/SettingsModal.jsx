@@ -42,22 +42,53 @@ export default function SettingsModal({ isOpen, settingsDraft, onChange, onClose
           </label>
 
           <label className="field">
-            <span>Minimum move (points)</span>
+            <span>Zone merge distance (pts)</span>
             <input
               type="number"
               step="1"
-              value={settingsDraft.minMovePoints}
-              onChange={(e) => onChange('minMovePoints', e.target.value)}
+              value={settingsDraft.zoneMergeDistancePts}
+              onChange={(e) => onChange('zoneMergeDistancePts', e.target.value)}
             />
           </label>
 
           <label className="field">
-            <span>Touch buffer (points)</span>
+            <span>Minimum clean move (pts)</span>
             <input
               type="number"
-              step="0.25"
-              value={settingsDraft.touchBufferPoints}
-              onChange={(e) => onChange('touchBufferPoints', e.target.value)}
+              step="1"
+              value={settingsDraft.minCleanMovePoints}
+              onChange={(e) => onChange('minCleanMovePoints', e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Target proximity (pts)</span>
+            <input
+              type="number"
+              step="0.5"
+              value={settingsDraft.targetProximityPts}
+              onChange={(e) => onChange('targetProximityPts', e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Max zone breach (pts)</span>
+            <input
+              type="number"
+              step="0.5"
+              value={settingsDraft.maxZoneBreachPts}
+              onChange={(e) => onChange('maxZoneBreachPts', e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Pivot strength (bars)</span>
+            <input
+              type="number"
+              step="1"
+              min="1"
+              value={settingsDraft.pivotStrengthBars}
+              onChange={(e) => onChange('pivotStrengthBars', e.target.value)}
             />
           </label>
 
@@ -85,7 +116,7 @@ export default function SettingsModal({ isOpen, settingsDraft, onChange, onClose
         </div>
 
         <div className="helper-note">
-          RTH-only and same-day constraints are enforced in this first build.
+          This build scans for source zones, finds the last pivot inside the zone, and only keeps moves that have clean space to the next external zone.
         </div>
 
         <div className="modal-actions">

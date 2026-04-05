@@ -603,8 +603,35 @@ export default function PriceChart({
   const [settingsError, setSettingsError] = useState('')
 
   useEffect(() => {
-    setSelectedTimes(normalizeTimes(initialSelectedTimes || []))
-  }, [initialSelectedTimes])
+  setSelectedTimes(normalizeTimes(initialSelectedTimes || []))
+}, [initialSelectedTimes])
+
+useEffect(() => {
+  const handleParentTimeslices = (event) => {
+    const data = event?.data
+    if (!data || data.type !== 'ib-parent-timeslices') return
+
+    const next = normalizeTimes(Array.isArray(data.times) ? data.times : [])
+    setSelectedTimes((prev) => {
+      const prevKey = normalizeTimes(prev).join('|')
+      const nextKey = next.join('|')
+      return prevKey === nextKey ? prev : next
+    })
+  }
+
+  window.addEventListener('message', handleParentTimeslices)
+  return () => {
+    window.removeEventListener('message', handleParentTimeslices)
+  }
+}, [])
+
+useEffect(() => {
+  try {
+    window.parent.postMessage({ type: 'ib-react-request-timeslices' }, '*')
+  } catch (err) {
+    // ignore
+  }
+}, [])
 
   useEffect(() => {
     if (!settingsOpen) {

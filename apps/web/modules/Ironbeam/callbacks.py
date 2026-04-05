@@ -3966,12 +3966,11 @@ def register_ironbeam_callbacks(app):
     @app.callback(
         Output("ib-react-preview-frame", "src"),
         Input("trade-date", "date"),
-        Input("smile-time-input", "value"),
         Input("ironbeam-bar-interval", "value"),
         Input("ib-chart-mode-toggle", "value"),
         Input("ib-indicator-state", "data"),
     )
-    def ib_update_react_preview_src(trade_date, selected_times_pt, bar_interval, chart_mode, indicator_state):
+    def ib_update_react_preview_src(trade_date, bar_interval, chart_mode, indicator_state):
         base = os.getenv("IRONBEAM_REACT_PREVIEW_URL", "/react-preview").rstrip("/")
         td = trade_date or dt.date.today().isoformat()
         interval = (bar_interval or "1min").strip()
@@ -3996,27 +3995,6 @@ def register_ironbeam_callbacks(app):
 
         gex_enabled = "gex_overlay" in enabled if enabled else True
 
-        # normalize selected time slices
-        if selected_times_pt is None:
-            raw_times = []
-        elif isinstance(selected_times_pt, list):
-            raw_times = selected_times_pt
-        else:
-            raw_times = [selected_times_pt]
-
-        cleaned_times = []
-        seen = set()
-        for item in raw_times:
-            s = str(item or "").strip()
-            if not s:
-                continue
-            if not re.match(r"^\d{2}:\d{2}$", s):
-                continue
-            if s in seen:
-                continue
-            seen.add(s)
-            cleaned_times.append(s)
-
         params = [
             f"trade_date={td}",
             f"interval={interval}",
@@ -4026,9 +4004,6 @@ def register_ironbeam_callbacks(app):
 
         if gex_min_abs_b is not None:
             params.append(f"gex_min_abs_b={gex_min_abs_b}")
-
-        if cleaned_times:
-            params.append(f"selected_times={','.join(cleaned_times)}")
 
         return f"{base}?{'&'.join(params)}"
 
@@ -4098,6 +4073,112 @@ def register_ironbeam_callbacks(app):
                 seen.add(s)
 
         return json.dumps({"times": cleaned})
+
+    app.clientside_callback(
+        """
+        function(parentValue, frameSrc, currentClicks) {
+            try {
+                if (!parentValue) {
+                    return window.dash_clientside.no_update;
+                }
+
+                let payload = parentValue;
+                if (typeof parentValue === "string") {
+                    try {
+                        payload = JSON.parse(parentValue);
+                    } catch (e) {
+                        payload = { times: [] };
+                    }
+                }
+
+                const times = Array.isArray(payload?.times) ? payload.times : [];
+
+                const send = () => {
+                    try {
+                        const frame = document.getElementById("ib-react-preview-frame");
+                        if (!frame || !frame.contentWindow) {
+                            return;
+                        }
+                        frame.contentWindow.postMessage(
+                            { type: "ib-parent-timeslices", times },
+                            "*"
+                        );
+                    } catch (err) {
+                        // ignore
+                    }
+                };
+
+                // normal case: dropdown edited while iframe is already alive
+                send();
+
+                // date change / iframe reload case: child may not be ready yet
+                window.setTimeout(send, 150);
+                window.setTimeout(send, 400);
+                window.setTimeout(send, 900);
+
+                return (currentClicks || 0) + 1;
+            } catch (err) {
+                return window.dash_clientside.no_update;
+            }
+        }
+        """,
+        Output("ib-react-timeslice-trigger", "n_clicks"),
+        Input("ib-react-timeslice-parent", "value"),
+        Input("ib-react-preview-frame", "src"),
+        State("ib-react-timeslice-trigger", "n_clicks"),
+        prevent_initial_call=False,
+    )
+
+    app.clientside_callback(
+        """
+        function(parentValue, currentClicks) {
+            try {
+                if (!window.__ibReactTimesliceRequestHookInstalled) {
+                    window.__ibReactTimesliceRequestHookInstalled = true;
+
+                    window.addEventListener("message", function(event) {
+                        try {
+                            const data = event && event.data;
+                            if (!data || data.type !== "ib-react-request-timeslices") {
+                                return;
+                            }
+
+                            const frame = document.getElementById("ib-react-preview-frame");
+                            if (!frame || !frame.contentWindow) {
+                                return;
+                            }
+
+                            let payload = parentValue;
+                            if (typeof payload === "string") {
+                                try {
+                                    payload = JSON.parse(payload);
+                                } catch (e) {
+                                    payload = { times: [] };
+                                }
+                            }
+
+                            const times = Array.isArray(payload?.times) ? payload.times : [];
+                            frame.contentWindow.postMessage(
+                                { type: "ib-parent-timeslices", times },
+                                "*"
+                            );
+                        } catch (err) {
+                            // ignore
+                        }
+                    });
+                }
+
+                return window.dash_clientside.no_update;
+            } catch (err) {
+                return window.dash_clientside.no_update;
+            }
+        }
+        """,
+        Output("ib-react-timeslice-bridge", "value"),
+        Input("ib-react-timeslice-parent", "value"),
+        State("ib-react-timeslice-bridge", "value"),
+        prevent_initial_call=False,
+    )
 
     @app.callback(
         Output("ib-classic-chart-wrap", "style"),

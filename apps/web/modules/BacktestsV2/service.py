@@ -41,7 +41,6 @@ def gex_to_bn(value: Any) -> float | None:
         return None
     if math.isnan(v):
         return None
-    # Supports both raw-dollar GEX and already-normalized BN values.
     if abs(v) >= 1_000_000:
         return v / 1_000_000_000.0
     return v
@@ -131,155 +130,335 @@ def _row_levels(row: Dict[str, Any], level_family: str) -> List[Dict[str, Any]]:
 
 
 def _qualifying_levels(row: Dict[str, Any], level_family: str, min_level_gex_bn: float) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    for item in _row_levels(row, level_family):
-        if abs(item["gex_bn"]) >= float(min_level_gex_bn):
-            out.append(item)
+    return [item for item in _row_levels(row, level_family) if abs(item["gex_bn"]) >= float(min_level_gex_bn)]
+
+
+def _collect_day_levels(day_rows: List[Dict[str, Any]], level_family: str, min_level_gex_bn: float) -> List[Dict[str, Any]]:
+    by_level: Dict[float, Dict[str, Any]] = {}
+
+    for row in day_rows:
+        for item in _qualifying_levels(row, level_family, min_level_gex_bn):
+            key = round(float(item["level"]), 4)
+            existing = by_level.get(key)
+            if existing is None:
+                by_level[key] = {
+                    "level": float(item["level"]),
+                    "max_abs_gex_bn": abs(float(item["gex_bn"])),
+                    "families": {str(item["family"])},
+                    "labels": {str(item["label"])},
+                }
+            else:
+                existing["max_abs_gex_bn"] = max(existing["max_abs_gex_bn"], abs(float(item["gex_bn"])))
+                existing["families"].add(str(item["family"]))
+                existing["labels"].add(str(item["label"]))
+
+    out = list(by_level.values())
+    out.sort(key=lambda x: x["level"])
+    for item in out:
+        item["families"] = sorted(item["families"])
+        item["labels"] = sorted(item["labels"])
     return out
 
 
-def _touched_levels(
-    row: Dict[str, Any],
-    level_family: str,
-    min_level_gex_bn: float,
-    touch_buffer_points: float,
-) -> List[Dict[str, Any]]:
-    low = row.get("low")
-    high = row.get("high")
-    if low is None or high is None:
+def _make_zone(items: List[Dict[str, Any]], zone_id: int) -> Dict[str, Any]:
+    sorted_items = sorted(items, key=lambda x: float(x["level"]))
+    low = float(sorted_items[0]["level"])
+    high = float(sorted_items[-1]["level"])
+    levels = [float(x["level"]) for x in sorted_items]
+    return {
+        "zone_id": int(zone_id),
+        "low": low,
+        "high": high,
+        "width": round(high - low, 2),
+        "count": len(sorted_items),
+        "levels": levels,
+        "levels_text": ", ".join(f"{x:.0f}" if float(x).is_integer() else f"{x:.2f}" for x in levels),
+        "max_abs_gex_bn": round(max(float(x["max_abs_gex_bn"]) for x in sorted_items), 2),
+        "items": sorted_items,
+    }
+
+
+def _build_zones(levels: List[Dict[str, Any]], zone_merge_distance_pts: float) -> List[Dict[str, Any]]:
+    if not levels:
         return []
 
-    try:
-        low_v = float(low)
-        high_v = float(high)
-    except Exception:
-        return []
+    zones: List[Dict[str, Any]] = []
+    current_items: List[Dict[str, Any]] = [levels[0]]
 
-    out: List[Dict[str, Any]] = []
-    for item in _qualifying_levels(row, level_family, min_level_gex_bn):
-        level_v = float(item["level"])
-        if (low_v - touch_buffer_points) <= level_v <= (high_v + touch_buffer_points):
-            out.append(item)
-    return out
+    for item in levels[1:]:
+        prev = current_items[-1]
+        if float(item["level"]) - float(prev["level"]) <= float(zone_merge_distance_pts):
+            current_items.append(item)
+        else:
+            zones.append(_make_zone(current_items, len(zones)))
+            current_items = [item]
+
+    zones.append(_make_zone(current_items, len(zones)))
+    return zones
 
 
-def _nearest_qualifying_distance(row: Dict[str, Any], level_family: str, min_level_gex_bn: float) -> float | None:
+def _in_zone_close(row: Dict[str, Any], zone: Dict[str, Any], max_zone_breach_pts: float) -> bool:
     close_v = row.get("close")
     if close_v is None:
-        return None
+        return False
     try:
         close_f = float(close_v)
     except Exception:
-        return None
-
-    levels = _qualifying_levels(row, level_family, min_level_gex_bn)
-    if not levels:
-        return None
-    return min(abs(float(item["level"]) - close_f) for item in levels)
+        return False
+    return (float(zone["low"]) - float(max_zone_breach_pts)) <= close_f <= (float(zone["high"]) + float(max_zone_breach_pts))
 
 
-def _diagnostics_payload(
-    df: pd.DataFrame,
+def _true_segments(mask: List[bool]) -> List[Tuple[int, int]]:
+    out: List[Tuple[int, int]] = []
+    start_idx: int | None = None
+    for i, flag in enumerate(mask):
+        if flag and start_idx is None:
+            start_idx = i
+        elif (not flag) and start_idx is not None:
+            out.append((start_idx, i - 1))
+            start_idx = None
+    if start_idx is not None:
+        out.append((start_idx, len(mask) - 1))
+    return out
+
+
+def _find_last_pivot(day_rows: List[Dict[str, Any]], start_idx: int, end_idx: int, direction: str, pivot_strength_bars: int) -> Tuple[int, float]:
+    look = max(1, int(pivot_strength_bars))
+
+    if direction == "up":
+        candidate_idx: int | None = None
+        for i in range(end_idx, start_idx - 1, -1):
+            left = max(start_idx, i - look)
+            right = min(end_idx, i + look)
+            center_v = float(day_rows[i]["low"])
+            window_vals = [float(day_rows[k]["low"]) for k in range(left, right + 1)]
+            if center_v <= min(window_vals):
+                candidate_idx = i
+                break
+        if candidate_idx is None:
+            min_v = min(float(day_rows[i]["low"]) for i in range(start_idx, end_idx + 1))
+            for i in range(end_idx, start_idx - 1, -1):
+                if float(day_rows[i]["low"]) == min_v:
+                    candidate_idx = i
+                    break
+        assert candidate_idx is not None
+        return candidate_idx, float(day_rows[candidate_idx]["low"])
+
+    candidate_idx = None
+    for i in range(end_idx, start_idx - 1, -1):
+        left = max(start_idx, i - look)
+        right = min(end_idx, i + look)
+        center_v = float(day_rows[i]["high"])
+        window_vals = [float(day_rows[k]["high"]) for k in range(left, right + 1)]
+        if center_v >= max(window_vals):
+            candidate_idx = i
+            break
+    if candidate_idx is None:
+        max_v = max(float(day_rows[i]["high"]) for i in range(start_idx, end_idx + 1))
+        for i in range(end_idx, start_idx - 1, -1):
+            if float(day_rows[i]["high"]) == max_v:
+                candidate_idx = i
+                break
+    assert candidate_idx is not None
+    return candidate_idx, float(day_rows[candidate_idx]["high"])
+
+
+def _first_target_hit(
+    day_rows: List[Dict[str, Any]],
+    *,
+    start_scan_idx: int,
+    direction: str,
+    zone: Dict[str, Any],
+    target_level: float,
+    target_proximity_pts: float,
+    max_zone_breach_pts: float,
+) -> int | None:
+    for j in range(start_scan_idx, len(day_rows)):
+        row = day_rows[j]
+
+        if _in_zone_close(row, zone, max_zone_breach_pts):
+            return None
+
+        try:
+            high_v = float(row["high"])
+            low_v = float(row["low"])
+        except Exception:
+            return None
+
+        if direction == "up":
+            if low_v < float(zone["low"]) - float(max_zone_breach_pts):
+                return None
+            if high_v >= float(target_level) - float(target_proximity_pts):
+                return j
+        else:
+            if high_v > float(zone["high"]) + float(max_zone_breach_pts):
+                return None
+            if low_v <= float(target_level) + float(target_proximity_pts):
+                return j
+
+    return None
+
+
+def _day_zone_results(
+    trade_date: dt.date,
+    day_rows: List[Dict[str, Any]],
     *,
     level_family: str,
     min_level_gex_bn: float,
-    touch_buffer_points: float,
-) -> Dict[str, Any]:
-    diag: Dict[str, Any] = {
-        "bars_total": int(len(df)),
-        "days_total": int(df["trade_date"].nunique()) if not df.empty else 0,
-        "rows_with_any_level": 0,
-        "rows_with_any_qualifying_level": 0,
-        "bars_touching_qualifying_level": 0,
-        "bars_within_0_5_pts": 0,
-        "bars_within_1_pt": 0,
-        "bars_within_2_pts": 0,
-        "bars_within_5_pts": 0,
-        "bars_within_10_pts": 0,
-        "start_candidates": 0,
-        "sample_qualifying_rows": [],
-        "column_stats": {},
+    zone_merge_distance_pts: float,
+    min_clean_move_points: float,
+    target_proximity_pts: float,
+    max_zone_breach_pts: float,
+    pivot_strength_bars: int,
+    max_results: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    qualifying_levels = _collect_day_levels(day_rows, level_family, min_level_gex_bn)
+    zones = _build_zones(qualifying_levels, zone_merge_distance_pts)
+
+    diagnostics = {
+        "qualifying_levels": len(qualifying_levels),
+        "zones_total": len(zones),
+        "source_zones_with_clean_targets": 0,
+        "zone_episodes_considered": 0,
+        "valid_instances": 0,
+        "sample_zones": [
+            {
+                "range": f"{zone['low']:.2f} – {zone['high']:.2f}",
+                "levels": zone["levels_text"],
+                "width": round(zone["width"], 2),
+                "count": int(zone["count"]),
+                "max_abs_gex_bn": round(float(zone["max_abs_gex_bn"]), 2),
+            }
+            for zone in zones[:8]
+        ],
     }
 
-    selected_defs = _selected_level_defs(level_family)
-    for _family, label, _level_col, _gex_col in selected_defs:
-        diag["column_stats"][label] = {
-            "rows_with_level": 0,
-            "rows_meeting_gex_threshold": 0,
-            "max_abs_gex_bn": None,
-        }
+    if not zones:
+        return [], diagnostics
 
-    if df.empty:
-        return diag
+    results: List[Dict[str, Any]] = []
 
-    day_start_candidates = 0
-    sample_rows: List[Dict[str, Any]] = []
+    for zone_idx, zone in enumerate(zones):
+        masks = [_in_zone_close(row, zone, max_zone_breach_pts) for row in day_rows]
+        episodes = _true_segments(masks)
 
-    for trade_date, day_df in df.groupby("trade_date", sort=True):
-        prev_touch_keys: set[str] = set()
-        for row in day_df.to_dict("records"):
-            all_levels = _row_levels(row, level_family)
-            if all_levels:
-                diag["rows_with_any_level"] += 1
+        if zone_idx < len(zones) - 1:
+            target_zone_up = zones[zone_idx + 1]
+            clean_space_up = float(target_zone_up["low"]) - float(zone["high"])
+            if clean_space_up >= float(min_clean_move_points):
+                diagnostics["source_zones_with_clean_targets"] += 1
+                for seg_start, seg_end in episodes:
+                    diagnostics["zone_episodes_considered"] += 1
+                    seg_min_low = min(float(day_rows[i]["low"]) for i in range(seg_start, seg_end + 1))
+                    if seg_min_low < float(zone["low"]) - float(max_zone_breach_pts):
+                        continue
 
-            for item in all_levels:
-                stat = diag["column_stats"][item["label"]]
-                stat["rows_with_level"] += 1
-                max_abs = abs(float(item["gex_bn"]))
-                current_max = stat["max_abs_gex_bn"]
-                if current_max is None or max_abs > current_max:
-                    stat["max_abs_gex_bn"] = max_abs
-                if max_abs >= float(min_level_gex_bn):
-                    stat["rows_meeting_gex_threshold"] += 1
+                    pivot_idx, pivot_price = _find_last_pivot(day_rows, seg_start, seg_end, "up", pivot_strength_bars)
+                    hit_idx = _first_target_hit(
+                        day_rows,
+                        start_scan_idx=seg_end + 1,
+                        direction="up",
+                        zone=zone,
+                        target_level=float(target_zone_up["low"]),
+                        target_proximity_pts=target_proximity_pts,
+                        max_zone_breach_pts=max_zone_breach_pts,
+                    )
+                    if hit_idx is None:
+                        continue
 
-            qualifying = _qualifying_levels(row, level_family, min_level_gex_bn)
-            if qualifying:
-                diag["rows_with_any_qualifying_level"] += 1
-                if len(sample_rows) < 8:
-                    nearest_dist = _nearest_qualifying_distance(row, level_family, min_level_gex_bn)
-                    sample_rows.append(
+                    start_row = day_rows[pivot_idx]
+                    target_row = day_rows[hit_idx]
+                    start_open = start_row.get("open")
+                    target_open = target_row.get("open")
+                    move_points = float(target_zone_up["low"]) - float(pivot_price)
+
+                    results.append(
                         {
                             "trade_date": str(trade_date),
-                            "ts_pt": str(row.get("ts_pt")),
-                            "close": round(float(row["close"]), 2) if row.get("close") is not None else None,
-                            "nearest_distance": round(float(nearest_dist), 2) if nearest_dist is not None else None,
-                            "levels": [
-                                f"{item['label']} @ {item['level']:.2f} ({item['gex_bn']:.2f} BN)"
-                                for item in qualifying[:3]
-                            ],
+                            "direction": "up",
+                            "source_zone_low": round(float(zone["low"]), 2),
+                            "source_zone_high": round(float(zone["high"]), 2),
+                            "source_zone_width": round(float(zone["width"]), 2),
+                            "source_zone_levels": zone["levels_text"],
+                            "target_level": round(float(target_zone_up["low"]), 2),
+                            "target_zone_range": f"{target_zone_up['low']:.2f} – {target_zone_up['high']:.2f}",
+                            "clean_space_points": round(float(clean_space_up), 2),
+                            "start_ts_pt": str(start_row.get("ts_pt")),
+                            "start_ts_utc": pd.Timestamp(start_row.get("ts_utc")).isoformat(),
+                            "start_open": round(float(start_open), 2) if start_open is not None else None,
+                            "start_pivot_price": round(float(pivot_price), 2),
+                            "start_context": "last pivot low in source zone",
+                            "target_ts_pt": str(target_row.get("ts_pt")),
+                            "target_ts_utc": pd.Timestamp(target_row.get("ts_utc")).isoformat(),
+                            "target_open": round(float(target_open), 2) if target_open is not None else None,
+                            "target_trigger_price": round(float(target_zone_up["low"]) - float(target_proximity_pts), 2),
+                            "move_points": round(float(move_points), 2),
+                            "elapsed_bars": int(hit_idx - pivot_idx),
                         }
                     )
+                    diagnostics["valid_instances"] += 1
+                    if len(results) >= int(max_results):
+                        return results, diagnostics
 
-            nearest_dist = _nearest_qualifying_distance(row, level_family, min_level_gex_bn)
-            if nearest_dist is not None:
-                if nearest_dist <= 0.5:
-                    diag["bars_within_0_5_pts"] += 1
-                if nearest_dist <= 1.0:
-                    diag["bars_within_1_pt"] += 1
-                if nearest_dist <= 2.0:
-                    diag["bars_within_2_pts"] += 1
-                if nearest_dist <= 5.0:
-                    diag["bars_within_5_pts"] += 1
-                if nearest_dist <= 10.0:
-                    diag["bars_within_10_pts"] += 1
+        if zone_idx > 0:
+            target_zone_down = zones[zone_idx - 1]
+            clean_space_down = float(zone["low"]) - float(target_zone_down["high"])
+            if clean_space_down >= float(min_clean_move_points):
+                diagnostics["source_zones_with_clean_targets"] += 1
+                for seg_start, seg_end in episodes:
+                    diagnostics["zone_episodes_considered"] += 1
+                    seg_max_high = max(float(day_rows[i]["high"]) for i in range(seg_start, seg_end + 1))
+                    if seg_max_high > float(zone["high"]) + float(max_zone_breach_pts):
+                        continue
 
-            touched = _touched_levels(row, level_family, min_level_gex_bn, touch_buffer_points)
-            if touched:
-                diag["bars_touching_qualifying_level"] += 1
-                current_keys = {f"{item['label']}|{item['level']:.2f}" for item in touched}
-                day_start_candidates += sum(1 for key in current_keys if key not in prev_touch_keys)
-                prev_touch_keys = current_keys
-            else:
-                prev_touch_keys = set()
+                    pivot_idx, pivot_price = _find_last_pivot(day_rows, seg_start, seg_end, "down", pivot_strength_bars)
+                    hit_idx = _first_target_hit(
+                        day_rows,
+                        start_scan_idx=seg_end + 1,
+                        direction="down",
+                        zone=zone,
+                        target_level=float(target_zone_down["high"]),
+                        target_proximity_pts=target_proximity_pts,
+                        max_zone_breach_pts=max_zone_breach_pts,
+                    )
+                    if hit_idx is None:
+                        continue
 
-    diag["start_candidates"] = int(day_start_candidates)
-    diag["sample_qualifying_rows"] = sample_rows
+                    start_row = day_rows[pivot_idx]
+                    target_row = day_rows[hit_idx]
+                    start_open = start_row.get("open")
+                    target_open = target_row.get("open")
+                    move_points = float(pivot_price) - float(target_zone_down["high"])
 
-    for stat in diag["column_stats"].values():
-        if stat["max_abs_gex_bn"] is not None:
-            stat["max_abs_gex_bn"] = round(float(stat["max_abs_gex_bn"]), 2)
+                    results.append(
+                        {
+                            "trade_date": str(trade_date),
+                            "direction": "down",
+                            "source_zone_low": round(float(zone["low"]), 2),
+                            "source_zone_high": round(float(zone["high"]), 2),
+                            "source_zone_width": round(float(zone["width"]), 2),
+                            "source_zone_levels": zone["levels_text"],
+                            "target_level": round(float(target_zone_down["high"]), 2),
+                            "target_zone_range": f"{target_zone_down['low']:.2f} – {target_zone_down['high']:.2f}",
+                            "clean_space_points": round(float(clean_space_down), 2),
+                            "start_ts_pt": str(start_row.get("ts_pt")),
+                            "start_ts_utc": pd.Timestamp(start_row.get("ts_utc")).isoformat(),
+                            "start_open": round(float(start_open), 2) if start_open is not None else None,
+                            "start_pivot_price": round(float(pivot_price), 2),
+                            "start_context": "last pivot high in source zone",
+                            "target_ts_pt": str(target_row.get("ts_pt")),
+                            "target_ts_utc": pd.Timestamp(target_row.get("ts_utc")).isoformat(),
+                            "target_open": round(float(target_open), 2) if target_open is not None else None,
+                            "target_trigger_price": round(float(target_zone_down["high"]) + float(target_proximity_pts), 2),
+                            "move_points": round(float(move_points), 2),
+                            "elapsed_bars": int(hit_idx - pivot_idx),
+                        }
+                    )
+                    diagnostics["valid_instances"] += 1
+                    if len(results) >= int(max_results):
+                        return results, diagnostics
 
-    return diag
+    return results, diagnostics
 
 
 def scan_gex_level_moves(
@@ -287,8 +466,11 @@ def scan_gex_level_moves(
     start_date: str,
     end_date: str,
     min_level_gex_bn: float,
-    min_move_points: float,
-    touch_buffer_points: float,
+    zone_merge_distance_pts: float,
+    min_clean_move_points: float,
+    target_proximity_pts: float,
+    max_zone_breach_pts: float,
+    pivot_strength_bars: int,
     level_family: str,
     max_results: int,
     source_view: str | None = None,
@@ -300,13 +482,6 @@ def scan_gex_level_moves(
     df = load_source_rows(start_date=start_date, end_date=end_date, source_view=source_view)
     source_view = safe_ident(source_view or DEFAULT_SOURCE_VIEW)
 
-    diagnostics = _diagnostics_payload(
-        df,
-        level_family=level_family,
-        min_level_gex_bn=float(min_level_gex_bn),
-        touch_buffer_points=float(touch_buffer_points),
-    )
-
     if df.empty:
         return {
             "rows": [],
@@ -315,94 +490,79 @@ def scan_gex_level_moves(
                 "days_scanned": 0,
                 "bars_scanned": 0,
                 "instances_found": 0,
+                "zones_total": 0,
             },
-            "diagnostics": diagnostics,
+            "diagnostics": {
+                "bars_total": 0,
+                "days_total": 0,
+                "qualifying_levels_seen": 0,
+                "zones_total": 0,
+                "source_zones_with_clean_targets": 0,
+                "zone_episodes_considered": 0,
+                "valid_instances": 0,
+                "sample_zones": [],
+                "sample_results": [],
+            },
         }
 
     results: List[Dict[str, Any]] = []
+    total_qualifying_levels = 0
+    total_zones = 0
+    total_source_zones = 0
+    total_zone_episodes = 0
+    sample_zones: List[Dict[str, Any]] = []
 
     for trade_date, day_df in df.groupby("trade_date", sort=True):
         day_rows = day_df.to_dict("records")
-        touched_by_idx: List[List[Dict[str, Any]]] = []
+        day_results, day_diag = _day_zone_results(
+            trade_date,
+            day_rows,
+            level_family=level_family,
+            min_level_gex_bn=float(min_level_gex_bn),
+            zone_merge_distance_pts=float(zone_merge_distance_pts),
+            min_clean_move_points=float(min_clean_move_points),
+            target_proximity_pts=float(target_proximity_pts),
+            max_zone_breach_pts=float(max_zone_breach_pts),
+            pivot_strength_bars=int(pivot_strength_bars),
+            max_results=max(0, int(max_results) - len(results)),
+        )
+        results.extend(day_results)
 
-        for row in day_rows:
-            touched_by_idx.append(
-                _touched_levels(
-                    row=row,
-                    level_family=level_family,
-                    min_level_gex_bn=min_level_gex_bn,
-                    touch_buffer_points=touch_buffer_points,
-                )
-            )
+        total_qualifying_levels += int(day_diag["qualifying_levels"])
+        total_zones += int(day_diag["zones_total"])
+        total_source_zones += int(day_diag["source_zones_with_clean_targets"])
+        total_zone_episodes += int(day_diag["zone_episodes_considered"])
 
-        prev_touch_keys: set[str] = set()
-        for i, row in enumerate(day_rows):
-            touched_here = touched_by_idx[i]
-            if not touched_here:
-                prev_touch_keys = set()
-                continue
-
-            start_candidates: List[Dict[str, Any]] = []
-            current_keys = set()
-            for lvl in touched_here:
-                key = f"{lvl['label']}|{lvl['level']:.2f}"
-                current_keys.add(key)
-                if key not in prev_touch_keys:
-                    start_candidates.append(lvl)
-
-            prev_touch_keys = current_keys
-            if not start_candidates:
-                continue
-
-            for start in start_candidates:
-                for j in range(i + 1, len(day_rows)):
-                    target_candidates = []
-                    for target in touched_by_idx[j]:
-                        move_points = abs(float(target["level"]) - float(start["level"]))
-                        if move_points < float(min_move_points):
-                            continue
-                        if abs(float(target["level"]) - float(start["level"])) < 1e-9:
-                            continue
-                        target_candidates.append((target, move_points))
-
-                    if not target_candidates:
-                        continue
-
-                    target, move_points = max(target_candidates, key=lambda x: x[1])
-                    start_open = row.get("open")
-                    target_open = day_rows[j].get("open")
-
-                    results.append(
-                        {
-                            "trade_date": str(trade_date),
-                            "start_ts_pt": str(row.get("ts_pt")),
-                            "start_ts_utc": pd.Timestamp(row.get("ts_utc")).isoformat(),
-                            "start_open": round(float(start_open), 2) if start_open is not None else None,
-                            "start_level_type": start["label"],
-                            "start_level": round(float(start["level"]), 2),
-                            "start_level_gex_bn": round(float(start["gex_bn"]), 2),
-                            "target_ts_pt": str(day_rows[j].get("ts_pt")),
-                            "target_ts_utc": pd.Timestamp(day_rows[j].get("ts_utc")).isoformat(),
-                            "target_open": round(float(target_open), 2) if target_open is not None else None,
-                            "target_level_type": target["label"],
-                            "target_level": round(float(target["level"]), 2),
-                            "target_level_gex_bn": round(float(target["gex_bn"]), 2),
-                            "move_points": round(float(move_points), 2),
-                            "elapsed_bars": int(j - i),
-                        }
-                    )
-                    break
-
-                if len(results) >= int(max_results):
-                    break
-
-            if len(results) >= int(max_results):
+        for zone in day_diag["sample_zones"]:
+            if len(sample_zones) >= 8:
                 break
+            sample_zones.append({"trade_date": str(trade_date), **zone})
 
         if len(results) >= int(max_results):
             break
 
-    diagnostics["instances_found"] = int(len(results))
+    diagnostics = {
+        "bars_total": int(len(df)),
+        "days_total": int(df["trade_date"].nunique()),
+        "qualifying_levels_seen": int(total_qualifying_levels),
+        "zones_total": int(total_zones),
+        "source_zones_with_clean_targets": int(total_source_zones),
+        "zone_episodes_considered": int(total_zone_episodes),
+        "valid_instances": int(len(results)),
+        "sample_zones": sample_zones,
+        "sample_results": [
+            {
+                "trade_date": row["trade_date"],
+                "direction": row["direction"],
+                "source_zone": f"{row['source_zone_low']:.2f} – {row['source_zone_high']:.2f}",
+                "target_level": row["target_level"],
+                "start_ts_pt": row["start_ts_pt"],
+                "target_ts_pt": row["target_ts_pt"],
+                "clean_space_points": row["clean_space_points"],
+            }
+            for row in results[:8]
+        ],
+    }
 
     return {
         "rows": results,
@@ -411,6 +571,7 @@ def scan_gex_level_moves(
             "days_scanned": int(df["trade_date"].nunique()),
             "bars_scanned": int(len(df)),
             "instances_found": int(len(results)),
+            "zones_total": int(total_zones),
         },
         "diagnostics": diagnostics,
     }

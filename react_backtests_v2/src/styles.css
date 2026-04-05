@@ -246,11 +246,6 @@ h2 {
   min-width: 100%;
 }
 
-.diag-level-list {
-  white-space: normal;
-  line-height: 1.4;
-}
-
 .table-wrap {
   flex: 1 1 auto;
   min-height: 0;
@@ -262,7 +257,7 @@ h2 {
 .results-table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 1180px;
+  min-width: 1500px;
 }
 
 .results-table thead th {
@@ -282,16 +277,48 @@ h2 {
   border-bottom: 1px solid #1f2937;
   white-space: nowrap;
   font-size: 12px;
+  vertical-align: top;
 }
 
 .results-table tbody tr:hover {
   background: rgba(37, 99, 235, 0.08);
 }
 
+.results-table tbody tr.selected-row {
+  background: rgba(37, 99, 235, 0.16);
+}
+
 .subcell {
   color: #94a3b8;
   font-size: 11px;
   margin-top: 2px;
+}
+
+.wrap-cell {
+  white-space: normal !important;
+  min-width: 160px;
+  line-height: 1.4;
+}
+
+.direction-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.direction-chip.up {
+  background: rgba(34, 197, 94, 0.18);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  color: #bbf7d0;
+}
+
+.direction-chip.down {
+  background: rgba(239, 68, 68, 0.18);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fecaca;
 }
 
 .empty-state {
@@ -310,12 +337,15 @@ h2 {
   align-items: center;
   justify-content: center;
   padding: 18px;
+  z-index: 2000;
 }
 
 .modal-card {
-  width: min(760px, 100%);
+  width: min(820px, 100%);
   padding: 18px;
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+  position: relative;
+  z-index: 2001;
 }
 
 .modal-header {

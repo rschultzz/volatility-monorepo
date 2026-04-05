@@ -24,15 +24,17 @@ export default function ResultsTable({ rows, selectedRowKey, onSelectRow }) {
         <thead>
           <tr>
             <th>Select</th>
-            <th>Trade Date</th>
+            <th>Date</th>
+            <th>Dir</th>
+            <th>Source Zone</th>
+            <th>Zone Levels</th>
             <th>Start Time (PT)</th>
             <th>Start Open</th>
-            <th>Start Level</th>
-            <th>Start GEX BN</th>
+            <th>Pivot Px</th>
             <th>Target Time (PT)</th>
             <th>Target Open</th>
             <th>Target Level</th>
-            <th>Target GEX BN</th>
+            <th>Clean Space</th>
             <th>Move Pts</th>
             <th>Bars</th>
           </tr>
@@ -41,7 +43,7 @@ export default function ResultsTable({ rows, selectedRowKey, onSelectRow }) {
           {rows.map((row, idx) => {
             const key = rowKey(row, idx);
             return (
-              <tr key={key}>
+              <tr key={key} className={selectedRowKey === key ? 'selected-row' : ''}>
                 <td>
                   <input
                     type="radio"
@@ -52,19 +54,30 @@ export default function ResultsTable({ rows, selectedRowKey, onSelectRow }) {
                 </td>
                 <td>{row.trade_date}</td>
                 <td>
+                  <span className={`direction-chip ${row.direction === 'up' ? 'up' : 'down'}`}>
+                    {row.direction}
+                  </span>
+                </td>
+                <td>
+                  <div>{fmt(row.source_zone_low)} – {fmt(row.source_zone_high)}</div>
+                  <div className="subcell">width {fmt(row.source_zone_width)}</div>
+                </td>
+                <td className="wrap-cell">
+                  <div>{row.source_zone_levels}</div>
+                </td>
+                <td>
                   <div>{row.start_ts_pt}</div>
-                  <div className="subcell">{row.start_level_type}</div>
+                  <div className="subcell">{row.start_context}</div>
                 </td>
                 <td>{fmt(row.start_open)}</td>
-                <td>{fmt(row.start_level)}</td>
-                <td>{fmt(row.start_level_gex_bn)}</td>
-                <td>
-                  <div>{row.target_ts_pt}</div>
-                  <div className="subcell">{row.target_level_type}</div>
-                </td>
+                <td>{fmt(row.start_pivot_price)}</td>
+                <td>{row.target_ts_pt}</td>
                 <td>{fmt(row.target_open)}</td>
-                <td>{fmt(row.target_level)}</td>
-                <td>{fmt(row.target_level_gex_bn)}</td>
+                <td>
+                  <div>{fmt(row.target_level)}</div>
+                  <div className="subcell">{row.target_zone_range}</div>
+                </td>
+                <td>{fmt(row.clean_space_points)}</td>
                 <td>{fmt(row.move_points)}</td>
                 <td>{row.elapsed_bars}</td>
               </tr>
