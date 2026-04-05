@@ -49,9 +49,9 @@ from modules.TermMetrics.callbacks import register_callbacks as register_term_me
 from modules.Ironbeam.components import ironbeam_layout
 from modules.Ironbeam.callbacks import register_ironbeam_callbacks
 
-# ===== Backtests (existing) =====
-from modules.Backtests.components import make_backtests_tab
-from modules.Backtests.callbacks import register_callbacks as register_backtests
+# ===== Backtests v2 (React shell) =====
+from modules.BacktestsV2.components import make_backtests_v2_tab
+from modules.BacktestsV2.routes import register_backtests_v2_routes
 
 # ===== IDs =====
 CLOCK_ID = "CLOCK"
@@ -67,7 +67,6 @@ LIVE_UPDATE_TIMER_ID = "live-update-timer"
 MAIN_TABS_ID = "main-tabs"
 TAB_DASHBOARD = "tab-dashboard"
 TAB_PRICE_CHART = "tab-price-chart"
-TAB_BACKTESTS = "tab-backtests"
 TAB_BACKTESTS_V2 = "tab-backtests-v2"
 
 # Backtests v2 view name (you renamed it)
@@ -364,6 +363,7 @@ VALID_USERNAME_PASSWORD_PAIRS = {
 }
 auth = dash_auth.BasicAuth(app, VALID_USERNAME_PASSWORD_PAIRS)
 
+register_backtests_v2_routes(server, REPO_ROOT)
 
 REACT_PREVIEW_DIST_DIR = (REPO_ROOT / "react_price_preview" / "dist").resolve()
 
@@ -402,10 +402,6 @@ def serve_layout():
     """Layout factory so defaults are recomputed on each page load."""
     default_trade_date = get_default_trade_date()
     time_options = pt_time_options()
-
-    # Backtests (existing) default range
-    bt_end = default_trade_date
-    bt_start = default_trade_date - dt.timedelta(days=10)
 
     # Backtests v2 default range
     bt2_end = default_trade_date
@@ -1129,8 +1125,7 @@ def serve_layout():
                         children=[
                             dcc.Tab(label="Dashboard", value=TAB_DASHBOARD, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                             dcc.Tab(label="Price Chart", value=TAB_PRICE_CHART, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
-                            dcc.Tab(label="Backtests", value=TAB_BACKTESTS, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
-                            dcc.Tab(label="Backtests v2", value=TAB_BACKTESTS_V2, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
+                            dcc.Tab(label="Backtests", value=TAB_BACKTESTS_V2, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                         ],
                     )
                 ],
@@ -1140,10 +1135,8 @@ def serve_layout():
             html.Div(id="dashboard-container", children=dashboard_children, style={"display": "block", "flex": "1 1 auto", "minHeight": 0, "overflowY": "auto"}),
             # ===== Ironbeam container =====
             html.Div(id="ironbeam-container", children=ironbeam_children, style={"display": "none", "flex": "1 1 auto", "minHeight": 0, "width": "100%"}),
-            # ===== Backtests container (existing) =====
-            html.Div(id="backtests-container", children=make_backtests_tab(bt_start, bt_end), style={"display": "none", "flex": "1 1 auto", "minHeight": 0, "overflowY": "auto"}),
-            # ===== Backtests v2 container (new) =====
-            html.Div(id="backtests-v2-container", children=backtests_v2_children, style={"display": "none", "flex": "1 1 auto", "minHeight": 0, "overflowY": "auto"}),
+            # ===== Backtests container (React shell) =====
+            html.Div(id="backtests-v2-container", children=[make_backtests_v2_tab()], style={"display": "none", "flex": "1 1 auto", "minHeight": 0, "overflowY": "hidden"}),
         ],
         style={
             "backgroundColor": "black",
@@ -1173,7 +1166,6 @@ def sync_expiration_with_trade(trade_date):
 @app.callback(
     Output("dashboard-container", "style"),
     Output("ironbeam-container", "style"),
-    Output("backtests-container", "style"),
     Output("backtests-v2-container", "style"),
     Input(MAIN_TABS_ID, "value"),
 )
@@ -1181,14 +1173,13 @@ def _switch_main_tab(tab_value):
     hidden = {"display": "none"}
     scrollable = {"display": "block", "flex": "1 1 auto", "minHeight": 0, "overflowY": "auto"}
     price_chart = {"display": "flex", "flex": "1 1 auto", "minHeight": 0, "overflow": "hidden", "width": "100%"}
+    backtests = {"display": "block", "flex": "1 1 auto", "minHeight": 0, "overflow": "hidden"}
 
-    if tab_value == TAB_BACKTESTS:
-        return hidden, hidden, scrollable, hidden
     if tab_value == TAB_BACKTESTS_V2:
-        return hidden, hidden, hidden, scrollable
+        return hidden, hidden, backtests
     if tab_value == TAB_PRICE_CHART:
-        return hidden, price_chart, hidden, hidden
-    return scrollable, hidden, hidden, hidden
+        return hidden, price_chart, hidden
+    return scrollable, hidden, hidden
 
 
 # ===== Backtests v2 loader callback (NEW) =====
@@ -1597,7 +1588,6 @@ register_skew(app)
 register_term_structure(app)
 register_term_metrics(app)
 register_ironbeam_callbacks(app)
-register_backtests(app, expected_toggle_id=EXPECTED_TOGGLE_ID)
 
 from dash import callback_context  # if not already imported
 
