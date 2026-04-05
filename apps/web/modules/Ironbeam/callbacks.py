@@ -13,6 +13,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.colors as pc
 from plotly.subplots import make_subplots
+import urllib.parse
 
 from dash import Input, Output, State, html, dcc, ctx, no_update, MATCH, ALL, Patch, ClientsideFunction
 from dash.exceptions import PreventUpdate
@@ -3966,11 +3967,20 @@ def register_ironbeam_callbacks(app):
     @app.callback(
         Output("ib-react-preview-frame", "src"),
         Input("trade-date", "date"),
+        Input("smile-time-input", "value"),
         Input("ironbeam-bar-interval", "value"),
         Input("ib-chart-mode-toggle", "value"),
         Input("ib-indicator-state", "data"),
+        State("ib-react-preview-frame", "src"),
     )
-    def ib_update_react_preview_src(trade_date, bar_interval, chart_mode, indicator_state):
+    def ib_update_react_preview_src(
+            trade_date,
+            selected_times_pt,
+            bar_interval,
+            chart_mode,
+            indicator_state,
+            current_src,
+    ):
         base = os.getenv("IRONBEAM_REACT_PREVIEW_URL", "/react-preview").rstrip("/")
         td = trade_date or dt.date.today().isoformat()
         interval = (bar_interval or "1min").strip()
@@ -3995,6 +4005,37 @@ def register_ironbeam_callbacks(app):
 
         gex_enabled = "gex_overlay" in enabled if enabled else True
 
+        # Parse current iframe trade_date so we only seed selected_times when the date changes.
+        prior_trade_date = None
+        try:
+            if current_src:
+                parsed = urllib.parse.urlparse(current_src)
+                qs = urllib.parse.parse_qs(parsed.query)
+                prior_trade_date = (qs.get("trade_date") or [None])[0]
+        except Exception:
+            prior_trade_date = None
+
+        # Clean current dropdown times
+        if selected_times_pt is None:
+            raw_times = []
+        elif isinstance(selected_times_pt, list):
+            raw_times = selected_times_pt
+        else:
+            raw_times = [selected_times_pt]
+
+        cleaned_times = []
+        seen = set()
+        for item in raw_times:
+            s = str(item or "").strip()
+            if not s:
+                continue
+            if not re.match(r"^\d{2}:\d{2}$", s):
+                continue
+            if s in seen:
+                continue
+            seen.add(s)
+            cleaned_times.append(s)
+
         params = [
             f"trade_date={td}",
             f"interval={interval}",
@@ -4004,6 +4045,14 @@ def register_ironbeam_callbacks(app):
 
         if gex_min_abs_b is not None:
             params.append(f"gex_min_abs_b={gex_min_abs_b}")
+
+        # Only seed selected_times when the iframe is reloading for a new trade date.
+        # That fixes Backtests -> chart highlight without causing normal dropdown edits
+        # or chart clicks to reload the iframe.
+        if td != prior_trade_date and cleaned_times:
+            params.append(
+                "selected_times=" + urllib.parse.quote(",".join(cleaned_times), safe=":,")
+            )
 
         return f"{base}?{'&'.join(params)}"
 
