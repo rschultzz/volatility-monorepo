@@ -3966,11 +3966,12 @@ def register_ironbeam_callbacks(app):
     @app.callback(
         Output("ib-react-preview-frame", "src"),
         Input("trade-date", "date"),
+        Input("smile-time-input", "value"),
         Input("ironbeam-bar-interval", "value"),
         Input("ib-chart-mode-toggle", "value"),
         Input("ib-indicator-state", "data"),
     )
-    def ib_update_react_preview_src(trade_date, bar_interval, chart_mode, indicator_state):
+    def ib_update_react_preview_src(trade_date, selected_times_pt, bar_interval, chart_mode, indicator_state):
         base = os.getenv("IRONBEAM_REACT_PREVIEW_URL", "/react-preview").rstrip("/")
         td = trade_date or dt.date.today().isoformat()
         interval = (bar_interval or "1min").strip()
@@ -3983,6 +3984,7 @@ def register_ironbeam_callbacks(app):
             enabled = indicator_state.get("enabled") or []
             if not isinstance(enabled, list):
                 enabled = [enabled] if enabled else []
+
             cfg_all = indicator_state.get("cfg") if isinstance(indicator_state.get("cfg"), dict) else {}
             gex_cfg = cfg_all.get("gex_overlay") if isinstance(cfg_all.get("gex_overlay"), dict) else {}
             raw_min_abs_b = gex_cfg.get("min_abs_b")
@@ -3994,16 +3996,41 @@ def register_ironbeam_callbacks(app):
 
         gex_enabled = "gex_overlay" in enabled if enabled else True
 
+        # normalize selected time slices
+        if selected_times_pt is None:
+            raw_times = []
+        elif isinstance(selected_times_pt, list):
+            raw_times = selected_times_pt
+        else:
+            raw_times = [selected_times_pt]
+
+        cleaned_times = []
+        seen = set()
+        for item in raw_times:
+            s = str(item or "").strip()
+            if not s:
+                continue
+            if not re.match(r"^\d{2}:\d{2}$", s):
+                continue
+            if s in seen:
+                continue
+            seen.add(s)
+            cleaned_times.append(s)
+
         params = [
             f"trade_date={td}",
             f"interval={interval}",
             f"gex_enabled={1 if gex_enabled else 0}",
             f"days_either_side={_react_days_either_side_for_interval(interval)}",
         ]
+
         if gex_min_abs_b is not None:
             params.append(f"gex_min_abs_b={gex_min_abs_b}")
 
-        return f"{base}/?{'&'.join(params)}"
+        if cleaned_times:
+            params.append(f"selected_times={','.join(cleaned_times)}")
+
+        return f"{base}?{'&'.join(params)}"
 
     @app.callback(
         Output("smile-time-input", "value", allow_duplicate=True),
