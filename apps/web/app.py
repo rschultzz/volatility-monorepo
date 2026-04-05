@@ -1,5 +1,3 @@
-# apps/web/app.py
-
 from __future__ import annotations
 
 # load local environment variables from .env
@@ -20,12 +18,14 @@ if str(REPO_ROOT) not in sys.path:
 # -----------------------------------------------------------------
 
 import os
+import re
 import socket
 import datetime as dt
 from typing import List
 
 import dash_auth
-from dash import Dash, html, dcc, Input, Output
+from dash import Dash, html, dcc, Input, Output, State, no_update
+from dash.exceptions import PreventUpdate
 from flask import send_from_directory
 
 # ===== Modules =====
@@ -41,7 +41,10 @@ from modules.TermMetrics.callbacks import register_callbacks as register_term_me
 from modules.Ironbeam.components import ironbeam_layout
 from modules.Ironbeam.callbacks import register_ironbeam_callbacks
 from modules.BacktestsV2.components import make_backtests_v2_tab
-from modules.BacktestsV2.routes import register_backtests_v2_routes
+from modules.BacktestsV2.routes import (
+    register_backtests_v2_routes,
+    get_backtests_v2_selection_since,
+)
 
 # ===== IDs =====
 CLOCK_ID = "CLOCK"
@@ -52,6 +55,9 @@ SMILE_GRAPH = "SMILE_GRAPH"
 EXPECTED_TOGGLE_ID = "expected-ss-toggle"
 LIVE_DATA_STORE_ID = "live-data-store"
 LIVE_UPDATE_TIMER_ID = "live-update-timer"
+
+BT2_SELECTION_POLL_ID = "bt2-selection-poll"
+BT2_SELECTION_SEQ_ID = "bt2-selection-seq"
 
 # Tabs (selector only; containers below stay mounted)
 MAIN_TABS_ID = "main-tabs"
@@ -116,6 +122,22 @@ def pt_time_options(start: str = "06:30", end: str = "13:00", step_min: int = 1)
         out.append({"label": f"{hhmm} PT", "value": hhmm})
         cur += dt.timedelta(minutes=step_min)
     return out
+
+
+def _parse_hhmm(value: object) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    m = re.search(r"(\d{1,2}):(\d{2})", s)
+    if not m:
+        return None
+    hh = int(m.group(1))
+    mm = m.group(2)
+    if hh < 0 or hh > 23:
+        return None
+    return f"{hh:02d}:{mm}"
 
 
 # ===== App setup =====
@@ -349,6 +371,8 @@ def serve_layout():
         [
             dcc.Store(id=LIVE_DATA_STORE_ID),
             dcc.Interval(id=LIVE_UPDATE_TIMER_ID, interval=15 * 1000, n_intervals=0),
+            dcc.Store(id=BT2_SELECTION_SEQ_ID, data=0),
+            dcc.Interval(id=BT2_SELECTION_POLL_ID, interval=750, n_intervals=0),
             html.Div(
                 [
                     html.Div(
@@ -460,6 +484,36 @@ def _switch_main_tab(tab_value):
     if tab_value == TAB_PRICE_CHART:
         return hidden, price_chart, hidden
     return scrollable, hidden, hidden
+
+
+@app.callback(
+    Output(BT2_SELECTION_SEQ_ID, "data"),
+    Output(TRADE_DATE_PICK, "date"),
+    Output(SMILE_TIME_INPUT, "value"),
+    Output(MAIN_TABS_ID, "value"),
+    Input(BT2_SELECTION_POLL_ID, "n_intervals"),
+    State(BT2_SELECTION_SEQ_ID, "data"),
+    prevent_initial_call=True,
+)
+def apply_backtests_selection(_n_intervals, last_seq):
+    seq, payload = get_backtests_v2_selection_since(last_seq)
+
+    if payload is None:
+        raise PreventUpdate
+
+    trade_date = payload.get("trade_date")
+    start_time = _parse_hhmm(payload.get("start_ts_pt"))
+    target_time = _parse_hhmm(payload.get("target_ts_pt"))
+
+    times = []
+    for t in [start_time, target_time]:
+        if t and t not in times:
+            times.append(t)
+
+    out_trade_date = trade_date if trade_date else no_update
+    out_times = times if times else no_update
+
+    return seq, out_trade_date, out_times, TAB_PRICE_CHART
 
 
 # Register module callbacks
