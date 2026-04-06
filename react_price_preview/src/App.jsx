@@ -416,6 +416,8 @@ export default function App() {
   const [extraBars, setExtraBars] = useState([])
   const [centerGexSegments, setCenterGexSegments] = useState([])
   const [extraGexSegments, setExtraGexSegments] = useState([])
+  const [centerExpectedMoveLevels, setCenterExpectedMoveLevels] = useState([])
+  const [extraExpectedMoveLevels, setExtraExpectedMoveLevels] = useState([])
   const [centerLoadedDates, setCenterLoadedDates] = useState([])
   const [extraLoadedDates, setExtraLoadedDates] = useState([])
   const [meta, setMeta] = useState(null)
@@ -525,6 +527,11 @@ export default function App() {
     [centerGexSegments, extraGexSegments]
   )
 
+  const mergedExpectedMoveLevels = useMemo(
+    () => [...centerExpectedMoveLevels, ...extraExpectedMoveLevels],
+    [centerExpectedMoveLevels, extraExpectedMoveLevels]
+  )
+
   const loadedFlowDates = useMemo(
     () => normalizeDateList([...centerLoadedDates, ...extraLoadedDates]),
     [centerLoadedDates, extraLoadedDates]
@@ -584,6 +591,8 @@ export default function App() {
         setExtraBars([])
         setCenterGexSegments([])
         setExtraGexSegments([])
+        setCenterExpectedMoveLevels([])
+        setExtraExpectedMoveLevels([])
         setCenterLoadedDates([])
         setExtraLoadedDates([])
         setMeta(null)
@@ -615,6 +624,7 @@ export default function App() {
         const payload = await response.json()
         setCenterBars(Array.isArray(payload.bars) ? payload.bars : [])
         setCenterGexSegments(Array.isArray(payload.gex_segments) ? payload.gex_segments : [])
+        setCenterExpectedMoveLevels(Array.isArray(payload.expected_move_levels) ? payload.expected_move_levels : [])
         setCenterLoadedDates(
           normalizeDateList(
             Array.isArray(payload.loaded_dates) && payload.loaded_dates.length
@@ -629,6 +639,8 @@ export default function App() {
         setExtraBars([])
         setCenterGexSegments([])
         setExtraGexSegments([])
+        setCenterExpectedMoveLevels([])
+        setExtraExpectedMoveLevels([])
         setCenterLoadedDates([])
         setExtraLoadedDates([])
         setMeta(null)
@@ -686,6 +698,7 @@ export default function App() {
         const payload = await response.json()
         setExtraBars(Array.isArray(payload.bars) ? payload.bars : [])
         setExtraGexSegments(Array.isArray(payload.gex_segments) ? payload.gex_segments : [])
+        setExtraExpectedMoveLevels(Array.isArray(payload.expected_move_levels) ? payload.expected_move_levels : [])
         setExtraLoadedDates(normalizeDateList(payload.loaded_dates))
       } catch (err) {
         if (err?.name === 'AbortError') return
@@ -835,6 +848,7 @@ export default function App() {
           lastLiveBarsSignatureRef.current = nextSignature
           setCenterBars(Array.isArray(payload.bars) ? payload.bars : [])
           setCenterGexSegments(Array.isArray(payload.gex_segments) ? payload.gex_segments : [])
+          setCenterExpectedMoveLevels(Array.isArray(payload.expected_move_levels) ? payload.expected_move_levels : [])
           setCenterLoadedDates(
             normalizeDateList(
               Array.isArray(payload.loaded_dates) && payload.loaded_dates.length
@@ -1147,6 +1161,7 @@ export default function App() {
                 gexSegments={mergedGexSegments}
                 gexEnabled={Boolean(meta?.gex_enabled ?? gexEnabled)}
                 gexMinAbsB={gexMinAbsB}
+                expectedMoveLevels={mergedExpectedMoveLevels}
                 onApplyGexMinAbsB={handleGexMinAbsBChange}
                 onApplyIntervalChange={handleIntervalChange}
                 onVisibleLogicalRangeChange={handleSharedLogicalRangeChange}

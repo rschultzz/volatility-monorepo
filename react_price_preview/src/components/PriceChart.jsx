@@ -22,6 +22,8 @@ const LIVE_OVERLAY_DOWN_BORDER = '#e5e7eb'
 const LIVE_OVERLAY_UP_FILL = 'rgba(96,165,250,0.18)'
 const LIVE_OVERLAY_DOWN_FILL = 'rgba(229,231,235,0.18)'
 
+const EXPECTED_MOVE_COLOR = '#ef4444'
+
 function coerceGexMinAbsB(value, fallback = 10) {
   const num = Number(value)
   if (!Number.isFinite(num)) return fallback
@@ -486,6 +488,32 @@ function normalizeGexSegments(value) {
   return out
 }
 
+function normalizeExpectedMoveLevels(value) {
+  if (!Array.isArray(value)) return []
+  const out = []
+  for (const item of value) {
+    const upper = Number(item?.upper)
+    const lower = Number(item?.lower)
+    const startTime = Number(item?.start_time)
+    const endTime = Number(item?.end_time)
+    if (!Number.isFinite(upper) || !Number.isFinite(lower) || !Number.isFinite(startTime) || !Number.isFinite(endTime)) {
+      continue
+    }
+
+    const shiftedStart = utcEpochShowingZoneTime(startTime, 'America/Los_Angeles')
+    const shiftedEnd = utcEpochShowingZoneTime(endTime, 'America/Los_Angeles')
+
+    out.push({
+      ...item,
+      upper,
+      lower,
+      shiftedStart,
+      shiftedEnd,
+    })
+  }
+  return out
+}
+
 function buildShiftedEpoch(year, month, day, hour = 0, minute = 0, second = 0) {
   return Date.UTC(year, month - 1, day, hour, minute, second) / 1000
 }
@@ -565,6 +593,7 @@ export default function PriceChart({
   gexSegments,
   gexEnabled,
   gexMinAbsB = 10,
+  expectedMoveLevels,
   onApplyGexMinAbsB,
   onApplyIntervalChange,
   onVisibleLogicalRangeChange,
@@ -577,6 +606,7 @@ export default function PriceChart({
   const seriesRef = useRef(null)
   const liveTradeSeriesRef = useRef(null)
   const gexSeriesRefs = useRef([])
+  const expectedMoveSeriesRefs = useRef([])
   const intervalRef = useRef(interval)
   const shiftedCandlesRef = useRef([])
   const dragRef = useRef({ active: false, lastY: 0 })
@@ -669,6 +699,11 @@ useEffect(() => {
   const normalizedGexSegments = useMemo(
     () => normalizeGexSegments(gexSegments),
     [gexSegments]
+  )
+
+  const normalizedExpectedMoveLevels = useMemo(
+    () => normalizeExpectedMoveLevels(expectedMoveLevels),
+    [expectedMoveLevels]
   )
 
   const sessionTimeRange = useMemo(
@@ -1166,6 +1201,7 @@ useEffect(() => {
       seriesRef.current = null
       liveTradeSeriesRef.current = null
       gexSeriesRefs.current = []
+      expectedMoveSeriesRefs.current = []
       dragRef.current.active = false
       reportLinkedCrosshair(null)
       if (interactionReleaseTimerRef.current) {
@@ -1484,6 +1520,70 @@ useEffect(() => {
 
     gexSeriesRefs.current = nextRefs
   }, [normalizedGexSegments, gexEnabled])
+
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+
+    for (const series of expectedMoveSeriesRefs.current) {
+      try {
+        chart.removeSeries(series)
+      } catch (err) {
+        // ignore stale references
+      }
+    }
+    expectedMoveSeriesRefs.current = []
+
+    if (!Array.isArray(normalizedExpectedMoveLevels) || !normalizedExpectedMoveLevels.length) {
+      return
+    }
+
+    const nextRefs = []
+
+    for (const item of normalizedExpectedMoveLevels) {
+      const shiftedStart = Number(item?.shiftedStart)
+      const shiftedEnd = Number(item?.shiftedEnd)
+      const upper = Number(item?.upper)
+      const lower = Number(item?.lower)
+
+      if (!Number.isFinite(shiftedStart) || !Number.isFinite(shiftedEnd)) {
+        continue
+      }
+
+      const commonOptions = {
+        color: EXPECTED_MOVE_COLOR,
+        lineWidth: 1,
+        lineStyle: 2, // Dotted
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+        pointMarkersVisible: false,
+      }
+
+      try {
+        if (Number.isFinite(upper)) {
+          const upperSeries = chart.addSeries(LineSeries, commonOptions)
+          upperSeries.setData([
+            { time: shiftedStart, value: upper },
+            { time: shiftedEnd, value: upper },
+          ])
+          nextRefs.push(upperSeries)
+        }
+        if (Number.isFinite(lower)) {
+          const lowerSeries = chart.addSeries(LineSeries, commonOptions)
+          lowerSeries.setData([
+            { time: shiftedStart, value: lower },
+            { time: shiftedEnd, value: lower },
+          ])
+          nextRefs.push(lowerSeries)
+        }
+      } catch (err) {
+        // ignore errors
+      }
+    }
+
+    expectedMoveSeriesRefs.current = nextRefs
+  }, [normalizedExpectedMoveLevels])
 
   return (
     <div className="chart-shell chart-shell-compact">

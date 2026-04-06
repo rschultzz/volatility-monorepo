@@ -24,6 +24,8 @@ from modules.Ironbeam.indicators.gex_overlay import build_gex_overlay_traces as 
 from sqlalchemy import create_engine, text
 from flask import jsonify, request
 
+from packages.shared.utils import fetch_skew_data
+
 
 def _indicator_state_token(state: object) -> str:
     """Stable token for guarding against stale-figure overwrites when indicator state changes."""
@@ -191,11 +193,6 @@ def _hex_to_rgba(color: str, alpha: float) -> str:
         return c
     if not c.startswith("#") or len(c) != 7:
         return c
-    r = int(c[1:3], 16)
-    g = int(c[3:5], 16)
-    b = int(c[1:3], 16) # Typo here in original? (c[1:3] used for b too). Actually it's c[5:7] in original.
-    # Fixing the typo I just noticed in the original read_file if it exists.
-    # Wait, let me re-check original _hex_to_rgba.
     r = int(c[1:3], 16)
     g = int(c[3:5], 16)
     b = int(c[5:7], 16)
@@ -1028,6 +1025,45 @@ def _build_react_preview_bars_payload(
             except Exception:
                 continue
 
+    # --- Expected Move Levels ---
+    expected_move_levels: list[dict] = []
+    # minutes_to_expiration at 6:33 PT is 402. annual_trading_minutes is 102,060.
+    # sqrt(402 / 102060) = 0.06276
+    SQRT_TERM = math.sqrt(402.0 / 102060.0)
+
+    for load_date, df_day in loaded_frames:
+        try:
+            # 1. ES Open at 6:30 PT
+            mask_630 = df_day["time_hhmm_pt"] == "06:30"
+            if not mask_630.any():
+                continue
+            es_open = float(df_day.loc[mask_630, "open"].iloc[0])
+
+            # 2. ATM IV at 6:33 PT
+            df_skew = fetch_skew_data(load_date.isoformat(), load_date.isoformat(), ["06:33"])
+            if df_skew.empty:
+                continue
+            atm_iv = float(df_skew["vol50"].iloc[0]) # fraction
+
+            pct_move = atm_iv * SQRT_TERM
+            upper = es_open * (1.0 + pct_move)
+            lower = es_open * (1.0 - pct_move)
+
+            # RTH window for lines: 06:30 to 13:00 PT
+            start_rth = dt.datetime.combine(load_date, dt.time(6, 30), tzinfo=pt_tz)
+            end_rth = dt.datetime.combine(load_date, dt.time(13, 0), tzinfo=pt_tz)
+            
+            expected_move_levels.append({
+                "date": load_date.isoformat(),
+                "upper": round(upper, 2),
+                "lower": round(lower, 2),
+                "start_time": int(start_rth.astimezone(ZoneInfo("UTC")).timestamp()),
+                "end_time": int(end_rth.astimezone(ZoneInfo("UTC")).timestamp()),
+            })
+        except Exception as e:
+            print(f"Error calculating expected move for {load_date}: {e}")
+            continue
+
     # Keep center-day gex_levels for backward compatibility if needed
     gex_levels: list[dict] = []
     if phase == "center" and gex_enabled and loaded_frames:
@@ -1077,6 +1113,7 @@ def _build_react_preview_bars_payload(
         "bars": bars,
         "gex_levels": gex_levels,
         "gex_segments": gex_segments,
+        "expected_move_levels": expected_move_levels,
         "trade_date": str(trade_date),
         "effective_trade_date": session_date.isoformat(),
         "interval": interval,
