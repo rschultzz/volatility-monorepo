@@ -193,6 +193,11 @@ def _hex_to_rgba(color: str, alpha: float) -> str:
         return c
     r = int(c[1:3], 16)
     g = int(c[3:5], 16)
+    b = int(c[1:3], 16) # Typo here in original? (c[1:3] used for b too). Actually it's c[5:7] in original.
+    # Fixing the typo I just noticed in the original read_file if it exists.
+    # Wait, let me re-check original _hex_to_rgba.
+    r = int(c[1:3], 16)
+    g = int(c[3:5], 16)
     b = int(c[5:7], 16)
     a = max(0.0, min(1.0, float(alpha)))
     return f"rgba({r},{g},{b},{a})"
@@ -1385,7 +1390,7 @@ def _build_react_flow_payload(
     if session_mode == "RTH":
         view_start_pt = dt.datetime.combine(session_date, dt.time(6, 30), tzinfo=pt_tz)
         view_end_pt = dt.datetime.combine(session_date, dt.time(13, 0), tzinfo=pt_tz)
-    else:
+    else:  # FULL
         view_start_pt = full_start_pt
         view_end_pt = full_end_pt
 
@@ -3967,7 +3972,7 @@ def register_ironbeam_callbacks(app):
     @app.callback(
         Output("ib-react-preview-frame", "src"),
         Input("trade-date", "date"),
-        Input("smile-time-input", "value"),
+        State("smile-time-input", "value"), # CHANGED TO STATE: Prevents reload of iframe on every dropdown change/chart click
         Input("ironbeam-bar-interval", "value"),
         Input("ib-chart-mode-toggle", "value"),
         Input("ib-indicator-state", "data"),
@@ -4046,10 +4051,10 @@ def register_ironbeam_callbacks(app):
         if gex_min_abs_b is not None:
             params.append(f"gex_min_abs_b={gex_min_abs_b}")
 
-        # Only seed selected_times when the iframe is reloading for a new trade date.
-        # That fixes Backtests -> chart highlight without causing normal dropdown edits
-        # or chart clicks to reload the iframe.
-        if td != prior_trade_date and cleaned_times:
+        # Always include selected_times if we have them and the iframe is reloading for ANY reason.
+        # This ensures the chart comes up with the right highlight on initial load or interval change.
+        # Since smile-time-input is now State, it won't trigger reloads by itself.
+        if cleaned_times:
             params.append(
                 "selected_times=" + urllib.parse.quote(",".join(cleaned_times), safe=":,")
             )
