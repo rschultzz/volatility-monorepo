@@ -39,6 +39,8 @@ THETA_ATM_PP_PER_SQRT_YEAR = -638
 
 MARKET_TIMEZONE = pytz.timezone("US/Eastern")
 
+ANNUAL_TRADING_MINUTES = 252 * 6.75 * 60  # 102,060
+
 
 # ----------------- Helpers -----------------
 def _skews_from_row(row: pd.Series) -> Tuple[float, float, float]:
@@ -93,6 +95,28 @@ def _T_from_row_snapshot(row: pd.Series, expiration_iso: str) -> Optional[float]
         .to_pydatetime()
     )
     return _years_to_exp(ts_et, expiration_iso)
+
+
+def _minutes_to_exp_0dte(ts_et: dt.datetime) -> float:
+    """
+    Business minutes left in today's RTH session (9:30 AM - 4:15 PM ET).
+    6.75 hours = 405 minutes.
+    """
+    if ts_et.tzinfo is None:
+        ts_et = MARKET_TIMEZONE.localize(ts_et)
+    else:
+        ts_et = ts_et.astimezone(MARKET_TIMEZONE)
+
+    day = ts_et.date()
+    # Using 16:15 because 6.75 hours * 60 = 405 mins, and 9:30 + 6:45 = 16:15.
+    open_dt = MARKET_TIMEZONE.localize(dt.datetime.combine(day, dt.time(9, 30)))
+    close_dt = MARKET_TIMEZONE.localize(dt.datetime.combine(day, dt.time(16, 15)))
+
+    if ts_et <= open_dt:
+        return 405.0
+    if ts_et >= close_dt:
+        return 0.0
+    return (close_dt - ts_et).total_seconds() / 60.0
 
 
 def _available_buckets(row: pd.Series) -> List[int]:
@@ -180,6 +204,7 @@ def register_callbacks(app):
     def render_skew_table(trade_date_iso, expiration_iso, times_pt, expected_value, live_data_json):
         # Same semantics as original: anything except "off" means we use Expected SS.
         expected_on = (expected_value != "off")
+        is_0dte = (trade_date_iso == expiration_iso) and trade_date_iso is not None
 
         base_cols = [
             "Time (PT)",
@@ -193,15 +218,20 @@ def register_callbacks(app):
             "Δ Put Skew %",
         ]
         exp_cols = ["ATM exp (SS) %", "ATM residual (bp)"]
+        
+        def get_final_cols():
+            cols = list(base_cols)
+            if expected_on:
+                # Insert exp_cols after ATM IV %
+                idx = cols.index("ATM IV %") + 1
+                for c in reversed(exp_cols):
+                    cols.insert(idx, c)
+            if is_0dte:
+                cols.append("Exp Move")
+            return cols
 
         if not trade_date_iso or not expiration_iso:
-            cols = (
-                base_cols
-                if not expected_on
-                else ["Time (PT)", "Stock", "Δ Stock %", "ATM IV %"]
-                + exp_cols
-                + ["Call Skew", "Put Skew", "Δ ATM IV %", "Δ Call Skew %", "Δ Put Skew %"]
-            )
+            cols = get_final_cols()
             fig = go.Figure(
                 data=[
                     go.Table(
@@ -271,6 +301,15 @@ def register_callbacks(app):
                     )
                     atm_exp_pct: Optional[float] = None
                     atm_res_bp: Optional[int] = None
+                    exp_move: Optional[float] = None
+
+                    if is_0dte and stock_now is not None:
+                        ts_utc_val = row_now.get("snap_shot_date")
+                        if ts_utc_val and not pd.isna(ts_utc_val):
+                            ts_et = pd.to_datetime(ts_utc_val, utc=True).tz_convert(MARKET_TIMEZONE)
+                            mins_left = _minutes_to_exp_0dte(ts_et)
+                            # remaining_move ≈ spot × ATM_IV_decimal × √(minutes_to_expiration / annual_trading_minutes)
+                            exp_move = stock_now * atm_now * math.sqrt(mins_left / ANNUAL_TRADING_MINUTES)
 
                     # Expected SS mode: compare vs *expected* curve from previous surface
                     if (
@@ -377,6 +416,7 @@ def register_callbacks(app):
                             "Δ Put Skew %": None
                             if d_put_pct is None
                             else round(d_put_pct, 2),
+                            "Exp Move": None if exp_move is None else round(exp_move, 2),
                         }
                     )
 
@@ -418,6 +458,11 @@ def register_callbacks(app):
                 )
                 atm_exp_pct: Optional[float] = None
                 atm_res_bp: Optional[int] = None
+                exp_move_live: Optional[float] = None
+
+                if is_0dte and stock_live is not None:
+                    # For live row, use current time ET
+                    exp_move_live = stock_live * atm_live * math.sqrt(_minutes_to_exp_0dte(now_et) / ANNUAL_TRADING_MINUTES)
 
                 if (
                     expected_on
@@ -513,17 +558,12 @@ def register_callbacks(app):
                         "Δ Put Skew %": None
                         if d_put_pct is None
                         else round(d_put_pct, 2),
+                        "Exp Move": None if exp_move_live is None else round(exp_move_live, 2),
                     }
                 )
 
         if not rows:
-            cols = (
-                base_cols
-                if not expected_on
-                else ["Time (PT)", "Stock", "Δ Stock %", "ATM IV %"]
-                + exp_cols
-                + ["Call Skew", "Put Skew", "Δ ATM IV %", "Δ Call Skew %", "Δ Put Skew %"]
-            )
+            cols = get_final_cols()
             fig = go.Figure(
                 data=[
                     go.Table(
@@ -548,33 +588,7 @@ def register_callbacks(app):
             return fig
 
         df = pd.DataFrame(rows)
-        ordered_cols = (
-            [
-                "Time (PT)",
-                "Stock",
-                "Δ Stock %",
-                "ATM IV %",
-                "ATM exp (SS) %",
-                "ATM residual (bp)",
-                "Call Skew",
-                "Put Skew",
-                "Δ ATM IV %",
-                "Δ Call Skew %",
-                "Δ Put Skew %",
-            ]
-            if expected_on
-            else [
-                "Time (PT)",
-                "Stock",
-                "Δ Stock %",
-                "ATM IV %",
-                "Call Skew",
-                "Put Skew",
-                "Δ ATM IV %",
-                "Δ Call Skew %",
-                "Δ Put Skew %",
-            ]
-        )
+        ordered_cols = get_final_cols()
         df = df[ordered_cols]
 
         color_cols = {
