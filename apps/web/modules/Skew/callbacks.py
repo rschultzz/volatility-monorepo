@@ -39,7 +39,7 @@ THETA_ATM_PP_PER_SQRT_YEAR = -638
 
 MARKET_TIMEZONE = pytz.timezone("US/Eastern")
 
-ANNUAL_TRADING_MINUTES = 252 * 6.75 * 60  # 102,060
+ANNUAL_MINUTES = 525600
 
 
 # ----------------- Helpers -----------------
@@ -308,8 +308,8 @@ def register_callbacks(app):
                         if ts_utc_val and not pd.isna(ts_utc_val):
                             ts_et = pd.to_datetime(ts_utc_val, utc=True).tz_convert(MARKET_TIMEZONE)
                             mins_left = _minutes_to_exp_0dte(ts_et)
-                            # remaining_move ≈ spot × ATM_IV_decimal × √(minutes_to_expiration / annual_trading_minutes)
-                            exp_move = stock_now * atm_now * math.sqrt(mins_left / ANNUAL_TRADING_MINUTES)
+                            # remaining_move ≈ spot × ATM_IV_decimal × √(minutes_to_expiration / 525600)
+                            exp_move = stock_now * atm_now * math.sqrt(mins_left / ANNUAL_MINUTES)
 
                     # Expected SS mode: compare vs *expected* curve from previous surface
                     if (
@@ -462,7 +462,7 @@ def register_callbacks(app):
 
                 if is_0dte and stock_live is not None:
                     # For live row, use current time ET
-                    exp_move_live = stock_live * atm_live * math.sqrt(_minutes_to_exp_0dte(now_et) / ANNUAL_TRADING_MINUTES)
+                    exp_move_live = stock_live * atm_live * math.sqrt(_minutes_to_exp_0dte(now_et) / ANNUAL_MINUTES)
 
                 if (
                     expected_on

@@ -801,7 +801,7 @@ def _effective_trade_date(selected_date: dt.date, pt_tz: ZoneInfo) -> tuple[dt.d
 
     # Optional: roll forward after ~15:00 PT to follow the CME/ETH session boundary.
     try:
-        now_pt = dt.datetime.now(tz=pt_tz)
+        now_pt = dt.datetime.now(pt_tz)
         if selected_date == now_pt.date() and now_pt.time() >= dt.time(15, 0):
             eff = _next_trade_date(selected_date, pt_tz)
             return eff, f'After 15:00 PT, overnight session rolls to {eff.isoformat()}'
@@ -1027,9 +1027,9 @@ def _build_react_preview_bars_payload(
 
     # --- Expected Move Levels ---
     expected_move_levels: list[dict] = []
-    # minutes_to_expiration at 6:33 PT is 402. annual_trading_minutes is 102,060.
-    # sqrt(402 / 102060) = 0.06276
-    SQRT_TERM = math.sqrt(402.0 / 102060.0)
+    # minutes_to_expiration at 6:33 PT is 402.
+    # New formula: sqrt(402 / 525600) = 0.027655
+    SQRT_TERM = math.sqrt(402.0 / 525600.0)
 
     for load_date, df_day in loaded_frames:
         try:
