@@ -599,6 +599,7 @@ export default function PriceChart({
   onVisibleLogicalRangeChange,
   onLinkedCrosshairChange,
   onInteractionActiveChange,
+  skewData = [],
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -632,36 +633,45 @@ export default function PriceChart({
   const [draftInterval, setDraftInterval] = useState(() => normalizeIntervalValue(interval, '1min'))
   const [settingsError, setSettingsError] = useState('')
 
+  const [floatingPos, setFloatingPos] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('ib-react-skew-window-pos')
+      if (saved) return JSON.parse(saved)
+    } catch (e) {}
+    return { top: 12, right: 12 }
+  })
+  const floatingDragRef = useRef(null)
+
   useEffect(() => {
-  setSelectedTimes(normalizeTimes(initialSelectedTimes || []))
-}, [initialSelectedTimes])
+    setSelectedTimes(normalizeTimes(initialSelectedTimes || []))
+  }, [initialSelectedTimes])
 
-useEffect(() => {
-  const handleParentTimeslices = (event) => {
-    const data = event?.data
-    if (!data || data.type !== 'ib-parent-timeslices') return
+  useEffect(() => {
+    const handleParentTimeslices = (event) => {
+      const data = event?.data
+      if (!data || data.type !== 'ib-parent-timeslices') return
 
-    const next = normalizeTimes(Array.isArray(data.times) ? data.times : [])
-    setSelectedTimes((prev) => {
-      const prevKey = normalizeTimes(prev).join('|')
-      const nextKey = next.join('|')
-      return prevKey === nextKey ? prev : next
-    })
-  }
+      const next = normalizeTimes(Array.isArray(data.times) ? data.times : [])
+      setSelectedTimes((prev) => {
+        const prevKey = normalizeTimes(prev).join('|')
+        const nextKey = next.join('|')
+        return prevKey === nextKey ? prev : next
+      })
+    }
 
-  window.addEventListener('message', handleParentTimeslices)
-  return () => {
-    window.removeEventListener('message', handleParentTimeslices)
-  }
-}, [])
+    window.addEventListener('message', handleParentTimeslices)
+    return () => {
+      window.removeEventListener('message', handleParentTimeslices)
+    }
+  }, [])
 
-useEffect(() => {
-  try {
-    window.parent.postMessage({ type: 'ib-react-request-timeslices' }, '*')
-  } catch (err) {
-    // ignore
-  }
-}, [])
+  useEffect(() => {
+    try {
+      window.parent.postMessage({ type: 'ib-react-request-timeslices' }, '*')
+    } catch (err) {
+      // ignore
+    }
+  }, [])
 
   useEffect(() => {
     if (!settingsOpen) {
@@ -1585,6 +1595,43 @@ useEffect(() => {
     expectedMoveSeriesRefs.current = nextRefs
   }, [normalizedExpectedMoveLevels])
 
+  const handleFloatingMouseDown = (e) => {
+    floatingDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startTop: floatingPos.top ?? NaN,
+      startRight: floatingPos.right ?? NaN,
+      startBottom: floatingPos.bottom ?? NaN,
+      startLeft: floatingPos.left ?? NaN,
+    }
+    window.addEventListener('mousemove', handleFloatingMouseMove)
+    window.addEventListener('mouseup', handleFloatingMouseUp)
+  }
+
+  const handleFloatingMouseMove = (e) => {
+    if (!floatingDragRef.current) return
+    const { startX, startY, startTop, startRight, startBottom, startLeft } = floatingDragRef.current
+    const dx = e.clientX - startX
+    const dy = e.clientY - startY
+
+    const next = {}
+    if (Number.isFinite(startTop)) next.top = startTop + dy
+    if (Number.isFinite(startBottom)) next.bottom = startBottom - dy
+    if (Number.isFinite(startLeft)) next.left = startLeft + dx
+    if (Number.isFinite(startRight)) next.right = startRight - dx
+
+    setFloatingPos(next)
+  }
+
+  const handleFloatingMouseUp = () => {
+    window.removeEventListener('mousemove', handleFloatingMouseMove)
+    window.removeEventListener('mouseup', handleFloatingMouseUp)
+    if (floatingPos) {
+      window.localStorage.setItem('ib-react-skew-window-pos', JSON.stringify(floatingPos))
+    }
+    floatingDragRef.current = null
+  }
+
   return (
     <div className="chart-shell chart-shell-compact">
       <div className="chart-frame chart-frame-compact">
@@ -1627,6 +1674,62 @@ useEffect(() => {
             >
               ⚙
             </button>
+          </div>
+
+          <div
+            onMouseDown={handleFloatingMouseDown}
+            style={{
+              position: 'absolute',
+              zIndex: 10,
+              cursor: 'grab',
+              background: 'rgba(15, 23, 42, 0.92)',
+              border: '1px solid #1f2937',
+              borderRadius: '12px',
+              padding: '10px 14px',
+              boxShadow: '0 10px 25px rgba(0,0,0,0.4)',
+              minWidth: '240px',
+              color: '#e2e8f0',
+              fontSize: '13px',
+              pointerEvents: 'auto',
+              userSelect: 'none',
+              ...floatingPos,
+            }}
+          >
+            <div style={{ fontWeight: 800, color: '#94a3b8', fontSize: '11px', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Skew Overview
+            </div>
+            {skewData && skewData.length > 0 ? (
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ color: '#94a3b8', fontSize: '10px', borderBottom: '1px solid #334155' }}>
+                    <th style={{ textAlign: 'left', padding: '4px 0' }}>Time</th>
+                    <th style={{ textAlign: 'right', padding: '4px 0' }}>Δ ATM%</th>
+                    <th style={{ textAlign: 'right', padding: '4px 0' }}>Δ Call%</th>
+                    <th style={{ textAlign: 'right', padding: '4px 0' }}>Δ Put%</th>
+                  </tr>
+                </thead>
+                <tbody style={{ fontFamily: 'ui-monospace, monospace', fontSize: '12px' }}>
+                  {skewData.map((row, idx) => (
+                    <tr key={idx} style={{ borderBottom: idx === skewData.length - 1 ? '0' : '1px solid #1e293b' }}>
+                      <td style={{ padding: '6px 0', fontWeight: 600 }}>{row.time}</td>
+                      <td style={{ textAlign: 'right', color: row.d_atm > 0 ? '#4ade80' : row.d_atm < 0 ? '#f87171' : 'inherit' }}>
+                        {row.d_atm != null ? row.d_atm.toFixed(2) : '--'}
+                      </td>
+                      <td style={{ textAlign: 'right', color: row.d_call > 0 ? '#4ade80' : row.d_call < 0 ? '#f87171' : 'inherit' }}>
+                        {row.d_call != null ? row.d_call.toFixed(2) : '--'}
+                      </td>
+                      <td style={{ textAlign: 'right', color: row.d_put > 0 ? '#4ade80' : row.d_put < 0 ? '#f87171' : 'inherit' }}>
+                        {row.d_put != null ? row.d_put.toFixed(2) : '--'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div style={{ color: '#64748b', fontSize: '12px', fontStyle: 'italic', textAlign: 'center', padding: '10px 0' }}>
+                Select time slices to view skew data
+              </div>
+            )}
           </div>
 
           {settingsOpen && (

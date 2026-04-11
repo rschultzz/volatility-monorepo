@@ -10,6 +10,7 @@ const FLOW_MAX_HEIGHT = 520
 const FULL_BARS_LIVE_POLL_MS = 30000
 const LIVE_OVERLAY_POLL_MS = 1000
 const FLOW_LIVE_POLL_MS = 3000
+const SKEW_DATA_POLL_MS = 10000
 
 function cleanBaseUrl(value) {
   const s = String(value || '').trim()
@@ -374,6 +375,8 @@ function rangesClose(a, b, eps = 1) {
 export default function App() {
   const params = useMemo(() => new URLSearchParams(window.location.search), [])
   const tradeDate = params.get('trade_date') || new Date().toISOString().slice(0, 10)
+  const expirationDate = params.get('expiration_date') || tradeDate
+  const expectedOn = params.get('expected') !== 'off'
 
   const initialInterval = useMemo(() => {
     const raw = params.get('interval') || '1min'
@@ -397,13 +400,11 @@ export default function App() {
   const flowHistAlpha = parseFloatOrNull(params.get('flow_hist_alpha')) ?? 0.30
 
   const apiBase = useMemo(() => inferApiBase(), [])
-  const initialSelectedTimes = useMemo(() => parseSelectedTimes(params), [params])
+  const [selectedTimes, setSelectedTimes] = useState(() => parseSelectedTimes(params))
 
   const [interval, setInterval] = useState(initialInterval)
 
   const effectiveDaysEitherSide = useMemo(() => {
-    // If the current interval matches what was in the URL, we can respect the URL parameter.
-    // Otherwise (if changed in React settings), use the standard logic for that interval.
     if (interval === initialInterval && explicitDaysEitherSide != null) {
       return explicitDaysEitherSide
     }
@@ -434,6 +435,8 @@ export default function App() {
   const [sharedLogicalRange, setSharedLogicalRange] = useState(null)
   const [linkedCrosshair, setLinkedCrosshair] = useState(null)
   const [isChartInteracting, setIsChartInteracting] = useState(false)
+
+  const [skewData, setSkewData] = useState([])
 
   const [flowPanelHeight, setFlowPanelHeight] = useState(() => {
     try {
@@ -482,6 +485,20 @@ export default function App() {
     const stepSeconds = flowResampleToSeconds(flowResample)
     return Math.max(1, Math.round((flowEmaMinutes * 60) / stepSeconds))
   }, [flowEmaMinutes, flowResample])
+
+  useEffect(() => {
+    const handleParentTimeslices = (event) => {
+      const data = event?.data
+      if (!data || data.type !== 'ib-parent-timeslices') return
+      const next = Array.isArray(data.times) ? data.times : []
+      setSelectedTimes((prev) => {
+        if (prev.join(',') === next.join(',')) return prev
+        return next
+      })
+    }
+    window.addEventListener('message', handleParentTimeslices)
+    return () => window.removeEventListener('message', handleParentTimeslices)
+  }, [])
 
   useEffect(() => {
     const tick = () => {
@@ -1027,6 +1044,71 @@ export default function App() {
     }
   }, [apiBase, tradeDate, selectedSessionTradeDateKey, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error, isLiveTradeDate])
 
+  // --- Skew Data Fetching ---
+  useEffect(() => {
+    if (loadingCenter || error) return undefined
+
+    let disposed = false
+    let inFlight = false
+    let activeController = null
+
+    const tick = async () => {
+      if (disposed || inFlight) return
+      inFlight = true
+      const controller = new AbortController()
+      activeController = controller
+
+      try {
+        const url = new URL(`${apiBase}/api/ironbeam/skew-data`)
+        url.searchParams.set('trade_date', tradeDate)
+        url.searchParams.set('expiration_date', expirationDate)
+        url.searchParams.set('expected', expectedOn ? 'on' : 'off')
+        if (selectedTimes && selectedTimes.length > 0) {
+          url.searchParams.set('times', selectedTimes.join(','))
+        }
+
+        // Live data from parent store if available
+        try {
+          const parentData = window.parent?.document?.getElementById('live-data-store')?.textContent
+          if (parentData) {
+            url.searchParams.set('live_data', parentData)
+          }
+        } catch (e) {
+          // ignore
+        }
+
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          credentials: 'include',
+          signal: controller.signal,
+          cache: 'no-store',
+        })
+
+        if (!response.ok) throw new Error('Skew data fetch failed')
+
+        const payload = await response.json()
+        if (disposed) return
+        setSkewData(payload.skew_data || [])
+      } catch (err) {
+        if (err?.name !== 'AbortError') {
+          console.error('Skew data refresh failed', err)
+        }
+      } finally {
+        if (activeController === controller) activeController = null
+        inFlight = false
+      }
+    }
+
+    tick()
+    const timer = window.setInterval(tick, SKEW_DATA_POLL_MS)
+
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+      if (activeController) activeController.abort()
+    }
+  }, [apiBase, tradeDate, expirationDate, selectedTimes, expectedOn, loadingCenter, error])
+
   useEffect(() => {
     const handleMove = (event) => {
       const state = dragStateRef.current
@@ -1157,7 +1239,7 @@ export default function App() {
                 tradeDate={tradeDate}
                 interval={interval}
                 liveTradeCandles={liveTradeBars}
-                initialSelectedTimes={initialSelectedTimes}
+                initialSelectedTimes={selectedTimes}
                 gexSegments={mergedGexSegments}
                 gexEnabled={Boolean(meta?.gex_enabled ?? gexEnabled)}
                 gexMinAbsB={gexMinAbsB}
@@ -1167,6 +1249,7 @@ export default function App() {
                 onVisibleLogicalRangeChange={handleSharedLogicalRangeChange}
                 onLinkedCrosshairChange={handleLinkedCrosshairChange}
                 onInteractionActiveChange={handleInteractionActiveChange}
+                skewData={skewData}
               />
             </div>
 
