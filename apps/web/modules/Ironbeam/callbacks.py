@@ -25,8 +25,9 @@ from modules.Ironbeam.indicators.gex_overlay import build_gex_overlay_traces as 
 from sqlalchemy import create_engine, text
 from flask import jsonify, request
 
-from packages.shared.utils import fetch_skew_data, is_market_hours
+from packages.shared.utils import fetch_skew_data, is_market_hours, fetch_live_orats_data, fetch_data_from_db
 from packages.shared.surface_compare import k_for_abs_delta
+from packages.shared.options_orats import pt_minute_to_et
 
 # Import skew helpers for the React API
 from modules.Skew.callbacks import (
@@ -34,6 +35,12 @@ from modules.Skew.callbacks import (
     _T_from_row_snapshot, _prev_smile_interp, _interp_linear_extrap,
     BETA_MAX_SHIFT_PP, BETA_VOLPTS_PER_1PCT, THETA_ATM_PP_PER_SQRT_YEAR,
     EPS_T, MARKET_TIMEZONE, ANNUAL_MINUTES, _minutes_to_exp_0dte
+)
+
+# Import Smile Chart helpers
+from modules.Smile.callbacks import (
+    _available_buckets, _bucket_labels_order, _expected_curve_shifted, _years_to_exp,
+    COLORWAY, LIVE_COLOR, MARKET_OPEN, MARKET_CLOSE
 )
 
 def _indicator_state_token(state: object) -> str:
@@ -1637,7 +1644,7 @@ def _build_react_skew_data_payload(
                         ret_frac = (stock_live - prev_stock) / prev_stock
                         level_shift_pp = max(-BETA_MAX_SHIFT_PP, min(BETA_MAX_SHIFT_PP, (-ret_frac) * 100.0 * BETA_VOLPTS_PER_1PCT))
                         droot = max(0.0, math.sqrt(max(prev_T, EPS_T)) - math.sqrt(max(T_live, EPS_T)))
-                        atm_theta_pp = THETA_ATM_PP_PER_SQ_YEAR * droot
+                        atm_theta_pp = THETA_ATM_PP_PER_SQRT_YEAR * droot
                         atm_exp = exp_atm_shape + (level_shift_pp / 100.0) + (atm_theta_pp / 100.0)
 
                         k_c25_live = k_for_abs_delta(0.25, is_put=False, sigma=atm_live, T=T_live)
@@ -1665,6 +1672,123 @@ def _build_react_skew_data_payload(
             pass
 
     return {"skew_data": rows}, 200
+
+
+def _build_react_smile_payload(
+    trade_date: str | None,
+    expiration_date: str | None,
+    times: list[str] | None,
+    expected: bool = True,
+    live_data_json: str | None = None,
+) -> tuple[dict, int]:
+    if not trade_date or not expiration_date:
+        return {"error": "Missing trade_date or expiration_date"}, 400
+
+    expected_on = expected
+    times_sorted = sorted(times or [])
+    
+    traces = []
+    
+    prev_row = None
+    prev_stock = None
+    prev_T = None
+    ref_row, ref_stock, ref_T = None, None, None
+
+    # Historical
+    if times_sorted:
+        df = fetch_data_from_db(trade_date, expiration_date, times_sorted)
+        if df is not None and not df.empty:
+            df["snapshot_pt"] = pd.to_datetime(df["snapshot_pt"]).dt.strftime("%H:%M")
+            for i, hhmm_pt in enumerate(times_sorted):
+                rows = df[df["snapshot_pt"] == hhmm_pt]
+                if rows.empty: continue
+                row_now = rows.iloc[0]
+                color = COLORWAY[i % len(COLORWAY)]
+
+                buckets_now = _available_buckets(row_now)
+                buckets_now = [n for n in buckets_now if n not in (95, 5)]
+                if not buckets_now or 50 not in buckets_now: continue
+                order_now, labels_now = _bucket_labels_order(buckets_now)
+                
+                try:
+                    y_now = [float(row_now[f"vol{n}"]) * 100.0 for n in order_now]
+                except KeyError: continue
+
+                traces.append({
+                    "x": labels_now,
+                    "y": y_now,
+                    "name": f"{hhmm_pt} PT",
+                    "line": {"color": color},
+                    "marker": {"color": color}
+                })
+
+                stock_val = row_now.get("stock_price")
+                stock_now = float(stock_val) if stock_val is not None and not pd.isna(stock_val) else None
+                ts_et = pt_minute_to_et(trade_date, hhmm_pt)
+                T_now = _years_to_exp(ts_et, expiration_date)
+
+                if expected_on and prev_row is not None and prev_stock is not None and prev_T is not None and stock_now is not None:
+                    try:
+                        labels_exp, y_exp, atm_exp_pct = _expected_curve_shifted(
+                            prev_row, prev_T, prev_stock, row_now, T_now, stock_now
+                        )
+                        traces.append({
+                            "x": labels_exp,
+                            "y": y_exp.tolist(),
+                            "name": f"Exp (SS) - {hhmm_pt}",
+                            "line": {"color": color, "dash": "dot"}
+                        })
+                    except Exception: pass
+
+                prev_row, prev_stock, prev_T = row_now, stock_now, T_now
+                try:
+                    from modules.Smile.callbacks import _k_grid_for_row
+                    k_now_ref, _ = _k_grid_for_row(row_now, T_now)
+                    if k_now_ref.size >= 2 and stock_now is not None:
+                        ref_row, ref_stock, ref_T = row_now, stock_now, T_now
+                except Exception: pass
+
+    # Live
+    now_et = dt.datetime.now(MARKET_TIMEZONE)
+    if live_data_json and MARKET_OPEN <= now_et.time() <= MARKET_CLOSE and now_et.weekday() < 5 and trade_date == now_et.date().isoformat():
+        try:
+            df_live = pd.read_json(StringIO(live_data_json), orient="split")
+            live_row_df = df_live[df_live["expir_date"] == expiration_date]
+            if not live_row_df.empty:
+                live_row = live_row_df.iloc[0]
+                buckets_live = _available_buckets(live_row)
+                buckets_live = [n for n in buckets_live if n not in (95, 5)]
+                if buckets_live and 50 in buckets_live:
+                    order_live, labels_live = _bucket_labels_order(buckets_live)
+                    y_live = [float(live_row[f"vol{n}"]) * 100.0 for n in order_live]
+                    traces.append({
+                        "x": labels_live,
+                        "y": y_live,
+                        "name": "Live",
+                        "line": {"color": LIVE_COLOR, "width": 3},
+                        "marker": {"color": LIVE_COLOR}
+                    })
+
+                    stock_live = float(live_row.get("stock_price")) if not pd.isna(live_row.get("stock_price")) else None
+                    ts_live_val = live_row.get("snapshot_pt")
+                    hhmm_live = ts_live_val if isinstance(ts_live_val, str) else pd.to_datetime(ts_live_val).strftime("%H:%M")
+                    live_T = _years_to_exp(pt_minute_to_et(trade_date, hhmm_live), expiration_date)
+
+                    if expected_on and ref_row is not None and ref_stock is not None and ref_T is not None and stock_live is not None:
+                        try:
+                            labels_exp_live, y_exp_live, atm_exp_pct_live = _expected_curve_shifted(
+                                ref_row, ref_T, ref_stock, live_row, live_T, stock_live
+                            )
+                            traces.append({
+                                "x": labels_exp_live,
+                                "y": y_exp_live.tolist(),
+                                "name": "Exp (SS) - Live",
+                                "line": {"color": LIVE_COLOR, "dash": "dot"}
+                            })
+                        except Exception: pass
+        except Exception: pass
+
+    return {"traces": traces}, 200
 
 
 def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
@@ -1717,6 +1841,8 @@ def _color_for_net_gex(net_val: float, cmin: float, cmax: float) -> str:
 
 
 def _compute_color_span(net_g: np.ndarray) -> tuple[float, float]:
+    if GEX_HEATMAP_COLORSCALE: # dummy check
+        pass
     if GEX_COLOR_ABS_MAX > 0:
         span = float(GEX_COLOR_ABS_MAX)
     else:
@@ -2505,6 +2631,31 @@ def register_ironbeam_callbacks(app):
 
             app.server._ironbeam_react_skew_data_route_registered = True
 
+        if not getattr(app.server, "_ironbeam_react_smile_data_route_registered", False):
+            @app.server.route("/api/ironbeam/smile-data", methods=["GET"])
+            def ironbeam_react_smile_data_api():
+                trade_date = request.args.get("trade_date")
+                expiration_date = request.args.get("expiration_date")
+                times_str = request.args.get("times")
+                expected = request.args.get("expected") != "off"
+                live_data_json = request.args.get("live_data")
+
+                times = times_str.split(",") if times_str else []
+                payload, status = _build_react_smile_payload(
+                    trade_date, expiration_date, times,
+                    expected=expected, live_data_json=live_data_json
+                )
+                
+                resp = jsonify(payload)
+                origin = request.headers.get("Origin")
+                allowed = {"http://localhost:5173", "http://127.0.0.1:5173", "http://0.0.0.0:5173"}
+                if origin in allowed:
+                    resp.headers["Access-Control-Allow-Origin"] = origin
+                    resp.headers["Access-Control-Allow-Credentials"] = "true"
+                    resp.headers["Vary"] = "Origin"
+                return resp, status
+            app.server._ironbeam_react_smile_data_route_registered = True
+
     # ---- Clientside Sync: Crosshair & Zoom ----
     app.clientside_callback(
         ClientsideFunction(namespace="ironbeam", function_name="sync_crosshair_and_zoom"),
@@ -3159,6 +3310,7 @@ def register_ironbeam_callbacks(app):
         except Exception:
             cooldown_active = False
 
+        HOVER_COOLDOWN_MS = 150 # missing constant
         hover_cooldown_active = False
         try:
             if isinstance(shared_xrange, dict):
@@ -3279,7 +3431,7 @@ def register_ironbeam_callbacks(app):
                             type="scattergl",
                             x=[day_start_pt, day_end_pt],
                             y=[lvl, lvl],
-                            mode="lines",
+                            mode="markers+lines" if line_width > 0 else "markers",
                             line=dict(color=color, width=line_width),
                             opacity=line_opacity,
                             name=f"GEX {target_str}",

@@ -6,6 +6,7 @@ import {
   CandlestickSeries,
   LineSeries,
 } from 'lightweight-charts'
+import SmileChart from './SmileChart'
 
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
@@ -600,6 +601,7 @@ export default function PriceChart({
   onLinkedCrosshairChange,
   onInteractionActiveChange,
   skewData = [],
+  smileData = null,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -641,6 +643,30 @@ export default function PriceChart({
     return { top: 12, right: 12 }
   })
   const floatingDragRef = useRef(null)
+
+  const [smileWindowSize, setSmileWindowSize] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('ib-react-smile-window-size')
+      if (saved) return JSON.parse(saved)
+    } catch (e) {}
+    return { width: 0, height: 0 } // 0 means calculate from stage
+  })
+  const [smileCollapsed, setSmileCollapsed] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('ib-react-smile-collapsed')
+      if (saved) return saved === 'true'
+    } catch (e) {}
+    return false
+  })
+  const smileResizeRef = useRef(null)
+
+  useEffect(() => {
+    if (!stageRef.current || (smileWindowSize.width > 0 && smileWindowSize.height > 0)) return
+    const stage = stageRef.current
+    const w = Math.round(stage.clientWidth / 2.4)
+    const h = Math.round(stage.clientHeight / 2.4)
+    setSmileWindowSize({ width: w, height: h })
+  }, [smileWindowSize])
 
   useEffect(() => {
     setSelectedTimes(normalizeTimes(initialSelectedTimes || []))
@@ -1596,6 +1622,10 @@ export default function PriceChart({
   }, [normalizedExpectedMoveLevels])
 
   const handleFloatingMouseDown = (e) => {
+    // Only drag if not clicking on collapse button
+    if (e.target.closest('.smile-collapse-btn')) return
+    e.stopPropagation()
+
     floatingDragRef.current = {
       startX: e.clientX,
       startY: e.clientY,
@@ -1630,6 +1660,90 @@ export default function PriceChart({
       window.localStorage.setItem('ib-react-skew-window-pos', JSON.stringify(floatingPos))
     }
     floatingDragRef.current = null
+  }
+
+  const handleSmileResizeMouseDown = (e, corner) => {
+    e.stopPropagation()
+    smileResizeRef.current = {
+      corner,
+      startX: e.clientX,
+      startY: e.clientY,
+      startWidth: smileWindowSize.width,
+      startHeight: smileWindowSize.height,
+      startTop: floatingPos.top ?? NaN,
+      startLeft: floatingPos.left ?? NaN,
+      startBottom: floatingPos.bottom ?? NaN,
+      startRight: floatingPos.right ?? NaN,
+    }
+    window.addEventListener('mousemove', handleSmileResizeMouseMove)
+    window.addEventListener('mouseup', handleSmileResizeMouseUp)
+  }
+
+  const handleSmileResizeMouseMove = (e) => {
+    if (!smileResizeRef.current) return
+    const { corner, startX, startY, startWidth, startHeight, startTop, startLeft, startBottom, startRight } = smileResizeRef.current
+    const dx = e.clientX - startX
+    const dy = e.clientY - startY
+
+    let nw = startWidth
+    let nh = startHeight
+    const nextPos = { ...floatingPos }
+
+    if (corner.includes('right')) {
+      if (Number.isFinite(startRight)) {
+        nw = startWidth - dx
+        nextPos.right = startRight + dx
+      } else {
+        nw = startWidth + dx
+      }
+    }
+    if (corner.includes('left')) {
+      if (Number.isFinite(startLeft)) {
+        nw = startWidth - dx
+        nextPos.left = startLeft + dx
+      } else {
+        nw = startWidth + dx
+      }
+    }
+    if (corner.includes('bottom')) {
+      if (Number.isFinite(startBottom)) {
+        nh = startHeight - dy
+        nextPos.bottom = startBottom + dy
+      } else {
+        nh = startHeight + dy
+      }
+    }
+    if (corner.includes('top')) {
+      if (Number.isFinite(startTop)) {
+        nh = startHeight - dy
+        nextPos.top = startTop + dy
+      } else {
+        nh = startHeight + dy
+      }
+    }
+
+    nw = Math.max(200, nw)
+    nh = Math.max(150, nh)
+
+    setSmileWindowSize({ width: nw, height: nh })
+    setFloatingPos(nextPos)
+  }
+
+  const handleSmileResizeMouseUp = () => {
+    window.removeEventListener('mousemove', handleSmileResizeMouseMove)
+    window.removeEventListener('mouseup', handleSmileResizeMouseUp)
+    window.localStorage.setItem('ib-react-smile-window-size', JSON.stringify(smileWindowSize))
+    window.localStorage.setItem('ib-react-skew-window-pos', JSON.stringify(floatingPos))
+    smileResizeRef.current = null
+  }
+
+  const toggleSmileCollapsed = (e) => {
+    e.stopPropagation()
+    setSmileCollapsed(prev => {
+      const next = !prev
+      window.localStorage.setItem('ib-react-smile-collapsed', String(next))
+      return next
+    })
   }
 
   return (
@@ -1678,61 +1792,124 @@ export default function PriceChart({
 
           <div
             onMouseDown={handleFloatingMouseDown}
+            onWheel={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
             style={{
               position: 'absolute',
               zIndex: 10,
-              cursor: 'grab',
+              cursor: smileCollapsed ? 'pointer' : 'grab',
               background: 'rgba(15, 23, 42, 0.92)',
               border: '1px solid #1f2937',
-              borderRadius: '12px',
-              padding: '10px 14px',
+              borderRadius: smileCollapsed ? '8px 0 0 8px' : '12px',
+              padding: smileCollapsed ? '6px 10px' : '10px 14px',
               boxShadow: '0 10px 25px rgba(0,0,0,0.4)',
-              minWidth: '280px',
+              minWidth: smileCollapsed ? 'auto' : '280px',
+              width: smileCollapsed ? 'auto' : smileWindowSize.width || 'auto',
+              height: smileCollapsed ? 'auto' : smileWindowSize.height || 'auto',
               color: '#e2e8f0',
               fontSize: '13px',
               pointerEvents: 'auto',
               userSelect: 'none',
-              ...floatingPos,
+              ...(smileCollapsed ? { top: 12, right: 0 } : floatingPos),
+              transition: 'border-radius 0.2s ease',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden'
             }}
+            onClick={smileCollapsed ? toggleSmileCollapsed : (e) => e.stopPropagation()}
           >
-            <div style={{ fontWeight: 800, color: '#94a3b8', fontSize: '11px', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Skew Overview
-            </div>
-            {skewData && skewData.length > 0 ? (
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ color: '#94a3b8', fontSize: '10px', borderBottom: '1px solid #334155' }}>
-                    <th style={{ textAlign: 'left', padding: '4px 0' }}>Time</th>
-                    <th style={{ textAlign: 'right', padding: '4px 0' }}>Δ ATM%</th>
-                    <th style={{ textAlign: 'right', padding: '4px 0' }}>Δ Call%</th>
-                    <th style={{ textAlign: 'right', padding: '4px 0' }}>Δ Put%</th>
-                    <th style={{ textAlign: 'right', padding: '4px 0' }}>Exp Move</th>
-                  </tr>
-                </thead>
-                <tbody style={{ fontFamily: 'ui-monospace, monospace', fontSize: '12px' }}>
-                  {skewData.map((row, idx) => (
-                    <tr key={idx} style={{ borderBottom: idx === skewData.length - 1 ? '0' : '1px solid #1e293b' }}>
-                      <td style={{ padding: '6px 0', fontWeight: 600 }}>{row.time}</td>
-                      <td style={{ textAlign: 'right', color: row.d_atm > 0 ? '#4ade80' : row.d_atm < 0 ? '#f87171' : 'inherit' }}>
-                        {row.d_atm != null ? row.d_atm.toFixed(2) : '--'}
-                      </td>
-                      <td style={{ textAlign: 'right', color: row.d_call > 0 ? '#4ade80' : row.d_call < 0 ? '#f87171' : 'inherit' }}>
-                        {row.d_call != null ? row.d_call.toFixed(2) : '--'}
-                      </td>
-                      <td style={{ textAlign: 'right', color: row.d_put > 0 ? '#4ade80' : row.d_put < 0 ? '#f87171' : 'inherit' }}>
-                        {row.d_put != null ? row.d_put.toFixed(2) : '--'}
-                      </td>
-                      <td style={{ textAlign: 'right', color: '#94a3b8' }}>
-                        {row.exp_move != null ? row.exp_move.toFixed(2) : '--'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <div style={{ color: '#64748b', fontSize: '12px', fontStyle: 'italic', textAlign: 'center', padding: '10px 0' }}>
-                Select time slices to view skew data
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center', 
+              marginBottom: smileCollapsed ? '0' : '8px' 
+            }}>
+              <div style={{ fontWeight: 800, color: '#94a3b8', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                {smileCollapsed ? 'Smile' : 'Overview'}
               </div>
+              {!smileCollapsed && (
+                <button 
+                  className="smile-collapse-btn"
+                  onClick={toggleSmileCollapsed}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#94a3b8',
+                    cursor: 'pointer',
+                    padding: '2px',
+                    fontSize: '14px',
+                    lineHeight: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  −
+                </button>
+              )}
+            </div>
+
+            {!smileCollapsed && (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                {smileData && smileData.traces && smileData.traces.length > 0 && (
+                  <div style={{ flex: '1', minHeight: 0, marginBottom: '4px' }}>
+                    <SmileChart 
+                      data={smileData} 
+                      width={smileWindowSize.width - 28} 
+                      height={Math.max(150, smileWindowSize.height - (skewData?.length ? (skewData.length * 25 + 80) : 60))} 
+                    />
+                  </div>
+                )}
+                
+                <div style={{ flex: '0 0 auto', overflowY: 'auto' }}>
+                  {skewData && skewData.length > 0 ? (
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ color: '#94a3b8', fontSize: '10px', borderBottom: '1px solid #334155' }}>
+                          <th style={{ textAlign: 'left', padding: '4px 0' }}>Time</th>
+                          <th style={{ textAlign: 'right', padding: '4px 0' }}>Δ ATM%</th>
+                          <th style={{ textAlign: 'right', padding: '4px 0' }}>Δ Call%</th>
+                          <th style={{ textAlign: 'right', padding: '4px 0' }}>Δ Put%</th>
+                          <th style={{ textAlign: 'right', padding: '4px 0' }}>Exp Move</th>
+                        </tr>
+                      </thead>
+                      <tbody style={{ fontFamily: 'ui-monospace, monospace', fontSize: '12px' }}>
+                        {skewData.map((row, idx) => (
+                          <tr key={idx} style={{ borderBottom: idx === skewData.length - 1 ? '0' : '1px solid #1e293b' }}>
+                            <td style={{ padding: '6px 0', fontWeight: 600 }}>{row.time}</td>
+                            <td style={{ textAlign: 'right', color: row.d_atm > 0 ? '#4ade80' : row.d_atm < 0 ? '#f87171' : 'inherit' }}>
+                              {row.d_atm != null ? row.d_atm.toFixed(2) : '--'}
+                            </td>
+                            <td style={{ textAlign: 'right', color: row.d_call > 0 ? '#4ade80' : row.d_call < 0 ? '#f87171' : 'inherit' }}>
+                              {row.d_call != null ? row.d_call.toFixed(2) : '--'}
+                            </td>
+                            <td style={{ textAlign: 'right', color: row.d_put > 0 ? '#4ade80' : row.d_put < 0 ? '#f87171' : 'inherit' }}>
+                              {row.d_put != null ? row.d_put.toFixed(2) : '--'}
+                            </td>
+                            <td style={{ textAlign: 'right', color: '#94a3b8' }}>
+                              {row.exp_move != null ? row.exp_move.toFixed(2) : '--'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div style={{ color: '#64748b', fontSize: '12px', fontStyle: 'italic', textAlign: 'center', padding: '10px 0' }}>
+                      Select time slices to view data
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Resize Handles */}
+            {!smileCollapsed && (
+              <>
+                <div onMouseDown={(e) => handleSmileResizeMouseDown(e, 'top-left')} style={{ position: 'absolute', top: 0, left: 0, width: '10px', height: '10px', cursor: 'nwse-resize', zIndex: 11 }} />
+                <div onMouseDown={(e) => handleSmileResizeMouseDown(e, 'top-right')} style={{ position: 'absolute', top: 0, right: 0, width: '10px', height: '10px', cursor: 'nesw-resize', zIndex: 11 }} />
+                <div onMouseDown={(e) => handleSmileResizeMouseDown(e, 'bottom-left')} style={{ position: 'absolute', bottom: 0, left: 0, width: '10px', height: '10px', cursor: 'nesw-resize', zIndex: 11 }} />
+                <div onMouseDown={(e) => handleSmileResizeMouseDown(e, 'bottom-right')} style={{ position: 'absolute', bottom: 0, right: 0, width: '10px', height: '10px', cursor: 'nwse-resize', zIndex: 11 }} />
+              </>
             )}
           </div>
 
