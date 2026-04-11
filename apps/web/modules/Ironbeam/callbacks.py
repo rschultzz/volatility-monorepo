@@ -36,7 +36,6 @@ from modules.Skew.callbacks import (
     EPS_T, MARKET_TIMEZONE, ANNUAL_MINUTES, _minutes_to_exp_0dte
 )
 
-
 def _indicator_state_token(state: object) -> str:
     """Stable token for guarding against stale-figure overwrites when indicator state changes."""
     if not isinstance(state, dict):
@@ -106,7 +105,6 @@ MULTI_LOAD_DAYS_PER_TICK = int(os.getenv("IRONBEAM_MULTI_LOAD_DAYS_PER_TICK", "1
 def _react_days_either_side_for_interval(interval: str) -> int:
     iv = str(interval or "1min").strip().lower()
     return max(0, REACT_DAYS_EITHER_SIDE_5MIN if iv == "5min" else REACT_DAYS_EITHER_SIDE_1MIN)
-
 
 # --- Smoothness toggles (render-only; safe defaults) ---
 USE_HOVERGRID = os.getenv("IRONBEAM_USE_HOVERGRID", "1").strip().lower() in ("1", "true", "yes", "y")
@@ -213,17 +211,16 @@ def _hex_to_rgba(color: str, alpha: float) -> str:
 
 def _fetch_flow_utc(start_utc: dt.datetime, end_utc: dt.datetime, symbol: str) -> pd.DataFrame:
     """
-    Fetch flow data. If 'symbol' returns no rows, discovery logic finds the
+    Fetch flow data. If 'symbol' returns no rows, discovery logic finds the 
     dominant symbol in the time range to support historical contracts.
     """
-
     def _do_query(s: str | None) -> pd.DataFrame:
         params = {"start_utc": start_utc, "end_utc": end_utc}
         where_sym = ""
         if s:
             where_sym = "AND symbol = :sym"
             params["sym"] = s
-
+            
         q = text(
             f"""
             SELECT ts_utc, symbol, buy_vol, sell_vol, unknown_vol
@@ -241,12 +238,12 @@ def _fetch_flow_utc(start_utc: dt.datetime, end_utc: dt.datetime, symbol: str) -
     df = _do_query(symbol)
     if not df.empty:
         return df
-
+        
     # 2. If empty, discovery: find whatever symbol is there
     df_all = _do_query(None)
     if df_all.empty:
         return df_all
-
+        
     # 3. Pick the dominant symbol to avoid roll overlap issues
     top_sym = df_all['symbol'].value_counts().idxmax()
     return df_all[df_all['symbol'] == top_sym].copy()
@@ -1539,6 +1536,7 @@ def _build_react_skew_data_payload(
         return {"error": "Missing trade_date or expiration_date"}, 400
 
     expected_on = expected
+    is_0dte = (trade_date == expiration_date)
 
     df_data = fetch_skew_data(trade_date, expiration_date, sorted(times or []))
     rows = []
@@ -1565,6 +1563,15 @@ def _build_react_skew_data_payload(
             d_atm_pct = _pct_change_frac(atm_now, prev_atm_actual)
             d_call_pct = _pct_change_pp(call_skew_pp_now, prev_call_skew_pp_actual)
             d_put_pct = _pct_change_pp(put_skew_pp_now, prev_put_skew_pp_actual)
+            exp_move = None
+
+            if is_0dte and stock_now is not None:
+                ts_utc_val = row_now.get("snap_shot_date")
+                if ts_utc_val and not pd.isna(ts_utc_val):
+                    ts_et = pd.to_datetime(ts_utc_val, utc=True).tz_convert(MARKET_TIMEZONE)
+                    mins_left = _minutes_to_exp_0dte(ts_et)
+                    # remaining_move ≈ spot × ATM_IV_decimal × √(minutes_to_expiration / 525600)
+                    exp_move = stock_now * atm_now * math.sqrt(mins_left / ANNUAL_MINUTES)
 
             if expected_on and prev_row is not None and prev_T is not None and prev_stock is not None and stock_now is not None and T_now is not None:
                 try:
@@ -1596,6 +1603,7 @@ def _build_react_skew_data_payload(
                 "d_atm": round(d_atm_pct, 2) if d_atm_pct is not None else None,
                 "d_call": round(d_call_pct, 2) if d_call_pct is not None else None,
                 "d_put": round(d_put_pct, 2) if d_put_pct is not None else None,
+                "exp_move": round(exp_move, 2) if exp_move is not None else None,
             })
 
             prev_row, prev_stock, prev_T = row_now, stock_now, T_now
@@ -1616,6 +1624,10 @@ def _build_react_skew_data_payload(
                 d_atm_pct = _pct_change_frac(atm_live, prev_atm_actual)
                 d_call_pct = _pct_change_pp(call_skew_pp_live, prev_call_skew_pp_actual)
                 d_put_pct = _pct_change_pp(put_skew_pp_live, prev_put_skew_pp_actual)
+                exp_move_live = None
+
+                if is_0dte and stock_live is not None:
+                    exp_move_live = stock_live * atm_live * math.sqrt(_minutes_to_exp_0dte(dt.datetime.now(MARKET_TIMEZONE)) / ANNUAL_MINUTES)
 
                 if expected_on and prev_row is not None and prev_T is not None and prev_stock is not None and stock_live is not None and T_live is not None:
                     try:
@@ -1625,7 +1637,7 @@ def _build_react_skew_data_payload(
                         ret_frac = (stock_live - prev_stock) / prev_stock
                         level_shift_pp = max(-BETA_MAX_SHIFT_PP, min(BETA_MAX_SHIFT_PP, (-ret_frac) * 100.0 * BETA_VOLPTS_PER_1PCT))
                         droot = max(0.0, math.sqrt(max(prev_T, EPS_T)) - math.sqrt(max(T_live, EPS_T)))
-                        atm_theta_pp = THETA_ATM_PP_PER_SQRT_YEAR * droot
+                        atm_theta_pp = THETA_ATM_PP_PER_SQ_YEAR * droot
                         atm_exp = exp_atm_shape + (level_shift_pp / 100.0) + (atm_theta_pp / 100.0)
 
                         k_c25_live = k_for_abs_delta(0.25, is_put=False, sigma=atm_live, T=T_live)
@@ -1647,6 +1659,7 @@ def _build_react_skew_data_payload(
                     "d_atm": round(d_atm_pct, 2) if d_atm_pct is not None else None,
                     "d_call": round(d_call_pct, 2) if d_call_pct is not None else None,
                     "d_put": round(d_put_pct, 2) if d_put_pct is not None else None,
+                    "exp_move": round(exp_move_live, 2) if exp_move_live is not None else None,
                 })
         except Exception:
             pass
@@ -3018,7 +3031,7 @@ def register_ironbeam_callbacks(app):
         gex_plugin = IB_PLUGIN_MAP.get("gex_overlay")
         gex_defaults = (getattr(gex_plugin, "default_config", lambda: {})() or {}) if gex_plugin else {}
         gex_cfg_all = (indicator_state.get("cfg") or {}) if isinstance(indicator_state.get("cfg"), dict) else {}
-        gex_cfg = gex_cfg_all.get("gex_overlay") if isinstance(gex_cfg_all.get("gex_overlay"), dict) else {}
+        gex_cfg = gex_cfg_all.get("gex_overlay") if isinstance(indicator_state.get("cfg"), dict) and isinstance(indicator_state.get("cfg").get("gex_overlay"), dict) else {}
         min_abs_b = gex_cfg.get("min_abs_b", gex_defaults.get("min_abs_b"))
         current_threshold = (float(min_abs_b) * 1e9) if (min_abs_b is not None) else fallback_threshold
 
@@ -3917,7 +3930,7 @@ def register_ironbeam_callbacks(app):
         Output("ib-react-preview-frame", "src"),
         Input("trade-date", "date"),
         Input("expiration-date-pick", "date"),
-        State("smile-time-input", "value"),  # State: prevent reload on timeslice change
+        State("smile-time-input", "value"), # State: prevent reload on timeslice change
         Input("ironbeam-bar-interval", "value"),
         Input("ib-chart-mode-toggle", "value"),
         Input("ib-indicator-state", "data"),
@@ -4139,6 +4152,7 @@ def register_ironbeam_callbacks(app):
             },
             {"display": "none", "width": "100%", "minWidth": 0, "minHeight": 0},
         )
+
 
     @app.callback(
         Output("ib-chart-mode-toggle", "value", allow_duplicate=True),

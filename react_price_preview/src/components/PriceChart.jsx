@@ -1687,7 +1687,7 @@ export default function PriceChart({
               borderRadius: '12px',
               padding: '10px 14px',
               boxShadow: '0 10px 25px rgba(0,0,0,0.4)',
-              minWidth: '240px',
+              minWidth: '280px',
               color: '#e2e8f0',
               fontSize: '13px',
               pointerEvents: 'auto',
@@ -1706,6 +1706,7 @@ export default function PriceChart({
                     <th style={{ textAlign: 'right', padding: '4px 0' }}>Δ ATM%</th>
                     <th style={{ textAlign: 'right', padding: '4px 0' }}>Δ Call%</th>
                     <th style={{ textAlign: 'right', padding: '4px 0' }}>Δ Put%</th>
+                    <th style={{ textAlign: 'right', padding: '4px 0' }}>Exp Move</th>
                   </tr>
                 </thead>
                 <tbody style={{ fontFamily: 'ui-monospace, monospace', fontSize: '12px' }}>
@@ -1720,6 +1721,9 @@ export default function PriceChart({
                       </td>
                       <td style={{ textAlign: 'right', color: row.d_put > 0 ? '#4ade80' : row.d_put < 0 ? '#f87171' : 'inherit' }}>
                         {row.d_put != null ? row.d_put.toFixed(2) : '--'}
+                      </td>
+                      <td style={{ textAlign: 'right', color: '#94a3b8' }}>
+                        {row.exp_move != null ? row.exp_move.toFixed(2) : '--'}
                       </td>
                     </tr>
                   ))}
