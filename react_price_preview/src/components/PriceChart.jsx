@@ -590,7 +590,7 @@ export default function PriceChart({
   liveTradeCandles,
   tradeDate,
   interval,
-  initialSelectedTimes,
+  selectedTimes: parentSelectedTimes = [],
   gexSegments,
   gexEnabled,
   gexMinAbsB = 10,
@@ -628,7 +628,9 @@ export default function PriceChart({
   const interactionActiveRef = useRef(false)
   const previousLiveTradeCandlesRef = useRef([])
 
-  const [selectedTimes, setSelectedTimes] = useState(normalizeTimes(initialSelectedTimes || []))
+  const [localSelectedTimes, setLocalSelectedTimes] = useState(normalizeTimes(parentSelectedTimes))
+  const selectedTimes = useMemo(() => normalizeTimes(parentSelectedTimes), [parentSelectedTimes])
+  
   const [sessionBands, setSessionBands] = useState([])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [draftGexMinAbsB, setDraftGexMinAbsB] = useState(() => coerceGexMinAbsB(gexMinAbsB, 10))
@@ -668,28 +670,10 @@ export default function PriceChart({
     setSmileWindowSize({ width: w, height: h })
   }, [smileWindowSize])
 
+  // Sync internal state with external prop
   useEffect(() => {
-    setSelectedTimes(normalizeTimes(initialSelectedTimes || []))
-  }, [initialSelectedTimes])
-
-  useEffect(() => {
-    const handleParentTimeslices = (event) => {
-      const data = event?.data
-      if (!data || data.type !== 'ib-parent-timeslices') return
-
-      const next = normalizeTimes(Array.isArray(data.times) ? data.times : [])
-      setSelectedTimes((prev) => {
-        const prevKey = normalizeTimes(prev).join('|')
-        const nextKey = next.join('|')
-        return prevKey === nextKey ? prev : next
-      })
-    }
-
-    window.addEventListener('message', handleParentTimeslices)
-    return () => {
-      window.removeEventListener('message', handleParentTimeslices)
-    }
-  }, [])
+    setLocalSelectedTimes(selectedTimes)
+  }, [selectedTimes])
 
   useEffect(() => {
     try {
@@ -768,7 +752,7 @@ export default function PriceChart({
     }
   }, [tradeDate, interval])
 
-  const selectedSet = useMemo(() => new Set(selectedTimes), [selectedTimes])
+  const selectedSet = useMemo(() => new Set(localSelectedTimes), [localSelectedTimes])
 
   const displayCandles = useMemo(
     () => applySelectionColors(shiftedCandles, selectedSet, interval),
@@ -1084,7 +1068,7 @@ export default function PriceChart({
       if (!param?.time) return
       const hhmm = toPtHHMM(param.time, intervalRef.current)
 
-      setSelectedTimes((prev) => {
+      setLocalSelectedTimes((prev) => {
         const exists = prev.includes(hhmm)
         const next = normalizeTimes(exists ? prev.filter((x) => x !== hhmm) : [...prev, hhmm])
         try {
@@ -1255,7 +1239,7 @@ export default function PriceChart({
     function handleParentMessage(event) {
       const data = event && event.data
       if (!data || data.type !== 'ib-parent-timeslices') return
-      setSelectedTimes(normalizeTimes(data.times || []))
+      setLocalSelectedTimes(normalizeTimes(data.times || []))
     }
 
     window.addEventListener('message', handleParentMessage)
@@ -1898,10 +1882,10 @@ export default function PriceChart({
             {/* Resize Handles */}
             {!smileCollapsed && (
               <>
-                <div onMouseDown={(e) => handleSmileResizeMouseDown(e, 'top-left')} style={{ position: 'absolute', top: 0, left: 0, width: '10px', height: '10px', cursor: 'nwse-resize', zIndex: 11 }} />
-                <div onMouseDown={(e) => handleSmileResizeMouseDown(e, 'top-right')} style={{ position: 'absolute', top: 0, right: 0, width: '10px', height: '10px', cursor: 'nesw-resize', zIndex: 11 }} />
-                <div onMouseDown={(e) => handleSmileResizeMouseDown(e, 'bottom-left')} style={{ position: 'absolute', bottom: 0, left: 0, width: '10px', height: '10px', cursor: 'nesw-resize', zIndex: 11 }} />
-                <div onMouseDown={(e) => handleSmileResizeMouseDown(e, 'bottom-right')} style={{ position: 'absolute', bottom: 0, right: 0, width: '10px', height: '10px', cursor: 'nwse-resize', zIndex: 11 }} />
+                <div onMouseDown={(e) => handleSmileResizeMouseDown(e, 'top-left')} style={{ position: 'absolute', top: 0, left: 0, width: '100px', height: '10px', cursor: 'nwse-resize', zIndex: 11 }} />
+                <div onMouseDown={(e) => handleSmileResizeMouseDown(e, 'top-right')} style={{ position: 'absolute', top: 0, right: 0, width: '100px', height: '10px', cursor: 'nesw-resize', zIndex: 11 }} />
+                <div onMouseDown={(e) => handleSmileResizeMouseDown(e, 'bottom-left')} style={{ position: 'absolute', bottom: 0, left: 0, width: '100px', height: '10px', cursor: 'nesw-resize', zIndex: 11 }} />
+                <div onMouseDown={(e) => handleSmileResizeMouseDown(e, 'bottom-right')} style={{ position: 'absolute', bottom: 0, right: 0, width: '100px', height: '10px', cursor: 'nwse-resize', zIndex: 11 }} />
               </>
             )}
           </div>
@@ -2066,7 +2050,7 @@ export default function PriceChart({
                       padding: '8px 12px',
                       cursor: 'pointer',
                       fontWeight: 700,
-                    }}
+                        }}
                   >
                     Apply
                   </button>

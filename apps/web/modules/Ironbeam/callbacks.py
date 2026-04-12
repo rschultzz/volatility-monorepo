@@ -2521,7 +2521,7 @@ def register_ironbeam_callbacks(app):
             if origin in allowed:
                 resp.headers["Access-Control-Allow-Origin"] = origin
                 resp.headers["Access-Control-Allow-Credentials"] = "true"
-                resp.headers["Vary"] = "Origin"
+                resp.headers["Vary"] = "Vary"
 
             return resp, status
 
@@ -4082,7 +4082,7 @@ def register_ironbeam_callbacks(app):
         Output("ib-react-preview-frame", "src"),
         Input("trade-date", "date"),
         Input("expiration-date-pick", "date"),
-        State("smile-time-input", "value"), # State: prevent reload on timeslice change
+        Input("smile-time-input", "value"), # Now an Input to catch latest value
         Input("ironbeam-bar-interval", "value"),
         Input("ib-chart-mode-toggle", "value"),
         Input("ib-indicator-state", "data"),
@@ -4099,6 +4099,15 @@ def register_ironbeam_callbacks(app):
             expected_ss_toggle,
             current_src,
     ):
+        triggered = [t["prop_id"] for t in ctx.triggered]
+        
+        # If ONLY the timeslices changed (manual user click), avoid a full iframe reload.
+        # We rely on the postMessage bridge for manual additions/removals.
+        # However, if trade_date or interval changed (e.g. from Backtests), we MUST reload.
+        only_times_changed = all("smile-time-input" in t for t in triggered)
+        if only_times_changed and current_src:
+            raise PreventUpdate
+
         base = os.getenv("IRONBEAM_REACT_PREVIEW_URL", "/react-preview").rstrip("/")
         td = trade_date or dt.date.today().isoformat()
         ed = expiration_date or td
@@ -4124,9 +4133,11 @@ def register_ironbeam_callbacks(app):
 
         gex_enabled = "gex_overlay" in enabled if enabled else True
 
+        times_str = ",".join(selected_times_pt) if selected_times_pt else ""
         params = [
             f"trade_date={td}",
             f"expiration_date={ed}",
+            f"selected_times={urllib.parse.quote(times_str)}",
             f"interval={interval}",
             f"gex_enabled={1 if gex_enabled else 0}",
             f"days_either_side={_react_days_either_side_for_interval(interval)}",
@@ -4211,6 +4222,9 @@ def register_ironbeam_callbacks(app):
                 if (typeof parentValue === "string") {
                     try { payload = JSON.parse(parentValue); } catch (e) { payload = { times: [] }; }
                 }
+                
+                // Keep latest value in a global for the request hook
+                window.__ibLastParentTimeslices = payload;
 
                 const times = Array.isArray(payload?.times) ? payload.times : [];
                 const send = () => {
@@ -4224,6 +4238,7 @@ def register_ironbeam_callbacks(app):
                 window.setTimeout(send, 150);
                 window.setTimeout(send, 400);
                 window.setTimeout(send, 900);
+                window.setTimeout(send, 2500); // Extra long for slow loads
 
                 return (currentClicks || 0) + 1;
             } catch (err) {
@@ -4251,7 +4266,8 @@ def register_ironbeam_callbacks(app):
                         const frame = document.getElementById("ib-react-preview-frame");
                         if (!frame || !frame.contentWindow) return;
 
-                        let payload = parentValue;
+                        // Use global variable instead of trapped closure to get latest state
+                        let payload = window.__ibLastParentTimeslices || { times: [] };
                         if (typeof payload === "string") {
                             try { payload = JSON.parse(payload); } catch (e) { payload = { times: [] }; }
                         }
@@ -4265,10 +4281,10 @@ def register_ironbeam_callbacks(app):
             }
         }
         """,
-        Output("ib-react-timeslice-bridge", "value"),
+        Output("ib-react-timeslice-bridge", "value", allow_duplicate=True),
         Input("ib-react-timeslice-parent", "value"),
         State("ib-react-timeslice-bridge", "value"),
-        prevent_initial_call=False,
+        prevent_initial_call=True,
     )
 
     @app.callback(

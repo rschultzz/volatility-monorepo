@@ -114,7 +114,7 @@ def get_default_trade_date() -> dt.date:
     return today
 
 
-def pt_time_options(start: str = "06:30", end: str = "13:00", step_min: int = 1) -> List[dict]:
+def pt_time_options(start: str = "06:30", end: str = "13:30", step_min: int = 1) -> List[dict]:
     t0, t1 = dt.datetime.strptime(start, "%H:%M"), dt.datetime.strptime(end, "%H:%M")
     out, cur = [], t0
     while cur <= t1:
@@ -127,17 +127,39 @@ def pt_time_options(start: str = "06:30", end: str = "13:00", step_min: int = 1)
 def _parse_hhmm(value: object) -> str | None:
     if value is None:
         return None
-    s = str(value).strip()
+    s = str(value).strip().upper()
     if not s:
         return None
-    m = re.search(r"(\d{1,2}):(\d{2})", s)
+    
+    # Try 24h or 12h format with regex, handles full ISO strings too by searching for the time part
+    m = re.search(r"(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?", s)
     if not m:
         return None
+    
     hh = int(m.group(1))
-    mm = m.group(2)
-    if hh < 0 or hh > 23:
+    mm = int(m.group(2))
+    ampm = m.group(4)
+    
+    if ampm == "PM" and hh < 12:
+        hh += 12
+    elif ampm == "AM" and hh == 12:
+        hh = 0
+        
+    if hh < 0 or hh > 23 or mm < 0 or mm > 59:
         return None
-    return f"{hh:02d}:{mm}"
+    return f"{hh:02d}:{mm:02d}"
+
+
+def _shift_hhmm(hhmm: str, minutes: int) -> str:
+    """Shift an HH:MM string by a given number of minutes."""
+    if not hhmm:
+        return hhmm
+    try:
+        t = dt.datetime.strptime(hhmm, "%H:%M")
+        t += dt.timedelta(minutes=minutes)
+        return t.strftime("%H:%M")
+    except Exception:
+        return hhmm
 
 
 # ===== App setup =====
@@ -489,7 +511,8 @@ def _switch_main_tab(tab_value):
 @app.callback(
     Output(BT2_SELECTION_SEQ_ID, "data"),
     Output(TRADE_DATE_PICK, "date"),
-    Output(SMILE_TIME_INPUT, "value"),
+    Output(SMILE_TIME_INPUT, "value", allow_duplicate=True),
+    Output("ironbeam-bar-interval", "value", allow_duplicate=True),
     Output(MAIN_TABS_ID, "value"),
     Input(BT2_SELECTION_POLL_ID, "n_intervals"),
     State(BT2_SELECTION_SEQ_ID, "data"),
@@ -506,14 +529,19 @@ def apply_backtests_selection(_n_intervals, last_seq):
     target_time = _parse_hhmm(payload.get("target_ts_pt"))
 
     times = []
+    # Shift times by +1 minute to match the "slice" convention (bar end/close)
+    # used in the rest of the app for highlighting and smile charts.
     for t in [start_time, target_time]:
-        if t and t not in times:
-            times.append(t)
+        if t:
+            t_shifted = _shift_hhmm(t, 1)
+            if t_shifted and t_shifted not in times:
+                times.append(t_shifted)
 
     out_trade_date = trade_date if trade_date else no_update
-    out_times = times if times else no_update
+    out_times = sorted(times) if times else []
 
-    return seq, out_trade_date, out_times, TAB_PRICE_CHART
+    # Force 1min interval when jumping from backtests to ensure highlighting sync
+    return seq, out_trade_date, out_times, "1min", TAB_PRICE_CHART
 
 
 # Register module callbacks

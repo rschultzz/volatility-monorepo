@@ -49,12 +49,24 @@ function inferApiBase() {
   return 'http://127.0.0.1:8060'
 }
 
+function normalizeTimes(value) {
+  if (!Array.isArray(value)) return []
+  const seen = new Set()
+  const out = []
+  for (const item of value) {
+    const s = String(item || '').trim()
+    if (!s) continue
+    if (!/^\d{2}:\d{2}$/.test(s)) continue
+    if (seen.has(s)) continue
+    seen.add(s)
+    out.push(s)
+  }
+  return out.sort()
+}
+
 function parseSelectedTimes(params) {
   const raw = params.get('selected_times') || ''
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
+  return normalizeTimes(raw.split(',').filter(Boolean))
 }
 
 function parseBool(value, fallback = true) {
@@ -401,7 +413,17 @@ export default function App() {
   const flowHistAlpha = parseFloatOrNull(params.get('flow_hist_alpha')) ?? 0.30
 
   const apiBase = useMemo(() => inferApiBase(), [])
-  const [selectedTimes, setSelectedTimes] = useState(() => parseSelectedTimes(params))
+  
+  const initialTimes = useMemo(() => parseSelectedTimes(params), [params])
+  const [selectedTimes, setSelectedTimes] = useState(initialTimes)
+
+  // Sync state if URL params change without component re-mount
+  useEffect(() => {
+    setSelectedTimes((prev) => {
+      const next = initialTimes
+      return prev.join(',') === next.join(',') ? prev : next
+    })
+  }, [initialTimes])
 
   const [interval, setInterval] = useState(initialInterval)
 
@@ -492,7 +514,7 @@ export default function App() {
     const handleParentTimeslices = (event) => {
       const data = event?.data
       if (!data || data.type !== 'ib-parent-timeslices') return
-      const next = Array.isArray(data.times) ? data.times : []
+      const next = normalizeTimes(Array.isArray(data.times) ? data.times : [])
       setSelectedTimes((prev) => {
         if (prev.join(',') === next.join(',')) return prev
         return next
@@ -1164,7 +1186,7 @@ export default function App() {
     }
 
     tick()
-    const timer = window.setInterval(tick, SMILE_DATA_POLL_MS)
+    const timer = window.setInterval(tick, SKEW_DATA_POLL_MS)
 
     return () => {
       disposed = true
@@ -1303,7 +1325,7 @@ export default function App() {
                 tradeDate={tradeDate}
                 interval={interval}
                 liveTradeCandles={liveTradeBars}
-                initialSelectedTimes={selectedTimes}
+                selectedTimes={selectedTimes}
                 gexSegments={mergedGexSegments}
                 gexEnabled={Boolean(meta?.gex_enabled ?? gexEnabled)}
                 gexMinAbsB={gexMinAbsB}
