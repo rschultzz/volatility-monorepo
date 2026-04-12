@@ -1689,41 +1689,27 @@ export default function PriceChart({
     let nh = startHeight
     const nextPos = { ...floatingPos }
 
+    // Width and Horizontal Position
     if (corner.includes('right')) {
-      if (Number.isFinite(startRight)) {
-        nw = startWidth - dx
-        nextPos.right = startRight + dx
-      } else {
-        nw = startWidth + dx
-      }
-    }
-    if (corner.includes('left')) {
-      if (Number.isFinite(startLeft)) {
-        nw = startWidth - dx
-        nextPos.left = startLeft + dx
-      } else {
-        nw = startWidth + dx
-      }
-    }
-    if (corner.includes('bottom')) {
-      if (Number.isFinite(startBottom)) {
-        nh = startHeight - dy
-        nextPos.bottom = startBottom + dy
-      } else {
-        nh = startHeight + dy
-      }
-    }
-    if (corner.includes('top')) {
-      if (Number.isFinite(startTop)) {
-        nh = startHeight - dy
-        nextPos.top = startTop + dy
-      } else {
-        nh = startHeight + dy
-      }
+      const adjDx = Math.max(200 - startWidth, dx)
+      nw = startWidth + adjDx
+      if (Number.isFinite(startRight)) nextPos.right = startRight - adjDx
+    } else if (corner.includes('left')) {
+      const adjDx = Math.min(startWidth - 200, dx)
+      nw = startWidth - adjDx
+      if (Number.isFinite(startLeft)) nextPos.left = startLeft + adjDx
     }
 
-    nw = Math.max(200, nw)
-    nh = Math.max(150, nh)
+    // Height and Vertical Position
+    if (corner.includes('bottom')) {
+      const adjDy = Math.max(150 - startHeight, dy)
+      nh = startHeight + adjDy
+      if (Number.isFinite(startBottom)) nextPos.bottom = startBottom - adjDy
+    } else if (corner.includes('top')) {
+      const adjDy = Math.min(startHeight - 150, dy)
+      nh = startHeight - adjDy
+      if (Number.isFinite(startTop)) nextPos.top = startTop + adjDy
+    }
 
     setSmileWindowSize({ width: nw, height: nh })
     setFloatingPos(nextPos)
@@ -1771,9 +1757,9 @@ export default function PriceChart({
               title="Price chart settings"
               aria-label="Open price chart settings"
               style={{
-                width: '24px',
-                height: '24px',
-                borderRadius: '8px',
+                width: '44px',
+                height: '44px',
+                borderRadius: '10px',
                 border: '1px solid rgba(148, 163, 184, 0.22)',
                 background: 'rgba(15, 23, 42, 0.96)',
                 color: '#cbd5e1',
@@ -1781,7 +1767,7 @@ export default function PriceChart({
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: '14px',
+                fontSize: '24px',
                 lineHeight: 1,
                 padding: 0,
               }}
@@ -1800,8 +1786,8 @@ export default function PriceChart({
               cursor: smileCollapsed ? 'pointer' : 'grab',
               background: 'rgba(15, 23, 42, 0.92)',
               border: '1px solid #1f2937',
-              borderRadius: smileCollapsed ? '8px 0 0 8px' : '12px',
-              padding: smileCollapsed ? '6px 10px' : '10px 14px',
+              borderRadius: '12px',
+              padding: smileCollapsed ? '6px 14px' : '10px 14px',
               boxShadow: '0 10px 25px rgba(0,0,0,0.4)',
               minWidth: smileCollapsed ? 'auto' : '280px',
               width: smileCollapsed ? 'auto' : smileWindowSize.width || 'auto',
@@ -1810,8 +1796,8 @@ export default function PriceChart({
               fontSize: '13px',
               pointerEvents: 'auto',
               userSelect: 'none',
-              ...(smileCollapsed ? { top: 12, right: 0 } : floatingPos),
-              transition: 'border-radius 0.2s ease',
+              ...(smileCollapsed ? { top: 8, left: 64, borderRadius: '10px' } : floatingPos),
+              transition: 'all 0.2s ease',
               display: 'flex',
               flexDirection: 'column',
               overflow: 'hidden'
@@ -1822,10 +1808,17 @@ export default function PriceChart({
               display: 'flex', 
               justifyContent: 'space-between', 
               alignItems: 'center', 
-              marginBottom: smileCollapsed ? '0' : '8px' 
+              marginBottom: smileCollapsed ? '0' : '8px',
+              height: smileCollapsed ? '32px' : 'auto'
             }}>
-              <div style={{ fontWeight: 800, color: '#94a3b8', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                {smileCollapsed ? 'Smile' : 'Overview'}
+              <div style={{ 
+                fontWeight: 800, 
+                color: smileCollapsed ? '#60a5fa' : '#94a3b8', 
+                fontSize: smileCollapsed ? '13px' : '11px', 
+                textTransform: 'uppercase', 
+                letterSpacing: '0.05em' 
+              }}>
+                {smileCollapsed ? 'SMILE' : 'Overview'}
               </div>
               {!smileCollapsed && (
                 <button 
