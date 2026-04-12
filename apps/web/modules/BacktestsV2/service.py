@@ -23,6 +23,10 @@ BETA_VOLPTS_PER_1PCT = 4.5
 BETA_MAX_SHIFT_PP = 6.0
 THETA_ATM_PP_PER_SQRT_YEAR = -638
 
+# New tolerance behavior for first-pass target acceptance
+MIN_TARGET_ACCEPTANCE_BARS = 3
+MAX_BARS_OUTSIDE_DURING_ACCEPTANCE = 1
+
 
 @lru_cache(maxsize=1)
 def get_engine():
@@ -515,6 +519,72 @@ def _fetch_skew_rows_for_times(trade_date: str, expiration_iso: str, times_pt: L
     return out
 
 
+def _close_near_target(row: Dict[str, Any], target_level: float, band_pts: float) -> bool:
+    close_v = row.get("close")
+    if close_v is None:
+        return False
+    try:
+        return abs(float(close_v) - float(target_level)) <= float(band_pts)
+    except Exception:
+        return False
+
+
+def _find_target_acceptance_rows(
+    *,
+    day_rows: List[Dict[str, Any]],
+    target_hit_idx: int,
+    target_level: float,
+    target_proximity_pts: float,
+    consolidation_window_minutes: int,
+) -> List[Dict[str, Any]]:
+    """
+    New behavior:
+    - Do not require consolidation to begin immediately on the target-hit bar.
+    - Search forward through the consolidation window.
+    - Build the first reasonable acceptance cluster near target.
+    """
+    max_bars = max(1, int(consolidation_window_minutes))
+    end_idx = min(len(day_rows) - 1, target_hit_idx + max_bars - 1)
+
+    candidate_rows = day_rows[target_hit_idx : end_idx + 1]
+    band = float(target_proximity_pts)
+
+    best_cluster: List[Dict[str, Any]] = []
+    current_cluster: List[Dict[str, Any]] = []
+    outside_count = 0
+
+    for row in candidate_rows:
+        inside = _close_near_target(row, target_level, band)
+
+        if inside:
+            current_cluster.append(row)
+            outside_count = 0
+        else:
+            if current_cluster:
+                outside_count += 1
+                if outside_count <= MAX_BARS_OUTSIDE_DURING_ACCEPTANCE:
+                    continue
+                if len(current_cluster) >= len(best_cluster):
+                    best_cluster = current_cluster[:]
+                current_cluster = []
+                outside_count = 0
+
+    if len(current_cluster) >= len(best_cluster):
+        best_cluster = current_cluster[:]
+
+    if len(best_cluster) >= MIN_TARGET_ACCEPTANCE_BARS:
+        return best_cluster
+
+    # fallback:
+    # if there are at least 3 near-target closes anywhere in the window,
+    # accept those even if they are not perfectly consecutive
+    fallback = [row for row in candidate_rows if _close_near_target(row, target_level, band)]
+    if len(fallback) >= MIN_TARGET_ACCEPTANCE_BARS:
+        return fallback
+
+    return []
+
+
 def _evaluate_up_short_setup(
     *,
     trade_date: dt.date,
@@ -539,37 +609,26 @@ def _evaluate_up_short_setup(
         "short_setup_reason": "not_evaluated",
     }
 
-    max_bars = max(1, int(consolidation_window_minutes))
-    end_idx = min(len(day_rows) - 1, target_hit_idx + max_bars - 1)
+    acceptance_rows = _find_target_acceptance_rows(
+        day_rows=day_rows,
+        target_hit_idx=target_hit_idx,
+        target_level=target_level,
+        target_proximity_pts=target_proximity_pts,
+        consolidation_window_minutes=consolidation_window_minutes,
+    )
 
-    consolidation_rows: List[Dict[str, Any]] = []
-    for i in range(target_hit_idx, end_idx + 1):
-        row = day_rows[i]
-        close_v = row.get("close")
-        if close_v is None:
-            break
-        try:
-            close_f = float(close_v)
-        except Exception:
-            break
-
-        if abs(close_f - float(target_level)) <= float(target_proximity_pts):
-            consolidation_rows.append(row)
-        else:
-            break
-
-    if not consolidation_rows:
+    if not acceptance_rows:
         default["short_setup_reason"] = "no_target_consolidation"
         return default
 
     entry_ts_pt = _normalize_pt_label(day_rows[entry_idx].get("ts_pt"))
-    consolidation_times = [_normalize_pt_label(r.get("ts_pt")) for r in consolidation_rows]
-    skew_times = [entry_ts_pt] + consolidation_times
+    acceptance_times = [_normalize_pt_label(r.get("ts_pt")) for r in acceptance_rows]
+    skew_times = [entry_ts_pt] + acceptance_times
 
     skew_df = _fetch_skew_rows_for_times(str(trade_date), str(trade_date), skew_times)
     if skew_df.empty:
-        default["consolidation_minutes_observed"] = len(consolidation_rows)
-        default["consolidation_end_ts_pt"] = _normalize_pt_label(consolidation_rows[-1].get("ts_pt"))
+        default["consolidation_minutes_observed"] = len(acceptance_rows)
+        default["consolidation_end_ts_pt"] = _normalize_pt_label(acceptance_rows[-1].get("ts_pt"))
         default["short_setup_reason"] = "no_skew_data"
         return default
 
@@ -581,8 +640,8 @@ def _evaluate_up_short_setup(
 
     entry_skew_row = by_label.get(entry_ts_pt)
     if entry_skew_row is None:
-        default["consolidation_minutes_observed"] = len(consolidation_rows)
-        default["consolidation_end_ts_pt"] = _normalize_pt_label(consolidation_rows[-1].get("ts_pt"))
+        default["consolidation_minutes_observed"] = len(acceptance_rows)
+        default["consolidation_end_ts_pt"] = _normalize_pt_label(acceptance_rows[-1].get("ts_pt"))
         default["short_setup_reason"] = "missing_entry_skew"
         return default
 
@@ -592,7 +651,7 @@ def _evaluate_up_short_setup(
         "delta_put_skew_pct": None,
     }
 
-    for row in consolidation_rows:
+    for row in acceptance_rows:
         label = _normalize_pt_label(row.get("ts_pt"))
         curr_skew_row = by_label.get(label)
         if curr_skew_row is None:
@@ -609,8 +668,8 @@ def _evaluate_up_short_setup(
 
         if d_put >= float(short_put_skew_increase_pct) and d_call <= float(short_call_skew_max_pct):
             return {
-                "consolidation_minutes_observed": len(consolidation_rows),
-                "consolidation_end_ts_pt": _normalize_pt_label(consolidation_rows[-1].get("ts_pt")),
+                "consolidation_minutes_observed": len(acceptance_rows),
+                "consolidation_end_ts_pt": _normalize_pt_label(acceptance_rows[-1].get("ts_pt")),
                 "short_setup_found": True,
                 "short_signal_ts_pt": label,
                 "short_signal_price": round(float(row["close"]), 2) if row.get("close") is not None else None,
@@ -621,8 +680,8 @@ def _evaluate_up_short_setup(
             }
 
     return {
-        "consolidation_minutes_observed": len(consolidation_rows),
-        "consolidation_end_ts_pt": _normalize_pt_label(consolidation_rows[-1].get("ts_pt")),
+        "consolidation_minutes_observed": len(acceptance_rows),
+        "consolidation_end_ts_pt": _normalize_pt_label(acceptance_rows[-1].get("ts_pt")),
         "short_setup_found": False,
         "short_signal_ts_pt": None,
         "short_signal_price": None,
