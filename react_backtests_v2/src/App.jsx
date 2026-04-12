@@ -20,10 +20,22 @@ const DEFAULT_SETTINGS = {
   pivotStrengthBars: 3,
   levelFamily: 'primary',
   maxResults: 2500,
+  consolidationWindowMinutes: 15,
+  shortPutSkewIncreasePct: 80,
+  shortCallSkewMaxPct: 30,
 };
 
 function summaryText(settings) {
-  return `${settings.startDate} → ${settings.endDate} | min GEX ${settings.minLevelGexBn} BN | merge ${settings.zoneMergeDistancePts} pts | clean move ${settings.minCleanMovePoints} pts | target ±${settings.targetProximityPts}`;
+  return [
+    `${settings.startDate} → ${settings.endDate}`,
+    `min GEX ${settings.minLevelGexBn} BN`,
+    `merge ${settings.zoneMergeDistancePts} pts`,
+    `clean move ${settings.minCleanMovePoints} pts`,
+    `target ±${settings.targetProximityPts}`,
+    `consolidation ${settings.consolidationWindowMinutes}m`,
+    `put ≥ ${settings.shortPutSkewIncreasePct}%`,
+    `call ≤ ${settings.shortCallSkewMaxPct}%`,
+  ].join(' | ');
 }
 
 function rowKey(row, idx) {
@@ -48,6 +60,7 @@ export default function App() {
       { label: 'Instances Found', value: summary?.instances_found ?? rows.length },
       { label: 'Bars Scanned', value: summary?.bars_scanned ?? '—' },
       { label: 'Zones Built', value: summary?.zones_total ?? '—' },
+      { label: 'Up Short Setups', value: summary?.up_short_setups_found ?? '—' },
     ];
   }, [rows.length, sourceView, summary]);
 
@@ -69,6 +82,9 @@ export default function App() {
         maxZoneBreachPts: Number(nextSettings.maxZoneBreachPts),
         pivotStrengthBars: Number(nextSettings.pivotStrengthBars),
         maxResults: Number(nextSettings.maxResults),
+        consolidationWindowMinutes: Number(nextSettings.consolidationWindowMinutes),
+        shortPutSkewIncreasePct: Number(nextSettings.shortPutSkewIncreasePct),
+        shortCallSkewMaxPct: Number(nextSettings.shortCallSkewMaxPct),
       };
 
       const res = await fetch('/api/backtests-v2/gex-moves', {
@@ -110,6 +126,7 @@ export default function App() {
           trade_date: row.trade_date,
           start_ts_pt: row.start_ts_pt,
           target_ts_pt: row.target_ts_pt,
+          signal_ts_pt: row.short_signal_ts_pt || '',
         }),
       });
 
@@ -130,7 +147,7 @@ export default function App() {
             <div className="eyebrow">Surface Dynamics</div>
             <h1>Backtests</h1>
             <p className="lead">
-              Zone-based scan: source GEX zone → last pivot → clean space → target proximity.
+              Zone-based scan plus up-move short setup: source zone → last pivot → target arrival → consolidation near target → skew trigger.
             </p>
           </div>
 
@@ -149,6 +166,7 @@ export default function App() {
           <div className="pill">Same day only</div>
           <div className="pill">Transitive GEX zones</div>
           <div className="pill">Last pivot inside source zone</div>
+          <div className="pill">Up short setup near target</div>
           <div className="pill pill-wide">{summaryText(settings)}</div>
         </div>
 
@@ -170,7 +188,7 @@ export default function App() {
             <div>
               <h2>Instances</h2>
               <p>
-                Select one setup to push its trade date and both PT times into the main Dash controls.
+                For up moves, this now evaluates whether a short setup appears during target consolidation using the entry minute as the expected SS reference.
               </p>
             </div>
           </div>

@@ -104,6 +104,37 @@ export default function SettingsModal({ isOpen, settingsDraft, onChange, onClose
             </select>
           </label>
 
+          <label className="field">
+            <span>Target consolidation window (min)</span>
+            <input
+              type="number"
+              step="1"
+              min="1"
+              value={settingsDraft.consolidationWindowMinutes}
+              onChange={(e) => onChange('consolidationWindowMinutes', e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Short trigger: min Δ Put Skew %</span>
+            <input
+              type="number"
+              step="1"
+              value={settingsDraft.shortPutSkewIncreasePct}
+              onChange={(e) => onChange('shortPutSkewIncreasePct', e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Short trigger: max Δ Call Skew %</span>
+            <input
+              type="number"
+              step="1"
+              value={settingsDraft.shortCallSkewMaxPct}
+              onChange={(e) => onChange('shortCallSkewMaxPct', e.target.value)}
+            />
+          </label>
+
           <label className="field field-wide">
             <span>Maximum results</span>
             <input
@@ -116,7 +147,7 @@ export default function SettingsModal({ isOpen, settingsDraft, onChange, onClose
         </div>
 
         <div className="helper-note">
-          This build scans for source zones, finds the last pivot inside the zone, and only keeps moves that have clean space to the next external zone.
+          Up-move short setup logic: once price reaches the target zone, this build watches for consolidation near that target and compares each minute back to the entry minute using the expected SS curve from entry.
         </div>
 
         <div className="modal-actions">

@@ -19,6 +19,7 @@ export default function DiagnosticsPanel({ diagnostics }) {
 
   const sampleZones = diagnostics.sample_zones || [];
   const sampleResults = diagnostics.sample_results || [];
+  const sampleShortSetups = diagnostics.sample_short_setups || [];
 
   return (
     <div className="diag-card">
@@ -26,7 +27,7 @@ export default function DiagnosticsPanel({ diagnostics }) {
         <div>
           <h2>Diagnostics</h2>
           <p>
-            This version diagnoses the zone model: qualifying levels, transitive zones, clean-target zones, and valid zone episodes.
+            This version diagnoses both the zone scan and the new up-move short-setup logic near the target level.
           </p>
         </div>
       </div>
@@ -38,6 +39,8 @@ export default function DiagnosticsPanel({ diagnostics }) {
         <StatCell label="Zones built" value={diagnostics.zones_total ?? '—'} />
         <StatCell label="Clean-target zones" value={diagnostics.source_zones_with_clean_targets ?? '—'} />
         <StatCell label="Zone episodes considered" value={diagnostics.zone_episodes_considered ?? '—'} />
+        <StatCell label="Valid instances" value={diagnostics.valid_instances ?? '—'} />
+        <StatCell label="Up short setups" value={diagnostics.up_short_setups_found ?? '—'} />
       </div>
 
       <div className="diag-two-col">
@@ -113,6 +116,44 @@ export default function DiagnosticsPanel({ diagnostics }) {
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+
+      <div className="diag-panel">
+        <div className="diag-panel-title">Sample Up Short Setups</div>
+        <div className="table-wrap diag-table-wrap">
+          <table className="results-table diag-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Start</th>
+                <th>Target</th>
+                <th>Signal</th>
+                <th>Target Level</th>
+                <th>Δ Put Skew %</th>
+                <th>Δ Call Skew %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sampleShortSetups.length ? (
+                sampleShortSetups.map((row, idx) => (
+                  <tr key={`${row.trade_date}-${row.signal_ts_pt}-${idx}`}>
+                    <td>{row.trade_date}</td>
+                    <td>{row.start_ts_pt}</td>
+                    <td>{row.target_ts_pt}</td>
+                    <td>{row.signal_ts_pt}</td>
+                    <td>{fmt(row.target_level)}</td>
+                    <td>{fmt(row.delta_put_skew_pct)}</td>
+                    <td>{fmt(row.delta_call_skew_pct)}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={7}>No up short setups found yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

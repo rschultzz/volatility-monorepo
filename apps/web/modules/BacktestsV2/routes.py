@@ -19,6 +19,9 @@ DEFAULT_SETTINGS = {
     "pivotStrengthBars": 3,
     "levelFamily": "primary",
     "maxResults": 2500,
+    "consolidationWindowMinutes": 15,
+    "shortPutSkewIncreasePct": 80,
+    "shortCallSkewMaxPct": 30,
 }
 
 _SELECTION_STATE: dict[str, Any] = {
@@ -77,6 +80,9 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 pivot_strength_bars=int(settings["pivotStrengthBars"]),
                 level_family=str(settings["levelFamily"]),
                 max_results=int(settings["maxResults"]),
+                consolidation_window_minutes=int(settings["consolidationWindowMinutes"]),
+                short_put_skew_increase_pct=float(settings["shortPutSkewIncreasePct"]),
+                short_call_skew_max_pct=float(settings["shortCallSkewMaxPct"]),
                 source_view=DEFAULT_SOURCE_VIEW,
             )
             return jsonify({
@@ -99,6 +105,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
         trade_date = str(payload.get("trade_date") or "").strip()
         start_ts_pt = str(payload.get("start_ts_pt") or "").strip()
         target_ts_pt = str(payload.get("target_ts_pt") or "").strip()
+        signal_ts_pt = str(payload.get("signal_ts_pt") or "").strip()
 
         if not trade_date:
             return jsonify({"ok": False, "error": "trade_date is required"}), 400
@@ -108,6 +115,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             "trade_date": trade_date,
             "start_ts_pt": start_ts_pt,
             "target_ts_pt": target_ts_pt,
+            "signal_ts_pt": signal_ts_pt,
         }
 
         return jsonify({

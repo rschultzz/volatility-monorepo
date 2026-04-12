@@ -9,6 +9,11 @@ function rowKey(row, idx) {
   return `${row.trade_date}-${row.start_ts_utc}-${row.target_ts_utc}-${idx}`;
 }
 
+function setupLabel(row) {
+  if (row.direction !== 'up') return 'N/A';
+  return row.short_setup_found ? 'Short setup' : 'No setup';
+}
+
 export default function ResultsTable({ rows, selectedRowKey, onSelectRow }) {
   if (!rows.length) {
     return (
@@ -37,6 +42,13 @@ export default function ResultsTable({ rows, selectedRowKey, onSelectRow }) {
             <th>Clean Space</th>
             <th>Move Pts</th>
             <th>Bars</th>
+            <th>Consol. Mins</th>
+            <th>Setup</th>
+            <th>Signal Time (PT)</th>
+            <th>Signal Px</th>
+            <th>Δ Put Skew %</th>
+            <th>Δ Call Skew %</th>
+            <th>Reason</th>
           </tr>
         </thead>
         <tbody>
@@ -80,6 +92,20 @@ export default function ResultsTable({ rows, selectedRowKey, onSelectRow }) {
                 <td>{fmt(row.clean_space_points)}</td>
                 <td>{fmt(row.move_points)}</td>
                 <td>{row.elapsed_bars}</td>
+                <td>
+                  <div>{row.consolidation_minutes_observed ?? '—'}</div>
+                  <div className="subcell">{row.consolidation_end_ts_pt || '—'}</div>
+                </td>
+                <td>
+                  <span className={`setup-chip ${row.short_setup_found ? 'hit' : 'miss'}`}>
+                    {setupLabel(row)}
+                  </span>
+                </td>
+                <td>{row.short_signal_ts_pt || '—'}</td>
+                <td>{fmt(row.short_signal_price)}</td>
+                <td>{fmt(row.short_signal_delta_put_skew_pct)}</td>
+                <td>{fmt(row.short_signal_delta_call_skew_pct)}</td>
+                <td className="wrap-cell">{row.short_setup_reason || '—'}</td>
               </tr>
             );
           })}

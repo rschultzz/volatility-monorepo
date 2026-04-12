@@ -151,7 +151,7 @@ h2 {
 
 .status-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -198,7 +198,7 @@ h2 {
 
 .diag-stat-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -257,13 +257,13 @@ h2 {
 .results-table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 1500px;
+  min-width: 2200px;
 }
 
 .results-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 2;
+  position: static;
+  top: auto;
+  z-index: auto;
   background: #111827;
   color: #f8fafc;
   text-align: left;
@@ -300,7 +300,8 @@ h2 {
   line-height: 1.4;
 }
 
-.direction-chip {
+.direction-chip,
+.setup-chip {
   display: inline-block;
   padding: 2px 8px;
   border-radius: 999px;
@@ -319,6 +320,18 @@ h2 {
   background: rgba(239, 68, 68, 0.18);
   border: 1px solid rgba(239, 68, 68, 0.35);
   color: #fecaca;
+}
+
+.setup-chip.hit {
+  background: rgba(249, 115, 22, 0.18);
+  border: 1px solid rgba(249, 115, 22, 0.35);
+  color: #fdba74;
+}
+
+.setup-chip.miss {
+  background: rgba(148, 163, 184, 0.16);
+  border: 1px solid rgba(148, 163, 184, 0.30);
+  color: #cbd5e1;
 }
 
 .empty-state {
@@ -341,7 +354,7 @@ h2 {
 }
 
 .modal-card {
-  width: min(820px, 100%);
+  width: min(920px, 100%);
   padding: 18px;
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
   position: relative;
@@ -397,9 +410,9 @@ h2 {
   margin-top: 18px;
 }
 
-@media (max-width: 1400px) {
+@media (max-width: 1600px) {
   .diag-stat-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
