@@ -23,7 +23,6 @@ BETA_VOLPTS_PER_1PCT = 4.5
 BETA_MAX_SHIFT_PP = 6.0
 THETA_ATM_PP_PER_SQRT_YEAR = -638
 
-# New tolerance behavior for first-pass target acceptance
 MIN_TARGET_ACCEPTANCE_BARS = 3
 MAX_BARS_OUTSIDE_DURING_ACCEPTANCE = 1
 
@@ -537,12 +536,6 @@ def _find_target_acceptance_rows(
     target_proximity_pts: float,
     consolidation_window_minutes: int,
 ) -> List[Dict[str, Any]]:
-    """
-    New behavior:
-    - Do not require consolidation to begin immediately on the target-hit bar.
-    - Search forward through the consolidation window.
-    - Build the first reasonable acceptance cluster near target.
-    """
     max_bars = max(1, int(consolidation_window_minutes))
     end_idx = min(len(day_rows) - 1, target_hit_idx + max_bars - 1)
 
@@ -575,14 +568,176 @@ def _find_target_acceptance_rows(
     if len(best_cluster) >= MIN_TARGET_ACCEPTANCE_BARS:
         return best_cluster
 
-    # fallback:
-    # if there are at least 3 near-target closes anywhere in the window,
-    # accept those even if they are not perfectly consecutive
     fallback = [row for row in candidate_rows if _close_near_target(row, target_level, band)]
     if len(fallback) >= MIN_TARGET_ACCEPTANCE_BARS:
         return fallback
 
     return []
+
+
+def _make_default_trade_fields(trade_reason: str = "not_evaluated") -> Dict[str, Any]:
+    return {
+        "trade_entry_found": False,
+        "trade_entry_ts_pt": None,
+        "trade_entry_price": None,
+        "trade_entry_reason": trade_reason,
+        "trade_range_high_at_entry": None,
+        "trade_range_low_at_entry": None,
+        "trade_entry_band_floor": None,
+        "trade_initial_stop_price": None,
+        "trade_take_profit_price": None,
+        "trade_trailing_active": False,
+        "trade_trailing_stop_price": None,
+        "trade_exit_ts_pt": None,
+        "trade_exit_price": None,
+        "trade_exit_reason": None,
+        "trade_realized_points": None,
+        "trade_mfe_points": None,
+        "trade_mae_points": None,
+        "trade_outcome": None,
+    }
+
+
+def _simulate_short_trade_from_signal(
+    *,
+    day_rows: List[Dict[str, Any]],
+    signal_idx: int,
+    seed_rows: List[Dict[str, Any]],
+    entry_within_top_pts: float,
+    entry_search_window_minutes: int,
+    initial_stop_pts: float,
+    trail_activate_profit_pts: float,
+    trailing_stop_pts: float,
+    take_profit_pts: float,
+) -> Dict[str, Any]:
+    default = _make_default_trade_fields("no_entry_window")
+
+    if signal_idx < 0 or signal_idx >= len(day_rows):
+        default["trade_entry_reason"] = "invalid_signal_index"
+        return default
+
+    range_high = max(float(r["high"]) for r in seed_rows if r.get("high") is not None)
+    range_low = min(float(r["low"]) for r in seed_rows if r.get("low") is not None)
+
+    search_end_idx = min(len(day_rows) - 1, signal_idx + max(1, int(entry_search_window_minutes)) - 1)
+
+    entry_idx: Optional[int] = None
+    entry_price: Optional[float] = None
+    entry_band_floor: Optional[float] = None
+    range_high_at_entry: Optional[float] = None
+    range_low_at_entry: Optional[float] = None
+
+    for j in range(signal_idx, search_end_idx + 1):
+        row = day_rows[j]
+        if row.get("high") is None or row.get("low") is None:
+            continue
+
+        high_v = float(row["high"])
+        low_v = float(row["low"])
+        range_high = max(range_high, high_v)
+        range_low = min(range_low, low_v)
+
+        band_floor = range_high - float(entry_within_top_pts)
+
+        if high_v >= band_floor:
+            entry_idx = j
+            entry_price = round(band_floor, 2)
+            entry_band_floor = round(band_floor, 2)
+            range_high_at_entry = round(range_high, 2)
+            range_low_at_entry = round(range_low, 2)
+            break
+
+    if entry_idx is None or entry_price is None:
+        return default
+
+    initial_stop_price = round(entry_price + float(initial_stop_pts), 2)
+    take_profit_price = round(entry_price - float(take_profit_pts), 2)
+
+    lowest_low_since_entry = entry_price
+    trailing_active = False
+    trailing_stop_price: Optional[float] = None
+    mfe_points = 0.0
+    mae_points = 0.0
+
+    exit_ts_pt: Optional[str] = None
+    exit_price: Optional[float] = None
+    exit_reason: Optional[str] = None
+
+    for k in range(entry_idx + 1, len(day_rows)):
+        row = day_rows[k]
+        if row.get("high") is None or row.get("low") is None:
+            continue
+
+        high_v = float(row["high"])
+        low_v = float(row["low"])
+
+        lowest_low_since_entry = min(lowest_low_since_entry, low_v)
+        mfe_points = max(mfe_points, entry_price - low_v)
+        mae_points = max(mae_points, high_v - entry_price)
+
+        if (not trailing_active) and mfe_points >= float(trail_activate_profit_pts):
+            trailing_active = True
+
+        active_stop_price = initial_stop_price
+        if trailing_active:
+            trailing_stop_price = round(lowest_low_since_entry + float(trailing_stop_pts), 2)
+            active_stop_price = trailing_stop_price
+
+        # Conservative assumption: if both stop and target are hit in same bar,
+        # the stop wins.
+        if high_v >= active_stop_price:
+            exit_ts_pt = _normalize_pt_label(row.get("ts_pt"))
+            exit_price = round(active_stop_price, 2)
+            exit_reason = "trailing_stop" if trailing_active else "initial_stop"
+            break
+
+        if low_v <= take_profit_price:
+            exit_ts_pt = _normalize_pt_label(row.get("ts_pt"))
+            exit_price = round(take_profit_price, 2)
+            exit_reason = "take_profit"
+            break
+
+    if exit_price is None:
+        last_row = day_rows[-1]
+        last_close = last_row.get("close")
+        if last_close is not None:
+            exit_ts_pt = _normalize_pt_label(last_row.get("ts_pt"))
+            exit_price = round(float(last_close), 2)
+            exit_reason = "end_of_day"
+        else:
+            exit_reason = "open_no_exit"
+
+    realized = None if exit_price is None else round(entry_price - float(exit_price), 2)
+
+    if realized is None:
+        outcome = None
+    elif realized > 0:
+        outcome = "win"
+    elif realized < 0:
+        outcome = "loss"
+    else:
+        outcome = "flat"
+
+    return {
+        "trade_entry_found": True,
+        "trade_entry_ts_pt": _normalize_pt_label(day_rows[entry_idx].get("ts_pt")),
+        "trade_entry_price": entry_price,
+        "trade_entry_reason": "entry_band_hit",
+        "trade_range_high_at_entry": range_high_at_entry,
+        "trade_range_low_at_entry": range_low_at_entry,
+        "trade_entry_band_floor": entry_band_floor,
+        "trade_initial_stop_price": initial_stop_price,
+        "trade_take_profit_price": take_profit_price,
+        "trade_trailing_active": trailing_active,
+        "trade_trailing_stop_price": trailing_stop_price,
+        "trade_exit_ts_pt": exit_ts_pt,
+        "trade_exit_price": exit_price,
+        "trade_exit_reason": exit_reason,
+        "trade_realized_points": realized,
+        "trade_mfe_points": round(mfe_points, 2),
+        "trade_mae_points": round(mae_points, 2),
+        "trade_outcome": outcome,
+    }
 
 
 def _evaluate_up_short_setup(
@@ -596,6 +751,12 @@ def _evaluate_up_short_setup(
     consolidation_window_minutes: int,
     short_put_skew_increase_pct: float,
     short_call_skew_max_pct: float,
+    entry_within_top_pts: float,
+    entry_search_window_minutes: int,
+    initial_stop_pts: float,
+    trail_activate_profit_pts: float,
+    trailing_stop_pts: float,
+    take_profit_pts: float,
 ) -> Dict[str, Any]:
     default = {
         "consolidation_minutes_observed": 0,
@@ -607,6 +768,7 @@ def _evaluate_up_short_setup(
         "short_signal_delta_call_skew_pct": None,
         "short_signal_delta_put_skew_pct": None,
         "short_setup_reason": "not_evaluated",
+        **_make_default_trade_fields("setup_not_hit"),
     }
 
     acceptance_rows = _find_target_acceptance_rows(
@@ -619,6 +781,7 @@ def _evaluate_up_short_setup(
 
     if not acceptance_rows:
         default["short_setup_reason"] = "no_target_consolidation"
+        default["trade_entry_reason"] = "no_setup"
         return default
 
     entry_ts_pt = _normalize_pt_label(day_rows[entry_idx].get("ts_pt"))
@@ -630,6 +793,7 @@ def _evaluate_up_short_setup(
         default["consolidation_minutes_observed"] = len(acceptance_rows)
         default["consolidation_end_ts_pt"] = _normalize_pt_label(acceptance_rows[-1].get("ts_pt"))
         default["short_setup_reason"] = "no_skew_data"
+        default["trade_entry_reason"] = "no_setup"
         return default
 
     by_label: Dict[str, pd.Series] = {}
@@ -643,6 +807,7 @@ def _evaluate_up_short_setup(
         default["consolidation_minutes_observed"] = len(acceptance_rows)
         default["consolidation_end_ts_pt"] = _normalize_pt_label(acceptance_rows[-1].get("ts_pt"))
         default["short_setup_reason"] = "missing_entry_skew"
+        default["trade_entry_reason"] = "no_setup"
         return default
 
     latest_metrics: Dict[str, Optional[float]] = {
@@ -651,7 +816,7 @@ def _evaluate_up_short_setup(
         "delta_put_skew_pct": None,
     }
 
-    for row in acceptance_rows:
+    for i, row in enumerate(acceptance_rows):
         label = _normalize_pt_label(row.get("ts_pt"))
         curr_skew_row = by_label.get(label)
         if curr_skew_row is None:
@@ -667,16 +832,41 @@ def _evaluate_up_short_setup(
             continue
 
         if d_put >= float(short_put_skew_increase_pct) and d_call <= float(short_call_skew_max_pct):
+            signal_price = round(float(row["close"]), 2) if row.get("close") is not None else None
+            signal_label = label
+            signal_day_idx = next(
+                (
+                    idx
+                    for idx in range(target_hit_idx, len(day_rows))
+                    if _normalize_pt_label(day_rows[idx].get("ts_pt")) == signal_label
+                ),
+                -1,
+            )
+
+            seed_rows = acceptance_rows[: i + 1]
+            trade_eval = _simulate_short_trade_from_signal(
+                day_rows=day_rows,
+                signal_idx=signal_day_idx,
+                seed_rows=seed_rows,
+                entry_within_top_pts=entry_within_top_pts,
+                entry_search_window_minutes=entry_search_window_minutes,
+                initial_stop_pts=initial_stop_pts,
+                trail_activate_profit_pts=trail_activate_profit_pts,
+                trailing_stop_pts=trailing_stop_pts,
+                take_profit_pts=take_profit_pts,
+            )
+
             return {
                 "consolidation_minutes_observed": len(acceptance_rows),
                 "consolidation_end_ts_pt": _normalize_pt_label(acceptance_rows[-1].get("ts_pt")),
                 "short_setup_found": True,
-                "short_signal_ts_pt": label,
-                "short_signal_price": round(float(row["close"]), 2) if row.get("close") is not None else None,
+                "short_signal_ts_pt": signal_label,
+                "short_signal_price": signal_price,
                 "short_signal_delta_atm_iv_pct": None if metrics["delta_atm_iv_pct"] is None else round(float(metrics["delta_atm_iv_pct"]), 2),
                 "short_signal_delta_call_skew_pct": round(float(d_call), 2),
                 "short_signal_delta_put_skew_pct": round(float(d_put), 2),
                 "short_setup_reason": "threshold_hit",
+                **trade_eval,
             }
 
     return {
@@ -689,6 +879,7 @@ def _evaluate_up_short_setup(
         "short_signal_delta_call_skew_pct": None if latest_metrics["delta_call_skew_pct"] is None else round(float(latest_metrics["delta_call_skew_pct"]), 2),
         "short_signal_delta_put_skew_pct": None if latest_metrics["delta_put_skew_pct"] is None else round(float(latest_metrics["delta_put_skew_pct"]), 2),
         "short_setup_reason": "threshold_not_met",
+        **_make_default_trade_fields("no_setup"),
     }
 
 
@@ -707,6 +898,12 @@ def _day_zone_results(
     consolidation_window_minutes: int,
     short_put_skew_increase_pct: float,
     short_call_skew_max_pct: float,
+    entry_within_top_pts: float,
+    entry_search_window_minutes: int,
+    initial_stop_pts: float,
+    trail_activate_profit_pts: float,
+    trailing_stop_pts: float,
+    take_profit_pts: float,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     qualifying_levels = _collect_day_levels(day_rows, level_family, min_level_gex_bn)
     zones = _build_zones(qualifying_levels, zone_merge_distance_pts)
@@ -718,6 +915,8 @@ def _day_zone_results(
         "zone_episodes_considered": 0,
         "valid_instances": 0,
         "up_short_setups_found": 0,
+        "actual_trades_found": 0,
+        "winning_trades": 0,
         "sample_zones": [
             {
                 "range": f"{zone['low']:.2f} – {zone['high']:.2f}",
@@ -729,6 +928,7 @@ def _day_zone_results(
             for zone in zones[:8]
         ],
         "sample_short_setups": [],
+        "sample_trades": [],
     }
 
     if not zones:
@@ -780,6 +980,12 @@ def _day_zone_results(
                         consolidation_window_minutes=consolidation_window_minutes,
                         short_put_skew_increase_pct=short_put_skew_increase_pct,
                         short_call_skew_max_pct=short_call_skew_max_pct,
+                        entry_within_top_pts=entry_within_top_pts,
+                        entry_search_window_minutes=entry_search_window_minutes,
+                        initial_stop_pts=initial_stop_pts,
+                        trail_activate_profit_pts=trail_activate_profit_pts,
+                        trailing_stop_pts=trailing_stop_pts,
+                        take_profit_pts=take_profit_pts,
                     )
 
                     row_out = {
@@ -807,6 +1013,7 @@ def _day_zone_results(
                     }
                     results.append(row_out)
                     diagnostics["valid_instances"] += 1
+
                     if setup_eval.get("short_setup_found"):
                         diagnostics["up_short_setups_found"] += 1
                         if len(diagnostics["sample_short_setups"]) < 8:
@@ -819,6 +1026,24 @@ def _day_zone_results(
                                     "target_level": round(float(target_zone_up["low"]), 2),
                                     "delta_put_skew_pct": setup_eval.get("short_signal_delta_put_skew_pct"),
                                     "delta_call_skew_pct": setup_eval.get("short_signal_delta_call_skew_pct"),
+                                }
+                            )
+
+                    if setup_eval.get("trade_entry_found"):
+                        diagnostics["actual_trades_found"] += 1
+                        if setup_eval.get("trade_outcome") == "win":
+                            diagnostics["winning_trades"] += 1
+                        if len(diagnostics["sample_trades"]) < 8:
+                            diagnostics["sample_trades"].append(
+                                {
+                                    "trade_date": str(trade_date),
+                                    "signal_ts_pt": setup_eval.get("short_signal_ts_pt"),
+                                    "entry_ts_pt": setup_eval.get("trade_entry_ts_pt"),
+                                    "entry_price": setup_eval.get("trade_entry_price"),
+                                    "exit_ts_pt": setup_eval.get("trade_exit_ts_pt"),
+                                    "exit_price": setup_eval.get("trade_exit_price"),
+                                    "exit_reason": setup_eval.get("trade_exit_reason"),
+                                    "realized_points": setup_eval.get("trade_realized_points"),
                                 }
                             )
 
@@ -886,6 +1111,7 @@ def _day_zone_results(
                             "short_signal_delta_call_skew_pct": None,
                             "short_signal_delta_put_skew_pct": None,
                             "short_setup_reason": "down_move_not_evaluated",
+                            **_make_default_trade_fields("down_move_not_evaluated"),
                         }
                     )
                     diagnostics["valid_instances"] += 1
@@ -910,6 +1136,12 @@ def scan_gex_level_moves(
     consolidation_window_minutes: int,
     short_put_skew_increase_pct: float,
     short_call_skew_max_pct: float,
+    entry_within_top_pts: float,
+    entry_search_window_minutes: int,
+    initial_stop_pts: float,
+    trail_activate_profit_pts: float,
+    trailing_stop_pts: float,
+    take_profit_pts: float,
     source_view: str | None = None,
 ) -> Dict[str, Any]:
     level_family = (level_family or "primary").strip().lower()
@@ -929,6 +1161,8 @@ def scan_gex_level_moves(
                 "instances_found": 0,
                 "zones_total": 0,
                 "up_short_setups_found": 0,
+                "actual_trades_found": 0,
+                "winning_trades": 0,
             },
             "diagnostics": {
                 "bars_total": 0,
@@ -939,9 +1173,12 @@ def scan_gex_level_moves(
                 "zone_episodes_considered": 0,
                 "valid_instances": 0,
                 "up_short_setups_found": 0,
+                "actual_trades_found": 0,
+                "winning_trades": 0,
                 "sample_zones": [],
                 "sample_results": [],
                 "sample_short_setups": [],
+                "sample_trades": [],
             },
         }
 
@@ -951,8 +1188,11 @@ def scan_gex_level_moves(
     total_source_zones = 0
     total_zone_episodes = 0
     total_short_setups = 0
+    total_actual_trades = 0
+    total_winning_trades = 0
     sample_zones: List[Dict[str, Any]] = []
     sample_short_setups: List[Dict[str, Any]] = []
+    sample_trades: List[Dict[str, Any]] = []
 
     for trade_date, day_df in df.groupby("trade_date", sort=True):
         day_rows = day_df.to_dict("records")
@@ -970,6 +1210,12 @@ def scan_gex_level_moves(
             consolidation_window_minutes=int(consolidation_window_minutes),
             short_put_skew_increase_pct=float(short_put_skew_increase_pct),
             short_call_skew_max_pct=float(short_call_skew_max_pct),
+            entry_within_top_pts=float(entry_within_top_pts),
+            entry_search_window_minutes=int(entry_search_window_minutes),
+            initial_stop_pts=float(initial_stop_pts),
+            trail_activate_profit_pts=float(trail_activate_profit_pts),
+            trailing_stop_pts=float(trailing_stop_pts),
+            take_profit_pts=float(take_profit_pts),
         )
         results.extend(day_results)
 
@@ -978,6 +1224,8 @@ def scan_gex_level_moves(
         total_source_zones += int(day_diag["source_zones_with_clean_targets"])
         total_zone_episodes += int(day_diag["zone_episodes_considered"])
         total_short_setups += int(day_diag["up_short_setups_found"])
+        total_actual_trades += int(day_diag["actual_trades_found"])
+        total_winning_trades += int(day_diag["winning_trades"])
 
         for zone in day_diag["sample_zones"]:
             if len(sample_zones) >= 8:
@@ -988,6 +1236,11 @@ def scan_gex_level_moves(
             if len(sample_short_setups) >= 8:
                 break
             sample_short_setups.append(item)
+
+        for item in day_diag.get("sample_trades", []):
+            if len(sample_trades) >= 8:
+                break
+            sample_trades.append(item)
 
         if len(results) >= int(max_results):
             break
@@ -1001,6 +1254,8 @@ def scan_gex_level_moves(
         "zone_episodes_considered": int(total_zone_episodes),
         "valid_instances": int(len(results)),
         "up_short_setups_found": int(total_short_setups),
+        "actual_trades_found": int(total_actual_trades),
+        "winning_trades": int(total_winning_trades),
         "sample_zones": sample_zones,
         "sample_results": [
             {
@@ -1015,6 +1270,7 @@ def scan_gex_level_moves(
             for row in results[:8]
         ],
         "sample_short_setups": sample_short_setups,
+        "sample_trades": sample_trades,
     }
 
     return {
@@ -1026,6 +1282,8 @@ def scan_gex_level_moves(
             "instances_found": int(len(results)),
             "zones_total": int(total_zones),
             "up_short_setups_found": int(total_short_setups),
+            "actual_trades_found": int(total_actual_trades),
+            "winning_trades": int(total_winning_trades),
         },
         "diagnostics": diagnostics,
     }

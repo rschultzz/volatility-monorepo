@@ -23,6 +23,11 @@ const DEFAULT_SETTINGS = {
   consolidationWindowMinutes: 15,
   shortPutSkewIncreasePct: 80,
   shortCallSkewMaxPct: 30,
+  entryRangeTopPts: 2,
+  initialStopPts: 6,
+  trailActivationProfitPts: 10,
+  trailingStopPts: 6,
+  takeProfitPts: 20,
 };
 
 function summaryText(settings) {
@@ -35,6 +40,11 @@ function summaryText(settings) {
     `consolidation ${settings.consolidationWindowMinutes}m`,
     `put ≥ ${settings.shortPutSkewIncreasePct}%`,
     `call ≤ ${settings.shortCallSkewMaxPct}%`,
+    `entry top ${settings.entryRangeTopPts} pts`,
+    `stop ${settings.initialStopPts}`,
+    `trail on +${settings.trailActivationProfitPts}`,
+    `trail ${settings.trailingStopPts}`,
+    `tp ${settings.takeProfitPts}`,
   ].join(' | ');
 }
 
@@ -61,6 +71,7 @@ export default function App() {
       { label: 'Bars Scanned', value: summary?.bars_scanned ?? '—' },
       { label: 'Zones Built', value: summary?.zones_total ?? '—' },
       { label: 'Up Short Setups', value: summary?.up_short_setups_found ?? '—' },
+      { label: 'Executed Shorts', value: summary?.executed_short_trades ?? '—' },
     ];
   }, [rows.length, sourceView, summary]);
 
@@ -85,6 +96,11 @@ export default function App() {
         consolidationWindowMinutes: Number(nextSettings.consolidationWindowMinutes),
         shortPutSkewIncreasePct: Number(nextSettings.shortPutSkewIncreasePct),
         shortCallSkewMaxPct: Number(nextSettings.shortCallSkewMaxPct),
+        entryRangeTopPts: Number(nextSettings.entryRangeTopPts),
+        initialStopPts: Number(nextSettings.initialStopPts),
+        trailActivationProfitPts: Number(nextSettings.trailActivationProfitPts),
+        trailingStopPts: Number(nextSettings.trailingStopPts),
+        takeProfitPts: Number(nextSettings.takeProfitPts),
       };
 
       const res = await fetch('/api/backtests-v2/gex-moves', {
@@ -147,7 +163,7 @@ export default function App() {
             <div className="eyebrow">Surface Dynamics</div>
             <h1>Backtests</h1>
             <p className="lead">
-              Zone-based scan plus up-move short setup: source zone → last pivot → target arrival → consolidation near target → skew trigger.
+              Zone-based scan plus up-move short setup and trade execution: source zone → last pivot → target arrival → consolidation → skew trigger → entry/stop/target simulation.
             </p>
           </div>
 
@@ -167,6 +183,7 @@ export default function App() {
           <div className="pill">Transitive GEX zones</div>
           <div className="pill">Last pivot inside source zone</div>
           <div className="pill">Up short setup near target</div>
+          <div className="pill">Simulated short entry + exits</div>
           <div className="pill pill-wide">{summaryText(settings)}</div>
         </div>
 
@@ -188,7 +205,7 @@ export default function App() {
             <div>
               <h2>Instances</h2>
               <p>
-                For up moves, this now evaluates whether a short setup appears during target consolidation using the entry minute as the expected SS reference.
+                Up moves now include short setup detection plus simulated execution, stop management, trailing stop activation, and take-profit handling.
               </p>
             </div>
           </div>

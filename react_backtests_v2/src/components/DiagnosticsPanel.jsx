@@ -20,6 +20,7 @@ export default function DiagnosticsPanel({ diagnostics }) {
   const sampleZones = diagnostics.sample_zones || [];
   const sampleResults = diagnostics.sample_results || [];
   const sampleShortSetups = diagnostics.sample_short_setups || [];
+  const sampleTrades = diagnostics.sample_trades || [];
 
   return (
     <div className="diag-card">
@@ -27,7 +28,7 @@ export default function DiagnosticsPanel({ diagnostics }) {
         <div>
           <h2>Diagnostics</h2>
           <p>
-            This version diagnoses both the zone scan and the new up-move short-setup logic near the target level.
+            This version diagnoses the zone scan, the up-move short setup near target, and the actual trade entry / exit simulation.
           </p>
         </div>
       </div>
@@ -41,6 +42,8 @@ export default function DiagnosticsPanel({ diagnostics }) {
         <StatCell label="Zone episodes considered" value={diagnostics.zone_episodes_considered ?? '—'} />
         <StatCell label="Valid instances" value={diagnostics.valid_instances ?? '—'} />
         <StatCell label="Up short setups" value={diagnostics.up_short_setups_found ?? '—'} />
+        <StatCell label="Actual trades" value={diagnostics.actual_trades_found ?? '—'} />
+        <StatCell label="Winning trades" value={diagnostics.winning_trades ?? '—'} />
       </div>
 
       <div className="diag-two-col">
@@ -150,6 +153,46 @@ export default function DiagnosticsPanel({ diagnostics }) {
               ) : (
                 <tr>
                   <td colSpan={7}>No up short setups found yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="diag-panel">
+        <div className="diag-panel-title">Sample Trades</div>
+        <div className="table-wrap diag-table-wrap">
+          <table className="results-table diag-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Signal</th>
+                <th>Entry</th>
+                <th>Entry Px</th>
+                <th>Exit</th>
+                <th>Exit Px</th>
+                <th>Exit Reason</th>
+                <th>Realized Pts</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sampleTrades.length ? (
+                sampleTrades.map((row, idx) => (
+                  <tr key={`${row.trade_date}-${row.entry_ts_pt}-${idx}`}>
+                    <td>{row.trade_date}</td>
+                    <td>{row.signal_ts_pt}</td>
+                    <td>{row.entry_ts_pt}</td>
+                    <td>{fmt(row.entry_price)}</td>
+                    <td>{row.exit_ts_pt}</td>
+                    <td>{fmt(row.exit_price)}</td>
+                    <td>{row.exit_reason}</td>
+                    <td>{fmt(row.realized_points)}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={8}>No trades simulated yet.</td>
                 </tr>
               )}
             </tbody>

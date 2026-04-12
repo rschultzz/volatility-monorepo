@@ -14,6 +14,11 @@ function setupLabel(row) {
   return row.short_setup_found ? 'Short setup' : 'No setup';
 }
 
+function tradeLabel(row) {
+  if (row.direction !== 'up') return 'N/A';
+  return row.trade_entry_found ? 'Trade entered' : 'No trade';
+}
+
 export default function ResultsTable({ rows, selectedRowKey, onSelectRow }) {
   if (!rows.length) {
     return (
@@ -48,6 +53,22 @@ export default function ResultsTable({ rows, selectedRowKey, onSelectRow }) {
             <th>Signal Px</th>
             <th>Δ Put Skew %</th>
             <th>Δ Call Skew %</th>
+            <th>Trade</th>
+            <th>Range High</th>
+            <th>Range Low</th>
+            <th>Entry Band Floor</th>
+            <th>Entry Time (PT)</th>
+            <th>Entry Px</th>
+            <th>Init Stop</th>
+            <th>Take Profit</th>
+            <th>Trailing Stop</th>
+            <th>Exit Time (PT)</th>
+            <th>Exit Px</th>
+            <th>Exit Reason</th>
+            <th>Realized Pts</th>
+            <th>MFE</th>
+            <th>MAE</th>
+            <th>Outcome</th>
             <th>Reason</th>
           </tr>
         </thead>
@@ -105,6 +126,26 @@ export default function ResultsTable({ rows, selectedRowKey, onSelectRow }) {
                 <td>{fmt(row.short_signal_price)}</td>
                 <td>{fmt(row.short_signal_delta_put_skew_pct)}</td>
                 <td>{fmt(row.short_signal_delta_call_skew_pct)}</td>
+                <td>
+                  <span className={`trade-chip ${row.trade_entry_found ? 'hit' : 'miss'}`}>
+                    {tradeLabel(row)}
+                  </span>
+                </td>
+                <td>{fmt(row.trade_range_high_at_entry)}</td>
+                <td>{fmt(row.trade_range_low_at_entry)}</td>
+                <td>{fmt(row.trade_entry_band_floor)}</td>
+                <td>{row.trade_entry_ts_pt || '—'}</td>
+                <td>{fmt(row.trade_entry_price)}</td>
+                <td>{fmt(row.trade_initial_stop_price)}</td>
+                <td>{fmt(row.trade_take_profit_price)}</td>
+                <td>{fmt(row.trade_trailing_stop_price)}</td>
+                <td>{row.trade_exit_ts_pt || '—'}</td>
+                <td>{fmt(row.trade_exit_price)}</td>
+                <td>{row.trade_exit_reason || '—'}</td>
+                <td>{fmt(row.trade_realized_points)}</td>
+                <td>{fmt(row.trade_mfe_points)}</td>
+                <td>{fmt(row.trade_mae_points)}</td>
+                <td>{row.trade_outcome || '—'}</td>
                 <td className="wrap-cell">{row.short_setup_reason || '—'}</td>
               </tr>
             );

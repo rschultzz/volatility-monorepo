@@ -22,6 +22,12 @@ DEFAULT_SETTINGS = {
     "consolidationWindowMinutes": 15,
     "shortPutSkewIncreasePct": 80,
     "shortCallSkewMaxPct": 30,
+    "entryWithinTopPts": 2,
+    "entrySearchWindowMinutes": 30,
+    "initialStopPts": 6,
+    "trailActivateProfitPts": 10,
+    "trailingStopPts": 6,
+    "takeProfitPts": 20,
 }
 
 _SELECTION_STATE: dict[str, Any] = {
@@ -83,6 +89,12 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 consolidation_window_minutes=int(settings["consolidationWindowMinutes"]),
                 short_put_skew_increase_pct=float(settings["shortPutSkewIncreasePct"]),
                 short_call_skew_max_pct=float(settings["shortCallSkewMaxPct"]),
+                entry_within_top_pts=float(settings["entryWithinTopPts"]),
+                entry_search_window_minutes=int(settings["entrySearchWindowMinutes"]),
+                initial_stop_pts=float(settings["initialStopPts"]),
+                trail_activate_profit_pts=float(settings["trailActivateProfitPts"]),
+                trailing_stop_pts=float(settings["trailingStopPts"]),
+                take_profit_pts=float(settings["takeProfitPts"]),
                 source_view=DEFAULT_SOURCE_VIEW,
             )
             return jsonify({
@@ -106,6 +118,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
         start_ts_pt = str(payload.get("start_ts_pt") or "").strip()
         target_ts_pt = str(payload.get("target_ts_pt") or "").strip()
         signal_ts_pt = str(payload.get("signal_ts_pt") or "").strip()
+        trade_entry_ts_pt = str(payload.get("trade_entry_ts_pt") or "").strip()
 
         if not trade_date:
             return jsonify({"ok": False, "error": "trade_date is required"}), 400
@@ -116,6 +129,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             "start_ts_pt": start_ts_pt,
             "target_ts_pt": target_ts_pt,
             "signal_ts_pt": signal_ts_pt,
+            "trade_entry_ts_pt": trade_entry_ts_pt,
         }
 
         return jsonify({

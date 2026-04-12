@@ -135,6 +135,72 @@ export default function SettingsModal({ isOpen, settingsDraft, onChange, onClose
             />
           </label>
 
+          <label className="field">
+            <span>Entry within top of range (pts)</span>
+            <input
+              type="number"
+              step="0.5"
+              min="0"
+              value={settingsDraft.entryWithinTopPts}
+              onChange={(e) => onChange('entryWithinTopPts', e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Entry search window (min)</span>
+            <input
+              type="number"
+              step="1"
+              min="1"
+              value={settingsDraft.entrySearchWindowMinutes}
+              onChange={(e) => onChange('entrySearchWindowMinutes', e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Initial stop (pts)</span>
+            <input
+              type="number"
+              step="0.5"
+              min="0.5"
+              value={settingsDraft.initialStopPts}
+              onChange={(e) => onChange('initialStopPts', e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Trail activate profit (pts)</span>
+            <input
+              type="number"
+              step="0.5"
+              min="0.5"
+              value={settingsDraft.trailActivateProfitPts}
+              onChange={(e) => onChange('trailActivateProfitPts', e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Trailing stop (pts)</span>
+            <input
+              type="number"
+              step="0.5"
+              min="0.5"
+              value={settingsDraft.trailingStopPts}
+              onChange={(e) => onChange('trailingStopPts', e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Take profit (pts)</span>
+            <input
+              type="number"
+              step="0.5"
+              min="0.5"
+              value={settingsDraft.takeProfitPts}
+              onChange={(e) => onChange('takeProfitPts', e.target.value)}
+            />
+          </label>
+
           <label className="field field-wide">
             <span>Maximum results</span>
             <input
@@ -147,7 +213,7 @@ export default function SettingsModal({ isOpen, settingsDraft, onChange, onClose
         </div>
 
         <div className="helper-note">
-          Up-move short setup logic: once price reaches the target zone, this build watches for consolidation near that target and compares each minute back to the entry minute using the expected SS curve from entry.
+          This build now does three layers for up moves: short setup near target, actual short entry near the top of the developing range, and then stop / trailing stop / take profit simulation.
         </div>
 
         <div className="modal-actions">
