@@ -17,7 +17,7 @@ export default function SettingsModal({ isOpen, settingsDraft, onChange, onClose
             <span>Start date</span>
             <input
               type="date"
-              value={settingsDraft.startDate}
+              value={settingsDraft.startDate || ''}
               onChange={(e) => onChange('startDate', e.target.value)}
             />
           </label>
@@ -26,7 +26,7 @@ export default function SettingsModal({ isOpen, settingsDraft, onChange, onClose
             <span>End date</span>
             <input
               type="date"
-              value={settingsDraft.endDate}
+              value={settingsDraft.endDate || ''}
               onChange={(e) => onChange('endDate', e.target.value)}
             />
           </label>
@@ -213,7 +213,7 @@ export default function SettingsModal({ isOpen, settingsDraft, onChange, onClose
         </div>
 
         <div className="helper-note">
-          This build now does three layers for up moves: short setup near target, actual short entry near the top of the developing range, and then stop / trailing stop / take profit simulation.
+          Strategy selection now lives in the page header. This modal stays focused on scan and trade parameters.
         </div>
 
         <div className="modal-actions">

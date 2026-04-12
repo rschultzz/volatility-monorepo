@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import SettingsModal from './components/SettingsModal';
 import ResultsTable from './components/ResultsTable';
 import DiagnosticsPanel from './components/DiagnosticsPanel';
@@ -9,7 +9,7 @@ function isoDateOffset(days) {
   return d.toISOString().slice(0, 10);
 }
 
-const DEFAULT_SETTINGS = {
+const FALLBACK_DEFAULT_SETTINGS = {
   startDate: isoDateOffset(-14),
   endDate: isoDateOffset(0),
   minLevelGexBn: 50,
@@ -23,14 +23,43 @@ const DEFAULT_SETTINGS = {
   consolidationWindowMinutes: 15,
   shortPutSkewIncreasePct: 80,
   shortCallSkewMaxPct: 30,
-  entryRangeTopPts: 2,
+  entryWithinTopPts: 2,
+  entrySearchWindowMinutes: 30,
   initialStopPts: 6,
-  trailActivationProfitPts: 10,
+  trailActivateProfitPts: 10,
   trailingStopPts: 6,
   takeProfitPts: 20,
 };
 
+function rowKey(row, idx) {
+  return `${row.trade_date}-${row.start_ts_utc}-${row.target_ts_utc}-${idx}`;
+}
+
+function normalizeNumericSettings(nextSettings) {
+  return {
+    ...nextSettings,
+    minLevelGexBn: Number(nextSettings.minLevelGexBn),
+    zoneMergeDistancePts: Number(nextSettings.zoneMergeDistancePts),
+    minCleanMovePoints: Number(nextSettings.minCleanMovePoints),
+    targetProximityPts: Number(nextSettings.targetProximityPts),
+    maxZoneBreachPts: Number(nextSettings.maxZoneBreachPts),
+    pivotStrengthBars: Number(nextSettings.pivotStrengthBars),
+    maxResults: Number(nextSettings.maxResults),
+    consolidationWindowMinutes: Number(nextSettings.consolidationWindowMinutes),
+    shortPutSkewIncreasePct: Number(nextSettings.shortPutSkewIncreasePct),
+    shortCallSkewMaxPct: Number(nextSettings.shortCallSkewMaxPct),
+    entryWithinTopPts: Number(nextSettings.entryWithinTopPts),
+    entrySearchWindowMinutes: Number(nextSettings.entrySearchWindowMinutes),
+    initialStopPts: Number(nextSettings.initialStopPts),
+    trailActivateProfitPts: Number(nextSettings.trailActivateProfitPts),
+    trailingStopPts: Number(nextSettings.trailingStopPts),
+    takeProfitPts: Number(nextSettings.takeProfitPts),
+  };
+}
+
 function summaryText(settings) {
+  if (!settings) return 'No settings loaded';
+
   return [
     `${settings.startDate} → ${settings.endDate}`,
     `min GEX ${settings.minLevelGexBn} BN`,
@@ -40,43 +69,110 @@ function summaryText(settings) {
     `consolidation ${settings.consolidationWindowMinutes}m`,
     `put ≥ ${settings.shortPutSkewIncreasePct}%`,
     `call ≤ ${settings.shortCallSkewMaxPct}%`,
-    `entry top ${settings.entryRangeTopPts} pts`,
+    `entry top ${settings.entryWithinTopPts} pts`,
+    `entry window ${settings.entrySearchWindowMinutes}m`,
     `stop ${settings.initialStopPts}`,
-    `trail on +${settings.trailActivationProfitPts}`,
+    `trail on +${settings.trailActivateProfitPts}`,
     `trail ${settings.trailingStopPts}`,
     `tp ${settings.takeProfitPts}`,
   ].join(' | ');
 }
 
-function rowKey(row, idx) {
-  return `${row.trade_date}-${row.start_ts_utc}-${row.target_ts_utc}-${idx}`;
-}
-
 export default function App() {
-  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
-  const [settingsDraft, setSettingsDraft] = useState(DEFAULT_SETTINGS);
+  const [strategies, setStrategies] = useState([]);
+  const [selectedStrategyKey, setSelectedStrategyKey] = useState('up_move_short');
+  const [settings, setSettings] = useState(FALLBACK_DEFAULT_SETTINGS);
+  const [settingsDraft, setSettingsDraft] = useState(FALLBACK_DEFAULT_SETTINGS);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState(null);
   const [diagnostics, setDiagnostics] = useState(null);
   const [sourceView, setSourceView] = useState('es_minutes_with_features_bt');
   const [loading, setLoading] = useState(false);
+  const [savingDefaults, setSavingDefaults] = useState(false);
+  const [bootstrapping, setBootstrapping] = useState(true);
   const [error, setError] = useState('');
   const [selectedRowKey, setSelectedRowKey] = useState(null);
+  const [activeStrategyMeta, setActiveStrategyMeta] = useState(null);
+
+  const selectedStrategy = useMemo(() => {
+    return strategies.find((item) => item.key === selectedStrategyKey) || activeStrategyMeta || null;
+  }, [activeStrategyMeta, selectedStrategyKey, strategies]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadStrategies() {
+      setBootstrapping(true);
+      setError('');
+
+      try {
+        const res = await fetch('/api/backtests-v2/strategies');
+        const data = await res.json();
+
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || 'Could not load strategies');
+        }
+
+        const nextStrategies = Array.isArray(data.strategies) ? data.strategies : [];
+        const defaultKey = data.defaultStrategyKey || nextStrategies[0]?.key || 'up_move_short';
+        const defaultStrategy = nextStrategies.find((item) => item.key === defaultKey) || nextStrategies[0] || null;
+        const defaults = defaultStrategy?.defaults || FALLBACK_DEFAULT_SETTINGS;
+
+        if (!isMounted) return;
+
+        setStrategies(nextStrategies);
+        setSelectedStrategyKey(defaultKey);
+        setActiveStrategyMeta(defaultStrategy);
+        setSettings(defaults);
+        setSettingsDraft(defaults);
+      } catch (err) {
+        if (!isMounted) return;
+        setError(err.message || 'Could not load strategies');
+      } finally {
+        if (isMounted) {
+          setBootstrapping(false);
+        }
+      }
+    }
+
+    loadStrategies();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const cards = useMemo(() => {
     return [
+      { label: 'Strategy', value: selectedStrategy?.label || '—' },
+      { label: 'Strategy ID', value: selectedStrategy?.strategyId ?? '—' },
       { label: 'Source View', value: sourceView || '—' },
       { label: 'Instances Found', value: summary?.instances_found ?? rows.length },
       { label: 'Bars Scanned', value: summary?.bars_scanned ?? '—' },
-      { label: 'Zones Built', value: summary?.zones_total ?? '—' },
-      { label: 'Up Short Setups', value: summary?.up_short_setups_found ?? '—' },
-      { label: 'Executed Shorts', value: summary?.executed_short_trades ?? '—' },
+      { label: 'Executed Trades', value: summary?.executed_short_trades ?? '—' },
     ];
-  }, [rows.length, sourceView, summary]);
+  }, [rows.length, selectedStrategy, sourceView, summary]);
 
   function updateDraft(name, value) {
     setSettingsDraft((prev) => ({ ...prev, [name]: value }));
+  }
+
+  function applyStrategyDefaults(strategyKey) {
+    const nextStrategy = strategies.find((item) => item.key === strategyKey);
+    if (!nextStrategy) {
+      setSelectedStrategyKey(strategyKey);
+      return;
+    }
+
+    const nextDefaults = nextStrategy.defaults || FALLBACK_DEFAULT_SETTINGS;
+    setSelectedStrategyKey(strategyKey);
+    setActiveStrategyMeta(nextStrategy);
+    setSettings(nextDefaults);
+    setSettingsDraft(nextDefaults);
+    setSelectedRowKey(null);
+    setRows([]);
+    setSummary(null);
+    setDiagnostics(null);
   }
 
   async function runScan(nextSettings = settingsDraft) {
@@ -84,24 +180,10 @@ export default function App() {
     setError('');
 
     try {
-      const payload = {
+      const payload = normalizeNumericSettings({
         ...nextSettings,
-        minLevelGexBn: Number(nextSettings.minLevelGexBn),
-        zoneMergeDistancePts: Number(nextSettings.zoneMergeDistancePts),
-        minCleanMovePoints: Number(nextSettings.minCleanMovePoints),
-        targetProximityPts: Number(nextSettings.targetProximityPts),
-        maxZoneBreachPts: Number(nextSettings.maxZoneBreachPts),
-        pivotStrengthBars: Number(nextSettings.pivotStrengthBars),
-        maxResults: Number(nextSettings.maxResults),
-        consolidationWindowMinutes: Number(nextSettings.consolidationWindowMinutes),
-        shortPutSkewIncreasePct: Number(nextSettings.shortPutSkewIncreasePct),
-        shortCallSkewMaxPct: Number(nextSettings.shortCallSkewMaxPct),
-        entryRangeTopPts: Number(nextSettings.entryRangeTopPts),
-        initialStopPts: Number(nextSettings.initialStopPts),
-        trailActivationProfitPts: Number(nextSettings.trailActivationProfitPts),
-        trailingStopPts: Number(nextSettings.trailingStopPts),
-        takeProfitPts: Number(nextSettings.takeProfitPts),
-      };
+        strategyKey: selectedStrategyKey,
+      });
 
       const res = await fetch('/api/backtests-v2/gex-moves', {
         method: 'POST',
@@ -114,18 +196,55 @@ export default function App() {
         throw new Error(data.error || 'Scan failed');
       }
 
-      setSettings(payload);
-      setSettingsDraft(payload);
+      const normalizedSettings = data.settings || payload;
+
+      setSettings(normalizedSettings);
+      setSettingsDraft(normalizedSettings);
       setRows(data.rows || []);
       setSummary(data.summary || null);
       setDiagnostics(data.diagnostics || null);
       setSourceView(data.sourceView || 'es_minutes_with_features_bt');
       setSelectedRowKey(null);
       setIsSettingsOpen(false);
+      setActiveStrategyMeta(data.strategy || selectedStrategy || null);
+      setStrategies((prev) => prev.map((item) => (item.key === data.strategy?.key ? data.strategy : item)));
     } catch (err) {
       setError(err.message || 'Scan failed');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleSaveDefaults() {
+    setSavingDefaults(true);
+    setError('');
+
+    try {
+      const params = normalizeNumericSettings(settingsDraft);
+
+      const res = await fetch('/api/backtests-v2/strategy-defaults', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          strategyKey: selectedStrategyKey,
+          params,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'Could not save strategy defaults');
+      }
+
+      const savedStrategy = data.strategy;
+      setActiveStrategyMeta(savedStrategy);
+      setStrategies((prev) => prev.map((item) => (item.key === savedStrategy.key ? savedStrategy : item)));
+      setSettings(savedStrategy.defaults || settingsDraft);
+      setSettingsDraft(savedStrategy.defaults || settingsDraft);
+    } catch (err) {
+      setError(err.message || 'Could not save strategy defaults');
+    } finally {
+      setSavingDefaults(false);
     }
   }
 
@@ -143,6 +262,7 @@ export default function App() {
           start_ts_pt: row.start_ts_pt,
           target_ts_pt: row.target_ts_pt,
           signal_ts_pt: row.short_signal_ts_pt || '',
+          trade_entry_ts_pt: row.trade_entry_ts_pt || '',
         }),
       });
 
@@ -163,27 +283,50 @@ export default function App() {
             <div className="eyebrow">Surface Dynamics</div>
             <h1>Backtests</h1>
             <p className="lead">
-              Zone-based scan plus up-move short setup and trade execution: source zone → last pivot → target arrival → consolidation → skew trigger → entry/stop/target simulation.
+              {selectedStrategy?.description || 'Loading strategy library…'}
             </p>
           </div>
 
-          <div className="header-actions">
-            <button className="ghost-button" onClick={() => setIsSettingsOpen(true)}>
+          <div className="header-actions" style={{ alignItems: 'stretch' }}>
+            <div style={{ minWidth: 260, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ color: '#9ca3af', fontSize: 12 }}>Strategy</div>
+              <select
+                value={selectedStrategyKey}
+                onChange={(e) => applyStrategyDefaults(e.target.value)}
+                disabled={bootstrapping || loading || savingDefaults}
+                style={{
+                  minWidth: 260,
+                  backgroundColor: '#111827',
+                  border: '1px solid #374151',
+                  color: 'white',
+                  borderRadius: '8px',
+                  padding: '10px 12px',
+                }}
+              >
+                {strategies.map((strategy) => (
+                  <option key={strategy.key} value={strategy.key}>
+                    {strategy.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button className="ghost-button" onClick={() => setIsSettingsOpen(true)} disabled={bootstrapping}>
               Settings
             </button>
-            <button className="primary-button" onClick={() => runScan(settings)} disabled={loading}>
+            <button className="ghost-button" onClick={handleSaveDefaults} disabled={bootstrapping || savingDefaults}>
+              {savingDefaults ? 'Saving…' : 'Save settings to strategy'}
+            </button>
+            <button className="primary-button" onClick={() => runScan(settings)} disabled={loading || bootstrapping}>
               {loading ? 'Running…' : 'Run Scan'}
             </button>
           </div>
         </div>
 
         <div className="toolbar-row">
-          <div className="pill">RTH only</div>
-          <div className="pill">Same day only</div>
-          <div className="pill">Transitive GEX zones</div>
-          <div className="pill">Last pivot inside source zone</div>
-          <div className="pill">Up short setup near target</div>
-          <div className="pill">Simulated short entry + exits</div>
+          {(selectedStrategy?.badges || []).map((badge) => (
+            <div className="pill" key={badge}>{badge}</div>
+          ))}
           <div className="pill pill-wide">{summaryText(settings)}</div>
         </div>
 
@@ -205,7 +348,7 @@ export default function App() {
             <div>
               <h2>Instances</h2>
               <p>
-                Up moves now include short setup detection plus simulated execution, stop management, trailing stop activation, and take-profit handling.
+                Iteration 3 loads saved parameter defaults from bt_strategies and lets you explicitly persist the current settings back to the selected strategy.
               </p>
             </div>
           </div>
