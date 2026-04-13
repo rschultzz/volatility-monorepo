@@ -24,7 +24,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -153,6 +154,7 @@ h2 {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .status-card,
@@ -186,7 +188,21 @@ h2 {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  min-height: 0;
+}
+
+/* Critical layout fix:
+   Diagnostics should size to content and never shrink underneath Instances.
+   Instances should be the pane that grows/shrinks. */
+.diag-card {
+  flex: 0 0 auto;
+  min-height: fit-content;
+  overflow: visible;
+}
+
+.results-card {
+  flex: 1 1 auto;
+  min-height: 260px;
+  overflow: hidden;
 }
 
 .results-header {
@@ -194,12 +210,17 @@ h2 {
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
+  flex-shrink: 0;
 }
 
-.diag-stat-grid {
+/* Diagnostics */
+.diag-stat-grid,
+.diag-stat-grid-compact {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
+  align-items: stretch;
+  width: 100%;
 }
 
 .diag-stat-card {
@@ -207,6 +228,10 @@ h2 {
   border-radius: 14px;
   background: #020617;
   padding: 12px;
+  min-height: 86px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
 }
 
 .diag-stat-label {
@@ -219,6 +244,7 @@ h2 {
   color: #f8fafc;
   font-size: 18px;
   font-weight: 700;
+  line-height: 1.2;
 }
 
 .diag-two-col {
@@ -246,6 +272,7 @@ h2 {
   min-width: 100%;
 }
 
+/* Tables */
 .table-wrap {
   flex: 1 1 auto;
   min-height: 0;
@@ -342,6 +369,7 @@ h2 {
   color: #94a3b8;
 }
 
+/* Modal */
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -359,6 +387,8 @@ h2 {
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
   position: relative;
   z-index: 2001;
+  max-height: calc(100vh - 36px);
+  overflow: auto;
 }
 
 .modal-header {
@@ -388,13 +418,19 @@ h2 {
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
   width: 100%;
   border-radius: 10px;
   border: 1px solid #334155;
   background: #020617;
   color: #e5e7eb;
   padding: 10px 12px;
+}
+
+.field textarea {
+  resize: vertical;
+  min-height: 84px;
 }
 
 .field-wide {
@@ -411,8 +447,8 @@ h2 {
 }
 
 @media (max-width: 1600px) {
-  .diag-stat-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+  .status-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -420,6 +456,10 @@ h2 {
   .status-grid,
   .diag-two-col {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -431,7 +471,8 @@ h2 {
   .form-grid,
   .status-grid,
   .diag-two-col,
-  .diag-stat-grid {
+  .diag-stat-grid,
+  .diag-stat-grid-compact {
     grid-template-columns: 1fr;
   }
 

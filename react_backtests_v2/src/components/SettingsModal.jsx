@@ -1,4 +1,14 @@
-export default function SettingsModal({ isOpen, settingsDraft, onChange, onClose, onRun }) {
+export default function SettingsModal({
+  isOpen,
+  settingsDraft,
+  strategyMetaDraft,
+  creatingStrategy,
+  onStrategyMetaChange,
+  onCreateStrategy,
+  onChange,
+  onClose,
+  onRun,
+}) {
   if (!isOpen) return null;
 
   return (
@@ -7,12 +17,48 @@ export default function SettingsModal({ isOpen, settingsDraft, onChange, onClose
         <div className="modal-header">
           <div>
             <div className="eyebrow">Backtests</div>
-            <h2>Scan Settings</h2>
+            <h2>Strategy & Scan Settings</h2>
           </div>
           <button className="ghost-button" onClick={onClose}>Close</button>
         </div>
 
         <div className="form-grid">
+          <label className="field field-wide">
+            <span>Strategy name</span>
+            <input
+              type="text"
+              value={strategyMetaDraft.displayName || ''}
+              onChange={(e) => onStrategyMetaChange('displayName', e.target.value)}
+            />
+          </label>
+
+          <label className="field field-wide">
+            <span>Strategy key</span>
+            <input
+              type="text"
+              value={strategyMetaDraft.strategyKey || ''}
+              onChange={(e) => onStrategyMetaChange('strategyKey', e.target.value)}
+            />
+          </label>
+
+          <label className="field field-wide">
+            <span>Notes</span>
+            <textarea
+              value={strategyMetaDraft.notes || ''}
+              onChange={(e) => onStrategyMetaChange('notes', e.target.value)}
+              rows={3}
+              style={{
+                width: '100%',
+                backgroundColor: '#111827',
+                border: '1px solid #374151',
+                color: 'white',
+                borderRadius: '8px',
+                padding: '10px 12px',
+                resize: 'vertical',
+              }}
+            />
+          </label>
+
           <label className="field">
             <span>Start date</span>
             <input
@@ -213,10 +259,13 @@ export default function SettingsModal({ isOpen, settingsDraft, onChange, onClose
         </div>
 
         <div className="helper-note">
-          Strategy selection now lives in the page header. This modal stays focused on scan and trade parameters.
+          This keeps one shared settings window, but adds strategy metadata so you can save the current strategy or create a new named variant. That leaves room for dynamic per-strategy fields later.
         </div>
 
         <div className="modal-actions">
+          <button className="ghost-button" onClick={onCreateStrategy}>
+            {creatingStrategy ? 'Creating…' : 'Save as new strategy'}
+          </button>
           <button className="ghost-button" onClick={onClose}>Cancel</button>
           <button className="primary-button" onClick={onRun}>Save & Run Scan</button>
         </div>

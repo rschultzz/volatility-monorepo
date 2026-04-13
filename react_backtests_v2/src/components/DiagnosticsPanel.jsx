@@ -14,13 +14,51 @@ function StatCell({ label, value }) {
   );
 }
 
-export default function DiagnosticsPanel({ diagnostics }) {
+function sortRowsForEquity(rows) {
+  return [...(rows || [])].sort((a, b) => {
+    const aKey = `${a.trade_date || ''} ${a.trade_entry_ts_pt || a.short_signal_ts_pt || a.target_ts_pt || a.start_ts_pt || ''}`;
+    const bKey = `${b.trade_date || ''} ${b.trade_entry_ts_pt || b.short_signal_ts_pt || b.target_ts_pt || b.start_ts_pt || ''}`;
+    return aKey.localeCompare(bKey);
+  });
+}
+
+function computePerformance(rows) {
+  const ordered = sortRowsForEquity(rows)
+    .map((row) => Number(row.trade_realized_points))
+    .filter((v) => Number.isFinite(v));
+
+  if (!ordered.length) {
+    return {
+      totalPnLPts: null,
+      evPtsPerTrade: null,
+      maxDrawdownPts: null,
+    };
+  }
+
+  const totalPnLPts = ordered.reduce((sum, v) => sum + v, 0);
+  const evPtsPerTrade = totalPnLPts / ordered.length;
+
+  let equity = 0;
+  let peak = 0;
+  let maxDrawdown = 0;
+
+  for (const pnl of ordered) {
+    equity += pnl;
+    peak = Math.max(peak, equity);
+    maxDrawdown = Math.max(maxDrawdown, peak - equity);
+  }
+
+  return {
+    totalPnLPts,
+    evPtsPerTrade,
+    maxDrawdownPts: maxDrawdown,
+  };
+}
+
+export default function DiagnosticsPanel({ diagnostics, rows = [] }) {
   if (!diagnostics) return null;
 
-  const sampleZones = diagnostics.sample_zones || [];
-  const sampleResults = diagnostics.sample_results || [];
-  const sampleShortSetups = diagnostics.sample_short_setups || [];
-  const sampleTrades = diagnostics.sample_trades || [];
+  const perf = computePerformance(rows);
 
   return (
     <div className="diag-card">
@@ -28,176 +66,20 @@ export default function DiagnosticsPanel({ diagnostics }) {
         <div>
           <h2>Diagnostics</h2>
           <p>
-            This version diagnoses the zone scan, the up-move short setup near target, and the actual trade entry / exit simulation.
+            This section emphasizes strategy performance first, with a smaller set of useful trade counts.
           </p>
         </div>
       </div>
 
-      <div className="diag-stat-grid">
-        <StatCell label="Bars total" value={diagnostics.bars_total ?? '—'} />
+      <div className="diag-stat-grid diag-stat-grid-compact">
         <StatCell label="Days total" value={diagnostics.days_total ?? '—'} />
-        <StatCell label="Qualifying levels seen" value={diagnostics.qualifying_levels_seen ?? '—'} />
-        <StatCell label="Zones built" value={diagnostics.zones_total ?? '—'} />
-        <StatCell label="Clean-target zones" value={diagnostics.source_zones_with_clean_targets ?? '—'} />
-        <StatCell label="Zone episodes considered" value={diagnostics.zone_episodes_considered ?? '—'} />
         <StatCell label="Valid instances" value={diagnostics.valid_instances ?? '—'} />
         <StatCell label="Up short setups" value={diagnostics.up_short_setups_found ?? '—'} />
         <StatCell label="Actual trades" value={diagnostics.actual_trades_found ?? '—'} />
         <StatCell label="Winning trades" value={diagnostics.winning_trades ?? '—'} />
-      </div>
-
-      <div className="diag-two-col">
-        <div className="diag-panel">
-          <div className="diag-panel-title">Sample Zones</div>
-          <div className="table-wrap diag-table-wrap">
-            <table className="results-table diag-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Range</th>
-                  <th>Levels</th>
-                  <th>Width</th>
-                  <th>Count</th>
-                  <th>Max Abs GEX BN</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sampleZones.length ? (
-                  sampleZones.map((row, idx) => (
-                    <tr key={`${row.trade_date}-${row.range}-${idx}`}>
-                      <td>{row.trade_date}</td>
-                      <td>{row.range}</td>
-                      <td className="wrap-cell">{row.levels}</td>
-                      <td>{fmt(row.width)}</td>
-                      <td>{row.count}</td>
-                      <td>{fmt(row.max_abs_gex_bn)}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={6}>No zones found.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="diag-panel">
-          <div className="diag-panel-title">Sample Results</div>
-          <div className="table-wrap diag-table-wrap">
-            <table className="results-table diag-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Dir</th>
-                  <th>Source Zone</th>
-                  <th>Target</th>
-                  <th>Start</th>
-                  <th>Target Time</th>
-                  <th>Clean Space</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sampleResults.length ? (
-                  sampleResults.map((row, idx) => (
-                    <tr key={`${row.trade_date}-${row.start_ts_pt}-${idx}`}>
-                      <td>{row.trade_date}</td>
-                      <td>{row.direction}</td>
-                      <td>{row.source_zone}</td>
-                      <td>{fmt(row.target_level)}</td>
-                      <td>{row.start_ts_pt}</td>
-                      <td>{row.target_ts_pt}</td>
-                      <td>{fmt(row.clean_space_points)}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={7}>No valid instances found yet.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div className="diag-panel">
-        <div className="diag-panel-title">Sample Up Short Setups</div>
-        <div className="table-wrap diag-table-wrap">
-          <table className="results-table diag-table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Start</th>
-                <th>Target</th>
-                <th>Signal</th>
-                <th>Target Level</th>
-                <th>Δ Put Skew %</th>
-                <th>Δ Call Skew %</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sampleShortSetups.length ? (
-                sampleShortSetups.map((row, idx) => (
-                  <tr key={`${row.trade_date}-${row.signal_ts_pt}-${idx}`}>
-                    <td>{row.trade_date}</td>
-                    <td>{row.start_ts_pt}</td>
-                    <td>{row.target_ts_pt}</td>
-                    <td>{row.signal_ts_pt}</td>
-                    <td>{fmt(row.target_level)}</td>
-                    <td>{fmt(row.delta_put_skew_pct)}</td>
-                    <td>{fmt(row.delta_call_skew_pct)}</td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={7}>No up short setups found yet.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="diag-panel">
-        <div className="diag-panel-title">Sample Trades</div>
-        <div className="table-wrap diag-table-wrap">
-          <table className="results-table diag-table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Signal</th>
-                <th>Entry</th>
-                <th>Entry Px</th>
-                <th>Exit</th>
-                <th>Exit Px</th>
-                <th>Exit Reason</th>
-                <th>Realized Pts</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sampleTrades.length ? (
-                sampleTrades.map((row, idx) => (
-                  <tr key={`${row.trade_date}-${row.entry_ts_pt}-${idx}`}>
-                    <td>{row.trade_date}</td>
-                    <td>{row.signal_ts_pt}</td>
-                    <td>{row.entry_ts_pt}</td>
-                    <td>{fmt(row.entry_price)}</td>
-                    <td>{row.exit_ts_pt}</td>
-                    <td>{fmt(row.exit_price)}</td>
-                    <td>{row.exit_reason}</td>
-                    <td>{fmt(row.realized_points)}</td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={8}>No trades simulated yet.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+        <StatCell label="Total P/L (pts)" value={fmt(perf.totalPnLPts)} />
+        <StatCell label="EV (pts/trade)" value={fmt(perf.evPtsPerTrade)} />
+        <StatCell label="Max drawdown (pts)" value={fmt(perf.maxDrawdownPts)} />
       </div>
     </div>
   );

@@ -35,6 +35,15 @@ function rowKey(row, idx) {
   return `${row.trade_date}-${row.start_ts_utc}-${row.target_ts_utc}-${idx}`;
 }
 
+function slugify(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
 function normalizeNumericSettings(nextSettings) {
   return {
     ...nextSettings,
@@ -83,6 +92,11 @@ export default function App() {
   const [selectedStrategyKey, setSelectedStrategyKey] = useState('up_move_short');
   const [settings, setSettings] = useState(FALLBACK_DEFAULT_SETTINGS);
   const [settingsDraft, setSettingsDraft] = useState(FALLBACK_DEFAULT_SETTINGS);
+  const [strategyMetaDraft, setStrategyMetaDraft] = useState({
+    displayName: '',
+    strategyKey: '',
+    notes: '',
+  });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -90,6 +104,7 @@ export default function App() {
   const [sourceView, setSourceView] = useState('es_minutes_with_features_bt');
   const [loading, setLoading] = useState(false);
   const [savingDefaults, setSavingDefaults] = useState(false);
+  const [creatingStrategy, setCreatingStrategy] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [error, setError] = useState('');
   const [selectedRowKey, setSelectedRowKey] = useState(null);
@@ -126,6 +141,11 @@ export default function App() {
         setActiveStrategyMeta(defaultStrategy);
         setSettings(defaults);
         setSettingsDraft(defaults);
+        setStrategyMetaDraft({
+          displayName: defaultStrategy?.displayName || defaultStrategy?.label || '',
+          strategyKey: defaultStrategy?.strategyKey || defaultKey,
+          notes: defaultStrategy?.notes || '',
+        });
       } catch (err) {
         if (!isMounted) return;
         setError(err.message || 'Could not load strategies');
@@ -142,37 +162,42 @@ export default function App() {
     };
   }, []);
 
-  const cards = useMemo(() => {
-    return [
-      { label: 'Strategy', value: selectedStrategy?.label || '—' },
-      { label: 'Strategy ID', value: selectedStrategy?.strategyId ?? '—' },
-      { label: 'Source View', value: sourceView || '—' },
-      { label: 'Instances Found', value: summary?.instances_found ?? rows.length },
-      { label: 'Bars Scanned', value: summary?.bars_scanned ?? '—' },
-      { label: 'Executed Trades', value: summary?.executed_short_trades ?? '—' },
-    ];
-  }, [rows.length, selectedStrategy, sourceView, summary]);
-
   function updateDraft(name, value) {
     setSettingsDraft((prev) => ({ ...prev, [name]: value }));
   }
 
-  function applyStrategyDefaults(strategyKey) {
-    const nextStrategy = strategies.find((item) => item.key === strategyKey);
-    if (!nextStrategy) {
-      setSelectedStrategyKey(strategyKey);
-      return;
-    }
+  function updateStrategyMeta(name, value) {
+    setStrategyMetaDraft((prev) => {
+      const next = { ...prev, [name]: value };
+      if (name === 'displayName' && (!prev.strategyKey || prev.strategyKey === slugify(prev.displayName))) {
+        next.strategyKey = slugify(value);
+      }
+      return next;
+    });
+  }
 
-    const nextDefaults = nextStrategy.defaults || FALLBACK_DEFAULT_SETTINGS;
-    setSelectedStrategyKey(strategyKey);
+  function hydrateFromStrategy(nextStrategy) {
+    const nextDefaults = nextStrategy?.defaults || FALLBACK_DEFAULT_SETTINGS;
     setActiveStrategyMeta(nextStrategy);
     setSettings(nextDefaults);
     setSettingsDraft(nextDefaults);
+    setStrategyMetaDraft({
+      displayName: nextStrategy?.displayName || nextStrategy?.label || '',
+      strategyKey: nextStrategy?.strategyKey || nextStrategy?.key || '',
+      notes: nextStrategy?.notes || '',
+    });
     setSelectedRowKey(null);
     setRows([]);
     setSummary(null);
     setDiagnostics(null);
+  }
+
+  function applyStrategyDefaults(strategyKey) {
+    const nextStrategy = strategies.find((item) => item.key === strategyKey);
+    setSelectedStrategyKey(strategyKey);
+    if (nextStrategy) {
+      hydrateFromStrategy(nextStrategy);
+    }
   }
 
   async function runScan(nextSettings = settingsDraft) {
@@ -197,6 +222,7 @@ export default function App() {
       }
 
       const normalizedSettings = data.settings || payload;
+      const nextStrategy = data.strategy || selectedStrategy || null;
 
       setSettings(normalizedSettings);
       setSettingsDraft(normalizedSettings);
@@ -206,8 +232,13 @@ export default function App() {
       setSourceView(data.sourceView || 'es_minutes_with_features_bt');
       setSelectedRowKey(null);
       setIsSettingsOpen(false);
-      setActiveStrategyMeta(data.strategy || selectedStrategy || null);
-      setStrategies((prev) => prev.map((item) => (item.key === data.strategy?.key ? data.strategy : item)));
+      setActiveStrategyMeta(nextStrategy);
+      setStrategies((prev) => prev.map((item) => (item.key === nextStrategy?.key ? nextStrategy : item)));
+      setStrategyMetaDraft({
+        displayName: nextStrategy?.displayName || nextStrategy?.label || '',
+        strategyKey: nextStrategy?.strategyKey || nextStrategy?.key || '',
+        notes: nextStrategy?.notes || '',
+      });
     } catch (err) {
       setError(err.message || 'Scan failed');
     } finally {
@@ -227,13 +258,15 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           strategyKey: selectedStrategyKey,
+          name: strategyMetaDraft.displayName,
+          notes: strategyMetaDraft.notes,
           params,
         }),
       });
 
       const data = await res.json();
       if (!res.ok || !data.ok) {
-        throw new Error(data.error || 'Could not save strategy defaults');
+        throw new Error(data.error || 'Could not save strategy');
       }
 
       const savedStrategy = data.strategy;
@@ -241,10 +274,52 @@ export default function App() {
       setStrategies((prev) => prev.map((item) => (item.key === savedStrategy.key ? savedStrategy : item)));
       setSettings(savedStrategy.defaults || settingsDraft);
       setSettingsDraft(savedStrategy.defaults || settingsDraft);
+      setStrategyMetaDraft({
+        displayName: savedStrategy.displayName || savedStrategy.label || '',
+        strategyKey: savedStrategy.strategyKey || savedStrategy.key || '',
+        notes: savedStrategy.notes || '',
+      });
+      setSelectedStrategyKey(savedStrategy.key);
     } catch (err) {
-      setError(err.message || 'Could not save strategy defaults');
+      setError(err.message || 'Could not save strategy');
     } finally {
       setSavingDefaults(false);
+    }
+  }
+
+  async function handleCreateStrategy() {
+    setCreatingStrategy(true);
+    setError('');
+
+    try {
+      const params = normalizeNumericSettings(settingsDraft);
+
+      const res = await fetch('/api/backtests-v2/strategy-create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseStrategyKey: selectedStrategyKey,
+          name: strategyMetaDraft.displayName,
+          strategyKey: strategyMetaDraft.strategyKey,
+          notes: strategyMetaDraft.notes,
+          params,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'Could not create strategy');
+      }
+
+      const newStrategy = data.strategy;
+      setStrategies((prev) => [...prev, newStrategy]);
+      setSelectedStrategyKey(newStrategy.key);
+      hydrateFromStrategy(newStrategy);
+      setIsSettingsOpen(false);
+    } catch (err) {
+      setError(err.message || 'Could not create strategy');
+    } finally {
+      setCreatingStrategy(false);
     }
   }
 
@@ -293,7 +368,7 @@ export default function App() {
               <select
                 value={selectedStrategyKey}
                 onChange={(e) => applyStrategyDefaults(e.target.value)}
-                disabled={bootstrapping || loading || savingDefaults}
+                disabled={bootstrapping || loading || savingDefaults || creatingStrategy}
                 style={{
                   minWidth: 260,
                   backgroundColor: '#111827',
@@ -305,7 +380,7 @@ export default function App() {
               >
                 {strategies.map((strategy) => (
                   <option key={strategy.key} value={strategy.key}>
-                    {strategy.label}
+                    {strategy.displayName || strategy.label}
                   </option>
                 ))}
               </select>
@@ -315,7 +390,7 @@ export default function App() {
               Settings
             </button>
             <button className="ghost-button" onClick={handleSaveDefaults} disabled={bootstrapping || savingDefaults}>
-              {savingDefaults ? 'Saving…' : 'Save settings to strategy'}
+              {savingDefaults ? 'Saving…' : 'Save current strategy'}
             </button>
             <button className="primary-button" onClick={() => runScan(settings)} disabled={loading || bootstrapping}>
               {loading ? 'Running…' : 'Run Scan'}
@@ -332,23 +407,14 @@ export default function App() {
 
         {error ? <div className="error-banner">{error}</div> : null}
 
-        <div className="status-grid">
-          {cards.map((card) => (
-            <div className="status-card" key={card.label}>
-              <div className="status-label">{card.label}</div>
-              <div className="status-value">{card.value}</div>
-            </div>
-          ))}
-        </div>
-
-        <DiagnosticsPanel diagnostics={diagnostics} />
+        <DiagnosticsPanel diagnostics={diagnostics} rows={rows} />
 
         <div className="results-card">
           <div className="results-header">
             <div>
               <h2>Instances</h2>
               <p>
-                Iteration 3 loads saved parameter defaults from bt_strategies and lets you explicitly persist the current settings back to the selected strategy.
+                Strategy instances returned by the current scan and trade simulation.
               </p>
             </div>
           </div>
@@ -364,6 +430,10 @@ export default function App() {
       <SettingsModal
         isOpen={isSettingsOpen}
         settingsDraft={settingsDraft}
+        strategyMetaDraft={strategyMetaDraft}
+        creatingStrategy={creatingStrategy}
+        onStrategyMetaChange={updateStrategyMeta}
+        onCreateStrategy={handleCreateStrategy}
         onChange={updateDraft}
         onClose={() => setIsSettingsOpen(false)}
         onRun={() => runScan(settingsDraft)}
