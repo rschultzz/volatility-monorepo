@@ -105,27 +105,6 @@ function normalizeNumericSettings(nextSettings) {
   };
 }
 
-function summaryText(settings) {
-  if (!settings) return 'No settings loaded';
-
-  return [
-    `${settings.startDate} → ${settings.endDate}`,
-    `min GEX ${settings.minLevelGexBn} BN`,
-    `merge ${settings.zoneMergeDistancePts} pts`,
-    `clean move ${settings.minCleanMovePoints} pts`,
-    `target ±${settings.targetProximityPts}`,
-    `consolidation ${settings.consolidationWindowMinutes}m`,
-    `put ≥ ${settings.shortPutSkewIncreasePct}%`,
-    `call ≤ ${settings.shortCallSkewMaxPct}%`,
-    `entry top ${settings.entryWithinTopPts} pts`,
-    `entry window ${settings.entrySearchWindowMinutes}m`,
-    `stop ${settings.initialStopPts}`,
-    `trail on +${settings.trailActivateProfitPts}`,
-    `trail ${settings.trailingStopPts}`,
-    `tp ${settings.takeProfitPts}`,
-  ].join(' | ');
-}
-
 export default function App() {
   const [strategies, setStrategies] = useState([]);
   const [selectedStrategyKey, setSelectedStrategyKey] = useState('up_move_short');
@@ -161,18 +140,12 @@ export default function App() {
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState(null);
   const [diagnostics, setDiagnostics] = useState(null);
-  const [sourceView, setSourceView] = useState('es_minutes_with_features_bt');
   const [loading, setLoading] = useState(false);
   const [savingDefaults, setSavingDefaults] = useState(false);
   const [creatingStrategy, setCreatingStrategy] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [error, setError] = useState('');
   const [selectedRowKey, setSelectedRowKey] = useState(null);
-  const [activeStrategyMeta, setActiveStrategyMeta] = useState(null);
-
-  const selectedStrategy = useMemo(() => {
-    return strategies.find((item) => item.key === selectedStrategyKey) || activeStrategyMeta || null;
-  }, [activeStrategyMeta, selectedStrategyKey, strategies]);
 
   useEffect(() => {
     localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(columns));
@@ -202,7 +175,6 @@ export default function App() {
 
         setStrategies(nextStrategies);
         setSelectedStrategyKey(defaultKey);
-        setActiveStrategyMeta(defaultStrategy);
         setSettings(defaults);
         setSettingsDraft(defaults);
         setStrategyMetaDraft({
@@ -240,27 +212,22 @@ export default function App() {
     });
   }
 
-  function hydrateFromStrategy(nextStrategy) {
-    const nextDefaults = nextStrategy?.defaults || FALLBACK_DEFAULT_SETTINGS;
-    setActiveStrategyMeta(nextStrategy);
-    setSettings(nextDefaults);
-    setSettingsDraft(nextDefaults);
-    setStrategyMetaDraft({
-      displayName: nextStrategy?.displayName || nextStrategy?.label || '',
-      strategyKey: nextStrategy?.strategyKey || nextStrategy?.key || '',
-      notes: nextStrategy?.notes || '',
-    });
-    setSelectedRowKey(null);
-    setRows([]);
-    setSummary(null);
-    setDiagnostics(null);
-  }
-
   function applyStrategyDefaults(strategyKey) {
     const nextStrategy = strategies.find((item) => item.key === strategyKey);
     setSelectedStrategyKey(strategyKey);
     if (nextStrategy) {
-      hydrateFromStrategy(nextStrategy);
+      const nextDefaults = nextStrategy?.defaults || FALLBACK_DEFAULT_SETTINGS;
+      setSettings(nextDefaults);
+      setSettingsDraft(nextDefaults);
+      setStrategyMetaDraft({
+        displayName: nextStrategy?.displayName || nextStrategy?.label || '',
+        strategyKey: nextStrategy?.strategyKey || nextStrategy?.key || '',
+        notes: nextStrategy?.notes || '',
+      });
+      setSelectedRowKey(null);
+      setRows([]);
+      setSummary(null);
+      setDiagnostics(null);
     }
   }
 
@@ -285,24 +252,13 @@ export default function App() {
         throw new Error(data.error || 'Scan failed');
       }
 
-      const normalizedSettings = data.settings || payload;
-      const nextStrategy = data.strategy || selectedStrategy || null;
-
-      setSettings(normalizedSettings);
-      setSettingsDraft(normalizedSettings);
+      setSettings(data.settings || payload);
+      setSettingsDraft(data.settings || payload);
       setRows(data.rows || []);
       setSummary(data.summary || null);
       setDiagnostics(data.diagnostics || null);
-      setSourceView(data.sourceView || 'es_minutes_with_features_bt');
       setSelectedRowKey(null);
       setIsSettingsOpen(false);
-      setActiveStrategyMeta(nextStrategy);
-      setStrategies((prev) => prev.map((item) => (item.key === nextStrategy?.key ? nextStrategy : item)));
-      setStrategyMetaDraft({
-        displayName: nextStrategy?.displayName || nextStrategy?.label || '',
-        strategyKey: nextStrategy?.strategyKey || nextStrategy?.key || '',
-        notes: nextStrategy?.notes || '',
-      });
     } catch (err) {
       setError(err.message || 'Scan failed');
     } finally {
@@ -334,16 +290,7 @@ export default function App() {
       }
 
       const savedStrategy = data.strategy;
-      setActiveStrategyMeta(savedStrategy);
       setStrategies((prev) => prev.map((item) => (item.key === savedStrategy.key ? savedStrategy : item)));
-      setSettings(savedStrategy.defaults || settingsDraft);
-      setSettingsDraft(savedStrategy.defaults || settingsDraft);
-      setStrategyMetaDraft({
-        displayName: savedStrategy.displayName || savedStrategy.label || '',
-        strategyKey: savedStrategy.strategyKey || savedStrategy.key || '',
-        notes: savedStrategy.notes || '',
-      });
-      setSelectedStrategyKey(savedStrategy.key);
     } catch (err) {
       setError(err.message || 'Could not save strategy');
     } finally {
@@ -375,10 +322,8 @@ export default function App() {
         throw new Error(data.error || 'Could not create strategy');
       }
 
-      const newStrategy = data.strategy;
-      setStrategies((prev) => [...prev, newStrategy]);
-      setSelectedStrategyKey(newStrategy.key);
-      hydrateFromStrategy(newStrategy);
+      setStrategies((prev) => [...prev, data.strategy]);
+      setSelectedStrategyKey(data.strategy.key);
       setIsSettingsOpen(false);
     } catch (err) {
       setError(err.message || 'Could not create strategy');
@@ -417,77 +362,53 @@ export default function App() {
   return (
     <div className="page">
       <div className="workspace-card">
-        <div className="workspace-header">
-          <div>
-            <div className="eyebrow">Surface Dynamics</div>
-            <h1>Backtests</h1>
-            <p className="lead">
-              {selectedStrategy?.description || 'Loading strategy library…'}
-            </p>
+        {error ? <div className="error-banner">{error}</div> : null}
+
+        <div className="results-header" style={{ alignItems: 'center', marginBottom: 0, padding: '4px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1 }}>
+            <select
+              value={selectedStrategyKey}
+              onChange={(e) => applyStrategyDefaults(e.target.value)}
+              disabled={bootstrapping || loading}
+              style={{
+                backgroundColor: '#111827',
+                border: '1px solid #374151',
+                color: 'white',
+                borderRadius: '6px',
+                padding: '6px 10px',
+                fontSize: '13px'
+              }}
+            >
+              {strategies.map((s) => (
+                <option key={s.key} value={s.key}>{s.displayName || s.label}</option>
+              ))}
+            </select>
           </div>
-
-          <div className="header-actions" style={{ alignItems: 'stretch' }}>
-            <div style={{ minWidth: 260, display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ color: '#9ca3af', fontSize: 12 }}>Strategy</div>
-              <select
-                value={selectedStrategyKey}
-                onChange={(e) => applyStrategyDefaults(e.target.value)}
-                disabled={bootstrapping || loading || savingDefaults || creatingStrategy}
-                style={{
-                  minWidth: 260,
-                  backgroundColor: '#111827',
-                  border: '1px solid #374151',
-                  color: 'white',
-                  borderRadius: '8px',
-                  padding: '10px 12px',
-                }}
-              >
-                {strategies.map((strategy) => (
-                  <option key={strategy.key} value={strategy.key}>
-                    {strategy.displayName || strategy.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <button className="ghost-button" onClick={() => setIsSettingsOpen(true)} disabled={bootstrapping}>
+          
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => setIsColumnsOpen(true)}>
+              ⚙️ Columns
+            </button>
+            <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => setIsSettingsOpen(true)}>
               Settings
             </button>
-            <button className="ghost-button" onClick={handleSaveDefaults} disabled={bootstrapping || savingDefaults}>
-              {savingDefaults ? 'Saving…' : 'Save current strategy'}
+            <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={handleSaveDefaults} disabled={savingDefaults}>
+              {savingDefaults ? 'Saving…' : 'Save'}
             </button>
-            <button className="primary-button" onClick={() => runScan(settings)} disabled={loading || bootstrapping}>
+            <button className="primary-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => runScan(settings)} disabled={loading}>
               {loading ? 'Running…' : 'Run Scan'}
             </button>
           </div>
         </div>
 
-        <div className="toolbar-row">
-          {(selectedStrategy?.badges || []).map((badge) => (
-            <div className="pill" key={badge}>{badge}</div>
-          ))}
-          <div className="pill pill-wide">{summaryText(settings)}</div>
-        </div>
-
-        {error ? <div className="error-banner">{error}</div> : null}
-
         <DiagnosticsPanel diagnostics={diagnostics} rows={rows} />
 
-        <div className="results-card">
+        <div className="results-card" style={{ flex: 1 }}>
           <div className="results-header">
-            <div>
-              <h2>Instances</h2>
-              <p>
-                Strategy instances returned by the current scan and trade simulation.
-              </p>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+              <h2 style={{ fontSize: 16 }}>Instances</h2>
+              <span style={{ color: '#64748b', fontSize: 12 }}>{rows.length} trades found</span>
             </div>
-            <button 
-              className="ghost-button" 
-              onClick={() => setIsColumnsOpen(true)}
-              style={{ padding: '6px 10px', fontSize: '12px' }}
-            >
-              ⚙️ Columns
-            </button>
           </div>
 
           <ResultsTable
