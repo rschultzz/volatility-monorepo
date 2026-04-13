@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 
 function fmt(value, digits = 2) {
   if (value === null || value === undefined || value === '') return '—';
@@ -21,7 +21,83 @@ function tradeLabel(row) {
   return row.trade_entry_found ? 'Trade entered' : 'No trade';
 }
 
+const COLUMN_DATA_MAP = {
+  date: 'trade_date',
+  direction: 'direction',
+  source_zone: 'source_zone_low',
+  zone_levels: 'source_zone_levels',
+  start_time: 'start_ts_pt',
+  start_open: 'start_open',
+  pivot_px: 'start_pivot_price',
+  target_time: 'target_ts_pt',
+  target_open: 'target_open',
+  target_level: 'target_level',
+  clean_space: 'clean_space_points',
+  move_pts: 'move_points',
+  bars: 'elapsed_bars',
+  consol_mins: 'consolidation_minutes_observed',
+  setup: 'short_setup_found',
+  signal_time: 'short_signal_ts_pt',
+  signal_px: 'short_signal_price',
+  put_skew: 'short_signal_delta_put_skew_pct',
+  call_skew: 'short_signal_delta_call_skew_pct',
+  trade: 'trade_entry_found',
+  range_high: 'trade_range_high_at_entry',
+  range_low: 'trade_range_low_at_entry',
+  entry_band: 'trade_entry_band_floor',
+  entry_time: 'trade_entry_ts_pt',
+  entry_px: 'trade_entry_price',
+  init_stop: 'trade_initial_stop_price',
+  take_profit: 'trade_take_profit_price',
+  trailing_stop: 'trade_trailing_stop_price',
+  exit_time: 'trade_exit_ts_pt',
+  exit_px: 'trade_exit_price',
+  exit_reason: 'trade_exit_reason',
+  realized_pts: 'trade_realized_points',
+  mfe: 'trade_mfe_points',
+  mae: 'trade_mae_points',
+  outcome: 'trade_outcome',
+  reason: 'short_setup_reason'
+};
+
 export default function ResultsTable({ rows, selectedRowKey, onSelectRow, columns }) {
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
+
+  const handleSort = (colId) => {
+    let direction = 'asc';
+    if (sortConfig.key === colId && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    } else if (sortConfig.key === colId && sortConfig.direction === 'desc') {
+      // Optional: cycle back to no sort
+      setSortConfig({ key: null, direction: 'asc' });
+      return;
+    }
+    setSortConfig({ key: colId, direction });
+  };
+
+  const processedRows = useMemo(() => {
+    let result = [...rows];
+
+    if (sortConfig.key) {
+      const dataKey = COLUMN_DATA_MAP[sortConfig.key];
+      if (dataKey) {
+        result.sort((a, b) => {
+          const aVal = a[dataKey];
+          const bVal = b[dataKey];
+
+          if (aVal === bVal) return 0;
+          if (aVal === null || aVal === undefined) return 1;
+          if (bVal === null || bVal === undefined) return -1;
+
+          const comparison = aVal < bVal ? -1 : 1;
+          return sortConfig.direction === 'asc' ? comparison : -comparison;
+        });
+      }
+    }
+
+    return result;
+  }, [rows, sortConfig]);
+
   if (!rows.length) {
     return (
       <div className="empty-state">
@@ -33,12 +109,11 @@ export default function ResultsTable({ rows, selectedRowKey, onSelectRow, column
   const renderCell = (col, row, idx) => {
     switch (col.id) {
       case 'select':
-        const key = rowKey(row, idx);
         return (
           <input
             type="radio"
             name="bt2-selected-trade"
-            checked={selectedRowKey === key}
+            checked={selectedRowKey === rowKey(row, idx)}
             onChange={() => onSelectRow(row, idx)}
           />
         );
@@ -129,13 +204,31 @@ export default function ResultsTable({ rows, selectedRowKey, onSelectRow, column
       <table className="results-table">
         <thead>
           <tr>
-            {visibleColumns.map(col => (
-              <th key={col.id}>{col.label}</th>
-            ))}
+            {visibleColumns.map(col => {
+              const isSortable = col.id !== 'select';
+              const isSorted = sortConfig.key === col.id;
+              
+              return (
+                <th 
+                  key={col.id}
+                  className={isSortable ? 'sortable-header' : ''}
+                  onClick={() => isSortable && handleSort(col.id)}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    {col.label}
+                    {isSorted && (
+                      <span className="sort-indicator">
+                        {sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}
+                      </span>
+                    )}
+                  </div>
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, idx) => {
+          {processedRows.map((row, idx) => {
             const key = rowKey(row, idx);
             return (
               <tr key={key} className={selectedRowKey === key ? 'selected-row' : ''}>

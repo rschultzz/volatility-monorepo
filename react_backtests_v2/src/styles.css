@@ -296,6 +296,7 @@ h2 {
   text-align: left;
   font-size: 12px;
   letter-spacing: 0.02em;
+  padding-bottom: 12px;
 }
 
 .results-table th,
@@ -305,6 +306,38 @@ h2 {
   white-space: nowrap;
   font-size: 12px;
   vertical-align: top;
+}
+
+.sortable-header {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.sortable-header:hover {
+  background: #1f2937 !important;
+}
+
+.sort-indicator {
+  color: #3b82f6;
+  font-weight: bold;
+}
+
+.filter-input {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 4px 8px;
+  background: #020617;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #e5e7eb;
+}
+
+.filter-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  background: #0f172a;
 }
 
 .results-table tbody tr:hover {
