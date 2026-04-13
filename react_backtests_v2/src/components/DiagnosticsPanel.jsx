@@ -23,7 +23,11 @@ function sortRowsForEquity(rows) {
 }
 
 function computePerformance(rows) {
-  const ordered = sortRowsForEquity(rows)
+  const executedTradeRows = sortRowsForEquity(rows).filter(
+    (row) => row.trade_entry_found && row.trade_realized_points !== null && row.trade_realized_points !== undefined
+  );
+
+  const ordered = executedTradeRows
     .map((row) => Number(row.trade_realized_points))
     .filter((v) => Number.isFinite(v));
 
