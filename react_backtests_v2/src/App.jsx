@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import SettingsModal from './components/SettingsModal';
 import ResultsTable from './components/ResultsTable';
 import DiagnosticsPanel from './components/DiagnosticsPanel';
+import ColumnSettingsModal from './components/ColumnSettingsModal';
 
 function isoDateOffset(days) {
   const d = new Date();
@@ -31,9 +32,47 @@ const FALLBACK_DEFAULT_SETTINGS = {
   takeProfitPts: 20,
 };
 
-function rowKey(row, idx) {
-  return `${row.trade_date}-${row.start_ts_utc}-${row.target_ts_utc}-${idx}`;
-}
+const DEFAULT_COLUMNS = [
+  { id: 'select', label: 'Select', visible: true, alwaysVisible: true },
+  { id: 'date', label: 'Date', visible: true },
+  { id: 'direction', label: 'Dir', visible: true },
+  { id: 'source_zone', label: 'Source Zone', visible: true },
+  { id: 'zone_levels', label: 'Zone Levels', visible: true, className: 'wrap-cell' },
+  { id: 'start_time', label: 'Start Time (PT)', visible: true },
+  { id: 'start_open', label: 'Start Open', visible: true },
+  { id: 'pivot_px', label: 'Pivot Px', visible: true },
+  { id: 'target_time', label: 'Target Time (PT)', visible: true },
+  { id: 'target_open', label: 'Target Open', visible: true },
+  { id: 'target_level', label: 'Target Level', visible: true },
+  { id: 'clean_space', label: 'Clean Space', visible: true },
+  { id: 'move_pts', label: 'Move Pts', visible: true },
+  { id: 'bars', label: 'Bars', visible: true },
+  { id: 'consol_mins', label: 'Consol. Mins', visible: true },
+  { id: 'setup', label: 'Setup', visible: true },
+  { id: 'signal_time', label: 'Signal Time (PT)', visible: true },
+  { id: 'signal_px', label: 'Signal Px', visible: true },
+  { id: 'put_skew', label: 'Δ Put Skew %', visible: true },
+  { id: 'call_skew', label: 'Δ Call Skew %', visible: true },
+  { id: 'trade', label: 'Trade', visible: true },
+  { id: 'range_high', label: 'Range High', visible: true },
+  { id: 'range_low', label: 'Range Low', visible: true },
+  { id: 'entry_band', label: 'Entry Band Floor', visible: true },
+  { id: 'entry_time', label: 'Entry Time (PT)', visible: true },
+  { id: 'entry_px', label: 'Entry Px', visible: true },
+  { id: 'init_stop', label: 'Init Stop', visible: true },
+  { id: 'take_profit', label: 'Take Profit', visible: true },
+  { id: 'trailing_stop', label: 'Trailing Stop', visible: true },
+  { id: 'exit_time', label: 'Exit Time (PT)', visible: true },
+  { id: 'exit_px', label: 'Exit Px', visible: true },
+  { id: 'exit_reason', label: 'Exit Reason', visible: true },
+  { id: 'realized_pts', label: 'Realized Pts', visible: true },
+  { id: 'mfe', label: 'MFE', visible: true },
+  { id: 'mae', label: 'MAE', visible: true },
+  { id: 'outcome', label: 'Outcome', visible: true },
+  { id: 'reason', label: 'Reason', visible: true, className: 'wrap-cell' },
+];
+
+const COLUMNS_STORAGE_KEY = 'bt2-results-table-columns';
 
 function slugify(value) {
   return String(value || '')
@@ -98,6 +137,27 @@ export default function App() {
     notes: '',
   });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isColumnsOpen, setIsColumnsOpen] = useState(false);
+  
+  const [columns, setColumns] = useState(() => {
+    const saved = localStorage.getItem(COLUMNS_STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        const merged = DEFAULT_COLUMNS.map(def => {
+          const found = parsed.find(p => p.id === def.id);
+          return found ? { ...def, ...found } : def;
+        });
+        const sorted = parsed.map(p => merged.find(m => m.id === p.id)).filter(Boolean);
+        const missing = merged.filter(m => !sorted.find(s => s.id === m.id));
+        return [...sorted, ...missing];
+      } catch (e) {
+        return DEFAULT_COLUMNS;
+      }
+    }
+    return DEFAULT_COLUMNS;
+  });
+
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState(null);
   const [diagnostics, setDiagnostics] = useState(null);
@@ -113,6 +173,10 @@ export default function App() {
   const selectedStrategy = useMemo(() => {
     return strategies.find((item) => item.key === selectedStrategyKey) || activeStrategyMeta || null;
   }, [activeStrategyMeta, selectedStrategyKey, strategies]);
+
+  useEffect(() => {
+    localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(columns));
+  }, [columns]);
 
   useEffect(() => {
     let isMounted = true;
@@ -324,7 +388,7 @@ export default function App() {
   }
 
   async function handleSelectRow(row, idx) {
-    const key = rowKey(row, idx);
+    const key = `${row.trade_date}-${row.start_ts_utc}-${row.target_ts_utc}-${idx}`;
     setSelectedRowKey(key);
     setError('');
 
@@ -417,12 +481,20 @@ export default function App() {
                 Strategy instances returned by the current scan and trade simulation.
               </p>
             </div>
+            <button 
+              className="ghost-button" 
+              onClick={() => setIsColumnsOpen(true)}
+              style={{ padding: '6px 10px', fontSize: '12px' }}
+            >
+              ⚙️ Columns
+            </button>
           </div>
 
           <ResultsTable
             rows={rows}
             selectedRowKey={selectedRowKey}
             onSelectRow={handleSelectRow}
+            columns={columns}
           />
         </div>
       </div>
@@ -437,6 +509,13 @@ export default function App() {
         onChange={updateDraft}
         onClose={() => setIsSettingsOpen(false)}
         onRun={() => runScan(settingsDraft)}
+      />
+
+      <ColumnSettingsModal
+        isOpen={isColumnsOpen}
+        onClose={() => setIsColumnsOpen(false)}
+        columns={columns}
+        onUpdateColumns={setColumns}
       />
     </div>
   );

@@ -288,9 +288,9 @@ h2 {
 }
 
 .results-table thead th {
-  position: static;
-  top: auto;
-  z-index: auto;
+  position: sticky;
+  top: 0;
+  z-index: 5;
   background: #111827;
   color: #f8fafc;
   text-align: left;
@@ -444,6 +444,16 @@ h2 {
 .modal-actions {
   justify-content: flex-end;
   margin-top: 18px;
+}
+
+/* Column Settings specific */
+.column-item:hover {
+  background: #111827 !important;
+}
+
+.icon-button:hover {
+  background: #1e293b !important;
+  border-color: #475569 !important;
 }
 
 @media (max-width: 1600px) {
