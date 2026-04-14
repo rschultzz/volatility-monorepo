@@ -40,6 +40,7 @@ from modules.Skew.callbacks import (
 # Import Smile Chart helpers
 from modules.Smile.callbacks import (
     _available_buckets, _bucket_labels_order, _expected_curve_shifted, _years_to_exp,
+    _k_grid_for_row,
     COLORWAY, LIVE_COLOR, MARKET_OPEN, MARKET_CLOSE
 )
 
@@ -1628,7 +1629,7 @@ def _build_react_skew_data_payload(
                 live_row = live_row_df.iloc[0]
                 stock_live = float(live_row.get("stock_price")) if not pd.isna(live_row.get("stock_price")) else None
                 atm_live, call_skew_pp_live, put_skew_pp_live = _skews_from_row(live_row)
-                T_live = _T_from_row_snapshot(live_row, expiration_date)
+                T_live = _years_to_exp(now_et, expiration_date)
 
                 d_atm_pct = _pct_change_frac(atm_live, prev_atm_actual)
                 d_call_pct = _pct_change_pp(call_skew_pp_live, prev_call_skew_pp_actual)
@@ -1652,7 +1653,7 @@ def _build_react_skew_data_payload(
                         k_c25_live = k_for_abs_delta(0.25, is_put=False, sigma=atm_live, T=T_live)
                         k_p25_live = k_for_abs_delta(0.25, is_put=True, sigma=atm_live, T=T_live)
                         exp_c25_shape = _interp_linear_extrap(k_c25_live + k_shift, k_prev, s_prev)
-                        exp_p25_shape = _interp_linear_extrap(k_p25_now + k_shift, k_prev, s_prev) # Fix: should be k_p25_live
+                        exp_p25_shape = _interp_linear_extrap(k_p25_live + k_shift, k_prev, s_prev)
                         shift_frac = atm_exp - exp_atm_shape
                         exp_call_skew_pp = (exp_c25_shape + shift_frac - atm_exp) * 100.0
                         exp_put_skew_pp = (exp_p25_shape + shift_frac - atm_exp) * 100.0
@@ -1753,7 +1754,6 @@ def _build_react_smile_payload(
 
                 prev_row, prev_stock, prev_T = row_now, stock_now, T_now
                 try:
-                    from modules.Smile.callbacks import _k_grid_for_row
                     k_now_ref, _ = _k_grid_for_row(row_now, T_now)
                     if k_now_ref.size >= 2 and stock_now is not None:
                         ref_row, ref_stock, ref_T = row_now, stock_now, T_now
@@ -1782,9 +1782,7 @@ def _build_react_smile_payload(
                     })
 
                     stock_live = float(live_row.get("stock_price")) if not pd.isna(live_row.get("stock_price")) else None
-                    ts_live_val = live_row.get("snapshot_pt")
-                    hhmm_live = ts_live_val if isinstance(ts_live_val, str) else pd.to_datetime(ts_live_val).strftime("%H:%M")
-                    live_T = _years_to_exp(pt_minute_to_et(trade_date, hhmm_live), expiration_date)
+                    live_T = _years_to_exp(now_et, expiration_date)
 
                     if expected_on and ref_row is not None and ref_stock is not None and ref_T is not None and stock_live is not None:
                         try:
@@ -2453,9 +2451,9 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
                 ts = ts.tz_localize(pt_tz)
             else:
                 ts = ts.tz_convert(pt_tz)
+            return ts
         except Exception:
             return None
-        return ts
 
     if isinstance(shared_xrange, dict):
         x0 = _parse_to_pt(shared_xrange.get("x0"))
