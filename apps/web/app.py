@@ -54,6 +54,7 @@ SMILE_TIME_INPUT = "smile-time-input"
 SMILE_GRAPH = "SMILE_GRAPH"
 EXPECTED_TOGGLE_ID = "expected-ss-toggle"
 LIVE_DATA_STORE_ID = "live-data-store"
+LIVE_DATA_MIRROR_ID = "live-data-mirror"
 LIVE_UPDATE_TIMER_ID = "live-update-timer"
 
 BT2_SELECTION_POLL_ID = "bt2-selection-poll"
@@ -173,6 +174,14 @@ VALID_USERNAME_PASSWORD_PAIRS = {
     "sara": "ChangeThisPassword123!",
 }
 auth = dash_auth.BasicAuth(app, VALID_USERNAME_PASSWORD_PAIRS)
+
+# Mirror live data for React preview to read from DOM
+@app.callback(
+    Output(LIVE_DATA_MIRROR_ID, "children"),
+    Input(LIVE_DATA_STORE_ID, "data")
+)
+def mirror_live_data(data):
+    return data
 
 # Mount the React Backtests app + API routes
 register_backtests_v2_routes(server, REPO_ROOT)
@@ -392,6 +401,7 @@ def serve_layout():
     return html.Div(
         [
             dcc.Store(id=LIVE_DATA_STORE_ID),
+            html.Div(id=LIVE_DATA_MIRROR_ID, style={"display": "none"}),
             dcc.Interval(id=LIVE_UPDATE_TIMER_ID, interval=15 * 1000, n_intervals=0),
             dcc.Store(id=BT2_SELECTION_SEQ_ID, data=0),
             dcc.Interval(id=BT2_SELECTION_POLL_ID, interval=750, n_intervals=0),

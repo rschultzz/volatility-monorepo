@@ -1091,9 +1091,9 @@ export default function App() {
           url.searchParams.set('times', selectedTimes.join(','))
         }
 
-        // Live data from parent store if available
+        // Live data from parent mirror if available
         try {
-          const parentData = window.parent?.document?.getElementById('live-data-store')?.textContent
+          const parentData = window.parent?.document?.getElementById('live-data-mirror')?.textContent
           if (parentData) {
             url.searchParams.set('live_data', parentData)
           }
@@ -1157,7 +1157,7 @@ export default function App() {
         }
 
         try {
-          const parentData = window.parent?.document?.getElementById('live-data-store')?.textContent
+          const parentData = window.parent?.document?.getElementById('live-data-mirror')?.textContent
           if (parentData) {
             url.searchParams.set('live_data', parentData)
           }

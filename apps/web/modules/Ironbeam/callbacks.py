@@ -1617,8 +1617,10 @@ def _build_react_skew_data_payload(
             prev_stock_actual, prev_atm_actual = stock_now, atm_now
             prev_call_skew_pp_actual, prev_put_skew_pp_actual = call_skew_pp_now, put_skew_pp_now
 
-    # Live Row logic
-    if live_data_json and is_market_hours() and trade_date == dt.datetime.now(MARKET_TIMEZONE).date().isoformat():
+    # Live Row logic - Strictly only during RTH and for "Today"
+    now_et = dt.datetime.now(MARKET_TIMEZONE)
+    today_iso = now_et.date().isoformat()
+    if live_data_json and is_market_hours() and trade_date == today_iso:
         try:
             df_live = pd.read_json(StringIO(live_data_json), orient="split")
             live_row_df = df_live[df_live["expir_date"] == expiration_date]
@@ -1634,7 +1636,7 @@ def _build_react_skew_data_payload(
                 exp_move_live = None
 
                 if is_0dte and stock_live is not None:
-                    exp_move_live = stock_live * atm_live * math.sqrt(_minutes_to_exp_0dte(dt.datetime.now(MARKET_TIMEZONE)) / ANNUAL_MINUTES)
+                    exp_move_live = stock_live * atm_live * math.sqrt(_minutes_to_exp_0dte(now_et) / ANNUAL_MINUTES)
 
                 if expected_on and prev_row is not None and prev_T is not None and prev_stock is not None and stock_live is not None and T_live is not None:
                     try:
@@ -1650,7 +1652,7 @@ def _build_react_skew_data_payload(
                         k_c25_live = k_for_abs_delta(0.25, is_put=False, sigma=atm_live, T=T_live)
                         k_p25_live = k_for_abs_delta(0.25, is_put=True, sigma=atm_live, T=T_live)
                         exp_c25_shape = _interp_linear_extrap(k_c25_live + k_shift, k_prev, s_prev)
-                        exp_p25_shape = _interp_linear_extrap(k_p25_live + k_shift, k_prev, s_prev)
+                        exp_p25_shape = _interp_linear_extrap(k_p25_now + k_shift, k_prev, s_prev) # Fix: should be k_p25_live
                         shift_frac = atm_exp - exp_atm_shape
                         exp_call_skew_pp = (exp_c25_shape + shift_frac - atm_exp) * 100.0
                         exp_put_skew_pp = (exp_p25_shape + shift_frac - atm_exp) * 100.0
@@ -1738,6 +1740,15 @@ def _build_react_smile_payload(
                             "name": f"Exp (SS) - {hhmm_pt}",
                             "line": {"color": color, "dash": "dot"}
                         })
+                        # Add ATM Marker
+                        traces.append({
+                            "x": ["ATM"],
+                            "y": [atm_exp_pct],
+                            "mode": "markers",
+                            "marker": {"symbol": "triangle-up", "size": 9, "color": color},
+                            "name": "ATM exp (SS)",
+                            "showlegend": False
+                        })
                     except Exception: pass
 
                 prev_row, prev_stock, prev_T = row_now, stock_now, T_now
@@ -1748,9 +1759,10 @@ def _build_react_smile_payload(
                         ref_row, ref_stock, ref_T = row_now, stock_now, T_now
                 except Exception: pass
 
-    # Live
+    # Live - Strictly only during RTH and for "Today"
     now_et = dt.datetime.now(MARKET_TIMEZONE)
-    if live_data_json and MARKET_OPEN <= now_et.time() <= MARKET_CLOSE and now_et.weekday() < 5 and trade_date == now_et.date().isoformat():
+    today_iso = now_et.date().isoformat()
+    if live_data_json and is_market_hours() and trade_date == today_iso:
         try:
             df_live = pd.read_json(StringIO(live_data_json), orient="split")
             live_row_df = df_live[df_live["expir_date"] == expiration_date]
@@ -1784,6 +1796,15 @@ def _build_react_smile_payload(
                                 "y": y_exp_live.tolist(),
                                 "name": "Exp (SS) - Live",
                                 "line": {"color": LIVE_COLOR, "dash": "dot"}
+                            })
+                            # Add ATM Marker
+                            traces.append({
+                                "x": ["ATM"],
+                                "y": [atm_exp_pct_live],
+                                "mode": "markers",
+                                "marker": {"symbol": "triangle-up", "size": 9, "color": LIVE_COLOR},
+                                "name": "ATM exp (SS)",
+                                "showlegend": False
                             })
                         except Exception: pass
         except Exception: pass

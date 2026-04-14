@@ -15,9 +15,15 @@ export default function SmileChart({ data, width, height }) {
     return data.traces.map((tr) => ({
       ...tr,
       type: 'scatter',
-      mode: tr.mode || 'lines+markers',
-      marker: { ...tr.marker, size: 4 },
-      line: { ...tr.line, width: tr.line?.width || 1.5 },
+      mode: tr.mode || (tr.x?.length === 1 ? 'markers' : 'lines+markers'),
+      marker: { 
+        ...tr.marker, 
+        size: tr.marker?.size || 4 
+      },
+      line: { 
+        ...tr.line, 
+        width: tr.line?.width || 1.5 
+      },
     }))
   }, [data])
 

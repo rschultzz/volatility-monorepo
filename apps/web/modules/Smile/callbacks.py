@@ -9,7 +9,7 @@ import plotly.graph_objs as go
 from dash import Input, Output
 import pytz
 
-from packages.shared.utils import fetch_live_orats_data, fetch_data_from_db
+from packages.shared.utils import fetch_live_orats_data, fetch_data_from_db, is_market_hours
 from packages.shared.surface_compare import k_for_abs_delta
 from packages.shared.options_orats import pt_minute_to_et
 
@@ -224,6 +224,10 @@ def register_callbacks(app):
         Input(LIVE_UPDATE_TIMER_ID, "n_intervals"),
     )
     def update_live_data(n):
+        # Proactively only fetch during market hours to keep the store clean outside RTH
+        if not is_market_hours():
+            return None
+            
         df_live = fetch_live_orats_data()
         if df_live is not None and not df_live.empty:
             return df_live.to_json(orient="split")
@@ -369,9 +373,8 @@ def register_callbacks(app):
         # --------- Live slice from ORATS API ---------
         now_et = dt.datetime.now(MARKET_TIMEZONE)
         today_iso = now_et.date().isoformat()
-        is_market_hours = MARKET_OPEN <= now_et.time() <= MARKET_CLOSE and now_et.weekday() < 5
 
-        if live_data_json and is_market_hours and trade_date_iso == today_iso:
+        if live_data_json and is_market_hours() and trade_date_iso == today_iso:
             df_live = pd.read_json(live_data_json, orient="split")
             if df_live is not None and not df_live.empty:
                 live_row_df = df_live[df_live["expir_date"] == expiration_iso]
