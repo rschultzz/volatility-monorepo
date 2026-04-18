@@ -740,6 +740,85 @@ def _simulate_short_trade_from_signal(
     }
 
 
+def _compute_prior_move_context(
+    day_rows: List[Dict[str, Any]],
+    pivot_idx: int,
+    pivot_price: float,
+    up_move_pts: float,
+) -> Dict[str, Any]:
+    """
+    Look back from the start of the up move (pivot_idx) across the session so far
+    and compute three context features that characterise prior trend:
+
+    prior_session_down_pts
+        The largest peak-to-trough down move that completed *before* pivot_idx.
+        Computed as the maximum (peak_high - subsequent_low) over a rolling window
+        of all RTH bars up to and including pivot_idx.
+
+    prior_down_vs_up_ratio
+        prior_session_down_pts / up_move_pts.
+        > 1.0 means the prior down move was larger than the up move we are about
+        to fade — the "bounce off the lows" warning signal.
+
+    start_pct_of_session_range
+        Where pivot_price sits within the session high/low range observed up to
+        pivot_idx.  0.0 = at the session low, 1.0 = at the session high.
+        A low value (e.g. < 0.25) means we are still near the bottom of the day's
+        range — another bounce indicator.
+    """
+    empty: Dict[str, Any] = {
+        "prior_session_down_pts": None,
+        "prior_down_vs_up_ratio": None,
+        "start_pct_of_session_range": None,
+    }
+
+    if pivot_idx <= 0 or up_move_pts <= 0:
+        return empty
+
+    prior_rows = day_rows[: pivot_idx + 1]
+
+    # Session range up to pivot
+    try:
+        session_high = max(float(r["high"]) for r in prior_rows if r.get("high") is not None)
+        session_low = min(float(r["low"]) for r in prior_rows if r.get("low") is not None)
+    except (ValueError, TypeError):
+        return empty
+
+    session_range = session_high - session_low
+    if session_range <= 0:
+        start_pct = None
+    else:
+        start_pct = round((pivot_price - session_low) / session_range, 3)
+
+    # Largest prior down move: rolling peak → trough
+    max_down = 0.0
+    running_peak = float(prior_rows[0]["high"]) if prior_rows[0].get("high") is not None else None
+
+    for r in prior_rows:
+        h = r.get("high")
+        lo = r.get("low")
+        if h is None or lo is None:
+            continue
+        h_f = float(h)
+        lo_f = float(lo)
+        if running_peak is None:
+            running_peak = h_f
+        else:
+            running_peak = max(running_peak, h_f)
+        drawdown = running_peak - lo_f
+        if drawdown > max_down:
+            max_down = drawdown
+
+    prior_down_pts = round(max_down, 2) if max_down > 0 else None
+    ratio = round(max_down / up_move_pts, 3) if (prior_down_pts is not None and up_move_pts > 0) else None
+
+    return {
+        "prior_session_down_pts": prior_down_pts,
+        "prior_down_vs_up_ratio": ratio,
+        "start_pct_of_session_range": start_pct,
+    }
+
+
 def _evaluate_up_short_setup(
     *,
     trade_date: dt.date,
@@ -757,6 +836,9 @@ def _evaluate_up_short_setup(
     trail_activate_profit_pts: float,
     trailing_stop_pts: float,
     take_profit_pts: float,
+    prior_ctx: Dict[str, Any],
+    max_prior_down_up_ratio: float,
+    max_start_pct_of_range: float,
 ) -> Dict[str, Any]:
     default = {
         "consolidation_minutes_observed": 0,
@@ -770,6 +852,18 @@ def _evaluate_up_short_setup(
         "short_setup_reason": "not_evaluated",
         **_make_default_trade_fields("setup_not_hit"),
     }
+
+    # --- Prior context filter ---
+    # Row still appears in results (for visibility/labeling), but no trade is
+    # entered. The reason string makes it easy to filter in the table later.
+    ratio = prior_ctx.get("prior_down_vs_up_ratio")
+    start_pct = prior_ctx.get("start_pct_of_session_range")
+    ratio_breached = ratio is not None and float(ratio) > float(max_prior_down_up_ratio)
+    pct_breached = start_pct is not None and float(start_pct) < float(max_start_pct_of_range)
+    if ratio_breached and pct_breached:
+        default["short_setup_reason"] = "prior_context_invalidated"
+        default["trade_entry_reason"] = "prior_context_invalidated"
+        return default
 
     acceptance_rows = _find_target_acceptance_rows(
         day_rows=day_rows,
@@ -904,6 +998,8 @@ def _day_zone_results(
     trail_activate_profit_pts: float,
     trailing_stop_pts: float,
     take_profit_pts: float,
+    max_prior_down_up_ratio: float,
+    max_start_pct_of_range: float,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     qualifying_levels = _collect_day_levels(day_rows, level_family, min_level_gex_bn)
     zones = _build_zones(qualifying_levels, zone_merge_distance_pts)
@@ -970,6 +1066,13 @@ def _day_zone_results(
                     target_open = target_row.get("open")
                     move_points = float(target_zone_up["low"]) - float(pivot_price)
 
+                    prior_ctx = _compute_prior_move_context(
+                        day_rows,
+                        pivot_idx=pivot_idx,
+                        pivot_price=pivot_price,
+                        up_move_pts=float(move_points),
+                    )
+
                     setup_eval = _evaluate_up_short_setup(
                         trade_date=trade_date,
                         day_rows=day_rows,
@@ -986,6 +1089,9 @@ def _day_zone_results(
                         trail_activate_profit_pts=trail_activate_profit_pts,
                         trailing_stop_pts=trailing_stop_pts,
                         take_profit_pts=take_profit_pts,
+                        prior_ctx=prior_ctx,
+                        max_prior_down_up_ratio=max_prior_down_up_ratio,
+                        max_start_pct_of_range=max_start_pct_of_range,
                     )
 
                     row_out = {
@@ -1009,6 +1115,7 @@ def _day_zone_results(
                         "target_trigger_price": round(float(target_zone_up["low"]) - float(target_proximity_pts), 2),
                         "move_points": round(float(move_points), 2),
                         "elapsed_bars": int(hit_idx - pivot_idx),
+                        **prior_ctx,
                         **setup_eval,
                     }
                     results.append(row_out)
@@ -1142,6 +1249,8 @@ def scan_gex_level_moves(
     trail_activate_profit_pts: float,
     trailing_stop_pts: float,
     take_profit_pts: float,
+    max_prior_down_up_ratio: float = 2.0,
+    max_start_pct_of_range: float = 0.20,
     source_view: str | None = None,
 ) -> Dict[str, Any]:
     level_family = (level_family or "primary").strip().lower()
@@ -1216,6 +1325,8 @@ def scan_gex_level_moves(
             trail_activate_profit_pts=float(trail_activate_profit_pts),
             trailing_stop_pts=float(trailing_stop_pts),
             take_profit_pts=float(take_profit_pts),
+            max_prior_down_up_ratio=float(max_prior_down_up_ratio),
+            max_start_pct_of_range=float(max_start_pct_of_range),
         )
         results.extend(day_results)
 

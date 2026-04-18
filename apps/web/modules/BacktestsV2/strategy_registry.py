@@ -35,6 +35,8 @@ def _base_defaults() -> Dict[str, Any]:
         "trailActivateProfitPts": 10,
         "trailingStopPts": 6,
         "takeProfitPts": 20,
+        "maxPriorDownUpRatio": 2.0,
+        "maxStartPctOfRange": 0.20,
     }
 
 

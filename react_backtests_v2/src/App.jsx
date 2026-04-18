@@ -30,6 +30,8 @@ const FALLBACK_DEFAULT_SETTINGS = {
   trailActivateProfitPts: 10,
   trailingStopPts: 6,
   takeProfitPts: 20,
+  maxPriorDownUpRatio: 2.0,
+  maxStartPctOfRange: 0.20,
 };
 
 const DEFAULT_COLUMNS = [
@@ -70,6 +72,9 @@ const DEFAULT_COLUMNS = [
   { id: 'mae', label: 'MAE', visible: true },
   { id: 'outcome', label: 'Outcome', visible: true },
   { id: 'reason', label: 'Reason', visible: true, className: 'wrap-cell' },
+  { id: 'prior_down_pts', label: 'Prior Down (pts)', visible: true },
+  { id: 'prior_down_ratio', label: 'Down/Up Ratio', visible: true },
+  { id: 'start_pct_range', label: 'Start % of Range', visible: true },
 ];
 
 const COLUMNS_STORAGE_KEY = 'bt2-results-table-columns';
@@ -102,6 +107,8 @@ function normalizeNumericSettings(nextSettings) {
     trailActivateProfitPts: Number(nextSettings.trailActivateProfitPts),
     trailingStopPts: Number(nextSettings.trailingStopPts),
     takeProfitPts: Number(nextSettings.takeProfitPts),
+    maxPriorDownUpRatio: Number(nextSettings.maxPriorDownUpRatio),
+    maxStartPctOfRange: Number(nextSettings.maxStartPctOfRange),
   };
 }
 

@@ -247,6 +247,29 @@ export default function SettingsModal({
             />
           </label>
 
+          <label className="field">
+            <span>Prior context: max down/up ratio</span>
+            <input
+              type="number"
+              step="0.1"
+              min="0"
+              value={settingsDraft.maxPriorDownUpRatio}
+              onChange={(e) => onChange('maxPriorDownUpRatio', e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Prior context: max start % of range</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              max="1"
+              value={settingsDraft.maxStartPctOfRange}
+              onChange={(e) => onChange('maxStartPctOfRange', e.target.value)}
+            />
+          </label>
+
           <label className="field field-wide">
             <span>Maximum results</span>
             <input

@@ -57,7 +57,10 @@ const COLUMN_DATA_MAP = {
   mfe: 'trade_mfe_points',
   mae: 'trade_mae_points',
   outcome: 'trade_outcome',
-  reason: 'short_setup_reason'
+  reason: 'short_setup_reason',
+  prior_down_pts: 'prior_session_down_pts',
+  prior_down_ratio: 'prior_down_vs_up_ratio',
+  start_pct_range: 'start_pct_of_session_range',
 };
 
 export default function ResultsTable({ rows, selectedRowKey, onSelectRow, columns }) {
@@ -193,6 +196,19 @@ export default function ResultsTable({ rows, selectedRowKey, onSelectRow, column
       case 'mae': return fmt(row.trade_mae_points);
       case 'outcome': return row.trade_outcome || '—';
       case 'reason': return row.short_setup_reason || '—';
+      case 'prior_down_pts': return fmt(row.prior_session_down_pts);
+      case 'prior_down_ratio': {
+        const ratio = row.prior_down_vs_up_ratio;
+        if (ratio === null || ratio === undefined) return '—';
+        const color = ratio > 1.5 ? '#fca5a5' : ratio > 1.0 ? '#fcd34d' : '#86efac';
+        return <span style={{ color, fontWeight: 700 }}>{fmt(ratio, 2)}</span>;
+      }
+      case 'start_pct_range': {
+        const pct = row.start_pct_of_session_range;
+        if (pct === null || pct === undefined) return '—';
+        const color = pct < 0.25 ? '#fca5a5' : pct < 0.45 ? '#fcd34d' : '#86efac';
+        return <span style={{ color }}>{(pct * 100).toFixed(1)}%</span>;
+      }
       default: return null;
     }
   };
