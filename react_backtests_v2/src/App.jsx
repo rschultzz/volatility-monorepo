@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import SettingsModal from './components/SettingsModal';
 import ResultsTable from './components/ResultsTable';
 import DiagnosticsPanel from './components/DiagnosticsPanel';
@@ -117,6 +117,7 @@ function normalizeNumericSettings(nextSettings) {
 }
 
 export default function App() {
+  const tableRef = useRef();
   const [strategies, setStrategies] = useState([]);
   const [selectedStrategyKey, setSelectedStrategyKey] = useState('up_move_short');
   const [settings, setSettings] = useState(FALLBACK_DEFAULT_SETTINGS);
@@ -419,10 +420,26 @@ export default function App() {
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
               <h2 style={{ fontSize: 16 }}>Instances</h2>
               <span style={{ color: '#64748b', fontSize: 12 }}>{rows.length} trades found</span>
+              <button 
+                className="ghost-button" 
+                style={{ 
+                  padding: '4px 10px', 
+                  fontSize: '12px', 
+                  marginLeft: '4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }} 
+                onClick={() => tableRef.current?.downloadCSV()}
+                disabled={!rows.length}
+              >
+                📥 CSV
+              </button>
             </div>
           </div>
 
           <ResultsTable
+            ref={tableRef}
             rows={rows}
             selectedRowKey={selectedRowKey}
             onSelectRow={handleSelectRow}
