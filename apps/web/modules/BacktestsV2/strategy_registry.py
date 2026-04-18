@@ -37,6 +37,7 @@ def _base_defaults() -> Dict[str, Any]:
         "takeProfitPts": 20,
         "maxPriorDownUpRatio": 2.0,
         "maxStartPctOfRange": 0.20,
+        "maxMoveLossPct": 0.75,
     }
 
 

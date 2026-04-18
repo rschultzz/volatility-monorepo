@@ -464,6 +464,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 take_profit_pts=float(settings["takeProfitPts"]),
                 max_prior_down_up_ratio=float(settings.get("maxPriorDownUpRatio", 2.0)),
                 max_start_pct_of_range=float(settings.get("maxStartPctOfRange", 0.20)),
+                max_move_loss_pct=float(settings.get("maxMoveLossPct", 0.75)),
                 source_view=DEFAULT_SOURCE_VIEW,
             )
 

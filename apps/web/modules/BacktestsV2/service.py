@@ -575,6 +575,104 @@ def _find_target_acceptance_rows(
     return []
 
 
+def _observe_consolidation_range(
+    *,
+    day_rows: List[Dict[str, Any]],
+    start_idx: int,
+    consolidation_window_minutes: int,
+    wall_high: float,
+    max_zone_breach_pts: float,
+    pivot_price: float,
+    move_points: float,
+    max_move_loss_pct: float,
+) -> Dict[str, Any]:
+    """
+    Observe bars from start_idx for up to consolidation_window_minutes, building
+    the true consolidation range freely. No proximity-to-level constraint.
+
+    Three outcomes per bar:
+      - PROMOTE: close > wall_high + max_zone_breach_pts
+                 Price pushed above the wall — range discarded, caller should
+                 advance to next GEX wall and restart with a fresh clock.
+      - INVALIDATE: close < pivot_price + move_points * (1 - max_move_loss_pct)
+                    75%+ of the move has been given back — setup is dead.
+      - CONTINUE: neither trigger — keep building range.
+
+    After consolidation_window_minutes bars with no trigger, range is confirmed.
+
+    Returns dict with:
+      status        — 'confirmed' | 'promoted' | 'invalidated' | 'insufficient'
+      rows          — all bars observed
+      range_high    — highest high seen
+      range_low     — lowest low seen
+      bars_observed — count
+      promote_idx   — bar index in day_rows where promotion triggered (or None)
+    """
+    max_bars = max(1, int(consolidation_window_minutes))
+    end_idx = min(len(day_rows) - 1, start_idx + max_bars - 1)
+
+    invalidation_floor = float(pivot_price) + float(move_points) * (1.0 - float(max_move_loss_pct))
+    breach_ceiling = float(wall_high) + float(max_zone_breach_pts)
+
+    observed: List[Dict[str, Any]] = []
+    range_high: Optional[float] = None
+    range_low: Optional[float] = None
+
+    for i in range(start_idx, end_idx + 1):
+        row = day_rows[i]
+        high_v = row.get("high")
+        low_v = row.get("low")
+        close_v = row.get("close")
+
+        if high_v is not None and low_v is not None:
+            h = float(high_v)
+            lo = float(low_v)
+            range_high = h if range_high is None else max(range_high, h)
+            range_low = lo if range_low is None else min(range_low, lo)
+
+        observed.append(row)
+
+        if close_v is not None:
+            c = float(close_v)
+            if c > breach_ceiling:
+                return {
+                    "status": "promoted",
+                    "rows": observed,
+                    "range_high": range_high,
+                    "range_low": range_low,
+                    "bars_observed": len(observed),
+                    "promote_idx": i,
+                }
+            if c < invalidation_floor:
+                return {
+                    "status": "invalidated",
+                    "rows": observed,
+                    "range_high": range_high,
+                    "range_low": range_low,
+                    "bars_observed": len(observed),
+                    "promote_idx": None,
+                }
+
+    if len(observed) < max_bars:
+        return {
+            "status": "insufficient",
+            "rows": observed,
+            "range_high": range_high,
+            "range_low": range_low,
+            "bars_observed": len(observed),
+            "promote_idx": None,
+        }
+
+    return {
+        "status": "confirmed",
+        "rows": observed,
+        "range_high": range_high,
+        "range_low": range_low,
+        "bars_observed": len(observed),
+        "promote_idx": None,
+    }
+
+
 def _make_default_trade_fields(trade_reason: str = "not_evaluated") -> Dict[str, Any]:
     return {
         "trade_entry_found": False,
@@ -603,6 +701,8 @@ def _simulate_short_trade_from_signal(
     day_rows: List[Dict[str, Any]],
     signal_idx: int,
     seed_rows: List[Dict[str, Any]],
+    confirmed_range_high: Optional[float],
+    consolidation_end_idx: int,
     entry_within_top_pts: float,
     entry_search_window_minutes: int,
     initial_stop_pts: float,
@@ -616,10 +716,17 @@ def _simulate_short_trade_from_signal(
         default["trade_entry_reason"] = "invalid_signal_index"
         return default
 
-    range_high = max(float(r["high"]) for r in seed_rows if r.get("high") is not None)
-    range_low = min(float(r["low"]) for r in seed_rows if r.get("low") is not None)
+    seed_high = max(float(r["high"]) for r in seed_rows if r.get("high") is not None)
+    seed_low = min(float(r["low"]) for r in seed_rows if r.get("low") is not None)
+    # Use the confirmed full-range high if provided — this ensures the entry band
+    # is anchored to the true range top even if the skew signal fired early.
+    range_high = confirmed_range_high if confirmed_range_high is not None else seed_high
+    range_low = seed_low
 
-    search_end_idx = min(len(day_rows) - 1, signal_idx + max(1, int(entry_search_window_minutes)) - 1)
+    # Entry search begins after consolidation window closes, not at signal time.
+    # Signal may fire during consolidation but entry must wait until range is proven.
+    entry_search_start = max(signal_idx, consolidation_end_idx + 1)
+    search_end_idx = min(len(day_rows) - 1, entry_search_start + max(1, int(entry_search_window_minutes)) - 1)
 
     entry_idx: Optional[int] = None
     entry_price: Optional[float] = None
@@ -627,7 +734,7 @@ def _simulate_short_trade_from_signal(
     range_high_at_entry: Optional[float] = None
     range_low_at_entry: Optional[float] = None
 
-    for j in range(signal_idx, search_end_idx + 1):
+    for j in range(entry_search_start, search_end_idx + 1):
         row = day_rows[j]
         if row.get("high") is None or row.get("low") is None:
             continue
@@ -826,7 +933,6 @@ def _evaluate_up_short_setup(
     entry_idx: int,
     target_hit_idx: int,
     target_level: float,
-    target_proximity_pts: float,
     consolidation_window_minutes: int,
     short_put_skew_increase_pct: float,
     short_call_skew_max_pct: float,
@@ -839,6 +945,8 @@ def _evaluate_up_short_setup(
     prior_ctx: Dict[str, Any],
     max_prior_down_up_ratio: float,
     max_start_pct_of_range: float,
+    observed_rows: List[Dict[str, Any]],
+    confirmed_range_high: Optional[float],
 ) -> Dict[str, Any]:
     default = {
         "consolidation_minutes_observed": 0,
@@ -854,8 +962,6 @@ def _evaluate_up_short_setup(
     }
 
     # --- Prior context filter ---
-    # Row still appears in results (for visibility/labeling), but no trade is
-    # entered. The reason string makes it easy to filter in the table later.
     ratio = prior_ctx.get("prior_down_vs_up_ratio")
     start_pct = prior_ctx.get("start_pct_of_session_range")
     ratio_breached = ratio is not None and float(ratio) > float(max_prior_down_up_ratio)
@@ -865,27 +971,20 @@ def _evaluate_up_short_setup(
         default["trade_entry_reason"] = "prior_context_invalidated"
         return default
 
-    acceptance_rows = _find_target_acceptance_rows(
-        day_rows=day_rows,
-        target_hit_idx=target_hit_idx,
-        target_level=target_level,
-        target_proximity_pts=target_proximity_pts,
-        consolidation_window_minutes=consolidation_window_minutes,
-    )
-
-    if not acceptance_rows:
+    # Range is pre-built by _observe_consolidation_range in _day_zone_results
+    if not observed_rows:
         default["short_setup_reason"] = "no_target_consolidation"
         default["trade_entry_reason"] = "no_setup"
         return default
 
     entry_ts_pt = _normalize_pt_label(day_rows[entry_idx].get("ts_pt"))
-    acceptance_times = [_normalize_pt_label(r.get("ts_pt")) for r in acceptance_rows]
+    acceptance_times = [_normalize_pt_label(r.get("ts_pt")) for r in observed_rows]
     skew_times = [entry_ts_pt] + acceptance_times
 
     skew_df = _fetch_skew_rows_for_times(str(trade_date), str(trade_date), skew_times)
     if skew_df.empty:
-        default["consolidation_minutes_observed"] = len(acceptance_rows)
-        default["consolidation_end_ts_pt"] = _normalize_pt_label(acceptance_rows[-1].get("ts_pt"))
+        default["consolidation_minutes_observed"] = len(observed_rows)
+        default["consolidation_end_ts_pt"] = _normalize_pt_label(observed_rows[-1].get("ts_pt"))
         default["short_setup_reason"] = "no_skew_data"
         default["trade_entry_reason"] = "no_setup"
         return default
@@ -898,8 +997,8 @@ def _evaluate_up_short_setup(
 
     entry_skew_row = by_label.get(entry_ts_pt)
     if entry_skew_row is None:
-        default["consolidation_minutes_observed"] = len(acceptance_rows)
-        default["consolidation_end_ts_pt"] = _normalize_pt_label(acceptance_rows[-1].get("ts_pt"))
+        default["consolidation_minutes_observed"] = len(observed_rows)
+        default["consolidation_end_ts_pt"] = _normalize_pt_label(observed_rows[-1].get("ts_pt"))
         default["short_setup_reason"] = "missing_entry_skew"
         default["trade_entry_reason"] = "no_setup"
         return default
@@ -910,7 +1009,7 @@ def _evaluate_up_short_setup(
         "delta_put_skew_pct": None,
     }
 
-    for i, row in enumerate(acceptance_rows):
+    for i, row in enumerate(observed_rows):
         label = _normalize_pt_label(row.get("ts_pt"))
         curr_skew_row = by_label.get(label)
         if curr_skew_row is None:
@@ -937,11 +1036,26 @@ def _evaluate_up_short_setup(
                 -1,
             )
 
-            seed_rows = acceptance_rows[: i + 1]
+            seed_rows = observed_rows[: i + 1]
+
+            # Find the day_rows index of the last consolidation bar so the
+            # entry search starts after the window closes.
+            last_consol_ts = _normalize_pt_label(observed_rows[-1].get("ts_pt"))
+            consolidation_end_idx = next(
+                (
+                    idx
+                    for idx in range(target_hit_idx, len(day_rows))
+                    if _normalize_pt_label(day_rows[idx].get("ts_pt")) == last_consol_ts
+                ),
+                signal_day_idx,
+            )
+
             trade_eval = _simulate_short_trade_from_signal(
                 day_rows=day_rows,
                 signal_idx=signal_day_idx,
                 seed_rows=seed_rows,
+                confirmed_range_high=confirmed_range_high,
+                consolidation_end_idx=consolidation_end_idx,
                 entry_within_top_pts=entry_within_top_pts,
                 entry_search_window_minutes=entry_search_window_minutes,
                 initial_stop_pts=initial_stop_pts,
@@ -951,8 +1065,8 @@ def _evaluate_up_short_setup(
             )
 
             return {
-                "consolidation_minutes_observed": len(acceptance_rows),
-                "consolidation_end_ts_pt": _normalize_pt_label(acceptance_rows[-1].get("ts_pt")),
+                "consolidation_minutes_observed": len(observed_rows),
+                "consolidation_end_ts_pt": _normalize_pt_label(observed_rows[-1].get("ts_pt")),
                 "short_setup_found": True,
                 "short_signal_ts_pt": signal_label,
                 "short_signal_price": signal_price,
@@ -964,8 +1078,8 @@ def _evaluate_up_short_setup(
             }
 
     return {
-        "consolidation_minutes_observed": len(acceptance_rows),
-        "consolidation_end_ts_pt": _normalize_pt_label(acceptance_rows[-1].get("ts_pt")),
+        "consolidation_minutes_observed": len(observed_rows),
+        "consolidation_end_ts_pt": _normalize_pt_label(observed_rows[-1].get("ts_pt")),
         "short_setup_found": False,
         "short_signal_ts_pt": None,
         "short_signal_price": None,
@@ -1000,6 +1114,7 @@ def _day_zone_results(
     take_profit_pts: float,
     max_prior_down_up_ratio: float,
     max_start_pct_of_range: float,
+    max_move_loss_pct: float,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     qualifying_levels = _collect_day_levels(day_rows, level_family, min_level_gex_bn)
     zones = _build_zones(qualifying_levels, zone_merge_distance_pts)
@@ -1037,20 +1152,32 @@ def _day_zone_results(
         episodes = _true_segments(masks)
 
         if zone_idx < len(zones) - 1:
-            target_zone_up = zones[zone_idx + 1]
-            clean_space_up = float(target_zone_up["low"]) - float(zone["high"])
-            if clean_space_up >= float(min_clean_move_points):
-                diagnostics["source_zones_with_clean_targets"] += 1
-                for seg_start, seg_end in episodes:
-                    diagnostics["zone_episodes_considered"] += 1
-                    seg_min_low = min(float(day_rows[i]["low"]) for i in range(seg_start, seg_end + 1))
-                    if seg_min_low < float(zone["low"]) - float(max_zone_breach_pts):
+            # Gather all zones above as potential targets
+            candidate_target_zone_indices = list(range(zone_idx + 1, len(zones)))
+
+            for seg_start, seg_end in episodes:
+                diagnostics["zone_episodes_considered"] += 1
+                seg_min_low = min(float(day_rows[i]["low"]) for i in range(seg_start, seg_end + 1))
+                if seg_min_low < float(zone["low"]) - float(max_zone_breach_pts):
+                    continue
+
+                pivot_idx, pivot_price = _find_last_pivot(day_rows, seg_start, seg_end, "up", pivot_strength_bars)
+
+                # Walk up through candidate target zones, promoting if price
+                # pushes through a wall before consolidating.
+                scan_from_idx = seg_end + 1
+                for target_zone_offset, t_zone_idx in enumerate(candidate_target_zone_indices):
+                    target_zone_up = zones[t_zone_idx]
+                    clean_space_up = float(target_zone_up["low"]) - float(zone["high"])
+                    if clean_space_up < float(min_clean_move_points):
                         continue
 
-                    pivot_idx, pivot_price = _find_last_pivot(day_rows, seg_start, seg_end, "up", pivot_strength_bars)
+                    if target_zone_offset == 0:
+                        diagnostics["source_zones_with_clean_targets"] += 1
+
                     hit_idx = _first_target_hit(
                         day_rows,
-                        start_scan_idx=seg_end + 1,
+                        start_scan_idx=scan_from_idx,
                         direction="up",
                         zone=zone,
                         target_level=float(target_zone_up["low"]),
@@ -1058,13 +1185,40 @@ def _day_zone_results(
                         max_zone_breach_pts=max_zone_breach_pts,
                     )
                     if hit_idx is None:
+                        break
+
+                    move_points = float(target_zone_up["low"]) - float(pivot_price)
+
+                    # Observe the consolidation window from the moment of target hit.
+                    # If price promotes (pushes above the wall), advance to the next
+                    # GEX zone and restart with a fresh clock from promote_idx.
+                    obs = _observe_consolidation_range(
+                        day_rows=day_rows,
+                        start_idx=hit_idx,
+                        consolidation_window_minutes=consolidation_window_minutes,
+                        wall_high=float(target_zone_up["high"]),
+                        max_zone_breach_pts=float(max_zone_breach_pts),
+                        pivot_price=float(pivot_price),
+                        move_points=float(move_points),
+                        max_move_loss_pct=float(max_move_loss_pct),
+                    )
+
+                    if obs["status"] == "promoted":
+                        # Price pushed through this wall — try next zone up.
+                        # Reset scan start to the bar that triggered promotion.
+                        scan_from_idx = obs["promote_idx"]
                         continue
 
+                    if obs["status"] in ("invalidated", "insufficient"):
+                        # Move gave back too much or ran out of day — no setup.
+                        break
+
+                    # status == "confirmed" — range is locked, evaluate setup.
+                    observed_rows = obs["rows"]
                     start_row = day_rows[pivot_idx]
                     target_row = day_rows[hit_idx]
                     start_open = start_row.get("open")
                     target_open = target_row.get("open")
-                    move_points = float(target_zone_up["low"]) - float(pivot_price)
 
                     prior_ctx = _compute_prior_move_context(
                         day_rows,
@@ -1079,7 +1233,6 @@ def _day_zone_results(
                         entry_idx=pivot_idx,
                         target_hit_idx=hit_idx,
                         target_level=float(target_zone_up["low"]),
-                        target_proximity_pts=target_proximity_pts,
                         consolidation_window_minutes=consolidation_window_minutes,
                         short_put_skew_increase_pct=short_put_skew_increase_pct,
                         short_call_skew_max_pct=short_call_skew_max_pct,
@@ -1092,6 +1245,8 @@ def _day_zone_results(
                         prior_ctx=prior_ctx,
                         max_prior_down_up_ratio=max_prior_down_up_ratio,
                         max_start_pct_of_range=max_start_pct_of_range,
+                        observed_rows=observed_rows,
+                        confirmed_range_high=obs["range_high"],
                     )
 
                     row_out = {
@@ -1156,6 +1311,9 @@ def _day_zone_results(
 
                     if len(results) >= int(max_results):
                         return results, diagnostics
+
+                    # Range confirmed and result recorded — stop walking up zones.
+                    break
 
         if zone_idx > 0:
             target_zone_down = zones[zone_idx - 1]
@@ -1251,6 +1409,7 @@ def scan_gex_level_moves(
     take_profit_pts: float,
     max_prior_down_up_ratio: float = 2.0,
     max_start_pct_of_range: float = 0.20,
+    max_move_loss_pct: float = 0.75,
     source_view: str | None = None,
 ) -> Dict[str, Any]:
     level_family = (level_family or "primary").strip().lower()
@@ -1327,6 +1486,7 @@ def scan_gex_level_moves(
             take_profit_pts=float(take_profit_pts),
             max_prior_down_up_ratio=float(max_prior_down_up_ratio),
             max_start_pct_of_range=float(max_start_pct_of_range),
+            max_move_loss_pct=float(max_move_loss_pct),
         )
         results.extend(day_results)
 

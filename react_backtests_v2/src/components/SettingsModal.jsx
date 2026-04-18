@@ -270,6 +270,21 @@ export default function SettingsModal({
             />
           </label>
 
+          <label className="field">
+            <span>Max move loss before invalidation</span>
+            <input
+              type="number"
+              step="0.05"
+              min="0"
+              max="1"
+              value={settingsDraft.maxMoveLossPct}
+              onChange={(e) => onChange('maxMoveLossPct', e.target.value)}
+            />
+            <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '4px' }}>
+              If price gives back this fraction of the up move during consolidation, the setup is invalidated. Default 0.75 = 75%.
+            </div>
+          </label>
+
           <label className="field field-wide">
             <span>Maximum results</span>
             <input

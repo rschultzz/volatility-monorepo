@@ -32,6 +32,8 @@ const FALLBACK_DEFAULT_SETTINGS = {
   takeProfitPts: 20,
   maxPriorDownUpRatio: 2.0,
   maxStartPctOfRange: 0.20,
+  minRangeProofMinutes: 20,
+  maxMoveLossPct: 0.75,
 };
 
 const DEFAULT_COLUMNS = [
@@ -109,6 +111,8 @@ function normalizeNumericSettings(nextSettings) {
     takeProfitPts: Number(nextSettings.takeProfitPts),
     maxPriorDownUpRatio: Number(nextSettings.maxPriorDownUpRatio),
     maxStartPctOfRange: Number(nextSettings.maxStartPctOfRange),
+    minRangeProofMinutes: Number(nextSettings.minRangeProofMinutes),
+    maxMoveLossPct: Number(nextSettings.maxMoveLossPct),
   };
 }
 

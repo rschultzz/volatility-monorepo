@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, forwardRef, useImperativeHandle } from 'react';
 
 function fmt(value, digits = 2) {
   if (value === null || value === undefined || value === '') return '—';
@@ -63,7 +63,7 @@ const COLUMN_DATA_MAP = {
   start_pct_range: 'start_pct_of_session_range',
 };
 
-export default function ResultsTable({ rows, selectedRowKey, onSelectRow, columns }) {
+const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns }, ref) => {
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
 
   const handleSort = (colId) => {
@@ -100,6 +100,68 @@ export default function ResultsTable({ rows, selectedRowKey, onSelectRow, column
 
     return result;
   }, [rows, sortConfig]);
+
+  useImperativeHandle(ref, () => ({
+    downloadCSV: () => {
+      if (!processedRows.length) return;
+
+      const visibleCols = columns.filter(c => c.visible && c.id !== 'select');
+      const headers = visibleCols.map(c => c.label);
+      
+      const csvContent = [
+        headers.join(','),
+        ...processedRows.map(row => {
+          return visibleCols.map(col => {
+            let val;
+            const dataKey = COLUMN_DATA_MAP[col.id];
+            
+            switch (col.id) {
+              case 'source_zone':
+                val = `${fmt(row.source_zone_low)} - ${fmt(row.source_zone_high)}`;
+                break;
+              case 'start_time':
+                val = `${row.start_ts_pt}${row.start_context ? ' (' + row.start_context + ')' : ''}`;
+                break;
+              case 'target_level':
+                val = `${fmt(row.target_level)}${row.target_zone_range ? ' (' + row.target_zone_range + ')' : ''}`;
+                break;
+              case 'consol_mins':
+                val = `${row.consolidation_minutes_observed ?? ''}${row.consolidation_end_ts_pt ? ' ' + row.consolidation_end_ts_pt : ''}`;
+                break;
+              case 'setup':
+                val = setupLabel(row);
+                break;
+              case 'trade':
+                val = tradeLabel(row);
+                break;
+              case 'prior_down_ratio':
+                val = fmt(row.prior_down_vs_up_ratio, 2);
+                break;
+              case 'start_pct_range':
+                val = row.start_pct_of_session_range != null ? (row.start_pct_of_session_range * 100).toFixed(1) + '%' : '';
+                break;
+              default:
+                val = row[dataKey];
+            }
+
+            if (val === null || val === undefined) return '';
+            const s = String(val).replace(/"/g, '""');
+            return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s}"` : s;
+          }).join(',');
+        })
+      ].join('\n');
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `backtest_results_${new Date().toISOString().slice(0, 10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+  }));
 
   if (!rows.length) {
     return (
@@ -260,4 +322,6 @@ export default function ResultsTable({ rows, selectedRowKey, onSelectRow, column
       </table>
     </div>
   );
-}
+});
+
+export default ResultsTable;
