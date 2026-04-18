@@ -673,6 +673,69 @@ def _observe_consolidation_range(
     }
 
 
+def _observe_consolidation_range_down(
+    *,
+    day_rows: List[Dict[str, Any]],
+    start_idx: int,
+    consolidation_window_minutes: int,
+    wall_high: float,
+    wall_low: float,
+    max_zone_breach_pts: float,
+    pivot_price: float,
+    move_points: float,
+    max_move_loss_pct: float,
+) -> Dict[str, Any]:
+    """
+    Mirror of _observe_consolidation_range for DOWN moves → LONG trades.
+
+    PROMOTE:    close < wall_high - max_zone_breach_pts
+                Price pushed through the top of the target zone — discard,
+                advance to next zone down.
+    INVALIDATE: close > pivot_price - move_points * (1 - max_move_loss_pct)
+                75%+ of the down move given back — setup dead.
+    CONFIRM:    window elapsed without either trigger.
+    """
+    max_bars = max(1, int(consolidation_window_minutes))
+    end_idx  = min(len(day_rows) - 1, start_idx + max_bars - 1)
+
+    invalidation_ceiling = float(pivot_price) - float(move_points) * (1.0 - float(max_move_loss_pct))
+    breach_floor         = float(wall_high) - float(max_zone_breach_pts)
+
+    observed:   List[Dict[str, Any]] = []
+    range_high: Optional[float]      = None
+    range_low:  Optional[float]      = None
+
+    for i in range(start_idx, end_idx + 1):
+        row     = day_rows[i]
+        high_v  = row.get("high")
+        low_v   = row.get("low")
+        close_v = row.get("close")
+
+        if high_v is not None and low_v is not None:
+            h  = float(high_v)
+            lo = float(low_v)
+            range_high = h  if range_high is None else max(range_high, h)
+            range_low  = lo if range_low  is None else min(range_low,  lo)
+
+            # PROMOTE: bar low pushed below the wall — price is through,
+            # advance to next zone down regardless of where it closed.
+            if lo < breach_floor:
+                return {"status": "promoted", "rows": observed, "range_high": range_high, "range_low": range_low, "bars_observed": len(observed), "promote_idx": i}
+
+        observed.append(row)
+
+        # INVALIDATE: close gave back too much of the down move
+        if close_v is not None:
+            c = float(close_v)
+            if c > invalidation_ceiling:
+                return {"status": "invalidated", "rows": observed, "range_high": range_high, "range_low": range_low, "bars_observed": len(observed), "promote_idx": None}
+
+    if len(observed) < max_bars:
+        return {"status": "insufficient", "rows": observed, "range_high": range_high, "range_low": range_low, "bars_observed": len(observed), "promote_idx": None}
+
+    return {"status": "confirmed", "rows": observed, "range_high": range_high, "range_low": range_low, "bars_observed": len(observed), "promote_idx": None}
+
+
 def _make_default_trade_fields(trade_reason: str = "not_evaluated") -> Dict[str, Any]:
     return {
         "trade_entry_found": False,
@@ -1319,9 +1382,14 @@ def _evaluate_down_long_setup(
     max_move_loss_pct: float,
     pivot_price: float,
     move_points: float,
+    observed_rows: List[Dict[str, Any]],
+    confirmed_range_low: Optional[float],
 ) -> Dict[str, Any]:
     """
-    Full evaluation for DOWN move → LONG trades.
+    Evaluate DOWN move → LONG trade from pre-built consolidation range.
+    The observation window is run by the caller (_day_zone_results) which
+    handles promotion to lower zones. This function receives the confirmed
+    observed_rows and confirmed_range_low directly.
 
     Skew signal: delta_put_skew_pct <= -long_put_skew_min_decrease_pct (put fear unwinding)
                  delta_call_skew_pct >=  long_call_skew_min_increase_pct (calls being bid)
@@ -1340,56 +1408,20 @@ def _evaluate_down_long_setup(
         **_make_default_trade_fields("setup_not_hit"),
     }
 
-    # Prior context filter (inverted: large prior up move before a down move = bounce risk)
+    # Prior context filter
     ratio     = prior_ctx.get("prior_up_vs_down_ratio")
     start_pct = prior_ctx.get("start_pct_of_session_range")
     ratio_breached = ratio     is not None and float(ratio)     > float(max_prior_down_up_ratio)
     pct_breached   = start_pct is not None and float(start_pct) > (1.0 - float(max_start_pct_of_range))
     if ratio_breached and pct_breached:
-        default["long_setup_reason"]    = "prior_context_invalidated"
-        default["trade_entry_reason"]   = "prior_context_invalidated"
+        default["long_setup_reason"]  = "prior_context_invalidated"
+        default["trade_entry_reason"] = "prior_context_invalidated"
         return default
 
-    # Consolidation observation window — free range, no proximity constraint.
-    # Invalidates if price closes back above source zone high (move reversal).
-    # Promotes if price closes below wall_low - max_zone_breach (but we don't
-    # have a zone below to promote to for longs, so we just invalidate).
-    invalidation_ceiling = float(pivot_price) - float(move_points) * (1.0 - float(max_move_loss_pct))
-    max_bars   = max(1, int(consolidation_window_minutes))
-    end_obs    = min(len(day_rows) - 1, target_hit_idx + max_bars - 1)
-    observed_rows: List[Dict[str, Any]] = []
-    range_high: Optional[float] = None
-    range_low:  Optional[float] = None
-    obs_invalidated = False
-
-    for i in range(target_hit_idx, end_obs + 1):
-        row   = day_rows[i]
-        high_v = row.get("high")
-        low_v  = row.get("low")
-        close_v = row.get("close")
-        if high_v is not None and low_v is not None:
-            range_high = float(high_v) if range_high is None else max(range_high, float(high_v))
-            range_low  = float(low_v)  if range_low  is None else min(range_low,  float(low_v))
-        observed_rows.append(row)
-        if close_v is not None:
-            c = float(close_v)
-            if c > float(source_zone_high):        # full reversal back through origin
-                obs_invalidated = True
-                break
-            if c > invalidation_ceiling:           # gave back too much of the down move
-                obs_invalidated = True
-                break
-
+    # Range is pre-built by _observe_consolidation_range_down in _day_zone_results
     if not observed_rows:
         default["long_setup_reason"]  = "no_target_consolidation"
         default["trade_entry_reason"] = "no_setup"
-        return default
-
-    if obs_invalidated:
-        default["consolidation_minutes_observed"] = len(observed_rows)
-        default["consolidation_end_ts_pt"]        = _normalize_pt_label(observed_rows[-1].get("ts_pt"))
-        default["long_setup_reason"]              = "invalidated_move_reversal"
-        default["trade_entry_reason"]             = "no_setup"
         return default
 
     entry_ts_pt      = _normalize_pt_label(day_rows[entry_idx].get("ts_pt"))
@@ -1461,7 +1493,7 @@ def _evaluate_down_long_setup(
                 day_rows=day_rows,
                 signal_idx=signal_day_idx,
                 seed_rows=seed_rows,
-                confirmed_range_low=range_low,
+                confirmed_range_low=confirmed_range_low,
                 consolidation_end_idx=consolidation_end_idx,
                 entry_within_bottom_pts=entry_within_bottom_pts,
                 entry_search_window_minutes=entry_search_window_minutes,
@@ -1740,33 +1772,45 @@ def _day_zone_results(
                     break
 
         if zone_idx > 0:
-            target_zone_down = zones[zone_idx - 1]
-            clean_space_down = float(zone["low"]) - float(target_zone_down["high"])
-            if clean_space_down >= float(min_clean_move_points):
-                diagnostics["source_zones_with_clean_targets"] += 1
-                for seg_start, seg_end in episodes:
-                    diagnostics["zone_episodes_considered"] += 1
-                    seg_max_high = max(float(day_rows[i]["high"]) for i in range(seg_start, seg_end + 1))
-                    if seg_max_high > float(zone["high"]) + float(max_zone_breach_pts):
+            # Gather all zones below as potential targets (walking downward)
+            candidate_target_zone_indices_down = list(range(zone_idx - 1, -1, -1))
+
+            for seg_start, seg_end in episodes:
+                diagnostics["zone_episodes_considered"] += 1
+                seg_max_high = max(float(day_rows[i]["high"]) for i in range(seg_start, seg_end + 1))
+                if seg_max_high > float(zone["high"]) + float(max_zone_breach_pts):
+                    continue
+
+                pivot_idx, pivot_price = _find_last_pivot(day_rows, seg_start, seg_end, "down", pivot_strength_bars)
+
+                # min_minutes_after_open filter for down moves
+                if min_minutes_after_open > 0:
+                    pivot_pt = _normalize_pt_label(day_rows[pivot_idx].get("ts_pt"))
+                    if pivot_pt:
+                        try:
+                            ph, pm = int(pivot_pt[:2]), int(pivot_pt[3:5])
+                            pivot_minutes_since_open = (ph - 6) * 60 + pm - 30
+                            if pivot_minutes_since_open < int(min_minutes_after_open):
+                                continue
+                        except Exception:
+                            pass
+
+                # Walk down through candidate target zones, promoting if price
+                # pushes through a wall before consolidating.
+                scan_from_idx = seg_end + 1
+                final_hit_idx = None
+                for target_zone_offset, t_zone_idx in enumerate(candidate_target_zone_indices_down):
+                    target_zone_down = zones[t_zone_idx]
+                    clean_space_down = float(zone["low"]) - float(target_zone_down["high"])
+                    if clean_space_down < float(min_clean_move_points):
                         continue
 
-                    pivot_idx, pivot_price = _find_last_pivot(day_rows, seg_start, seg_end, "down", pivot_strength_bars)
-
-                    # min_minutes_after_open filter for down moves
-                    if min_minutes_after_open > 0:
-                        pivot_pt = _normalize_pt_label(day_rows[pivot_idx].get("ts_pt"))
-                        if pivot_pt:
-                            try:
-                                ph, pm = int(pivot_pt[:2]), int(pivot_pt[3:5])
-                                pivot_minutes_since_open = (ph - 6) * 60 + pm - 30
-                                if pivot_minutes_since_open < int(min_minutes_after_open):
-                                    continue
-                            except Exception:
-                                pass
+                    if target_zone_offset == 0:
+                        diagnostics["source_zones_with_clean_targets"] += 1
 
                     hit_idx = _first_target_hit(
                         day_rows,
-                        start_scan_idx=seg_end + 1,
+                        start_scan_idx=scan_from_idx,
                         direction="down",
                         zone=zone,
                         target_level=float(target_zone_down["high"]),
@@ -1774,13 +1818,38 @@ def _day_zone_results(
                         max_zone_breach_pts=max_zone_breach_pts,
                     )
                     if hit_idx is None:
+                        break
+
+                    final_hit_idx = hit_idx
+                    move_points = float(pivot_price) - float(target_zone_down["high"])
+
+                    # Observe consolidation from target hit. If price promotes
+                    # (pushes below wall low), advance to next zone down.
+                    obs = _observe_consolidation_range_down(
+                        day_rows=day_rows,
+                        start_idx=hit_idx,
+                        consolidation_window_minutes=consolidation_window_minutes,
+                        wall_high=float(target_zone_down["high"]),
+                        wall_low=float(target_zone_down["low"]),
+                        max_zone_breach_pts=float(max_zone_breach_pts),
+                        pivot_price=float(pivot_price),
+                        move_points=float(move_points),
+                        max_move_loss_pct=float(max_move_loss_pct),
+                    )
+
+                    if obs["status"] == "promoted":
+                        scan_from_idx = obs["promote_idx"]
                         continue
 
+                    if obs["status"] in ("invalidated", "insufficient"):
+                        break
+
+                    # Confirmed — evaluate setup
+                    observed_rows = obs["rows"]
                     start_row   = day_rows[pivot_idx]
-                    target_row  = day_rows[hit_idx]
+                    target_row  = day_rows[final_hit_idx]
                     start_open  = start_row.get("open")
                     target_open = target_row.get("open")
-                    move_points = float(pivot_price) - float(target_zone_down["high"])
 
                     prior_ctx = _compute_prior_move_context_down(
                         day_rows,
@@ -1793,7 +1862,7 @@ def _day_zone_results(
                         trade_date=trade_date,
                         day_rows=day_rows,
                         entry_idx=pivot_idx,
-                        target_hit_idx=hit_idx,
+                        target_hit_idx=final_hit_idx,
                         target_level=float(target_zone_down["high"]),
                         consolidation_window_minutes=consolidation_window_minutes,
                         long_put_skew_min_decrease_pct=long_put_skew_min_decrease_pct,
@@ -1813,6 +1882,8 @@ def _day_zone_results(
                         max_move_loss_pct=max_move_loss_pct,
                         pivot_price=float(pivot_price),
                         move_points=float(move_points),
+                        observed_rows=observed_rows,
+                        confirmed_range_low=obs["range_low"],
                     )
 
                     results.append(
@@ -1836,7 +1907,7 @@ def _day_zone_results(
                             "target_open":          round(float(target_open), 2) if target_open is not None else None,
                             "target_trigger_price": round(float(target_zone_down["high"]) + float(target_proximity_pts), 2),
                             "move_points":          round(float(move_points), 2),
-                            "elapsed_bars":         int(hit_idx - pivot_idx),
+                            "elapsed_bars":         int(final_hit_idx - pivot_idx),
                             **prior_ctx,
                             **setup_eval,
                         }
@@ -1854,7 +1925,27 @@ def _day_zone_results(
                     if len(results) >= int(max_results):
                         return results, diagnostics
 
-    return results, diagnostics
+                    break
+
+    # Deduplicate down-move rows: if multiple source zones produced a result
+    # with the same target level and target bar, keep only the one with the
+    # largest move_points (highest source zone = cleanest move).
+    seen_down: dict = {}
+    deduped: List[Dict[str, Any]] = []
+    for row in results:
+        if row.get("direction") != "down":
+            deduped.append(row)
+            continue
+        key = (row.get("trade_date"), row.get("target_level"), row.get("target_ts_pt"))
+        if key not in seen_down or (row.get("move_points") or 0) > (seen_down[key].get("move_points") or 0):
+            seen_down[key] = row
+    for row in results:
+        if row.get("direction") == "down":
+            key = (row.get("trade_date"), row.get("target_level"), row.get("target_ts_pt"))
+            if seen_down.get(key) is row:
+                deduped.append(row)
+
+    return deduped, diagnostics
 
 
 def scan_gex_level_moves(
