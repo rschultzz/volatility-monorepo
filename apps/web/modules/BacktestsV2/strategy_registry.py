@@ -39,6 +39,8 @@ def _base_defaults() -> Dict[str, Any]:
         "maxStartPctOfRange": 0.20,
         "maxMoveLossPct": 0.75,
         "minMinutesAfterOpen": 15,
+        "longPutSkewMinDecreasePct": 80.0,
+        "longCallSkewMinIncreasePct": 30.0,
     }
 
 

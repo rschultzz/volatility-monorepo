@@ -35,6 +35,8 @@ const FALLBACK_DEFAULT_SETTINGS = {
   minRangeProofMinutes: 20,
   maxMoveLossPct: 0.75,
   minMinutesAfterOpen: 15,
+  longPutSkewMinDecreasePct: 80.0,
+  longCallSkewMinIncreasePct: 30.0,
 };
 
 const DEFAULT_COLUMNS = [
@@ -115,6 +117,8 @@ function normalizeNumericSettings(nextSettings) {
     minRangeProofMinutes: Number(nextSettings.minRangeProofMinutes),
     maxMoveLossPct: Number(nextSettings.maxMoveLossPct),
     minMinutesAfterOpen: Number(nextSettings.minMinutesAfterOpen),
+    longPutSkewMinDecreasePct: Number(nextSettings.longPutSkewMinDecreasePct),
+    longCallSkewMinIncreasePct: Number(nextSettings.longCallSkewMinIncreasePct),
   };
 }
 

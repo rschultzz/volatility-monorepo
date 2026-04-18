@@ -18,6 +18,8 @@ const FIELD_HELP = {
   maxMoveLossPct: 'If price gives back more than this fraction of the up move during consolidation, the setup is invalidated. Example: 0.75 means a 40pt move that retraces more than 30pts is dead.',
   shortPutSkewIncreasePct: 'Minimum percentage increase in put skew (relative to model expectation) required to trigger the short signal. Captures defensive options positioning near the wall.',
   shortCallSkewMaxPct: 'Maximum allowed change in call skew at signal time. Keeps the signal from firing when the market is still bidding calls aggressively, suggesting continued upside.',
+  longPutSkewMinDecreasePct: 'Put skew must decrease by at least this percentage (fear unwinding after a selloff). A reading of 80 means delta_put_skew must be ≤ −80%.',
+  longCallSkewMinIncreasePct: 'Call skew must increase by at least this percentage (upside being bid). A reading of 30 means delta_call_skew must be ≥ +30%.',
   entryWithinTopPts: 'After consolidation closes, entry triggers when price trades within this many points of the confirmed range high.',
   entrySearchWindowMinutes: 'How many minutes after consolidation closes to look for an entry. If price does not return to the top of range in this window, no trade is taken.',
   initialStopPts: 'Initial stop loss distance above the entry price.',
@@ -150,6 +152,9 @@ export default function SettingsModal({
 }) {
   if (!isOpen) return null;
 
+  const isDownMove = (strategyMetaDraft.strategyKey || '').includes('down_move') ||
+                     (strategyMetaDraft.baseStrategyKey || '').includes('down_move');
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card" style={{ width: 'min(980px, 100%)', padding: '20px' }} onClick={(e) => e.stopPropagation()}>
@@ -237,12 +242,25 @@ export default function SettingsModal({
 
           {/* ── Vol signal ── */}
           <SectionCard title="Vol signal">
-            <Field label="Short trigger: min Δ Put Skew %" fieldKey="shortPutSkewIncreasePct">
-              <input type="number" step="1" value={settingsDraft.shortPutSkewIncreasePct} onChange={(e) => onChange('shortPutSkewIncreasePct', e.target.value)} />
-            </Field>
-            <Field label="Short trigger: max Δ Call Skew %" fieldKey="shortCallSkewMaxPct">
-              <input type="number" step="1" value={settingsDraft.shortCallSkewMaxPct} onChange={(e) => onChange('shortCallSkewMaxPct', e.target.value)} />
-            </Field>
+            {isDownMove ? (
+              <>
+                <Field label="Long trigger: min Δ Put Skew decrease %" fieldKey="longPutSkewMinDecreasePct">
+                  <input type="number" step="1" min="0" value={settingsDraft.longPutSkewMinDecreasePct} onChange={(e) => onChange('longPutSkewMinDecreasePct', e.target.value)} />
+                </Field>
+                <Field label="Long trigger: min Δ Call Skew increase %" fieldKey="longCallSkewMinIncreasePct">
+                  <input type="number" step="1" min="0" value={settingsDraft.longCallSkewMinIncreasePct} onChange={(e) => onChange('longCallSkewMinIncreasePct', e.target.value)} />
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field label="Short trigger: min Δ Put Skew %" fieldKey="shortPutSkewIncreasePct">
+                  <input type="number" step="1" value={settingsDraft.shortPutSkewIncreasePct} onChange={(e) => onChange('shortPutSkewIncreasePct', e.target.value)} />
+                </Field>
+                <Field label="Short trigger: max Δ Call Skew %" fieldKey="shortCallSkewMaxPct">
+                  <input type="number" step="1" value={settingsDraft.shortCallSkewMaxPct} onChange={(e) => onChange('shortCallSkewMaxPct', e.target.value)} />
+                </Field>
+              </>
+            )}
           </SectionCard>
 
           {/* ── Trade entry ── */}

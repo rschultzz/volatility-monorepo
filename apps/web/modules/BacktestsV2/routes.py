@@ -466,6 +466,8 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 max_start_pct_of_range=float(settings.get("maxStartPctOfRange", 0.20)),
                 max_move_loss_pct=float(settings.get("maxMoveLossPct", 0.75)),
                 min_minutes_after_open=int(settings.get("minMinutesAfterOpen", 15)),
+                long_put_skew_min_decrease_pct=float(settings.get("longPutSkewMinDecreasePct", 80.0)),
+                long_call_skew_min_increase_pct=float(settings.get("longCallSkewMinIncreasePct", 30.0)),
                 source_view=DEFAULT_SOURCE_VIEW,
             )
 

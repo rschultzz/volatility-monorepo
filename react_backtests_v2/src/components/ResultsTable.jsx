@@ -12,12 +12,12 @@ function rowKey(row, idx) {
 }
 
 function setupLabel(row) {
-  if (row.direction !== 'up') return 'N/A';
-  return row.short_setup_found ? 'Short setup' : 'No setup';
+  if (row.direction === 'up') return row.short_setup_found ? 'Short setup' : 'No setup';
+  if (row.direction === 'down') return row.long_setup_found ? 'Long setup' : 'No setup';
+  return 'N/A';
 }
 
 function tradeLabel(row) {
-  if (row.direction !== 'up') return 'N/A';
   return row.trade_entry_found ? 'Trade entered' : 'No trade';
 }
 
@@ -134,6 +134,18 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
               case 'trade':
                 val = tradeLabel(row);
                 break;
+              case 'signal_time':
+                val = (row.direction === 'down' ? row.long_signal_ts_pt : row.short_signal_ts_pt) || '';
+                break;
+              case 'put_skew':
+                val = fmt(row.direction === 'down' ? row.long_signal_delta_put_skew_pct : row.short_signal_delta_put_skew_pct);
+                break;
+              case 'call_skew':
+                val = fmt(row.direction === 'down' ? row.long_signal_delta_call_skew_pct : row.short_signal_delta_call_skew_pct);
+                break;
+              case 'reason':
+                val = (row.direction === 'down' ? row.long_setup_reason : row.short_setup_reason) || '';
+                break;
               case 'prior_down_ratio':
                 val = fmt(row.prior_down_vs_up_ratio, 2);
                 break;
@@ -228,14 +240,18 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
         );
       case 'setup':
         return (
-          <span className={`setup-chip ${row.short_setup_found ? 'hit' : 'miss'}`}>
+          <span className={`setup-chip ${(row.short_setup_found || row.long_setup_found) ? 'hit' : 'miss'}`}>
             {setupLabel(row)}
           </span>
         );
-      case 'signal_time': return row.short_signal_ts_pt || '—';
-      case 'signal_px': return fmt(row.short_signal_price);
-      case 'put_skew': return fmt(row.short_signal_delta_put_skew_pct);
-      case 'call_skew': return fmt(row.short_signal_delta_call_skew_pct);
+      case 'signal_time':
+        return (row.direction === 'down' ? row.long_signal_ts_pt : row.short_signal_ts_pt) || '—';
+      case 'signal_px':
+        return fmt(row.direction === 'down' ? row.long_signal_price : row.short_signal_price);
+      case 'put_skew':
+        return fmt(row.direction === 'down' ? row.long_signal_delta_put_skew_pct : row.short_signal_delta_put_skew_pct);
+      case 'call_skew':
+        return fmt(row.direction === 'down' ? row.long_signal_delta_call_skew_pct : row.short_signal_delta_call_skew_pct);
       case 'trade':
         return (
           <span className={`trade-chip ${row.trade_entry_found ? 'hit' : 'miss'}`}>
@@ -257,7 +273,8 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
       case 'mfe': return fmt(row.trade_mfe_points);
       case 'mae': return fmt(row.trade_mae_points);
       case 'outcome': return row.trade_outcome || '—';
-      case 'reason': return row.short_setup_reason || '—';
+      case 'reason':
+        return (row.direction === 'down' ? row.long_setup_reason : row.short_setup_reason) || '—';
       case 'prior_down_pts': return fmt(row.prior_session_down_pts);
       case 'prior_down_ratio': {
         const ratio = row.prior_down_vs_up_ratio;
