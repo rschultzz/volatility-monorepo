@@ -34,6 +34,7 @@ const FALLBACK_DEFAULT_SETTINGS = {
   maxStartPctOfRange: 0.20,
   minRangeProofMinutes: 20,
   maxMoveLossPct: 0.75,
+  minMinutesAfterOpen: 15,
 };
 
 const DEFAULT_COLUMNS = [
@@ -113,6 +114,7 @@ function normalizeNumericSettings(nextSettings) {
     maxStartPctOfRange: Number(nextSettings.maxStartPctOfRange),
     minRangeProofMinutes: Number(nextSettings.minRangeProofMinutes),
     maxMoveLossPct: Number(nextSettings.maxMoveLossPct),
+    minMinutesAfterOpen: Number(nextSettings.minMinutesAfterOpen),
   };
 }
 

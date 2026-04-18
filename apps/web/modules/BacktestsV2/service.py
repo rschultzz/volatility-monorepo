@@ -1115,6 +1115,7 @@ def _day_zone_results(
     max_prior_down_up_ratio: float,
     max_start_pct_of_range: float,
     max_move_loss_pct: float,
+    min_minutes_after_open: int,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     qualifying_levels = _collect_day_levels(day_rows, level_family, min_level_gex_bn)
     zones = _build_zones(qualifying_levels, zone_merge_distance_pts)
@@ -1162,6 +1163,20 @@ def _day_zone_results(
                     continue
 
                 pivot_idx, pivot_price = _find_last_pivot(day_rows, seg_start, seg_end, "up", pivot_strength_bars)
+
+                # Skip episodes whose pivot falls within min_minutes_after_open
+                # of the RTH open (06:30 PT). Early-session price is often noisy
+                # and this filter prevents chasing moves that start at the bell.
+                if min_minutes_after_open > 0:
+                    pivot_pt = _normalize_pt_label(day_rows[pivot_idx].get("ts_pt"))
+                    if pivot_pt:
+                        try:
+                            ph, pm = int(pivot_pt[:2]), int(pivot_pt[3:5])
+                            pivot_minutes_since_open = (ph - 6) * 60 + pm - 30
+                            if pivot_minutes_since_open < int(min_minutes_after_open):
+                                continue
+                        except Exception:
+                            pass
 
                 # Walk up through candidate target zones, promoting if price
                 # pushes through a wall before consolidating.
@@ -1410,6 +1425,7 @@ def scan_gex_level_moves(
     max_prior_down_up_ratio: float = 2.0,
     max_start_pct_of_range: float = 0.20,
     max_move_loss_pct: float = 0.75,
+    min_minutes_after_open: int = 15,
     source_view: str | None = None,
 ) -> Dict[str, Any]:
     level_family = (level_family or "primary").strip().lower()
@@ -1487,6 +1503,7 @@ def scan_gex_level_moves(
             max_prior_down_up_ratio=float(max_prior_down_up_ratio),
             max_start_pct_of_range=float(max_start_pct_of_range),
             max_move_loss_pct=float(max_move_loss_pct),
+            min_minutes_after_open=int(min_minutes_after_open),
         )
         results.extend(day_results)
 

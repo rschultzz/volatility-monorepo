@@ -285,6 +285,20 @@ export default function SettingsModal({
             </div>
           </label>
 
+          <label className="field">
+            <span>Min minutes after open</span>
+            <input
+              type="number"
+              step="1"
+              min="0"
+              value={settingsDraft.minMinutesAfterOpen}
+              onChange={(e) => onChange('minMinutesAfterOpen', e.target.value)}
+            />
+            <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '4px' }}>
+              Up move pivot must start at least this many minutes after the 6:30 PT open. Set to 0 to disable.
+            </div>
+          </label>
+
           <label className="field field-wide">
             <span>Maximum results</span>
             <input
