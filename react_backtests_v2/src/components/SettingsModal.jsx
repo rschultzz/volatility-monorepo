@@ -32,7 +32,7 @@ const FIELD_HELP = {
   longTrailingStopPts: 'Once activated, trailing stop sits this many points below the highest high since entry.',
   longTakeProfitPts: 'Fixed take-profit target above long entry. Set to roughly the distance to the next GEX level above.',
   maxPriorDownUpRatio: 'If the largest prior down move of the session exceeds this multiple of the current up move, the setup is treated as a bounce off the lows and is invalidated.',
-  maxStartPctOfRange: "The up move pivot must start above this percentile of the session range so far. 0.20 means the pivot cannot be in the bottom 20% of the day's range.",
+  maxStartPctOfRange: "For shorts: pivot must start above this percentile of the session range (0.20 = not in bottom 20%). For longs: target level must be in the bottom X% of the session range (0.50 = must be below the day's midpoint).",
   maxResults: 'Maximum number of result rows returned per scan. Increase for long date ranges.',
 };
 

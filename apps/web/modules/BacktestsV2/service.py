@@ -1178,11 +1178,15 @@ def _compute_prior_move_context_down(
     pivot_idx: int,
     pivot_price: float,
     down_move_pts: float,
+    target_hit_idx: int = 0,
+    target_level: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Mirror of _compute_prior_move_context for down moves.
     Measures the largest prior UP move before the down move started,
-    and where the pivot sits within the session range.
+    and where the TARGET LEVEL sits within the session range seen up to
+    the target hit. For longs we want the target near the session lows,
+    not the pivot (which will always be near the top by definition).
     """
     empty: Dict[str, Any] = {
         "prior_session_up_pts": None,
@@ -1195,14 +1199,20 @@ def _compute_prior_move_context_down(
 
     prior_rows = day_rows[: pivot_idx + 1]
 
+    # Use rows up to the target hit for the session range — gives a fuller picture
+    # of where the target level sits relative to the day so far.
+    range_rows = day_rows[: max(pivot_idx + 1, target_hit_idx + 1)]
+
     try:
-        session_high = max(float(r["high"]) for r in prior_rows if r.get("high") is not None)
-        session_low  = min(float(r["low"])  for r in prior_rows if r.get("low")  is not None)
+        session_high = max(float(r["high"]) for r in range_rows if r.get("high") is not None)
+        session_low  = min(float(r["low"])  for r in range_rows if r.get("low")  is not None)
     except (ValueError, TypeError):
         return empty
 
     session_range = session_high - session_low
-    start_pct = round((pivot_price - session_low) / session_range, 3) if session_range > 0 else None
+    # For longs: where is the TARGET LEVEL within the session range?
+    # 0.0 = at the session low (ideal), 1.0 = at the session high (bad for a long)
+    target_pct = round((target_level - session_low) / session_range, 3) if session_range > 0 else None
 
     # Largest prior up move: rolling trough → peak
     max_up = 0.0
@@ -1225,7 +1235,7 @@ def _compute_prior_move_context_down(
     return {
         "prior_session_up_pts": prior_up_pts,
         "prior_up_vs_down_ratio": ratio,
-        "start_pct_of_session_range": start_pct,
+        "start_pct_of_session_range": target_pct,  # repurposed: target level's pct of session range
     }
 
 
@@ -1442,12 +1452,21 @@ def _evaluate_down_long_setup(
         **_make_default_trade_fields("setup_not_hit"),
     }
 
-    # Prior context filter
+    # Prior context filter for longs.
+    # start_pct_of_session_range now holds the TARGET LEVEL's percentile within
+    # the session range seen so far (0.0 = at session low, 1.0 = at session high).
+    # We want longs near the bottom of the range — invalidate if the target is
+    # above maxStartPctOfRange of the session range (e.g. 0.5 = top half is invalid).
+    # Also invalidate if the prior up move was large relative to the current down move.
     ratio     = prior_ctx.get("prior_up_vs_down_ratio")
     start_pct = prior_ctx.get("start_pct_of_session_range")
     ratio_breached = ratio     is not None and float(ratio)     > float(max_prior_down_up_ratio)
-    pct_breached   = start_pct is not None and float(start_pct) > (1.0 - float(max_start_pct_of_range))
-    if ratio_breached and pct_breached:
+    pct_breached   = start_pct is not None and float(start_pct) > float(max_start_pct_of_range)
+    if pct_breached:
+        default["long_setup_reason"]  = "prior_context_invalidated"
+        default["trade_entry_reason"] = "prior_context_invalidated"
+        return default
+    if ratio_breached:
         default["long_setup_reason"]  = "prior_context_invalidated"
         default["trade_entry_reason"] = "prior_context_invalidated"
         return default
@@ -1897,6 +1916,8 @@ def _day_zone_results(
                         pivot_idx=pivot_idx,
                         pivot_price=pivot_price,
                         down_move_pts=float(move_points),
+                        target_hit_idx=final_hit_idx,
+                        target_level=float(target_zone_down["high"]),
                     )
 
                     setup_eval = _evaluate_down_long_setup(
