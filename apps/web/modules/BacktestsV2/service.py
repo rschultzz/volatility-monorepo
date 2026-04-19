@@ -1241,7 +1241,11 @@ def _simulate_long_trade_from_signal(
     range_low  = confirmed_range_low if confirmed_range_low is not None else seed_low
     range_high = seed_high
 
-    entry_search_start = max(signal_idx, consolidation_end_idx + 1)
+    # For longs, start entry search from the signal bar itself — unlike shorts
+    # where we wait for consolidation to close before looking for a re-test,
+    # long entries should be taken at or near the signal when price is still
+    # near the lows, not after the bounce has already begun.
+    entry_search_start = signal_idx
     search_end_idx = min(len(day_rows) - 1, entry_search_start + max(1, int(entry_search_window_minutes)) - 1)
 
     entry_idx: Optional[int]   = None
