@@ -772,6 +772,7 @@ def _simulate_short_trade_from_signal(
     trail_activate_profit_pts: float,
     trailing_stop_pts: float,
     take_profit_pts: float,
+    max_minutes_before_close: int = 45,
 ) -> Dict[str, Any]:
     default = _make_default_trade_fields("no_entry_window")
 
@@ -801,6 +802,18 @@ def _simulate_short_trade_from_signal(
         row = day_rows[j]
         if row.get("high") is None or row.get("low") is None:
             continue
+
+        # Block entry within max_minutes_before_close of 13:00 PT close
+        if max_minutes_before_close > 0:
+            ts_pt = _normalize_pt_label(row.get("ts_pt"))
+            if ts_pt:
+                try:
+                    eh, em = int(ts_pt[:2]), int(ts_pt[3:5])
+                    minutes_to_close = (13 - eh) * 60 - em
+                    if minutes_to_close <= int(max_minutes_before_close):
+                        break
+                except Exception:
+                    pass
 
         high_v = float(row["high"])
         low_v = float(row["low"])
@@ -1010,6 +1023,7 @@ def _evaluate_up_short_setup(
     max_start_pct_of_range: float,
     observed_rows: List[Dict[str, Any]],
     confirmed_range_high: Optional[float],
+    max_minutes_before_close: int = 45,
 ) -> Dict[str, Any]:
     default = {
         "consolidation_minutes_observed": 0,
@@ -1125,6 +1139,7 @@ def _evaluate_up_short_setup(
                 trail_activate_profit_pts=trail_activate_profit_pts,
                 trailing_stop_pts=trailing_stop_pts,
                 take_profit_pts=take_profit_pts,
+                max_minutes_before_close=max_minutes_before_close,
             )
 
             return {
@@ -1227,6 +1242,7 @@ def _simulate_long_trade_from_signal(
     trail_activate_profit_pts: float,
     trailing_stop_pts: float,
     take_profit_pts: float,
+    max_minutes_before_close: int = 45,
 ) -> Dict[str, Any]:
     """Mirror of _simulate_short_trade_from_signal for LONG trades."""
     default = _make_default_trade_fields("no_entry_window")
@@ -1258,6 +1274,19 @@ def _simulate_long_trade_from_signal(
         row = day_rows[j]
         if row.get("high") is None or row.get("low") is None:
             continue
+
+        # Block entry within max_minutes_before_close of 13:00 PT close
+        if max_minutes_before_close > 0:
+            ts_pt = _normalize_pt_label(row.get("ts_pt"))
+            if ts_pt:
+                try:
+                    eh, em = int(ts_pt[:2]), int(ts_pt[3:5])
+                    minutes_to_close = (13 - eh) * 60 - em
+                    if minutes_to_close <= int(max_minutes_before_close):
+                        break
+                except Exception:
+                    pass
+
         high_v = float(row["high"])
         low_v  = float(row["low"])
         range_low  = min(range_low,  low_v)
@@ -1388,6 +1417,7 @@ def _evaluate_down_long_setup(
     move_points: float,
     observed_rows: List[Dict[str, Any]],
     confirmed_range_low: Optional[float],
+    max_minutes_before_close: int = 45,
 ) -> Dict[str, Any]:
     """
     Evaluate DOWN move → LONG trade from pre-built consolidation range.
@@ -1505,6 +1535,7 @@ def _evaluate_down_long_setup(
                 trail_activate_profit_pts=trail_activate_profit_pts,
                 trailing_stop_pts=trailing_stop_pts,
                 take_profit_pts=take_profit_pts,
+                max_minutes_before_close=max_minutes_before_close,
             )
 
             return {
@@ -1561,6 +1592,7 @@ def _day_zone_results(
     min_minutes_after_open: int,
     long_put_skew_min_decrease_pct: float,
     long_call_skew_min_increase_pct: float,
+    max_minutes_before_close: int,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     qualifying_levels = _collect_day_levels(day_rows, level_family, min_level_gex_bn)
     zones = _build_zones(qualifying_levels, zone_merge_distance_pts)
@@ -1707,6 +1739,7 @@ def _day_zone_results(
                         max_start_pct_of_range=max_start_pct_of_range,
                         observed_rows=observed_rows,
                         confirmed_range_high=obs["range_high"],
+                        max_minutes_before_close=max_minutes_before_close,
                     )
 
                     row_out = {
@@ -1888,6 +1921,7 @@ def _day_zone_results(
                         move_points=float(move_points),
                         observed_rows=observed_rows,
                         confirmed_range_low=obs["range_low"],
+                        max_minutes_before_close=max_minutes_before_close,
                     )
 
                     results.append(
@@ -1979,6 +2013,7 @@ def scan_gex_level_moves(
     min_minutes_after_open: int = 15,
     long_put_skew_min_decrease_pct: float = 80.0,
     long_call_skew_min_increase_pct: float = 30.0,
+    max_minutes_before_close: int = 45,
     source_view: str | None = None,
 ) -> Dict[str, Any]:
     level_family = (level_family or "primary").strip().lower()
@@ -2059,6 +2094,7 @@ def scan_gex_level_moves(
             min_minutes_after_open=int(min_minutes_after_open),
             long_put_skew_min_decrease_pct=float(long_put_skew_min_decrease_pct),
             long_call_skew_min_increase_pct=float(long_call_skew_min_increase_pct),
+            max_minutes_before_close=int(max_minutes_before_close),
         )
         results.extend(day_results)
 

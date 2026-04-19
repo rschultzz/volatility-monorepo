@@ -37,6 +37,7 @@ const FALLBACK_DEFAULT_SETTINGS = {
   minMinutesAfterOpen: 15,
   longPutSkewMinDecreasePct: 80.0,
   longCallSkewMinIncreasePct: 30.0,
+  maxMinutesBeforeClose: 45,
 };
 
 const DEFAULT_COLUMNS = [
@@ -119,6 +120,7 @@ function normalizeNumericSettings(nextSettings) {
     minMinutesAfterOpen: Number(nextSettings.minMinutesAfterOpen),
     longPutSkewMinDecreasePct: Number(nextSettings.longPutSkewMinDecreasePct),
     longCallSkewMinIncreasePct: Number(nextSettings.longCallSkewMinIncreasePct),
+    maxMinutesBeforeClose: Number(nextSettings.maxMinutesBeforeClose),
   };
 }
 

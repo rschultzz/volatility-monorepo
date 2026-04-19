@@ -14,6 +14,7 @@ const FIELD_HELP = {
   pivotStrengthBars: 'Number of bars on each side required to confirm a swing high or low as a valid pivot. Higher values find stronger, less frequent pivots.',
   levelFamily: 'Which GEX wall types to include. Primary walls carry the most gamma. Strong walls are secondary. Both combines them.',
   minMinutesAfterOpen: 'The pivot that starts the up move must occur at least this many minutes after the 6:30 PT RTH open. Filters out chaotic early-session moves. Set to 0 to disable.',
+  maxMinutesBeforeClose: 'Block trade entry within this many minutes of the 1:00 PM PT close. Set to 0 to disable. Default 45 blocks entries after 12:15 PM PT.',
   consolidationWindowMinutes: 'After price hits the target wall, the system observes price action for up to this many minutes to build the consolidation range. The skew signal must fire within this window.',
   maxMoveLossPct: 'If price gives back more than this fraction of the up move during consolidation, the setup is invalidated. Example: 0.75 means a 40pt move that retraces more than 30pts is dead.',
   shortPutSkewIncreasePct: 'Minimum percentage increase in put skew (relative to model expectation) required to trigger the short signal. Captures defensive options positioning near the wall.',
@@ -218,6 +219,9 @@ export default function SettingsModal({
             </Field>
             <Field label="Min minutes after open" fieldKey="minMinutesAfterOpen">
               <input type="number" step="1" min="0" value={settingsDraft.minMinutesAfterOpen} onChange={(e) => onChange('minMinutesAfterOpen', e.target.value)} />
+            </Field>
+            <Field label="Max minutes before close" fieldKey="maxMinutesBeforeClose">
+              <input type="number" step="5" min="0" value={settingsDraft.maxMinutesBeforeClose} onChange={(e) => onChange('maxMinutesBeforeClose', e.target.value)} />
             </Field>
             <Field label="Prior context: max down/up ratio" fieldKey="maxPriorDownUpRatio">
               <input type="number" step="0.1" min="0" value={settingsDraft.maxPriorDownUpRatio} onChange={(e) => onChange('maxPriorDownUpRatio', e.target.value)} />
