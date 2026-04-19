@@ -36,11 +36,11 @@ const COLUMN_DATA_MAP = {
   move_pts: 'move_points',
   bars: 'elapsed_bars',
   consol_mins: 'consolidation_minutes_observed',
-  setup: 'short_setup_found',
-  signal_time: 'short_signal_ts_pt',
-  signal_px: 'short_signal_price',
-  put_skew: 'short_signal_delta_put_skew_pct',
-  call_skew: 'short_signal_delta_call_skew_pct',
+  setup: (row) => row.direction === 'down' ? row.long_setup_found : row.short_setup_found,
+  signal_time: (row) => row.direction === 'down' ? row.long_signal_ts_pt : row.short_signal_ts_pt,
+  signal_px: (row) => row.direction === 'down' ? row.long_signal_price : row.short_signal_price,
+  put_skew: (row) => row.direction === 'down' ? row.long_signal_delta_put_skew_pct : row.short_signal_delta_put_skew_pct,
+  call_skew: (row) => row.direction === 'down' ? row.long_signal_delta_call_skew_pct : row.short_signal_delta_call_skew_pct,
   trade: 'trade_entry_found',
   range_high: 'trade_range_high_at_entry',
   range_low: 'trade_range_low_at_entry',
@@ -57,7 +57,7 @@ const COLUMN_DATA_MAP = {
   mfe: 'trade_mfe_points',
   mae: 'trade_mae_points',
   outcome: 'trade_outcome',
-  reason: 'short_setup_reason',
+  reason: (row) => row.direction === 'down' ? row.long_setup_reason : row.short_setup_reason,
   prior_down_pts: 'prior_session_down_pts',
   prior_down_ratio: 'prior_down_vs_up_ratio',
   start_pct_range: 'start_pct_of_session_range',
@@ -85,12 +85,18 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
       const dataKey = COLUMN_DATA_MAP[sortConfig.key];
       if (dataKey) {
         result.sort((a, b) => {
-          const aVal = a[dataKey];
-          const bVal = b[dataKey];
+          let aVal, bVal;
+          if (typeof dataKey === 'function') {
+            aVal = dataKey(a);
+            bVal = dataKey(b);
+          } else {
+            aVal = a[dataKey];
+            bVal = b[dataKey];
+          }
 
           if (aVal === bVal) return 0;
-          if (aVal === null || aVal === undefined) return 1;
-          if (bVal === null || bVal === undefined) return -1;
+          if (aVal === null || aVal === undefined || aVal === '') return 1;
+          if (bVal === null || bVal === undefined || bVal === '') return -1;
 
           const comparison = aVal < bVal ? -1 : 1;
           return sortConfig.direction === 'asc' ? comparison : -comparison;
@@ -153,7 +159,7 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
                 val = row.start_pct_of_session_range != null ? (row.start_pct_of_session_range * 100).toFixed(1) + '%' : '';
                 break;
               default:
-                val = row[dataKey];
+                val = typeof dataKey === 'function' ? dataKey(row) : row[dataKey];
             }
 
             if (val === null || val === undefined) return '';
