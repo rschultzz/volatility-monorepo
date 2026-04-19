@@ -42,6 +42,10 @@ def _base_defaults() -> Dict[str, Any]:
         "longPutSkewMinDecreasePct": 80.0,
         "longCallSkewMinIncreasePct": 30.0,
         "maxMinutesBeforeClose": 45,
+        "longInitialStopPts": 10.0,
+        "longTrailActivateProfitPts": 20.0,
+        "longTrailingStopPts": 10.0,
+        "longTakeProfitPts": 35.0,
     }
 
 

@@ -27,6 +27,10 @@ const FIELD_HELP = {
   trailActivateProfitPts: 'The trade must reach this many points of profit before the trailing stop activates.',
   trailingStopPts: 'Once activated, the trailing stop sits this many points above the lowest low reached since entry.',
   takeProfitPts: 'Fixed take-profit target below entry. Trade exits immediately when price reaches this level.',
+  longInitialStopPts: 'Initial stop loss distance below the long entry price. Independent from the short stop setting.',
+  longTrailActivateProfitPts: 'Long trade must reach this many points of profit before the trailing stop activates. Set high to give the range room to develop.',
+  longTrailingStopPts: 'Once activated, trailing stop sits this many points below the highest high since entry.',
+  longTakeProfitPts: 'Fixed take-profit target above long entry. Set to roughly the distance to the next GEX level above.',
   maxPriorDownUpRatio: 'If the largest prior down move of the session exceeds this multiple of the current up move, the setup is treated as a bounce off the lows and is invalidated.',
   maxStartPctOfRange: "The up move pivot must start above this percentile of the session range so far. 0.20 means the pivot cannot be in the bottom 20% of the day's range.",
   maxResults: 'Maximum number of result rows returned per scan. Increase for long date ranges.',
@@ -279,18 +283,37 @@ export default function SettingsModal({
 
           {/* ── Trade management ── */}
           <SectionCard title="Trade management">
-            <Field label="Initial stop (pts)" fieldKey="initialStopPts">
-              <input type="number" step="0.5" min="0.5" value={settingsDraft.initialStopPts} onChange={(e) => onChange('initialStopPts', e.target.value)} />
-            </Field>
-            <Field label="Trail activate profit (pts)" fieldKey="trailActivateProfitPts">
-              <input type="number" step="0.5" min="0.5" value={settingsDraft.trailActivateProfitPts} onChange={(e) => onChange('trailActivateProfitPts', e.target.value)} />
-            </Field>
-            <Field label="Trailing stop (pts)" fieldKey="trailingStopPts">
-              <input type="number" step="0.5" min="0.5" value={settingsDraft.trailingStopPts} onChange={(e) => onChange('trailingStopPts', e.target.value)} />
-            </Field>
-            <Field label="Take profit (pts)" fieldKey="takeProfitPts">
-              <input type="number" step="0.5" min="0.5" value={settingsDraft.takeProfitPts} onChange={(e) => onChange('takeProfitPts', e.target.value)} />
-            </Field>
+            {isDownMove ? (
+              <>
+                <Field label="Long initial stop (pts)" fieldKey="longInitialStopPts">
+                  <input type="number" step="0.5" min="0.5" value={settingsDraft.longInitialStopPts} onChange={(e) => onChange('longInitialStopPts', e.target.value)} />
+                </Field>
+                <Field label="Long trail activate profit (pts)" fieldKey="longTrailActivateProfitPts">
+                  <input type="number" step="0.5" min="0.5" value={settingsDraft.longTrailActivateProfitPts} onChange={(e) => onChange('longTrailActivateProfitPts', e.target.value)} />
+                </Field>
+                <Field label="Long trailing stop (pts)" fieldKey="longTrailingStopPts">
+                  <input type="number" step="0.5" min="0.5" value={settingsDraft.longTrailingStopPts} onChange={(e) => onChange('longTrailingStopPts', e.target.value)} />
+                </Field>
+                <Field label="Long take profit (pts)" fieldKey="longTakeProfitPts">
+                  <input type="number" step="0.5" min="0.5" value={settingsDraft.longTakeProfitPts} onChange={(e) => onChange('longTakeProfitPts', e.target.value)} />
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field label="Initial stop (pts)" fieldKey="initialStopPts">
+                  <input type="number" step="0.5" min="0.5" value={settingsDraft.initialStopPts} onChange={(e) => onChange('initialStopPts', e.target.value)} />
+                </Field>
+                <Field label="Trail activate profit (pts)" fieldKey="trailActivateProfitPts">
+                  <input type="number" step="0.5" min="0.5" value={settingsDraft.trailActivateProfitPts} onChange={(e) => onChange('trailActivateProfitPts', e.target.value)} />
+                </Field>
+                <Field label="Trailing stop (pts)" fieldKey="trailingStopPts">
+                  <input type="number" step="0.5" min="0.5" value={settingsDraft.trailingStopPts} onChange={(e) => onChange('trailingStopPts', e.target.value)} />
+                </Field>
+                <Field label="Take profit (pts)" fieldKey="takeProfitPts">
+                  <input type="number" step="0.5" min="0.5" value={settingsDraft.takeProfitPts} onChange={(e) => onChange('takeProfitPts', e.target.value)} />
+                </Field>
+              </>
+            )}
           </SectionCard>
 
           {/* ── Scan limits ── */}

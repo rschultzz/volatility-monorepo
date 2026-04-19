@@ -38,6 +38,10 @@ const FALLBACK_DEFAULT_SETTINGS = {
   longPutSkewMinDecreasePct: 80.0,
   longCallSkewMinIncreasePct: 30.0,
   maxMinutesBeforeClose: 45,
+  longInitialStopPts: 10.0,
+  longTrailActivateProfitPts: 20.0,
+  longTrailingStopPts: 10.0,
+  longTakeProfitPts: 35.0,
 };
 
 const DEFAULT_COLUMNS = [
@@ -121,6 +125,10 @@ function normalizeNumericSettings(nextSettings) {
     longPutSkewMinDecreasePct: Number(nextSettings.longPutSkewMinDecreasePct),
     longCallSkewMinIncreasePct: Number(nextSettings.longCallSkewMinIncreasePct),
     maxMinutesBeforeClose: Number(nextSettings.maxMinutesBeforeClose),
+    longInitialStopPts: Number(nextSettings.longInitialStopPts),
+    longTrailActivateProfitPts: Number(nextSettings.longTrailActivateProfitPts),
+    longTrailingStopPts: Number(nextSettings.longTrailingStopPts),
+    longTakeProfitPts: Number(nextSettings.longTakeProfitPts),
   };
 }
 

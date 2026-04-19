@@ -1238,10 +1238,10 @@ def _simulate_long_trade_from_signal(
     consolidation_end_idx: int,
     entry_within_bottom_pts: float,
     entry_search_window_minutes: int,
-    initial_stop_pts: float,
-    trail_activate_profit_pts: float,
-    trailing_stop_pts: float,
-    take_profit_pts: float,
+    long_initial_stop_pts: float,
+    long_trail_activate_profit_pts: float,
+    long_trailing_stop_pts: float,
+    long_take_profit_pts: float,
     max_minutes_before_close: int = 45,
 ) -> Dict[str, Any]:
     """Mirror of _simulate_short_trade_from_signal for LONG trades."""
@@ -1304,8 +1304,8 @@ def _simulate_long_trade_from_signal(
     if entry_idx is None or entry_price is None:
         return default
 
-    initial_stop_price = round(entry_price - float(initial_stop_pts), 2)
-    take_profit_price  = round(entry_price + float(take_profit_pts),  2)
+    initial_stop_price = round(entry_price - float(long_initial_stop_pts), 2)
+    take_profit_price  = round(entry_price + float(long_take_profit_pts),  2)
 
     highest_high_since_entry = entry_price
     trailing_active  = False
@@ -1328,12 +1328,12 @@ def _simulate_long_trade_from_signal(
         mfe_points = max(mfe_points, high_v - entry_price)
         mae_points = max(mae_points, entry_price - low_v)
 
-        if (not trailing_active) and mfe_points >= float(trail_activate_profit_pts):
+        if (not trailing_active) and mfe_points >= float(long_trail_activate_profit_pts):
             trailing_active = True
 
         active_stop_price = initial_stop_price
         if trailing_active:
-            trailing_stop_price = round(highest_high_since_entry - float(trailing_stop_pts), 2)
+            trailing_stop_price = round(highest_high_since_entry - float(long_trailing_stop_pts), 2)
             active_stop_price   = trailing_stop_price
 
         if low_v <= active_stop_price:
@@ -1402,10 +1402,10 @@ def _evaluate_down_long_setup(
     long_call_skew_min_increase_pct: float,
     entry_within_bottom_pts: float,
     entry_search_window_minutes: int,
-    initial_stop_pts: float,
-    trail_activate_profit_pts: float,
-    trailing_stop_pts: float,
-    take_profit_pts: float,
+    long_initial_stop_pts: float,
+    long_trail_activate_profit_pts: float,
+    long_trailing_stop_pts: float,
+    long_take_profit_pts: float,
     prior_ctx: Dict[str, Any],
     max_prior_down_up_ratio: float,
     max_start_pct_of_range: float,
@@ -1531,10 +1531,10 @@ def _evaluate_down_long_setup(
                 consolidation_end_idx=consolidation_end_idx,
                 entry_within_bottom_pts=entry_within_bottom_pts,
                 entry_search_window_minutes=entry_search_window_minutes,
-                initial_stop_pts=initial_stop_pts,
-                trail_activate_profit_pts=trail_activate_profit_pts,
-                trailing_stop_pts=trailing_stop_pts,
-                take_profit_pts=take_profit_pts,
+                long_initial_stop_pts=long_initial_stop_pts,
+                long_trail_activate_profit_pts=long_trail_activate_profit_pts,
+                long_trailing_stop_pts=long_trailing_stop_pts,
+                long_take_profit_pts=long_take_profit_pts,
                 max_minutes_before_close=max_minutes_before_close,
             )
 
@@ -1593,6 +1593,10 @@ def _day_zone_results(
     long_put_skew_min_decrease_pct: float,
     long_call_skew_min_increase_pct: float,
     max_minutes_before_close: int,
+    long_initial_stop_pts: float,
+    long_trail_activate_profit_pts: float,
+    long_trailing_stop_pts: float,
+    long_take_profit_pts: float,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     qualifying_levels = _collect_day_levels(day_rows, level_family, min_level_gex_bn)
     zones = _build_zones(qualifying_levels, zone_merge_distance_pts)
@@ -1906,10 +1910,10 @@ def _day_zone_results(
                         long_call_skew_min_increase_pct=long_call_skew_min_increase_pct,
                         entry_within_bottom_pts=entry_within_top_pts,
                         entry_search_window_minutes=entry_search_window_minutes,
-                        initial_stop_pts=initial_stop_pts,
-                        trail_activate_profit_pts=trail_activate_profit_pts,
-                        trailing_stop_pts=trailing_stop_pts,
-                        take_profit_pts=take_profit_pts,
+                        long_initial_stop_pts=long_initial_stop_pts,
+                        long_trail_activate_profit_pts=long_trail_activate_profit_pts,
+                        long_trailing_stop_pts=long_trailing_stop_pts,
+                        long_take_profit_pts=long_take_profit_pts,
                         prior_ctx=prior_ctx,
                         max_prior_down_up_ratio=max_prior_down_up_ratio,
                         max_start_pct_of_range=max_start_pct_of_range,
@@ -2014,6 +2018,10 @@ def scan_gex_level_moves(
     long_put_skew_min_decrease_pct: float = 80.0,
     long_call_skew_min_increase_pct: float = 30.0,
     max_minutes_before_close: int = 45,
+    long_initial_stop_pts: float = 10.0,
+    long_trail_activate_profit_pts: float = 20.0,
+    long_trailing_stop_pts: float = 10.0,
+    long_take_profit_pts: float = 35.0,
     source_view: str | None = None,
 ) -> Dict[str, Any]:
     level_family = (level_family or "primary").strip().lower()
@@ -2095,6 +2103,10 @@ def scan_gex_level_moves(
             long_put_skew_min_decrease_pct=float(long_put_skew_min_decrease_pct),
             long_call_skew_min_increase_pct=float(long_call_skew_min_increase_pct),
             max_minutes_before_close=int(max_minutes_before_close),
+            long_initial_stop_pts=float(long_initial_stop_pts),
+            long_trail_activate_profit_pts=float(long_trail_activate_profit_pts),
+            long_trailing_stop_pts=float(long_trailing_stop_pts),
+            long_take_profit_pts=float(long_take_profit_pts),
         )
         results.extend(day_results)
 

@@ -469,6 +469,10 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 long_put_skew_min_decrease_pct=float(settings.get("longPutSkewMinDecreasePct", 80.0)),
                 long_call_skew_min_increase_pct=float(settings.get("longCallSkewMinIncreasePct", 30.0)),
                 max_minutes_before_close=int(settings.get("maxMinutesBeforeClose", 45)),
+                long_initial_stop_pts=float(settings.get("longInitialStopPts", 10.0)),
+                long_trail_activate_profit_pts=float(settings.get("longTrailActivateProfitPts", 20.0)),
+                long_trailing_stop_pts=float(settings.get("longTrailingStopPts", 10.0)),
+                long_take_profit_pts=float(settings.get("longTakeProfitPts", 35.0)),
                 source_view=DEFAULT_SOURCE_VIEW,
             )
 
