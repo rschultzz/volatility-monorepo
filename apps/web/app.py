@@ -537,11 +537,14 @@ def apply_backtests_selection(_n_intervals, last_seq):
     trade_date = payload.get("trade_date")
     start_time = _parse_hhmm(payload.get("start_ts_pt"))
     target_time = _parse_hhmm(payload.get("target_ts_pt"))
+    signal_time = _parse_hhmm(payload.get("signal_ts_pt"))
+    entry_time = _parse_hhmm(payload.get("trade_entry_ts_pt"))
+    exit_time = _parse_hhmm(payload.get("trade_exit_ts_pt"))
 
     times = []
     # Shift times by +1 minute to match the "slice" convention (bar end/close)
     # used in the rest of the app for highlighting and smile charts.
-    for t in [start_time, target_time]:
+    for t in [start_time, target_time, signal_time, entry_time, exit_time]:
         if t:
             t_shifted = _shift_hhmm(t, 1)
             if t_shifted and t_shifted not in times:

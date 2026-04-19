@@ -365,8 +365,9 @@ export default function App() {
           trade_date: row.trade_date,
           start_ts_pt: row.start_ts_pt,
           target_ts_pt: row.target_ts_pt,
-          signal_ts_pt: row.short_signal_ts_pt || '',
+          signal_ts_pt: (row.direction === 'down' ? row.long_signal_ts_pt : row.short_signal_ts_pt) || '',
           trade_entry_ts_pt: row.trade_entry_ts_pt || '',
+          trade_exit_ts_pt: row.trade_exit_ts_pt || '',
         }),
       });
 

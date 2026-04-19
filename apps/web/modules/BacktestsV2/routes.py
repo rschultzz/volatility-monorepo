@@ -508,6 +508,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
         target_ts_pt = str(payload.get("target_ts_pt") or "").strip()
         signal_ts_pt = str(payload.get("signal_ts_pt") or "").strip()
         trade_entry_ts_pt = str(payload.get("trade_entry_ts_pt") or "").strip()
+        trade_exit_ts_pt = str(payload.get("trade_exit_ts_pt") or "").strip()
 
         if not trade_date:
             return jsonify({"ok": False, "error": "trade_date is required"}), 400
@@ -519,6 +520,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             "target_ts_pt": target_ts_pt,
             "signal_ts_pt": signal_ts_pt,
             "trade_entry_ts_pt": trade_entry_ts_pt,
+            "trade_exit_ts_pt": trade_exit_ts_pt,
         }
 
         return jsonify(
