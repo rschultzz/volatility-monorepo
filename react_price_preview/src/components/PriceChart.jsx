@@ -7,6 +7,7 @@ import {
   LineSeries,
 } from 'lightweight-charts'
 import SmileChart from './SmileChart'
+import SignalPanel from './SignalPanel'
 
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
@@ -1889,6 +1890,12 @@ export default function PriceChart({
               </>
             )}
           </div>
+
+          {/* Signal Panel — separate floating window, self-managed fetch */}
+          <SignalPanel
+            tradeDate={tradeDate}
+            isToday={tradeDate === new Date().toISOString().slice(0, 10)}
+          />
 
           {settingsOpen && (
             <div

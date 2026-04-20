@@ -469,10 +469,6 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 long_put_skew_min_decrease_pct=float(settings.get("longPutSkewMinDecreasePct", 80.0)),
                 long_call_skew_min_increase_pct=float(settings.get("longCallSkewMinIncreasePct", 30.0)),
                 max_minutes_before_close=int(settings.get("maxMinutesBeforeClose", 45)),
-                long_initial_stop_pts=float(settings.get("longInitialStopPts", 10.0)),
-                long_trail_activate_profit_pts=float(settings.get("longTrailActivateProfitPts", 20.0)),
-                long_trailing_stop_pts=float(settings.get("longTrailingStopPts", 10.0)),
-                long_take_profit_pts=float(settings.get("longTakeProfitPts", 35.0)),
                 source_view=DEFAULT_SOURCE_VIEW,
             )
 
@@ -535,6 +531,246 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             }
         )
 
+    def scan_signals_api():
+        """
+        Scan for setups on a given date and persist results to bt_signals.
+        Uses the same runner as scan_gex_moves_api but also:
+        - Computes a settings_hash so stale results can be identified
+        - Upserts rows to bt_signals (preserves existing labels)
+        - Returns signal rows shaped for SignalPanel
+        """
+        import hashlib, datetime as _dt, uuid as _uuid
+
+        raw_payload = _normalize_payload_aliases(request.get_json(silent=True) or {})
+        resolved = _resolve_strategy_payloads()
+
+        strategy_key = str(raw_payload.get("strategyKey") or _default_strategy_key()).strip()
+        item = resolved.get(strategy_key)
+        if item is None:
+            return jsonify({"ok": False, "error": f"Unknown strategyKey: {strategy_key}"}), 400
+
+        strategy = item["spec"]
+        strategy_meta = item["serialized"]
+        settings = {**strategy_meta["defaults"], **raw_payload}
+        settings["strategyKey"] = strategy_key
+
+        trade_date = str(raw_payload.get("tradeDate") or raw_payload.get("startDate") or "").strip()
+        if not trade_date:
+            return jsonify({"ok": False, "error": "tradeDate is required"}), 400
+
+        # Settings hash — identifies this exact parameter set
+        hash_keys = [
+            "minLevelGexBn", "zoneMergeDistancePts", "minCleanMovePoints",
+            "targetProximityPts", "maxZoneBreachPts", "pivotStrengthBars",
+            "levelFamily", "consolidationWindowMinutes",
+            "shortPutSkewIncreasePct", "shortCallSkewMaxPct",
+            "entryWithinTopPts", "entrySearchWindowMinutes",
+            "initialStopPts", "trailActivateProfitPts", "trailingStopPts", "takeProfitPts",
+            "maxPriorDownUpRatio", "maxStartPctOfRange", "maxMoveLossPct",
+            "minMinutesAfterOpen", "longPutSkewMinDecreasePct", "longCallSkewMinIncreasePct",
+            "maxMinutesBeforeClose", "longInitialStopPts", "longTrailActivateProfitPts",
+            "longTrailingStopPts", "longTakeProfitPts",
+        ]
+        hash_str = json.dumps({k: settings.get(k) for k in hash_keys}, sort_keys=True)
+        settings_hash = hashlib.md5(hash_str.encode()).hexdigest()[:12]
+
+        try:
+            data = strategy.runner(
+                start_date=trade_date,
+                end_date=trade_date,
+                min_level_gex_bn=float(settings["minLevelGexBn"]),
+                zone_merge_distance_pts=float(settings["zoneMergeDistancePts"]),
+                min_clean_move_points=float(settings["minCleanMovePoints"]),
+                target_proximity_pts=float(settings["targetProximityPts"]),
+                max_zone_breach_pts=float(settings["maxZoneBreachPts"]),
+                pivot_strength_bars=int(settings["pivotStrengthBars"]),
+                level_family=str(settings["levelFamily"]),
+                max_results=int(settings.get("maxResults", 2500)),
+                consolidation_window_minutes=int(settings["consolidationWindowMinutes"]),
+                short_put_skew_increase_pct=float(settings["shortPutSkewIncreasePct"]),
+                short_call_skew_max_pct=float(settings["shortCallSkewMaxPct"]),
+                entry_within_top_pts=float(settings["entryWithinTopPts"]),
+                entry_search_window_minutes=int(settings["entrySearchWindowMinutes"]),
+                initial_stop_pts=float(settings["initialStopPts"]),
+                trail_activate_profit_pts=float(settings["trailActivateProfitPts"]),
+                trailing_stop_pts=float(settings["trailingStopPts"]),
+                take_profit_pts=float(settings["takeProfitPts"]),
+                max_prior_down_up_ratio=float(settings.get("maxPriorDownUpRatio", 2.0)),
+                max_start_pct_of_range=float(settings.get("maxStartPctOfRange", 0.20)),
+                max_move_loss_pct=float(settings.get("maxMoveLossPct", 0.75)),
+                min_minutes_after_open=int(settings.get("minMinutesAfterOpen", 15)),
+                long_put_skew_min_decrease_pct=float(settings.get("longPutSkewMinDecreasePct", 80.0)),
+                long_call_skew_min_increase_pct=float(settings.get("longCallSkewMinIncreasePct", 30.0)),
+                max_minutes_before_close=int(settings.get("maxMinutesBeforeClose", 45)),
+                long_initial_stop_pts=float(settings.get("longInitialStopPts", 10.0)),
+                long_trail_activate_profit_pts=float(settings.get("longTrailActivateProfitPts", 20.0)),
+                long_trailing_stop_pts=float(settings.get("longTrailingStopPts", 10.0)),
+                long_take_profit_pts=float(settings.get("longTakeProfitPts", 35.0)),
+                source_view=DEFAULT_SOURCE_VIEW,
+            )
+
+            base_strategy_key = strategy_meta.get("baseStrategyKey") or item["base_registry_key"]
+            raw_rows = data.get("rows") or []
+            rows = _filtered_rows(raw_rows, base_strategy_key)
+
+            # Shape rows into signal objects and persist to bt_signals
+            engine = _engine()
+            signal_out = []
+            with engine.begin() as conn:
+                for row in rows:
+                    direction = row.get("direction", "up")
+                    has_setup = row.get("short_setup_found") or row.get("long_setup_found")
+                    has_trade = row.get("trade_entry_found")
+                    status = "completed" if has_trade else ("signal_fired" if has_setup else "expired")
+
+                    signal_ts_pt = row.get("short_signal_ts_pt") or row.get("long_signal_ts_pt")
+                    put_skew = row.get("short_signal_delta_put_skew_pct") or row.get("long_signal_delta_put_skew_pct")
+                    call_skew = row.get("short_signal_delta_call_skew_pct") or row.get("long_signal_delta_call_skew_pct")
+
+                    # Check if this exact row already exists (match on date + direction + target + signal_ts)
+                    existing = conn.execute(text("""
+                        SELECT signal_id, label, label_note
+                        FROM bt_signals
+                        WHERE trade_date = :td
+                          AND strategy_key = :sk
+                          AND settings_hash = :sh
+                          AND direction = :dir
+                          AND target_level = :tl
+                          AND signal_ts_pt IS NOT DISTINCT FROM :stp
+                        LIMIT 1
+                    """), {
+                        "td": trade_date, "sk": strategy_key, "sh": settings_hash,
+                        "dir": direction,
+                        "tl": row.get("target_level"),
+                        "stp": signal_ts_pt,
+                    }).fetchone()
+
+                    if existing:
+                        signal_id = str(existing[0])
+                        label = existing[1]
+                        label_note = existing[2]
+                        # Update outcome/status in case it changed
+                        conn.execute(text("""
+                            UPDATE bt_signals SET
+                                status = :status,
+                                entry_price = :ep,
+                                initial_stop = :st,
+                                take_profit = :tp,
+                                realized_pts = :rp,
+                                outcome = :oc,
+                                raw_result = CAST(:rr AS jsonb)
+                            WHERE signal_id = :sid
+                        """), {
+                            "status": status, "ep": row.get("trade_entry_price"),
+                            "st": row.get("trade_initial_stop_price"),
+                            "tp": row.get("trade_take_profit_price"),
+                            "rp": row.get("trade_realized_points"),
+                            "oc": row.get("trade_outcome"),
+                            "rr": json.dumps({k: _json_safe_value(v) for k, v in row.items()}),
+                            "sid": signal_id,
+                        })
+                    else:
+                        signal_id = str(_uuid.uuid4())
+                        label = None
+                        label_note = None
+                        conn.execute(text("""
+                            INSERT INTO bt_signals (
+                                signal_id, trade_date, strategy_key, settings_hash,
+                                direction, status,
+                                source_zone_low, source_zone_high, target_level,
+                                entry_price, initial_stop, take_profit, trailing_stop,
+                                signal_ts_pt, entry_ts_pt, exit_ts_pt,
+                                put_skew, call_skew,
+                                realized_pts, outcome,
+                                raw_result
+                            ) VALUES (
+                                :sid, :td, :sk, :sh,
+                                :dir, :status,
+                                :szl, :szh, :tl,
+                                :ep, :ist, :tp, :ts,
+                                :stp, :etp, :xtp,
+                                :put, :call,
+                                :rp, :oc,
+                                CAST(:rr AS jsonb)
+                            )
+                        """), {
+                            "sid": signal_id, "td": trade_date, "sk": strategy_key, "sh": settings_hash,
+                            "dir": direction, "status": status,
+                            "szl": row.get("source_zone_low"), "szh": row.get("source_zone_high"),
+                            "tl": row.get("target_level"),
+                            "ep": row.get("trade_entry_price"),
+                            "ist": row.get("trade_initial_stop_price"),
+                            "tp": row.get("trade_take_profit_price"),
+                            "ts": row.get("trade_trailing_stop_price"),
+                            "stp": signal_ts_pt,
+                            "etp": row.get("trade_entry_ts_pt"),
+                            "xtp": row.get("trade_exit_ts_pt"),
+                            "put": put_skew, "call": call_skew,
+                            "rp": row.get("trade_realized_points"),
+                            "oc": row.get("trade_outcome"),
+                            "rr": json.dumps({k: _json_safe_value(v) for k, v in row.items()}),
+                        })
+
+                    signal_out.append({
+                        "signal_id": signal_id,
+                        "trade_date": trade_date,
+                        "strategy_key": strategy_key,
+                        "settings_hash": settings_hash,
+                        "direction": direction,
+                        "status": status,
+                        "source_zone_low": row.get("source_zone_low"),
+                        "source_zone_high": row.get("source_zone_high"),
+                        "target_level": row.get("target_level"),
+                        "entry_price": row.get("trade_entry_price"),
+                        "initial_stop": row.get("trade_initial_stop_price"),
+                        "take_profit": row.get("trade_take_profit_price"),
+                        "signal_ts_pt": signal_ts_pt,
+                        "entry_ts_pt": row.get("trade_entry_ts_pt"),
+                        "exit_ts_pt": row.get("trade_exit_ts_pt"),
+                        "put_skew": put_skew,
+                        "call_skew": call_skew,
+                        "realized_pts": row.get("trade_realized_points"),
+                        "outcome": row.get("trade_outcome"),
+                        "label": label,
+                        "label_note": label_note,
+                    })
+
+            return jsonify({"ok": True, "signals": signal_out, "settingsHash": settings_hash})
+
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+    def label_signal_api():
+        """Update the thumbs up/down label on a signal."""
+        payload = request.get_json(silent=True) or {}
+        signal_id = str(payload.get("signalId") or "").strip()
+        label = payload.get("label")  # +1, -1, 0, or null
+        note = payload.get("note", "")
+
+        if not signal_id:
+            return jsonify({"ok": False, "error": "signalId is required"}), 400
+
+        if label is not None and label not in (-1, 0, 1):
+            return jsonify({"ok": False, "error": "label must be -1, 0, 1, or null"}), 400
+
+        try:
+            engine = _engine()
+            with engine.begin() as conn:
+                result = conn.execute(text("""
+                    UPDATE bt_signals
+                    SET label = :label,
+                        label_note = :note,
+                        labeled_at = now()
+                    WHERE signal_id = :sid::uuid
+                    RETURNING signal_id, label, label_note, labeled_at
+                """), {"label": label, "note": note or None, "sid": signal_id})
+                row = result.fetchone()
+                if row is None:
+                    return jsonify({"ok": False, "error": "signal not found"}), 404
+            return jsonify({"ok": True, "signalId": str(row[0]), "label": row[1]})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
     if "backtests_v2_preview_index" not in server.view_functions:
         server.add_url_rule("/backtests-v2-preview", endpoint="backtests_v2_preview_index", view_func=index)
 
@@ -581,5 +817,21 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             "/api/backtests-v2/select-trade",
             endpoint="backtests_v2_select_trade",
             view_func=select_trade_api,
+            methods=["POST"],
+        )
+
+    if "backtests_v2_scan_signals" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/signals/scan",
+            endpoint="backtests_v2_scan_signals",
+            view_func=scan_signals_api,
+            methods=["POST"],
+        )
+
+    if "backtests_v2_label_signal" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/signals/label",
+            endpoint="backtests_v2_label_signal",
+            view_func=label_signal_api,
             methods=["POST"],
         )
