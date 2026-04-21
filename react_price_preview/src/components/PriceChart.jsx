@@ -643,7 +643,7 @@ export default function PriceChart({
       const saved = window.localStorage.getItem('ib-react-skew-window-pos')
       if (saved) return JSON.parse(saved)
     } catch (e) {}
-    return { top: 12, right: 12 }
+    return { bottom: 12, left: 12 }
   })
   const floatingDragRef = useRef(null)
 
