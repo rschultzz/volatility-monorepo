@@ -36,7 +36,7 @@ function StatusDot({ status }) {
   )
 }
 
-function SignalCard({ signal, onLabel, isToday }) {
+function SignalCard({ signal, onLabel, isToday, isSelected, onSelect }) {
   const dir = DIR_CONFIG[signal.direction] || DIR_CONFIG.up
   const sta = STATUS_CONFIG[signal.status] || STATUS_CONFIG.watching
 
@@ -51,6 +51,20 @@ function SignalCard({ signal, onLabel, isToday }) {
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '5px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {/* Radio button for trade selection */}
+          <input
+            type="radio"
+            checked={isSelected}
+            onChange={() => onSelect(signal.signal_id)}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              cursor: 'pointer',
+              width: '14px',
+              height: '14px',
+              flexShrink: 0,
+            }}
+            title="Select this trade to view timeslices"
+          />
           <span style={{
             fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em',
             color: dir.color, background: dir.bg,
@@ -350,6 +364,54 @@ export default function SignalPanel({
     })
   }
 
+  const [selectedSignalId, setSelectedSignalId] = useState(null)
+
+  const handleSelectSignal = useCallback((signalId) => {
+    // Toggle selection: if already selected, deselect; otherwise select
+    const nextId = selectedSignalId === signalId ? null : signalId
+    setSelectedSignalId(nextId)
+
+    // Find the selected signal and extract timeslices
+    const selectedSignal = signals.find(s => s.signal_id === signalId)
+    if (!selectedSignal) {
+      // Deselected or not found - clear timeslices
+      try {
+        window.parent.postMessage({ type: 'ib-react-timeslices', times: [] }, '*')
+      } catch (err) {
+        console.error('postMessage failed', err)
+      }
+      return
+    }
+
+    // Extract time fields from the signal
+    const times = []
+    const timeFields = [
+      selectedSignal.start_ts_pt,
+      selectedSignal.target_ts_pt,
+      selectedSignal.signal_ts_pt,
+      selectedSignal.entry_ts_pt,
+      selectedSignal.exit_ts_pt,
+    ]
+
+    for (const t of timeFields) {
+      if (t && typeof t === 'string') {
+        const trimmed = t.trim()
+        // Validate HH:MM format
+        if (/^\d{2}:\d{2}$/.test(trimmed) && !times.includes(trimmed)) {
+          times.push(trimmed)
+        }
+      }
+    }
+
+    // Sort and send to parent
+    times.sort()
+    try {
+      window.parent.postMessage({ type: 'ib-react-timeslices', times }, '*')
+    } catch (err) {
+      console.error('postMessage failed', err)
+    }
+  }, [selectedSignalId, signals])
+
   const completedSignals = signals.filter(s => s.status === 'completed' || s.status === 'expired')
   const activeSignals = signals.filter(s => s.status !== 'completed' && s.status !== 'expired')
 
@@ -357,7 +419,7 @@ export default function SignalPanel({
     <div
       onMouseDown={handleDragMouseDown}
       onWheel={e => e.stopPropagation()}
-      onClick={e => e.stopPropagation()}
+      onClick={collapsed ? toggleCollapsed : e => e.stopPropagation()}
       style={{
         position: 'absolute',
         zIndex: 11,
@@ -378,7 +440,6 @@ export default function SignalPanel({
         overflow: 'hidden',
         ...(collapsed ? { top: 8, left: 64 + 200 } : pos),
       }}
-      onClick={collapsed ? toggleCollapsed : e => e.stopPropagation()}
     >
       {/* Header */}
       <div style={{
@@ -486,7 +547,14 @@ export default function SignalPanel({
                     </div>
                   )}
                   {activeSignals.map(s => (
-                    <SignalCard key={s.signal_id} signal={s} onLabel={handleLabel} isToday={isToday} />
+                    <SignalCard 
+                      key={s.signal_id} 
+                      signal={s} 
+                      onLabel={handleLabel} 
+                      isToday={isToday}
+                      isSelected={selectedSignalId === s.signal_id}
+                      onSelect={handleSelectSignal}
+                    />
                   ))}
                 </>
               )}
@@ -498,7 +566,14 @@ export default function SignalPanel({
                     Completed
                   </div>
                   {completedSignals.map(s => (
-                    <SignalCard key={s.signal_id} signal={s} onLabel={handleLabel} isToday={isToday} />
+                    <SignalCard 
+                      key={s.signal_id} 
+                      signal={s} 
+                      onLabel={handleLabel} 
+                      isToday={isToday}
+                      isSelected={selectedSignalId === s.signal_id}
+                      onSelect={handleSelectSignal}
+                    />
                   ))}
                 </>
               )}
