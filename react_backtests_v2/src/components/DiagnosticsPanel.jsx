@@ -59,7 +59,91 @@ function computePerformance(rows) {
   };
 }
 
-export default function DiagnosticsPanel({ diagnostics, rows = [] }) {
+function FunnelStage({ stage, index }) {
+  const { label, kind, bypassed, candidates_in, kept, dropped, drop_reasons } = stage;
+  const pct = candidates_in > 0 ? (kept / candidates_in) * 100 : 0;
+  
+  const kindColor = kind === 'construction' ? '#3b82f6' : kind === 'filter' ? '#10b981' : '#64748b';
+  const barColor = bypassed ? '#475569' : kindColor;
+  
+  return (
+    <div style={{
+      background: '#0f172a',
+      border: '1px solid #1e293b',
+      borderRadius: '10px',
+      padding: '12px 14px',
+      marginBottom: '8px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ 
+            fontSize: '11px', 
+            fontWeight: '700', 
+            color: '#64748b',
+            minWidth: '20px',
+          }}>
+            {index + 1}.
+          </span>
+          <span style={{ 
+            fontSize: '13px', 
+            fontWeight: '600', 
+            color: bypassed ? '#64748b' : '#e2e8f0',
+            opacity: bypassed ? 0.6 : 1,
+          }}>
+            {label}
+          </span>
+          {bypassed && (
+            <span style={{
+              fontSize: '9px',
+              fontWeight: '700',
+              color: '#64748b',
+              background: '#1e293b',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              letterSpacing: '0.05em',
+            }}>
+              BYPASSED
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: '12px', color: '#94a3b8', fontWeight: '500' }}>
+          {kept} / {candidates_in}
+          {dropped > 0 && !bypassed && (
+            <span style={{ color: '#f87171', marginLeft: '8px' }}>
+              (−{dropped})
+            </span>
+          )}
+        </div>
+      </div>
+      
+      <div style={{
+        height: '6px',
+        background: '#1e293b',
+        borderRadius: '3px',
+        overflow: 'hidden',
+      }}>
+        <div style={{
+          height: '100%',
+          width: `${pct}%`,
+          background: barColor,
+          transition: 'width 0.3s ease',
+        }} />
+      </div>
+      
+      {!bypassed && dropped > 0 && drop_reasons && Object.keys(drop_reasons).length > 0 && (
+        <div style={{ marginTop: '8px', fontSize: '11px', color: '#64748b' }}>
+          {Object.entries(drop_reasons).map(([reason, count]) => (
+            <div key={reason} style={{ marginTop: '2px' }}>
+              • {reason.replace(/_/g, ' ')}: {count}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function DiagnosticsPanel({ diagnostics, rows = [], funnel = [] }) {
   if (!diagnostics) return null;
 
   const perf = computePerformance(rows);
@@ -74,6 +158,24 @@ export default function DiagnosticsPanel({ diagnostics, rows = [] }) {
           </p>
         </div>
       </div>
+
+      {funnel && funnel.length > 0 && (
+        <div style={{ marginBottom: '20px' }}>
+          <h3 style={{ 
+            fontSize: '13px', 
+            fontWeight: '700', 
+            color: '#93c5fd', 
+            marginBottom: '12px',
+            letterSpacing: '0.05em',
+            textTransform: 'uppercase',
+          }}>
+            Pipeline Funnel
+          </h3>
+          {funnel.map((stage, idx) => (
+            <FunnelStage key={stage.key} stage={stage} index={idx} />
+          ))}
+        </div>
+      )}
 
       <div className="diag-stat-grid diag-stat-grid-compact">
         <StatCell label="Days total" value={diagnostics.days_total ?? '—'} />

@@ -42,6 +42,7 @@ const FALLBACK_DEFAULT_SETTINGS = {
   longTrailActivateProfitPts: 20.0,
   longTrailingStopPts: 10.0,
   longTakeProfitPts: 35.0,
+  bypassFilters: [],
 };
 
 const DEFAULT_COLUMNS = [
@@ -129,6 +130,8 @@ function normalizeNumericSettings(nextSettings) {
     longTrailActivateProfitPts: Number(nextSettings.longTrailActivateProfitPts),
     longTrailingStopPts: Number(nextSettings.longTrailingStopPts),
     longTakeProfitPts: Number(nextSettings.longTakeProfitPts),
+    // Pass through non-numeric fields
+    bypassFilters: nextSettings.bypassFilters || [],
   };
 }
 
@@ -168,6 +171,7 @@ export default function App() {
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState(null);
   const [diagnostics, setDiagnostics] = useState(null);
+  const [funnel, setFunnel] = useState([]);
   const [loading, setLoading] = useState(false);
   const [savingDefaults, setSavingDefaults] = useState(false);
   const [creatingStrategy, setCreatingStrategy] = useState(false);
@@ -285,6 +289,7 @@ export default function App() {
       setRows(data.rows || []);
       setSummary(data.summary || null);
       setDiagnostics(data.diagnostics || null);
+      setFunnel(data.funnel || []);
       setSelectedRowKey(null);
       setIsSettingsOpen(false);
     } catch (err) {
@@ -430,7 +435,7 @@ export default function App() {
           </div>
         </div>
 
-        <DiagnosticsPanel diagnostics={diagnostics} rows={rows} />
+        <DiagnosticsPanel diagnostics={diagnostics} rows={rows} funnel={funnel} />
 
         <div className="results-card" style={{ flex: 1 }}>
           <div className="results-header">
@@ -475,6 +480,14 @@ export default function App() {
         onChange={updateDraft}
         onClose={() => setIsSettingsOpen(false)}
         onRun={() => runScan(settingsDraft)}
+        bypassFilters={settingsDraft.bypassFilters || []}
+        onToggleBypass={(stageKey) => {
+          const current = settingsDraft.bypassFilters || [];
+          const next = current.includes(stageKey)
+            ? current.filter(k => k !== stageKey)
+            : [...current, stageKey];
+          updateDraft('bypassFilters', next);
+        }}
       />
 
       <ColumnSettingsModal

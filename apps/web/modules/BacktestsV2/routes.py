@@ -65,7 +65,11 @@ def _sanitize_saved_params(params: Dict[str, Any], defaults: Dict[str, Any]) -> 
     for key, value in (params or {}).items():
         if key not in allowed_keys:
             continue
-        clean[key] = _json_safe_value(value)
+        # Preserve arrays (like bypassFilters) as-is
+        if isinstance(value, list):
+            clean[key] = value
+        else:
+            clean[key] = _json_safe_value(value)
 
     return clean
 
@@ -470,6 +474,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 long_call_skew_min_increase_pct=float(settings.get("longCallSkewMinIncreasePct", 30.0)),
                 max_minutes_before_close=int(settings.get("maxMinutesBeforeClose", 45)),
                 source_view=DEFAULT_SOURCE_VIEW,
+                bypass_filters=tuple(settings.get("bypassFilters") or ()),
             )
 
             base_strategy_key = strategy_meta.get("baseStrategyKey") or item["base_registry_key"]
@@ -487,6 +492,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                     "rows": rows,
                     "summary": summary,
                     "diagnostics": diagnostics,
+                    "funnel": data.get("funnel", []),
                 }
             )
         except Exception as exc:
@@ -607,6 +613,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 long_trailing_stop_pts=float(settings.get("longTrailingStopPts", 10.0)),
                 long_take_profit_pts=float(settings.get("longTakeProfitPts", 35.0)),
                 source_view=DEFAULT_SOURCE_VIEW,
+                bypass_filters=tuple(settings.get("bypassFilters") or ()),
             )
 
             base_strategy_key = strategy_meta.get("baseStrategyKey") or item["base_registry_key"]

@@ -46,6 +46,7 @@ def _base_defaults() -> Dict[str, Any]:
         "longTrailActivateProfitPts": 20.0,
         "longTrailingStopPts": 10.0,
         "longTakeProfitPts": 35.0,
+        "bypassFilters": [],
     }
 
 
