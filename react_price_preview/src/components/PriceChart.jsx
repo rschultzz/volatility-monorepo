@@ -594,7 +594,7 @@ export default function PriceChart({
   selectedTimes: parentSelectedTimes = [],
   gexSegments,
   gexEnabled,
-  gexMinAbsB = 10,
+  gexMinAbsB = 50,
   expectedMoveLevels,
   onApplyGexMinAbsB,
   onApplyIntervalChange,
