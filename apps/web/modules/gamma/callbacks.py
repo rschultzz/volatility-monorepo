@@ -4,10 +4,14 @@ import os
 import datetime as dt
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output, callback
+from dash import Input, Output, State, callback
 from sqlalchemy import text
 from sqlalchemy import create_engine
 from sqlalchemy.engine.url import make_url
+from zoneinfo import ZoneInfo
+
+# Import utilities for live data and market hours
+from packages.shared.utils import is_market_hours
 
 # ---------- Config ----------
 # Optional zoom: set GEX_ZOOM_PCT to a float like "0.03" for ±3% of max call gamma.
@@ -211,18 +215,105 @@ def _fetch_es_open_at_1501_prior_day(trade_date: dt.date) -> float | None:
     return None
 
 
+# ---------- Helper to fetch live ES price ----------
+def _fetch_live_es_price() -> float | None:
+    """
+    Fetch the most recent ES price from the ironbeam_es_trades table.
+    Returns None if no recent data is available.
+    """
+    eng = get_engine()
+    
+    # Get the most recent trade within the last 2 minutes (more aggressive)
+    sql = text("""
+        SELECT price, ts_utc
+        FROM ironbeam_es_trades
+        WHERE ts_utc >= NOW() - INTERVAL '2 minutes'
+        ORDER BY ts_utc DESC
+        LIMIT 1
+    """)
+    
+    try:
+        with eng.connect() as con:
+            result = con.execute(sql)
+            row = result.fetchone()
+            if row:
+                price = float(row[0])
+                ts = row[1]
+                print(f"[gamma] Fetched live ES price: {price} at {ts}")
+                return price
+    except Exception as e:
+        print(f"[gamma] Error fetching live ES price: {e}")
+    
+    print("[gamma] No recent ES price found")
+    return None
+
+
 # ---------- Dash callback ----------
 @callback(
     Output("GEX_GRAPH", "figure"),
-    Input("trade-date", "date"),
+    [Input("trade-date", "date"),
+     Input("live-update-timer", "n_intervals")],
+    [State("GEX_GRAPH", "relayoutData")],
 )
-def render_gex(trade_date_iso: str | None):
+def render_gex(trade_date_iso: str | None, n_intervals: int, relayout_data: dict | None):
+    from dash import ctx
+    
     if not trade_date_iso:
         return _build_gex_figure(pd.DataFrame(), "—")
+    
     trade_date = dt.date.fromisoformat(trade_date_iso)
     df = _fetch_gex_grouped_by_level(trade_date)
     
     # Fetch ES open price at 15:01 PT on prior day for zoom calculation
     es_open_1501 = _fetch_es_open_at_1501_prior_day(trade_date)
     
-    return _build_gex_figure(df, trade_date_iso, es_open_1501)
+    # Check if this is a live update (not a date change)
+    triggered_id = ctx.triggered_id if ctx.triggered else None
+    is_live_update = (triggered_id == "live-update-timer")
+    
+    fig = _build_gex_figure(df, trade_date_iso, es_open_1501)
+    
+    # Preserve user's zoom/pan state if this is a live update
+    if is_live_update and relayout_data:
+        # Preserve x-axis range
+        if "xaxis.range[0]" in relayout_data and "xaxis.range[1]" in relayout_data:
+            fig.update_xaxes(range=[relayout_data["xaxis.range[0]"], relayout_data["xaxis.range[1]"]])
+        elif "xaxis.range" in relayout_data:
+            fig.update_xaxes(range=relayout_data["xaxis.range"])
+        
+        # Preserve y-axis range
+        if "yaxis.range[0]" in relayout_data and "yaxis.range[1]" in relayout_data:
+            fig.update_yaxes(range=[relayout_data["yaxis.range[0]"], relayout_data["yaxis.range[1]"]])
+        elif "yaxis.range" in relayout_data:
+            fig.update_yaxes(range=relayout_data["yaxis.range"])
+    
+    # Add live price line only during RTH when trade_date = today
+    pt_tz = ZoneInfo("America/Los_Angeles")
+    today = dt.datetime.now(pt_tz).date()
+    
+    if trade_date == today and is_market_hours():
+        live_price = _fetch_live_es_price()
+        if live_price is not None:
+            # Add red dotted horizontal line at live price with annotation on y-axis
+            fig.add_hline(
+                y=live_price,
+                line_width=2,
+                line_dash="dot",
+                line_color="red",
+                annotation_text=f"{live_price:.2f}",
+                annotation_position="left",
+                annotation=dict(
+                    font=dict(size=11, color="white", family="monospace", weight="bold"),
+                    bgcolor="red",
+                    bordercolor="white",
+                    borderwidth=1,
+                    borderpad=4,
+                    xanchor="right",
+                    xshift=-5,  # Shift left to align with y-axis labels
+                )
+            )
+    
+    # Add uirevision to prevent full resets on live updates
+    fig.update_layout(uirevision=f"gex-{trade_date_iso}")
+    
+    return fig
