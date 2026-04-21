@@ -98,7 +98,7 @@ def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
 
 
 # ---------- Figure ----------
-def _build_gex_figure(df: pd.DataFrame, trade_date_str: str) -> go.Figure:
+def _build_gex_figure(df: pd.DataFrame, trade_date_str: str, es_open_1501: float | None = None) -> go.Figure:
     fig = go.Figure()
     fig.update_layout(
         template="plotly_dark",
@@ -118,7 +118,8 @@ def _build_gex_figure(df: pd.DataFrame, trade_date_str: str) -> go.Figure:
         fig.add_vline(x=0, line_width=1, line_dash="dot")
         return fig
 
-    y = df["level"].astype(str)
+    # Use numeric levels for y-axis (not strings) so we can set range properly
+    y = df["level"]
 
     fig.add_bar(
         x=df["put_gamma"], y=y, orientation="h", name="Puts",
@@ -149,11 +150,65 @@ def _build_gex_figure(df: pd.DataFrame, trade_date_str: str) -> go.Figure:
     elif max_abs > 0:
         # Default: show full width (+5% padding)
         fig.update_xaxes(range=[-max_abs * 1.05, max_abs * 1.05])
+    
+    # If we have ES open price at 15:01 PT on prior day, set default y-axis zoom to ±3% of that price
+    # User can still zoom out and scroll to see other levels
+    if es_open_1501 is not None and es_open_1501 > 0:
+        # Calculate ±3% range for y-axis zoom
+        zoom_range = es_open_1501 * 0.03
+        y_min = es_open_1501 - zoom_range
+        y_max = es_open_1501 + zoom_range
+        
+        # Set the y-axis range (user can still zoom out/scroll)
+        fig.update_yaxes(range=[y_min, y_max])
 
     # Zero line
     fig.add_vline(x=0, line_width=1, line_dash="dot", opacity=0.6)
 
     return fig
+
+
+# ---------- Helper to fetch ES open price at 15:01 PT on prior day ----------
+def _fetch_es_open_at_1501_prior_day(trade_date: dt.date) -> float | None:
+    """
+    Fetch the ES open price at 15:01 PT on the day before the trade_date.
+    Returns None if no data is available.
+    """
+    from zoneinfo import ZoneInfo
+    
+    pt_tz = ZoneInfo("America/Los_Angeles")
+    prior_date = trade_date - dt.timedelta(days=1)
+    
+    # Target time: 15:01 PT on prior day
+    target_time_pt = dt.datetime.combine(prior_date, dt.time(15, 1), tzinfo=pt_tz)
+    target_time_utc = target_time_pt.astimezone(ZoneInfo("UTC"))
+    
+    # Query the ironbeam_es_1m_bars table
+    eng = get_engine()
+    
+    # Look for bars within a 2-minute window around 15:01 PT
+    start_utc = target_time_utc - dt.timedelta(minutes=1)
+    end_utc = target_time_utc + dt.timedelta(minutes=1)
+    
+    sql = text("""
+        SELECT datetime, open
+        FROM ironbeam_es_1m_bars
+        WHERE datetime >= :start_utc
+          AND datetime <= :end_utc
+        ORDER BY datetime ASC
+        LIMIT 1
+    """)
+    
+    try:
+        with eng.connect() as con:
+            result = con.execute(sql, {"start_utc": start_utc, "end_utc": end_utc})
+            row = result.fetchone()
+            if row:
+                return float(row[1])  # return the open price
+    except Exception as e:
+        print(f"[gamma] Error fetching ES open at 15:01 prior day: {e}")
+    
+    return None
 
 
 # ---------- Dash callback ----------
@@ -166,4 +221,8 @@ def render_gex(trade_date_iso: str | None):
         return _build_gex_figure(pd.DataFrame(), "—")
     trade_date = dt.date.fromisoformat(trade_date_iso)
     df = _fetch_gex_grouped_by_level(trade_date)
-    return _build_gex_figure(df, trade_date_iso)
+    
+    # Fetch ES open price at 15:01 PT on prior day for zoom calculation
+    es_open_1501 = _fetch_es_open_at_1501_prior_day(trade_date)
+    
+    return _build_gex_figure(df, trade_date_iso, es_open_1501)
