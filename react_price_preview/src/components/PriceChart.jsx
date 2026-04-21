@@ -1717,6 +1717,18 @@ export default function PriceChart({
     })
   }
 
+  const handleRemoveTimeslice = (timeToRemove) => {
+    setLocalSelectedTimes((prev) => {
+      const next = normalizeTimes(prev.filter((x) => x !== timeToRemove))
+      try {
+        window.parent.postMessage({ type: 'ib-react-timeslices', times: next }, '*')
+      } catch (err) {
+        console.error('postMessage failed', err)
+      }
+      return next
+    })
+  }
+
   return (
     <div className="chart-shell chart-shell-compact">
       <div className="chart-frame chart-frame-compact">
@@ -1764,7 +1776,7 @@ export default function PriceChart({
           <div
             onMouseDown={handleFloatingMouseDown}
             onWheel={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
+            onClick={smileCollapsed ? toggleSmileCollapsed : (e) => e.stopPropagation()}
             style={{
               position: 'absolute',
               zIndex: 10,
@@ -1787,7 +1799,6 @@ export default function PriceChart({
               flexDirection: 'column',
               overflow: 'hidden'
             }}
-            onClick={smileCollapsed ? toggleSmileCollapsed : (e) => e.stopPropagation()}
           >
             <div style={{ 
               display: 'flex', 
@@ -1849,6 +1860,7 @@ export default function PriceChart({
                           <th style={{ textAlign: 'right', padding: '4px 0' }}>Δ Call%</th>
                           <th style={{ textAlign: 'right', padding: '4px 0' }}>Δ Put%</th>
                           <th style={{ textAlign: 'right', padding: '4px 0' }}>Exp Move</th>
+                          <th style={{ width: '20px' }}></th>
                         </tr>
                       </thead>
                       <tbody style={{ fontFamily: 'ui-monospace, monospace', fontSize: '12px' }}>
@@ -1866,6 +1878,32 @@ export default function PriceChart({
                             </td>
                             <td style={{ textAlign: 'right', color: '#94a3b8' }}>
                               {row.exp_move != null ? row.exp_move.toFixed(2) : '--'}
+                            </td>
+                            <td style={{ textAlign: 'center', padding: '6px 0' }}>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleRemoveTimeslice(row.time)
+                                }}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: '#64748b',
+                                  cursor: 'pointer',
+                                  padding: '0 4px',
+                                  fontSize: '11px',
+                                  lineHeight: 1,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  transition: 'color 0.15s'
+                                }}
+                                onMouseEnter={(e) => e.currentTarget.style.color = '#f87171'}
+                                onMouseLeave={(e) => e.currentTarget.style.color = '#64748b'}
+                                title={`Remove ${row.time}`}
+                              >
+                                ✕
+                              </button>
                             </td>
                           </tr>
                         ))}
