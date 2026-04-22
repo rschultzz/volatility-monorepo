@@ -88,7 +88,57 @@ const DEFAULT_COLUMNS = [
   { id: 'prior_down_pts', label: 'Prior Down (pts)', visible: true },
   { id: 'prior_down_ratio', label: 'Down/Up Ratio', visible: true },
   { id: 'start_pct_range', label: 'Start % of Range', visible: true },
+
+  // ── Study mode columns (hidden by default; auto-shown in study mode) ──
+  { id: 'skew_passed', label: 'Skew Passed', visible: false },
+  { id: 'target_price', label: 'Target Px', visible: false },
+
+  { id: 'fwd_30m_mfe',   label: 'MFE 30m',   visible: false, className: 'study-col' },
+  { id: 'fwd_30m_mae',   label: 'MAE 30m',   visible: false, className: 'study-col' },
+  { id: 'fwd_30m_close', label: 'Close 30m', visible: false, className: 'study-col' },
+
+  { id: 'fwd_60m_mfe',   label: 'MFE 60m',   visible: false, className: 'study-col' },
+  { id: 'fwd_60m_mae',   label: 'MAE 60m',   visible: false, className: 'study-col' },
+  { id: 'fwd_60m_close', label: 'Close 60m', visible: false, className: 'study-col' },
+
+  { id: 'fwd_90m_mfe',   label: 'MFE 90m',   visible: false, className: 'study-col' },
+  { id: 'fwd_90m_mae',   label: 'MAE 90m',   visible: false, className: 'study-col' },
+  { id: 'fwd_90m_close', label: 'Close 90m', visible: false, className: 'study-col' },
+
+  { id: 'fwd_120m_mfe',   label: 'MFE 120m',   visible: false, className: 'study-col' },
+  { id: 'fwd_120m_mae',   label: 'MAE 120m',   visible: false, className: 'study-col' },
+  { id: 'fwd_120m_close', label: 'Close 120m', visible: false, className: 'study-col' },
+
+  { id: 'fwd_180m_mfe',   label: 'MFE 180m',   visible: false, className: 'study-col' },
+  { id: 'fwd_180m_mae',   label: 'MAE 180m',   visible: false, className: 'study-col' },
+  { id: 'fwd_180m_close', label: 'Close 180m', visible: false, className: 'study-col' },
+
+  { id: 'fwd_eod_mfe',   label: 'MFE EOD',   visible: false, className: 'study-col' },
+  { id: 'fwd_eod_mae',   label: 'MAE EOD',   visible: false, className: 'study-col' },
+  { id: 'fwd_eod_close', label: 'Close EOD', visible: false, className: 'study-col' },
 ];
+
+// Columns that represent managed-mode-only data (hidden in study mode)
+const MANAGED_ONLY_COLUMNS = new Set([
+  'signal_time', 'signal_px', 'put_skew', 'call_skew',
+  'trade', 'range_high', 'range_low', 'entry_band',
+  'entry_time', 'entry_px',
+  'init_stop', 'take_profit', 'trailing_stop',
+  'exit_time', 'exit_px', 'exit_reason',
+  'realized_pts', 'mfe', 'mae', 'outcome',
+  'reason', 'consol_mins', 'setup',
+]);
+
+// Columns that are study-mode-specific (shown only in study mode)
+const STUDY_ONLY_COLUMNS = new Set([
+  'skew_passed', 'target_price',
+  'fwd_30m_mfe',  'fwd_30m_mae',  'fwd_30m_close',
+  'fwd_60m_mfe',  'fwd_60m_mae',  'fwd_60m_close',
+  'fwd_90m_mfe',  'fwd_90m_mae',  'fwd_90m_close',
+  'fwd_120m_mfe', 'fwd_120m_mae', 'fwd_120m_close',
+  'fwd_180m_mfe', 'fwd_180m_mae', 'fwd_180m_close',
+  'fwd_eod_mfe',  'fwd_eod_mae',  'fwd_eod_close',
+]);
 
 const COLUMNS_STORAGE_KEY = 'bt2-results-table-columns';
 
@@ -188,6 +238,26 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(columns));
   }, [columns]);
+
+  // When in study mode: auto-show study columns and auto-hide managed-only columns.
+  // When in managed mode: auto-hide study columns and restore managed columns to user preference.
+  // This doesn't mutate the stored `columns` state — user's visibility preferences are preserved.
+  const effectiveExecutionMode = settings?.executionMode || 'managed';
+  const effectiveColumns = useMemo(() => {
+    const isStudy = effectiveExecutionMode === 'study_target_hits';
+    return columns.map(col => {
+      if (isStudy && STUDY_ONLY_COLUMNS.has(col.id)) {
+        return { ...col, visible: true };
+      }
+      if (isStudy && MANAGED_ONLY_COLUMNS.has(col.id)) {
+        return { ...col, visible: false };
+      }
+      if (!isStudy && STUDY_ONLY_COLUMNS.has(col.id)) {
+        return { ...col, visible: false };
+      }
+      return col;
+    });
+  }, [columns, effectiveExecutionMode]);
 
   useEffect(() => {
     let isMounted = true;
@@ -441,7 +511,12 @@ export default function App() {
           </div>
         </div>
 
-        <DiagnosticsPanel diagnostics={diagnostics} rows={rows} funnel={funnel} />
+        <DiagnosticsPanel
+          diagnostics={diagnostics}
+          rows={rows}
+          funnel={funnel}
+          executionMode={effectiveExecutionMode}
+        />
 
         <div className="results-card" style={{ flex: 1 }}>
           <div className="results-header">
@@ -471,7 +546,7 @@ export default function App() {
             rows={rows}
             selectedRowKey={selectedRowKey}
             onSelectRow={handleSelectRow}
-            columns={columns}
+            columns={effectiveColumns}
           />
         </div>
       </div>

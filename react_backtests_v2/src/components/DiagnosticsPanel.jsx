@@ -1,48 +1,3 @@
-const FUNNEL_GROUPS = [
-  {
-    id: "levels",
-    title: "Levels",
-    unitLabel: "levels",
-    stageKeys: ["gex_level_qualifies"],
-  },
-  {
-    id: "zones",
-    title: "Zones",
-    unitLabel: "zones",
-    stageKeys: ["zone_built"],
-  },
-  {
-    id: "episodes",
-    title: "Episodes",
-    unitLabel: "pivots",
-    stageKeys: ["zone_episode_valid", "pivot_after_open"],
-  },
-  {
-    id: "target_attempts",
-    title: "Target attempts",
-    unitLabel: "target attempts",
-    stageKeys: ["clean_space_sufficient", "target_hit"],
-  },
-  {
-    id: "confirmed_ranges",
-    title: "Confirmed ranges",
-    unitLabel: "confirmed ranges",
-    stageKeys: ["consolidation_not_invalidated", "consolidation_window_complete"],
-  },
-  {
-    id: "setups",
-    title: "Setups",
-    unitLabel: "setups",
-    stageKeys: ["prior_context_valid"],
-  },
-  {
-    id: "signals_and_entries",
-    title: "Signals + entries",
-    unitLabel: "entries",
-    stageKeys: ["skew_signal_fired", "trade_window_open", "entry_band_hit"],
-  },
-];
-
 function fmt(value, digits = 2) {
   if (value === null || value === undefined || value === '') return '—';
   const num = Number(value);
@@ -104,14 +59,12 @@ function computePerformance(rows) {
   };
 }
 
-function FunnelStage({ stage, index, expectedCandidatesIn }) {
+function FunnelStage({ stage, index }) {
   const { label, kind, bypassed, candidates_in, kept, dropped, drop_reasons } = stage;
   const pct = candidates_in > 0 ? (kept / candidates_in) * 100 : 0;
   
   const kindColor = kind === 'construction' ? '#3b82f6' : kind === 'filter' ? '#10b981' : '#64748b';
   const barColor = bypassed ? '#475569' : kindColor;
-  
-  const hasMismatch = expectedCandidatesIn !== null && expectedCandidatesIn !== undefined && expectedCandidatesIn !== candidates_in;
   
   return (
     <div style={{
@@ -120,7 +73,6 @@ function FunnelStage({ stage, index, expectedCandidatesIn }) {
       borderRadius: '10px',
       padding: '12px 14px',
       marginBottom: '8px',
-      marginLeft: '12px',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -151,18 +103,6 @@ function FunnelStage({ stage, index, expectedCandidatesIn }) {
               letterSpacing: '0.05em',
             }}>
               BYPASSED
-            </span>
-          )}
-          {hasMismatch && (
-            <span 
-              style={{
-                fontSize: '11px',
-                color: '#fb923c',
-                marginLeft: '4px',
-              }}
-              title={`Expected ${expectedCandidatesIn} from previous stage`}
-            >
-              ⚠
             </span>
           )}
         </div>
@@ -203,71 +143,19 @@ function FunnelStage({ stage, index, expectedCandidatesIn }) {
   );
 }
 
-function groupFunnel(funnel) {
-  const grouped = [];
-  const ungrouped = [];
-  const stageKeyToIndex = new Map();
-  
-  funnel.forEach((stage, idx) => {
-    stageKeyToIndex.set(stage.key, idx);
-  });
-  
-  FUNNEL_GROUPS.forEach((groupDef) => {
-    const stages = [];
-    groupDef.stageKeys.forEach((key) => {
-      const idx = stageKeyToIndex.get(key);
-      if (idx !== undefined) {
-        stages.push({ stage: funnel[idx], globalIndex: idx });
-      }
-    });
-    
-    if (stages.length > 0) {
-      grouped.push({ groupDef, stages });
-    }
-  });
-  
-  const allGroupedKeys = new Set(FUNNEL_GROUPS.flatMap(g => g.stageKeys));
-  funnel.forEach((stage, idx) => {
-    if (!allGroupedKeys.has(stage.key)) {
-      ungrouped.push({ stage, globalIndex: idx });
-    }
-  });
-  
-  return { grouped, ungrouped };
-}
-
-function GroupTransition({ fromStage, toStage, fromUnit, toUnit }) {
-  // Defensive checks for undefined/null values
-  if (!fromStage || !toStage) {
-    return null;
-  }
-  
-  const fromCount = fromStage.kept ?? 0;
-  const toCount = toStage.candidates_in ?? 0;
-  
-  let text;
-  if (fromCount === toCount) {
-    text = `↓  ${fromCount.toLocaleString()} ${fromUnit}`;
-  } else {
-    text = `↓  ${fromCount.toLocaleString()} ${fromUnit} produced ${toCount.toLocaleString()} ${toUnit}`;
-  }
-  
-  return (
-    <div style={{
-      fontSize: '11px',
-      color: '#64748b',
-      padding: '12px 0',
-      textAlign: 'left',
-    }}>
-      {text}
-    </div>
-  );
-}
-
-export default function DiagnosticsPanel({ diagnostics, rows = [], funnel = [] }) {
+export default function DiagnosticsPanel({ diagnostics, rows = [], funnel = [], executionMode = 'managed' }) {
   if (!diagnostics) return null;
 
-  const perf = computePerformance(rows);
+  const isStudy = executionMode === 'study_target_hits';
+  const perf = isStudy
+    ? { totalPnLPts: null, evPtsPerTrade: null, maxDrawdownPts: null }
+    : computePerformance(rows);
+
+  const aggregate = diagnostics.forward_outcomes_aggregate || null;
+  const horizonOrder = ['30m', '60m', '90m', '120m', '180m', 'eod'];
+  const horizonsInAgg = aggregate
+    ? horizonOrder.filter(h => aggregate[h] && aggregate[h].count > 0)
+    : [];
 
   return (
     <div className="diag-card">
@@ -275,116 +163,300 @@ export default function DiagnosticsPanel({ diagnostics, rows = [], funnel = [] }
         <div>
           <h2>Diagnostics</h2>
           <p>
-            This section emphasizes strategy performance first, with a smaller set of useful trade counts.
+            {isStudy
+              ? 'Study mode — forward-price outcomes from target-touch to close, across all surviving rows.'
+              : 'This section emphasizes strategy performance first, with a smaller set of useful trade counts.'}
           </p>
         </div>
       </div>
 
       {funnel && funnel.length > 0 && (
         <div style={{ marginBottom: '20px' }}>
-          <h3 style={{ 
-            fontSize: '13px', 
-            fontWeight: '700', 
-            color: '#93c5fd', 
+          <h3 style={{
+            fontSize: '13px',
+            fontWeight: '700',
+            color: '#93c5fd',
             marginBottom: '12px',
             letterSpacing: '0.05em',
             textTransform: 'uppercase',
           }}>
             Pipeline Funnel
           </h3>
-          {(() => {
-            try {
-              const { grouped, ungrouped } = groupFunnel(funnel);
-            
-            return (
-              <>
-                {grouped.map((group, groupIdx) => {
-                  const { groupDef, stages } = group;
-                  const prevGroup = groupIdx > 0 ? grouped[groupIdx - 1] : null;
-                  
-                  return (
-                    <div key={groupDef.id}>
-                      {prevGroup && (
-                        <GroupTransition
-                          fromStage={prevGroup.stages[prevGroup.stages.length - 1].stage}
-                          toStage={stages[0].stage}
-                          fromUnit={prevGroup.groupDef.unitLabel}
-                          toUnit={groupDef.unitLabel}
-                        />
-                      )}
-                      
-                      <div style={{
-                        fontSize: '14px',
-                        fontWeight: '700',
-                        color: '#93c5fd',
-                        marginBottom: '8px',
-                        letterSpacing: '0.03em',
-                      }}>
-                        {groupDef.title}
-                      </div>
-                      
-                      {stages.map((stageInfo, stageIdx) => {
-                        const prevStageInfo = stageIdx > 0 ? stages[stageIdx - 1] : null;
-                        const expectedCandidatesIn = prevStageInfo ? prevStageInfo.stage.kept : null;
-                        
-                        return (
-                          <FunnelStage
-                            key={stageInfo.stage.key}
-                            stage={stageInfo.stage}
-                            index={stageInfo.globalIndex}
-                            expectedCandidatesIn={expectedCandidatesIn}
-                          />
-                        );
-                      })}
-                    </div>
-                  );
-                })}
-                
-                {ungrouped.length > 0 && (
-                  <div>
-                    <div style={{
-                      fontSize: '14px',
-                      fontWeight: '700',
-                      color: '#93c5fd',
-                      marginTop: '16px',
-                      marginBottom: '8px',
-                      letterSpacing: '0.03em',
-                    }}>
-                      Ungrouped
-                    </div>
-                    {ungrouped.map((stageInfo) => (
-                      <FunnelStage
-                        key={stageInfo.stage.key}
-                        stage={stageInfo.stage}
-                        index={stageInfo.globalIndex}
-                        expectedCandidatesIn={null}
-                      />
-                    ))}
-                  </div>
-                )}
-              </>
-            );
-            } catch (err) {
-              console.error('Error rendering funnel:', err);
-              return (
-                <div style={{ color: '#f87171', fontSize: '12px', padding: '10px' }}>
-                  Error rendering funnel. Check console for details.
-                </div>
-              );
-            }
-          })()}
+          {funnel.map((stage, idx) => (
+            <FunnelStage key={stage.key} stage={stage} index={idx} />
+          ))}
         </div>
+      )}
+
+      {isStudy && aggregate && horizonsInAgg.length > 0 && (
+        <>
+          <ForwardOutcomesAggregate aggregate={aggregate} horizons={horizonsInAgg} />
+          <ForwardOutcomesHistograms rows={rows} horizons={horizonsInAgg} />
+        </>
       )}
 
       <div className="diag-stat-grid diag-stat-grid-compact">
         <StatCell label="Days total" value={diagnostics.days_total ?? '—'} />
         <StatCell label="Valid instances" value={diagnostics.valid_instances ?? '—'} />
-        <StatCell label="Up short setups" value={diagnostics.up_short_setups_found ?? '—'} />
-        <StatCell label="Actual trades" value={diagnostics.actual_trades_found ?? '—'} />
-        <StatCell label="Winning trades" value={diagnostics.winning_trades ?? '—'} />
-        <StatCell label="Total P/L (pts)" value={fmt(perf.totalPnLPts)} />
-        <StatCell label="EV (pts/trade)" value={fmt(perf.evPtsPerTrade)} />
-        <StatCell label="Max drawdown (pts)" value={fmt(perf.maxDrawdownPts)} />
+        {isStudy
+          ? <StatCell label="Study target hits" value={diagnostics.entries_found ?? diagnostics.valid_instances ?? '—'} />
+          : <StatCell label="Up short setups" value={diagnostics.up_short_setups_found ?? '—'} />}
+        <StatCell label="Actual trades" value={isStudy ? '—' : (diagnostics.actual_trades_found ?? '—')} />
+        <StatCell label="Winning trades" value={isStudy ? '—' : (diagnostics.winning_trades ?? '—')} />
+        <StatCell label="Total P/L (pts)" value={isStudy ? '—' : fmt(perf.totalPnLPts)} />
+        <StatCell label="EV (pts/trade)" value={isStudy ? '—' : fmt(perf.evPtsPerTrade)} />
+        <StatCell label="Max drawdown (pts)" value={isStudy ? '—' : fmt(perf.maxDrawdownPts)} />
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────
+//  Forward outcomes aggregate table (study mode)
+// ─────────────────────────────────────────────────────────────────────
+
+function ForwardOutcomesAggregate({ aggregate, horizons }) {
+  const cellStyle = {
+    padding: '8px 12px',
+    fontSize: '12px',
+    color: '#e2e8f0',
+    borderBottom: '1px solid #1e293b',
+    textAlign: 'right',
+  };
+  const labelCellStyle = {
+    ...cellStyle,
+    textAlign: 'left',
+    fontWeight: 600,
+    color: '#cbd5e1',
+  };
+  const headerStyle = {
+    ...cellStyle,
+    fontSize: '11px',
+    color: '#64748b',
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    borderBottom: '1px solid #334155',
+  };
+
+  const colorForValue = (v) => {
+    if (v === null || v === undefined) return '#64748b';
+    if (v > 0) return '#86efac';
+    if (v < 0) return '#fca5a5';
+    return '#e2e8f0';
+  };
+
+  return (
+    <div style={{ marginBottom: '24px' }}>
+      <h3 style={{
+        fontSize: '13px',
+        fontWeight: '700',
+        color: '#93c5fd',
+        marginBottom: '12px',
+        letterSpacing: '0.05em',
+        textTransform: 'uppercase',
+      }}>
+        Forward Outcomes by Horizon
+      </h3>
+      <div style={{
+        background: '#0f172a',
+        border: '1px solid #1e293b',
+        borderRadius: '10px',
+        overflow: 'hidden',
+      }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={{ ...headerStyle, textAlign: 'left' }}>Horizon</th>
+              <th style={headerStyle}>Count</th>
+              <th style={headerStyle}>MFE median</th>
+              <th style={headerStyle}>MFE mean</th>
+              <th style={headerStyle}>MAE median</th>
+              <th style={headerStyle}>MAE mean</th>
+              <th style={headerStyle}>Close median</th>
+              <th style={headerStyle}>Close mean</th>
+              <th style={headerStyle}>Win rate @ close</th>
+            </tr>
+          </thead>
+          <tbody>
+            {horizons.map(h => {
+              const a = aggregate[h] || {};
+              return (
+                <tr key={h}>
+                  <td style={labelCellStyle}>{h}</td>
+                  <td style={cellStyle}>{a.count ?? '—'}</td>
+                  <td style={{ ...cellStyle, color: '#86efac' }}>{a.mfe_median ?? '—'}</td>
+                  <td style={{ ...cellStyle, color: '#86efac' }}>{a.mfe_mean ?? '—'}</td>
+                  <td style={{ ...cellStyle, color: '#fca5a5' }}>{a.mae_median ?? '—'}</td>
+                  <td style={{ ...cellStyle, color: '#fca5a5' }}>{a.mae_mean ?? '—'}</td>
+                  <td style={{ ...cellStyle, color: colorForValue(a.close_median), fontWeight: 700 }}>{a.close_median ?? '—'}</td>
+                  <td style={{ ...cellStyle, color: colorForValue(a.close_mean), fontWeight: 700 }}>{a.close_mean ?? '—'}</td>
+                  <td style={cellStyle}>{a.win_rate_at_close !== undefined && a.win_rate_at_close !== null
+                    ? `${(a.win_rate_at_close * 100).toFixed(0)}%`
+                    : '—'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────
+//  Forward outcomes histograms (study mode)
+// ─────────────────────────────────────────────────────────────────────
+
+function ForwardOutcomesHistograms({ rows, horizons }) {
+  return (
+    <div style={{ marginBottom: '24px' }}>
+      <h3 style={{
+        fontSize: '13px',
+        fontWeight: '700',
+        color: '#93c5fd',
+        marginBottom: '12px',
+        letterSpacing: '0.05em',
+        textTransform: 'uppercase',
+      }}>
+        Close P&amp;L Distribution
+      </h3>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+        gap: '12px',
+      }}>
+        {horizons.map(h => (
+          <Histogram
+            key={h}
+            title={h}
+            values={rows
+              .map(r => r.forward_outcomes?.[h]?.close_pts)
+              .filter(v => v !== null && v !== undefined && Number.isFinite(v))}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Histogram({ title, values }) {
+  if (!values.length) {
+    return (
+      <div style={{
+        background: '#0f172a',
+        border: '1px solid #1e293b',
+        borderRadius: '10px',
+        padding: '12px',
+        minHeight: '140px',
+      }}>
+        <div style={{ fontSize: '12px', fontWeight: 700, color: '#cbd5e1', marginBottom: '8px' }}>{title}</div>
+        <div style={{ fontSize: '11px', color: '#64748b' }}>No data</div>
+      </div>
+    );
+  }
+
+  // Compute bins: anchor at zero so positive/negative are visually symmetric.
+  // Use fixed bin width of 2 points for readability on typical SPX/ES moves.
+  const binWidth = 2;
+  const minV = Math.min(...values);
+  const maxV = Math.max(...values);
+
+  // Extend bin range outward to nearest bin edge around zero
+  const firstBinStart = Math.floor(minV / binWidth) * binWidth;
+  const lastBinStart = Math.floor(maxV / binWidth) * binWidth;
+  const nBins = Math.max(1, Math.round((lastBinStart - firstBinStart) / binWidth) + 1);
+
+  const bins = new Array(nBins).fill(0);
+  for (const v of values) {
+    let idx = Math.floor((v - firstBinStart) / binWidth);
+    if (idx < 0) idx = 0;
+    if (idx >= nBins) idx = nBins - 1;
+    bins[idx] += 1;
+  }
+  const maxBin = Math.max(...bins);
+
+  // Width of SVG
+  const width = 240;
+  const height = 100;
+  const barGap = 1;
+  const barWidth = Math.max(1, (width - (nBins - 1) * barGap) / nBins);
+
+  // Find bin that contains zero, for the axis reference
+  const zeroIdx = Math.floor((0 - firstBinStart) / binWidth);
+
+  // Stats
+  const sorted = [...values].sort((a, b) => a - b);
+  const median = sorted.length % 2
+    ? sorted[Math.floor(sorted.length / 2)]
+    : 0.5 * (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]);
+  const winRate = values.filter(v => v > 0).length / values.length;
+
+  return (
+    <div style={{
+      background: '#0f172a',
+      border: '1px solid #1e293b',
+      borderRadius: '10px',
+      padding: '12px',
+    }}>
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'baseline',
+        marginBottom: '8px',
+      }}>
+        <div style={{ fontSize: '12px', fontWeight: 700, color: '#cbd5e1' }}>{title}</div>
+        <div style={{ fontSize: '10px', color: '#64748b' }}>
+          n={values.length} &middot; med {median.toFixed(1)} &middot; win {(winRate * 100).toFixed(0)}%
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
+        {/* Baseline */}
+        <line x1="0" y1={height - 1} x2={width} y2={height - 1} stroke="#1e293b" strokeWidth="1" />
+        {/* Zero line */}
+        {zeroIdx >= 0 && zeroIdx <= nBins && (
+          <line
+            x1={zeroIdx * (barWidth + barGap)}
+            y1="0"
+            x2={zeroIdx * (barWidth + barGap)}
+            y2={height}
+            stroke="#334155"
+            strokeWidth="1"
+            strokeDasharray="2,2"
+          />
+        )}
+        {/* Bars */}
+        {bins.map((count, i) => {
+          const binStart = firstBinStart + i * binWidth;
+          const barHeight = maxBin > 0 ? (count / maxBin) * (height - 4) : 0;
+          const color = binStart + binWidth / 2 > 0 ? '#22c55e' : binStart + binWidth / 2 < 0 ? '#ef4444' : '#64748b';
+          return (
+            <rect
+              key={i}
+              x={i * (barWidth + barGap)}
+              y={height - barHeight - 1}
+              width={barWidth}
+              height={barHeight}
+              fill={color}
+              opacity="0.8"
+            >
+              <title>{`[${binStart.toFixed(1)}, ${(binStart + binWidth).toFixed(1)}): ${count}`}</title>
+            </rect>
+          );
+        })}
+      </svg>
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        fontSize: '10px',
+        color: '#64748b',
+        marginTop: '4px',
+      }}>
+        <span>{firstBinStart.toFixed(0)}</span>
+        <span>0</span>
+        <span>{(lastBinStart + binWidth).toFixed(0)}</span>
       </div>
     </div>
   );

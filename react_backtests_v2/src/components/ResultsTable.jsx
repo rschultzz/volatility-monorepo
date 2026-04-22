@@ -61,6 +61,34 @@ const COLUMN_DATA_MAP = {
   prior_down_pts: 'prior_session_down_pts',
   prior_down_ratio: 'prior_down_vs_up_ratio',
   start_pct_range: 'start_pct_of_session_range',
+
+  // ── Study mode columns ──
+  skew_passed: 'skew_threshold_passed',
+  target_price: 'target_price',
+
+  fwd_30m_mfe:   (row) => row.forward_outcomes?.['30m']?.mfe_pts,
+  fwd_30m_mae:   (row) => row.forward_outcomes?.['30m']?.mae_pts,
+  fwd_30m_close: (row) => row.forward_outcomes?.['30m']?.close_pts,
+
+  fwd_60m_mfe:   (row) => row.forward_outcomes?.['60m']?.mfe_pts,
+  fwd_60m_mae:   (row) => row.forward_outcomes?.['60m']?.mae_pts,
+  fwd_60m_close: (row) => row.forward_outcomes?.['60m']?.close_pts,
+
+  fwd_90m_mfe:   (row) => row.forward_outcomes?.['90m']?.mfe_pts,
+  fwd_90m_mae:   (row) => row.forward_outcomes?.['90m']?.mae_pts,
+  fwd_90m_close: (row) => row.forward_outcomes?.['90m']?.close_pts,
+
+  fwd_120m_mfe:   (row) => row.forward_outcomes?.['120m']?.mfe_pts,
+  fwd_120m_mae:   (row) => row.forward_outcomes?.['120m']?.mae_pts,
+  fwd_120m_close: (row) => row.forward_outcomes?.['120m']?.close_pts,
+
+  fwd_180m_mfe:   (row) => row.forward_outcomes?.['180m']?.mfe_pts,
+  fwd_180m_mae:   (row) => row.forward_outcomes?.['180m']?.mae_pts,
+  fwd_180m_close: (row) => row.forward_outcomes?.['180m']?.close_pts,
+
+  fwd_eod_mfe:   (row) => row.forward_outcomes?.['eod']?.mfe_pts,
+  fwd_eod_mae:   (row) => row.forward_outcomes?.['eod']?.mae_pts,
+  fwd_eod_close: (row) => row.forward_outcomes?.['eod']?.close_pts,
 };
 
 const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns }, ref) => {
@@ -294,6 +322,58 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
         const color = pct < 0.25 ? '#fca5a5' : pct < 0.45 ? '#fcd34d' : '#86efac';
         return <span style={{ color }}>{(pct * 100).toFixed(1)}%</span>;
       }
+
+      // ── Study mode columns ──
+      case 'skew_passed': {
+        if (row.skew_threshold_passed === null || row.skew_threshold_passed === undefined) return '—';
+        return row.skew_threshold_passed
+          ? <span style={{ color: '#86efac', fontWeight: 700 }}>✓</span>
+          : <span style={{ color: '#fca5a5', fontWeight: 700 }}>✗</span>;
+      }
+      case 'target_price': return fmt(row.target_price);
+
+      // Close columns: color green if > 0, red if < 0
+      case 'fwd_30m_close':
+      case 'fwd_60m_close':
+      case 'fwd_90m_close':
+      case 'fwd_120m_close':
+      case 'fwd_180m_close':
+      case 'fwd_eod_close': {
+        const horizonKey = col.id === 'fwd_eod_close' ? 'eod' : col.id.replace('fwd_', '').replace('_close', '');
+        const v = row.forward_outcomes?.[horizonKey]?.close_pts;
+        if (v === null || v === undefined) return '—';
+        const color = v > 0 ? '#86efac' : v < 0 ? '#fca5a5' : '#e5e7eb';
+        return <span style={{ color, fontWeight: 600 }}>{fmt(v)}</span>;
+      }
+
+      // MFE columns: always positive favorable, show in green if > 0
+      case 'fwd_30m_mfe':
+      case 'fwd_60m_mfe':
+      case 'fwd_90m_mfe':
+      case 'fwd_120m_mfe':
+      case 'fwd_180m_mfe':
+      case 'fwd_eod_mfe': {
+        const horizonKey = col.id === 'fwd_eod_mfe' ? 'eod' : col.id.replace('fwd_', '').replace('_mfe', '');
+        const v = row.forward_outcomes?.[horizonKey]?.mfe_pts;
+        if (v === null || v === undefined) return '—';
+        const color = v > 0 ? '#86efac' : '#94a3b8';
+        return <span style={{ color }}>{fmt(v)}</span>;
+      }
+
+      // MAE columns: adverse magnitude (positive number), show in amber/red proportional
+      case 'fwd_30m_mae':
+      case 'fwd_60m_mae':
+      case 'fwd_90m_mae':
+      case 'fwd_120m_mae':
+      case 'fwd_180m_mae':
+      case 'fwd_eod_mae': {
+        const horizonKey = col.id === 'fwd_eod_mae' ? 'eod' : col.id.replace('fwd_', '').replace('_mae', '');
+        const v = row.forward_outcomes?.[horizonKey]?.mae_pts;
+        if (v === null || v === undefined) return '—';
+        const color = v > 0 ? '#fca5a5' : '#94a3b8';
+        return <span style={{ color }}>{fmt(v)}</span>;
+      }
+
       default: return null;
     }
   };
