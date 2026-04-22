@@ -294,26 +294,27 @@ def _create_strategy_from_existing(base_strategy_key: str, new_name: Any, new_st
     }
 
 
-def _row_matches_strategy(row: Dict[str, Any], base_strategy_key: str) -> bool:
-    direction = str(row.get("direction") or "").strip().lower()
-
-    if base_strategy_key == "up_move_short":
-        return direction == "up"
-
-    if base_strategy_key == "down_move_scan":
-        return direction == "down"
-
-    return True
-
-
 def _strategy_direction(base_strategy_key: str) -> Optional[str]:
-    """Map a base strategy key to the direction whose funnel should be shown.
-    Returns None for non-directional strategies."""
-    if base_strategy_key == "up_move_short":
+    """Canonical mapping from a base strategy key to its direction.
+    Uses the same prefix-based matching as _legacy_base_registry_key so
+    user-cloned strategy keys like 'up_move_short_v1_2' resolve correctly.
+    Returns 'up', 'down', or None (non-directional)."""
+    key = str(base_strategy_key or "").strip().lower()
+    if not key:
+        return None
+    if key.startswith("up_move_short"):
         return "up"
-    if base_strategy_key == "down_move_scan":
+    if key.startswith("down_move"):
         return "down"
     return None
+
+
+def _row_matches_strategy(row: Dict[str, Any], base_strategy_key: str) -> bool:
+    direction = str(row.get("direction") or "").strip().lower()
+    expected = _strategy_direction(base_strategy_key)
+    if expected is None:
+        return True   # non-directional strategy — accept all rows
+    return direction == expected
 
 
 def _filter_funnel_for_direction(funnel: List[dict], direction: Optional[str]) -> List[dict]:

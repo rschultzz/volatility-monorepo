@@ -1280,7 +1280,7 @@ def _evaluate_up_short_setup(
         if not recorder.record("prior_context_valid", StageResult(
             kept=not (ratio_breached and pct_breached),
             drop_reason="prior_down_ratio_and_start_pct_breached" if (ratio_breached and pct_breached) else None
-        )):
+        ), direction="up"):
             default["short_setup_reason"] = "prior_context_invalidated"
             default["trade_entry_reason"] = "prior_context_invalidated"
             return default
@@ -1305,7 +1305,7 @@ def _evaluate_up_short_setup(
     if recorder:
         skew_bypassed = recorder.is_bypassed("skew_signal_fired")
         if skew_df.empty and not skew_bypassed:
-            recorder.record("skew_signal_fired", StageResult(kept=False, drop_reason="missing_skew_data"))
+            recorder.record("skew_signal_fired", StageResult(kept=False, drop_reason="missing_skew_data"), direction="up")
             default["consolidation_minutes_observed"] = len(observed_rows)
             default["consolidation_end_ts_pt"] = _normalize_pt_label(observed_rows[-1].get("ts_pt"))
             default["short_setup_reason"] = "no_skew_data"
@@ -1330,7 +1330,7 @@ def _evaluate_up_short_setup(
     if recorder:
         skew_bypassed = recorder.is_bypassed("skew_signal_fired")
         if entry_skew_row is None and not skew_bypassed:
-            recorder.record("skew_signal_fired", StageResult(kept=False, drop_reason="missing_entry_skew"))
+            recorder.record("skew_signal_fired", StageResult(kept=False, drop_reason="missing_entry_skew"), direction="up")
             default["consolidation_minutes_observed"] = len(observed_rows)
             default["consolidation_end_ts_pt"] = _normalize_pt_label(observed_rows[-1].get("ts_pt"))
             default["short_setup_reason"] = "missing_entry_skew"
@@ -1404,7 +1404,7 @@ def _evaluate_up_short_setup(
         if not recorder.record("skew_signal_fired", StageResult(
             kept=signal_found,
             drop_reason="threshold_not_met" if not signal_found else None
-        )):
+        ), direction="up"):
             return {
                 "consolidation_minutes_observed": len(observed_rows),
                 "consolidation_end_ts_pt": _normalize_pt_label(observed_rows[-1].get("ts_pt")),
@@ -1450,13 +1450,13 @@ def _evaluate_up_short_setup(
     # Record trade_window_open and entry_band_hit stages
     if recorder:
         if trade_eval["trade_entry_reason"] == "inside_close_buffer":
-            recorder.record("trade_window_open", StageResult(kept=False, drop_reason="inside_close_buffer"))
+            recorder.record("trade_window_open", StageResult(kept=False, drop_reason="inside_close_buffer"), direction="up")
         elif trade_eval["trade_entry_found"]:
-            recorder.record("trade_window_open", StageResult(kept=True))
-            recorder.record("entry_band_hit", StageResult(kept=True))
+            recorder.record("trade_window_open", StageResult(kept=True), direction="up")
+            recorder.record("entry_band_hit", StageResult(kept=True), direction="up")
         else:
-            recorder.record("trade_window_open", StageResult(kept=True))
-            recorder.record("entry_band_hit", StageResult(kept=False, drop_reason="no_entry_band_hit_in_window"))
+            recorder.record("trade_window_open", StageResult(kept=True), direction="up")
+            recorder.record("entry_band_hit", StageResult(kept=False, drop_reason="no_entry_band_hit_in_window"), direction="up")
 
     return {
         "consolidation_minutes_observed": len(observed_rows),
@@ -1937,13 +1937,13 @@ def _evaluate_down_long_setup(
     # Record trade_window_open and entry_band_hit stages
     if recorder:
         if trade_eval["trade_entry_reason"] == "inside_close_buffer":
-            recorder.record("trade_window_open", StageResult(kept=False, drop_reason="inside_close_buffer"))
+            recorder.record("trade_window_open", StageResult(kept=False, drop_reason="inside_close_buffer"), direction="down")
         elif trade_eval["trade_entry_found"]:
-            recorder.record("trade_window_open", StageResult(kept=True))
-            recorder.record("entry_band_hit", StageResult(kept=True))
+            recorder.record("trade_window_open", StageResult(kept=True), direction="down")
+            recorder.record("entry_band_hit", StageResult(kept=True), direction="down")
         else:
-            recorder.record("trade_window_open", StageResult(kept=True))
-            recorder.record("entry_band_hit", StageResult(kept=False, drop_reason="no_entry_band_hit_in_window"))
+            recorder.record("trade_window_open", StageResult(kept=True), direction="down")
+            recorder.record("entry_band_hit", StageResult(kept=False, drop_reason="no_entry_band_hit_in_window"), direction="down")
 
     return {
         "consolidation_minutes_observed":  len(observed_rows),
