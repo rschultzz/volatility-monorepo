@@ -48,6 +48,7 @@ class FunnelStage:
     key: str                 # stable machine id, e.g. "gex_level_qualifies"
     label: str               # human label for UI
     kind: StageKind          # filter | construction | evaluation
+    scope: Literal["shared", "directional"] = "shared"
     filter_param_keys: tuple[str, ...] = ()   # camelCase payload keys this stage reads
     bypassable: bool = True  # set False for construction-only stages
 
@@ -56,20 +57,27 @@ class FunnelRecorder:
     def __init__(self, stages: list[FunnelStage], bypass_set: set[str]):
         self.stages = stages
         self.bypass_set = bypass_set
-        self._counts = {
-            s.key: {
-                "in": 0,
-                "kept": 0,
-                "dropped": 0,
-                "drop_reasons": Counter()
-            }
-            for s in stages
-        }
+        self._counts: dict[str, dict[str, dict[str, Any]]] = {}
+        for s in stages:
+            if s.scope == "shared":
+                self._counts[s.key] = {
+                    "shared": {"in": 0, "kept": 0, "dropped": 0, "drop_reasons": Counter()}
+                }
+            else:  # directional
+                self._counts[s.key] = {
+                    "up":   {"in": 0, "kept": 0, "dropped": 0, "drop_reasons": Counter()},
+                    "down": {"in": 0, "kept": 0, "dropped": 0, "drop_reasons": Counter()},
+                }
 
     def is_bypassed(self, stage_key: str) -> bool:
         return stage_key in self.bypass_set
 
-    def record(self, stage_key: str, result: StageResult) -> bool:
+    def record(
+        self,
+        stage_key: str,
+        result: StageResult,
+        direction: Optional[Literal["up", "down"]] = None,
+    ) -> bool:
         """
         Record a stage result. Returns the effective kept value.
         If stage is bypassed, force kept=True regardless of result.
@@ -78,46 +86,80 @@ class FunnelRecorder:
             # Stage not in registry — ignore silently
             return result.kept
 
-        counts = self._counts[stage_key]
-        counts["in"] += 1
+        stage = next((s for s in self.stages if s.key == stage_key), None)
+        if stage is None:
+            return result.kept
 
+        if stage.scope == "shared":
+            bucket = self._counts[stage_key]["shared"]
+        else:
+            if direction not in ("up", "down"):
+                # Directional stage called without direction — defensive fallback
+                direction = "up"
+            bucket = self._counts[stage_key][direction]
+
+        bucket["in"] += 1
         bypassed = self.is_bypassed(stage_key)
-        effective_kept = True if bypassed else result.kept
+        effective_kept = result.kept or bypassed
 
         if effective_kept:
-            counts["kept"] += 1
+            bucket["kept"] += 1
         else:
-            counts["dropped"] += 1
+            bucket["dropped"] += 1
             if result.drop_reason:
-                counts["drop_reasons"][result.drop_reason] += 1
+                bucket["drop_reasons"][result.drop_reason] += 1
 
         return effective_kept
 
     def snapshot(self) -> list[dict]:
-        """Return JSON-safe list of stage summaries."""
+        """Return JSON-safe list of stage summaries with direction-aware data."""
         out = []
         for stage in self.stages:
-            counts = self._counts[stage.key]
+            buckets = self._counts[stage.key]
             bypassed = self.is_bypassed(stage.key)
-            out.append({
+
+            entry = {
                 "key": stage.key,
                 "label": stage.label,
                 "kind": stage.kind,
+                "scope": stage.scope,
                 "bypassed": bypassed,
-                "candidates_in": counts["in"],
-                "kept": counts["kept"],
-                "dropped": counts["dropped"],
-                "drop_reasons": dict(counts["drop_reasons"]),
-            })
+            }
+
+            if stage.scope == "shared":
+                b = buckets["shared"]
+                entry["shared"] = {
+                    "candidates_in": b["in"],
+                    "kept": b["kept"],
+                    "dropped": b["dropped"],
+                    "drop_reasons": dict(b["drop_reasons"]),
+                }
+            else:
+                entry["up"] = {
+                    "candidates_in": buckets["up"]["in"],
+                    "kept":          buckets["up"]["kept"],
+                    "dropped":       buckets["up"]["dropped"],
+                    "drop_reasons":  dict(buckets["up"]["drop_reasons"]),
+                }
+                entry["down"] = {
+                    "candidates_in": buckets["down"]["in"],
+                    "kept":          buckets["down"]["kept"],
+                    "dropped":       buckets["down"]["dropped"],
+                    "drop_reasons":  dict(buckets["down"]["drop_reasons"]),
+                }
+
+            out.append(entry)
+
         return out
 
 
-# Define the ordered stage list (direction-agnostic)
+# Define the ordered stage list with scope assignments
 PIPELINE_STAGES = [
     FunnelStage(
         key="gex_level_qualifies",
         label="GEX level meets min gamma",
         kind="filter",
+        scope="shared",
         filter_param_keys=("minLevelGexBn",),
         bypassable=True,
     ),
@@ -125,6 +167,7 @@ PIPELINE_STAGES = [
         key="zone_built",
         label="Zones constructed",
         kind="construction",
+        scope="shared",
         filter_param_keys=("zoneMergeDistancePts",),
         bypassable=False,
     ),
@@ -132,6 +175,7 @@ PIPELINE_STAGES = [
         key="zone_episode_valid",
         label="Price-in-zone episode clean",
         kind="filter",
+        scope="directional",
         filter_param_keys=("maxZoneBreachPts",),
         bypassable=True,
     ),
@@ -139,6 +183,7 @@ PIPELINE_STAGES = [
         key="pivot_after_open",
         label="Pivot is late enough in session",
         kind="filter",
+        scope="directional",
         filter_param_keys=("minMinutesAfterOpen",),
         bypassable=True,
     ),
@@ -146,6 +191,7 @@ PIPELINE_STAGES = [
         key="clean_space_sufficient",
         label="Enough clear space to target",
         kind="filter",
+        scope="directional",
         filter_param_keys=("minCleanMovePoints",),
         bypassable=True,
     ),
@@ -153,6 +199,7 @@ PIPELINE_STAGES = [
         key="target_hit",
         label="Price touched target proximity",
         kind="construction",
+        scope="directional",
         filter_param_keys=("targetProximityPts",),
         bypassable=False,
     ),
@@ -160,6 +207,7 @@ PIPELINE_STAGES = [
         key="consolidation_not_invalidated",
         label="Range not invalidated by move loss",
         kind="filter",
+        scope="directional",
         filter_param_keys=("maxMoveLossPct",),
         bypassable=True,
     ),
@@ -167,6 +215,7 @@ PIPELINE_STAGES = [
         key="consolidation_window_complete",
         label="Consolidation window reached EOD",
         kind="filter",
+        scope="directional",
         filter_param_keys=("consolidationWindowMinutes",),
         bypassable=True,
     ),
@@ -174,6 +223,7 @@ PIPELINE_STAGES = [
         key="prior_context_valid",
         label="Not a bounce off lows (up) / top (down)",
         kind="filter",
+        scope="directional",
         filter_param_keys=("maxPriorDownUpRatio", "maxStartPctOfRange"),
         bypassable=True,
     ),
@@ -181,6 +231,7 @@ PIPELINE_STAGES = [
         key="skew_signal_fired",
         label="Skew thresholds met",
         kind="filter",
+        scope="directional",
         filter_param_keys=("shortPutSkewIncreasePct", "shortCallSkewMaxPct", "longPutSkewMinDecreasePct", "longCallSkewMinIncreasePct"),
         bypassable=True,
     ),
@@ -188,6 +239,7 @@ PIPELINE_STAGES = [
         key="trade_window_open",
         label="Entry not blocked by close-of-day buffer",
         kind="filter",
+        scope="directional",
         filter_param_keys=("maxMinutesBeforeClose",),
         bypassable=True,
     ),
@@ -195,6 +247,7 @@ PIPELINE_STAGES = [
         key="entry_band_hit",
         label="Price re-entered the entry band",
         kind="filter",
+        scope="directional",
         filter_param_keys=("entryWithinTopPts", "entrySearchWindowMinutes"),
         bypassable=True,
     ),
@@ -1942,7 +1995,7 @@ def _day_zone_results(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     qualifying_levels = _collect_day_levels(day_rows, level_family, min_level_gex_bn)
     
-    # Record gex_level_qualifies stage
+    # Record gex_level_qualifies stage (shared scope - no direction)
     if recorder:
         for row in day_rows:
             for item in _row_levels(row, level_family):
@@ -2015,20 +2068,26 @@ def _day_zone_results(
 
                 # Record pivot_after_open stage
                 if recorder:
+                    pivot_kept = True
+                    drop_reason = None
                     if min_minutes_after_open > 0:
                         pivot_pt = _normalize_pt_label(day_rows[pivot_idx].get("ts_pt"))
                         if pivot_pt:
                             try:
                                 ph, pm = int(pivot_pt[:2]), int(pivot_pt[3:5])
                                 pivot_minutes_since_open = (ph - 6) * 60 + pm - 30
-                                kept = pivot_minutes_since_open >= int(min_minutes_after_open)
-                                if not recorder.record("pivot_after_open", StageResult(
-                                    kept=kept,
-                                    drop_reason="pivot_too_early" if not kept else None
-                                )):
-                                    continue
+                                if pivot_minutes_since_open < int(min_minutes_after_open):
+                                    pivot_kept = False
+                                    drop_reason = "pivot_too_early"
                             except Exception:
-                                pass
+                                pass  # unparseable timestamp — treat as kept (default)
+                    
+                    effective_kept = recorder.record(
+                        "pivot_after_open",
+                        StageResult(kept=pivot_kept, drop_reason=drop_reason)
+                    )
+                    if not effective_kept:
+                        continue
                 else:
                     # Skip episodes whose pivot falls within min_minutes_after_open
                     # of the RTH open (06:30 PT). Early-session price is often noisy
@@ -2044,24 +2103,34 @@ def _day_zone_results(
                             except Exception:
                                 pass
 
+                # --- Record clean_space_sufficient ONCE per pivot ---
+                if recorder:
+                    has_any_clean_target = any(
+                        float(zones[t_idx]["low"]) - float(zone["high"]) >= float(min_clean_move_points)
+                        for t_idx in candidate_target_zone_indices
+                    )
+                    effective_kept = recorder.record(
+                        "clean_space_sufficient",
+                        StageResult(
+                            kept=has_any_clean_target,
+                            drop_reason="clean_space_below_min" if not has_any_clean_target else None
+                        )
+                    )
+                    if not effective_kept:
+                        continue   # skip to next episode's pivot
+
                 # Walk up through candidate target zones, promoting if price
                 # pushes through a wall before consolidating.
                 scan_from_idx = seg_end + 1
+                target_hit_found = False
+                
                 for target_zone_offset, t_zone_idx in enumerate(candidate_target_zone_indices):
                     target_zone_up = zones[t_zone_idx]
                     clean_space_up = float(target_zone_up["low"]) - float(zone["high"])
                     
-                    # Record clean_space_sufficient stage
-                    if recorder:
-                        kept = clean_space_up >= float(min_clean_move_points)
-                        if not recorder.record("clean_space_sufficient", StageResult(
-                            kept=kept,
-                            drop_reason="clean_space_below_min" if not kept else None
-                        )):
-                            continue
-                    else:
-                        if clean_space_up < float(min_clean_move_points):
-                            continue
+                    # Silent filter inside construction — no recorder call
+                    if clean_space_up < float(min_clean_move_points):
+                        continue
 
                     if target_zone_offset == 0:
                         diagnostics["source_zones_with_clean_targets"] += 1
@@ -2076,16 +2145,9 @@ def _day_zone_results(
                         max_zone_breach_pts=max_zone_breach_pts,
                     )
                     
-                    # Record target_hit stage (construction)
-                    if recorder:
-                        if hit_idx is None:
-                            recorder.record("target_hit", StageResult(kept=False, drop_reason="no_target_hit"))
-                            break
-                        else:
-                            recorder.record("target_hit", StageResult(kept=True))
-                    else:
-                        if hit_idx is None:
-                            break
+                    if hit_idx is None:
+                        # exhausted this zone without touching it — try the next one up
+                        continue
 
                     move_points = float(target_zone_up["low"]) - float(pivot_price)
 
@@ -2109,31 +2171,44 @@ def _day_zone_results(
                         # Promotion is NOT a filter drop — it's control flow.
                         scan_from_idx = obs["promote_idx"]
                         continue
+                    
+                    # Non-promoted outcome — this is the terminal target
+                    # Target hit and observation complete — record target_hit once per pivot
+                    target_hit_found = True
+                    if recorder:
+                        recorder.record("target_hit", StageResult(kept=True))
 
                     # Record consolidation stages
                     if recorder:
                         if obs["status"] == "invalidated":
-                            if not recorder.record("consolidation_not_invalidated", StageResult(
+                            effective_kept = recorder.record("consolidation_not_invalidated", StageResult(
                                 kept=False,
                                 drop_reason="invalidated_by_max_move_loss_pct"
-                            )):
-                                # If bypassed, use partial observed_rows
+                            ))
+                            if effective_kept:
+                                # Bypassed: use partial observed_rows, fall through to next stage
                                 observed_rows = obs["rows"]
+                                # Also record stage 8 as kept=True since we're continuing
+                                recorder.record("consolidation_window_complete", StageResult(kept=True))
                             else:
+                                # Not bypassed: invalidation is terminal for this pivot
                                 break
                         else:
                             recorder.record("consolidation_not_invalidated", StageResult(kept=True))
                         
                         if obs["status"] == "insufficient":
-                            if not recorder.record("consolidation_window_complete", StageResult(
+                            effective_kept = recorder.record("consolidation_window_complete", StageResult(
                                 kept=False,
                                 drop_reason="insufficient_bars_before_eod"
-                            )):
-                                # If bypassed, use partial observed_rows
+                            ))
+                            if effective_kept:
+                                # Bypassed: use partial observed_rows
                                 observed_rows = obs["rows"]
                             else:
+                                # Not bypassed: insufficient is terminal
                                 break
-                        else:
+                        elif obs["status"] != "invalidated":
+                            # status == "confirmed" — record stage 8 as kept
                             recorder.record("consolidation_window_complete", StageResult(kept=True))
                     else:
                         if obs["status"] in ("invalidated", "insufficient"):
@@ -2243,6 +2318,10 @@ def _day_zone_results(
 
                     # Range confirmed and result recorded — stop walking up zones.
                     break
+                
+                # If we exhausted all target zones without a confirmed hit, record target_hit as dropped
+                if not target_hit_found and recorder:
+                    recorder.record("target_hit", StageResult(kept=False, drop_reason="no_target_hit"))
 
         if zone_idx > 0:
             # Gather all zones below as potential targets (walking downward)
@@ -2268,20 +2347,26 @@ def _day_zone_results(
 
                 # Record pivot_after_open stage for down moves
                 if recorder:
+                    pivot_kept = True
+                    drop_reason = None
                     if min_minutes_after_open > 0:
                         pivot_pt = _normalize_pt_label(day_rows[pivot_idx].get("ts_pt"))
                         if pivot_pt:
                             try:
                                 ph, pm = int(pivot_pt[:2]), int(pivot_pt[3:5])
                                 pivot_minutes_since_open = (ph - 6) * 60 + pm - 30
-                                kept = pivot_minutes_since_open >= int(min_minutes_after_open)
-                                if not recorder.record("pivot_after_open", StageResult(
-                                    kept=kept,
-                                    drop_reason="pivot_too_early" if not kept else None
-                                )):
-                                    continue
+                                if pivot_minutes_since_open < int(min_minutes_after_open):
+                                    pivot_kept = False
+                                    drop_reason = "pivot_too_early"
                             except Exception:
-                                pass
+                                pass  # unparseable timestamp — treat as kept (default)
+                    
+                    effective_kept = recorder.record(
+                        "pivot_after_open",
+                        StageResult(kept=pivot_kept, drop_reason=drop_reason)
+                    )
+                    if not effective_kept:
+                        continue
                 else:
                     # min_minutes_after_open filter for down moves
                     if min_minutes_after_open > 0:
@@ -2295,25 +2380,35 @@ def _day_zone_results(
                             except Exception:
                                 pass
 
+                # --- Record clean_space_sufficient ONCE per pivot (mirror of up-move) ---
+                if recorder:
+                    has_any_clean_target = any(
+                        float(zone["low"]) - float(zones[t_idx]["high"]) >= float(min_clean_move_points)
+                        for t_idx in candidate_target_zone_indices_down
+                    )
+                    effective_kept = recorder.record(
+                        "clean_space_sufficient",
+                        StageResult(
+                            kept=has_any_clean_target,
+                            drop_reason="clean_space_below_min" if not has_any_clean_target else None
+                        )
+                    )
+                    if not effective_kept:
+                        continue
+
                 # Walk down through candidate target zones, promoting if price
                 # pushes through a wall before consolidating.
                 scan_from_idx = seg_end + 1
                 final_hit_idx = None
+                target_hit_found = False
+                
                 for target_zone_offset, t_zone_idx in enumerate(candidate_target_zone_indices_down):
                     target_zone_down = zones[t_zone_idx]
                     clean_space_down = float(zone["low"]) - float(target_zone_down["high"])
                     
-                    # Record clean_space_sufficient stage for down moves
-                    if recorder:
-                        kept = clean_space_down >= float(min_clean_move_points)
-                        if not recorder.record("clean_space_sufficient", StageResult(
-                            kept=kept,
-                            drop_reason="clean_space_below_min" if not kept else None
-                        )):
-                            continue
-                    else:
-                        if clean_space_down < float(min_clean_move_points):
-                            continue
+                    # Silent filter inside construction — no recorder call
+                    if clean_space_down < float(min_clean_move_points):
+                        continue
 
                     if target_zone_offset == 0:
                         diagnostics["source_zones_with_clean_targets"] += 1
@@ -2328,16 +2423,9 @@ def _day_zone_results(
                         max_zone_breach_pts=max_zone_breach_pts,
                     )
                     
-                    # Record target_hit stage for down moves
-                    if recorder:
-                        if hit_idx is None:
-                            recorder.record("target_hit", StageResult(kept=False, drop_reason="no_target_hit"))
-                            break
-                        else:
-                            recorder.record("target_hit", StageResult(kept=True))
-                    else:
-                        if hit_idx is None:
-                            break
+                    if hit_idx is None:
+                        # exhausted this zone without touching it — try the next one down
+                        continue
 
                     final_hit_idx = hit_idx
                     move_points = float(pivot_price) - float(target_zone_down["high"])
@@ -2360,28 +2448,43 @@ def _day_zone_results(
                         scan_from_idx = obs["promote_idx"]
                         continue
 
+                    # Non-promoted outcome — this is the terminal target
+                    # Target hit and observation complete — record target_hit once per pivot
+                    target_hit_found = True
+                    if recorder:
+                        recorder.record("target_hit", StageResult(kept=True))
+
                     # Record consolidation stages for down moves
                     if recorder:
                         if obs["status"] == "invalidated":
-                            if not recorder.record("consolidation_not_invalidated", StageResult(
+                            effective_kept = recorder.record("consolidation_not_invalidated", StageResult(
                                 kept=False,
                                 drop_reason="invalidated_by_max_move_loss_pct"
-                            )):
+                            ))
+                            if effective_kept:
+                                # Bypassed: use partial observed_rows, fall through to next stage
                                 observed_rows = obs["rows"]
+                                # Also record stage 8 as kept=True since we're continuing
+                                recorder.record("consolidation_window_complete", StageResult(kept=True))
                             else:
+                                # Not bypassed: invalidation is terminal for this pivot
                                 break
                         else:
                             recorder.record("consolidation_not_invalidated", StageResult(kept=True))
                         
                         if obs["status"] == "insufficient":
-                            if not recorder.record("consolidation_window_complete", StageResult(
+                            effective_kept = recorder.record("consolidation_window_complete", StageResult(
                                 kept=False,
                                 drop_reason="insufficient_bars_before_eod"
-                            )):
+                            ))
+                            if effective_kept:
+                                # Bypassed: use partial observed_rows
                                 observed_rows = obs["rows"]
                             else:
+                                # Not bypassed: insufficient is terminal
                                 break
-                        else:
+                        elif obs["status"] != "invalidated":
+                            # status == "confirmed" — record stage 8 as kept
                             recorder.record("consolidation_window_complete", StageResult(kept=True))
                     else:
                         if obs["status"] in ("invalidated", "insufficient"):
@@ -2473,6 +2576,10 @@ def _day_zone_results(
                         return results, diagnostics
 
                     break
+                
+                # If we exhausted all target zones without a confirmed terminal hit, record as dropped
+                if not target_hit_found and recorder:
+                    recorder.record("target_hit", StageResult(kept=False, drop_reason="no_target_hit"))
 
     # Deduplicate down-move rows: if multiple source zones produced a result
     # with the same target level and target bar, keep only the one with the

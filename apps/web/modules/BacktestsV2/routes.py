@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from flask import jsonify, request, send_from_directory
 from sqlalchemy import create_engine, text
@@ -305,6 +306,56 @@ def _row_matches_strategy(row: Dict[str, Any], base_strategy_key: str) -> bool:
     return True
 
 
+def _strategy_direction(base_strategy_key: str) -> Optional[str]:
+    """Map a base strategy key to the direction whose funnel should be shown.
+    Returns None for non-directional strategies."""
+    if base_strategy_key == "up_move_short":
+        return "up"
+    if base_strategy_key == "down_move_scan":
+        return "down"
+    return None
+
+
+def _filter_funnel_for_direction(funnel: List[dict], direction: Optional[str]) -> List[dict]:
+    """Reshape each stage so the flat keys (candidates_in, kept, dropped, drop_reasons)
+    reflect the selected direction. Preserves existing frontend contract."""
+    if not funnel:
+        return []
+
+    out = []
+    for stage in funnel:
+        scope = stage.get("scope", "shared")
+        if scope == "shared":
+            bucket = stage.get("shared", {}) or {}
+        elif direction in ("up", "down"):
+            bucket = stage.get(direction, {}) or {}
+        else:
+            # Unknown direction — sum up+down as a combined view
+            up = stage.get("up", {}) or {}
+            down = stage.get("down", {}) or {}
+            combined_reasons = Counter(up.get("drop_reasons", {}) or {})
+            combined_reasons.update(down.get("drop_reasons", {}) or {})
+            bucket = {
+                "candidates_in": (up.get("candidates_in", 0) or 0) + (down.get("candidates_in", 0) or 0),
+                "kept":          (up.get("kept", 0) or 0)          + (down.get("kept", 0) or 0),
+                "dropped":       (up.get("dropped", 0) or 0)       + (down.get("dropped", 0) or 0),
+                "drop_reasons":  dict(combined_reasons),
+            }
+
+        out.append({
+            "key":           stage.get("key"),
+            "label":         stage.get("label"),
+            "kind":          stage.get("kind"),
+            "scope":         scope,
+            "bypassed":      stage.get("bypassed", False),
+            "candidates_in": bucket.get("candidates_in", 0),
+            "kept":          bucket.get("kept", 0),
+            "dropped":       bucket.get("dropped", 0),
+            "drop_reasons":  bucket.get("drop_reasons", {}) or {},
+        })
+    return out
+
+
 def _filtered_rows(rows: List[Dict[str, Any]], base_strategy_key: str) -> List[Dict[str, Any]]:
     return [row for row in (rows or []) if _row_matches_strategy(row, base_strategy_key)]
 
@@ -483,6 +534,11 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             summary = _rebuild_summary(rows, strategy_key, data.get("summary"))
             diagnostics = _rebuild_diagnostics(rows, strategy_key, data.get("diagnostics"))
 
+            # Filter funnel by direction
+            funnel_raw = data.get("funnel", [])
+            direction = _strategy_direction(base_strategy_key)
+            funnel_filtered = _filter_funnel_for_direction(funnel_raw, direction)
+
             return jsonify(
                 {
                     "ok": True,
@@ -492,7 +548,8 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                     "rows": rows,
                     "summary": summary,
                     "diagnostics": diagnostics,
-                    "funnel": data.get("funnel", []),
+                    "funnel": funnel_filtered,
+                    "funnelRaw": funnel_raw,
                 }
             )
         except Exception as exc:

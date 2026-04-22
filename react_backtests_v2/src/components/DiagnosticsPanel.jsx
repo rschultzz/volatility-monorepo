@@ -1,3 +1,48 @@
+const FUNNEL_GROUPS = [
+  {
+    id: "levels",
+    title: "Levels",
+    unitLabel: "levels",
+    stageKeys: ["gex_level_qualifies"],
+  },
+  {
+    id: "zones",
+    title: "Zones",
+    unitLabel: "zones",
+    stageKeys: ["zone_built"],
+  },
+  {
+    id: "episodes",
+    title: "Episodes",
+    unitLabel: "pivots",
+    stageKeys: ["zone_episode_valid", "pivot_after_open"],
+  },
+  {
+    id: "target_attempts",
+    title: "Target attempts",
+    unitLabel: "target attempts",
+    stageKeys: ["clean_space_sufficient", "target_hit"],
+  },
+  {
+    id: "confirmed_ranges",
+    title: "Confirmed ranges",
+    unitLabel: "confirmed ranges",
+    stageKeys: ["consolidation_not_invalidated", "consolidation_window_complete"],
+  },
+  {
+    id: "setups",
+    title: "Setups",
+    unitLabel: "setups",
+    stageKeys: ["prior_context_valid"],
+  },
+  {
+    id: "signals_and_entries",
+    title: "Signals + entries",
+    unitLabel: "entries",
+    stageKeys: ["skew_signal_fired", "trade_window_open", "entry_band_hit"],
+  },
+];
+
 function fmt(value, digits = 2) {
   if (value === null || value === undefined || value === '') return '—';
   const num = Number(value);
@@ -59,12 +104,14 @@ function computePerformance(rows) {
   };
 }
 
-function FunnelStage({ stage, index }) {
+function FunnelStage({ stage, index, expectedCandidatesIn }) {
   const { label, kind, bypassed, candidates_in, kept, dropped, drop_reasons } = stage;
   const pct = candidates_in > 0 ? (kept / candidates_in) * 100 : 0;
   
   const kindColor = kind === 'construction' ? '#3b82f6' : kind === 'filter' ? '#10b981' : '#64748b';
   const barColor = bypassed ? '#475569' : kindColor;
+  
+  const hasMismatch = expectedCandidatesIn !== null && expectedCandidatesIn !== undefined && expectedCandidatesIn !== candidates_in;
   
   return (
     <div style={{
@@ -73,6 +120,7 @@ function FunnelStage({ stage, index }) {
       borderRadius: '10px',
       padding: '12px 14px',
       marginBottom: '8px',
+      marginLeft: '12px',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -103,6 +151,18 @@ function FunnelStage({ stage, index }) {
               letterSpacing: '0.05em',
             }}>
               BYPASSED
+            </span>
+          )}
+          {hasMismatch && (
+            <span 
+              style={{
+                fontSize: '11px',
+                color: '#fb923c',
+                marginLeft: '4px',
+              }}
+              title={`Expected ${expectedCandidatesIn} from previous stage`}
+            >
+              ⚠
             </span>
           )}
         </div>
@@ -143,6 +203,67 @@ function FunnelStage({ stage, index }) {
   );
 }
 
+function groupFunnel(funnel) {
+  const grouped = [];
+  const ungrouped = [];
+  const stageKeyToIndex = new Map();
+  
+  funnel.forEach((stage, idx) => {
+    stageKeyToIndex.set(stage.key, idx);
+  });
+  
+  FUNNEL_GROUPS.forEach((groupDef) => {
+    const stages = [];
+    groupDef.stageKeys.forEach((key) => {
+      const idx = stageKeyToIndex.get(key);
+      if (idx !== undefined) {
+        stages.push({ stage: funnel[idx], globalIndex: idx });
+      }
+    });
+    
+    if (stages.length > 0) {
+      grouped.push({ groupDef, stages });
+    }
+  });
+  
+  const allGroupedKeys = new Set(FUNNEL_GROUPS.flatMap(g => g.stageKeys));
+  funnel.forEach((stage, idx) => {
+    if (!allGroupedKeys.has(stage.key)) {
+      ungrouped.push({ stage, globalIndex: idx });
+    }
+  });
+  
+  return { grouped, ungrouped };
+}
+
+function GroupTransition({ fromStage, toStage, fromUnit, toUnit }) {
+  // Defensive checks for undefined/null values
+  if (!fromStage || !toStage) {
+    return null;
+  }
+  
+  const fromCount = fromStage.kept ?? 0;
+  const toCount = toStage.candidates_in ?? 0;
+  
+  let text;
+  if (fromCount === toCount) {
+    text = `↓  ${fromCount.toLocaleString()} ${fromUnit}`;
+  } else {
+    text = `↓  ${fromCount.toLocaleString()} ${fromUnit} produced ${toCount.toLocaleString()} ${toUnit}`;
+  }
+  
+  return (
+    <div style={{
+      fontSize: '11px',
+      color: '#64748b',
+      padding: '12px 0',
+      textAlign: 'left',
+    }}>
+      {text}
+    </div>
+  );
+}
+
 export default function DiagnosticsPanel({ diagnostics, rows = [], funnel = [] }) {
   if (!diagnostics) return null;
 
@@ -171,9 +292,87 @@ export default function DiagnosticsPanel({ diagnostics, rows = [], funnel = [] }
           }}>
             Pipeline Funnel
           </h3>
-          {funnel.map((stage, idx) => (
-            <FunnelStage key={stage.key} stage={stage} index={idx} />
-          ))}
+          {(() => {
+            try {
+              const { grouped, ungrouped } = groupFunnel(funnel);
+            
+            return (
+              <>
+                {grouped.map((group, groupIdx) => {
+                  const { groupDef, stages } = group;
+                  const prevGroup = groupIdx > 0 ? grouped[groupIdx - 1] : null;
+                  
+                  return (
+                    <div key={groupDef.id}>
+                      {prevGroup && (
+                        <GroupTransition
+                          fromStage={prevGroup.stages[prevGroup.stages.length - 1].stage}
+                          toStage={stages[0].stage}
+                          fromUnit={prevGroup.groupDef.unitLabel}
+                          toUnit={groupDef.unitLabel}
+                        />
+                      )}
+                      
+                      <div style={{
+                        fontSize: '14px',
+                        fontWeight: '700',
+                        color: '#93c5fd',
+                        marginBottom: '8px',
+                        letterSpacing: '0.03em',
+                      }}>
+                        {groupDef.title}
+                      </div>
+                      
+                      {stages.map((stageInfo, stageIdx) => {
+                        const prevStageInfo = stageIdx > 0 ? stages[stageIdx - 1] : null;
+                        const expectedCandidatesIn = prevStageInfo ? prevStageInfo.stage.kept : null;
+                        
+                        return (
+                          <FunnelStage
+                            key={stageInfo.stage.key}
+                            stage={stageInfo.stage}
+                            index={stageInfo.globalIndex}
+                            expectedCandidatesIn={expectedCandidatesIn}
+                          />
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+                
+                {ungrouped.length > 0 && (
+                  <div>
+                    <div style={{
+                      fontSize: '14px',
+                      fontWeight: '700',
+                      color: '#93c5fd',
+                      marginTop: '16px',
+                      marginBottom: '8px',
+                      letterSpacing: '0.03em',
+                    }}>
+                      Ungrouped
+                    </div>
+                    {ungrouped.map((stageInfo) => (
+                      <FunnelStage
+                        key={stageInfo.stage.key}
+                        stage={stageInfo.stage}
+                        index={stageInfo.globalIndex}
+                        expectedCandidatesIn={null}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
+            );
+            } catch (err) {
+              console.error('Error rendering funnel:', err);
+              return (
+                <div style={{ color: '#f87171', fontSize: '12px', padding: '10px' }}>
+                  Error rendering funnel. Check console for details.
+                </div>
+              );
+            }
+          })()}
         </div>
       )}
 
