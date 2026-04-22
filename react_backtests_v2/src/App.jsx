@@ -43,6 +43,8 @@ const FALLBACK_DEFAULT_SETTINGS = {
   longTrailingStopPts: 10.0,
   longTakeProfitPts: 35.0,
   bypassFilters: [],
+  executionMode: 'managed',
+  forwardHorizonsMinutes: [30, 60, 90, 120, 180],
 };
 
 const DEFAULT_COLUMNS = [
@@ -132,6 +134,10 @@ function normalizeNumericSettings(nextSettings) {
     longTakeProfitPts: Number(nextSettings.longTakeProfitPts),
     // Pass through non-numeric fields
     bypassFilters: nextSettings.bypassFilters || [],
+    executionMode: nextSettings.executionMode || 'managed',
+    forwardHorizonsMinutes: Array.isArray(nextSettings.forwardHorizonsMinutes)
+      ? nextSettings.forwardHorizonsMinutes.map(Number).filter(n => Number.isFinite(n) && n > 0)
+      : [30, 60, 90, 120, 180],
   };
 }
 

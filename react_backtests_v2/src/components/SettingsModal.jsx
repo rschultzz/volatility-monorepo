@@ -330,8 +330,48 @@ export default function SettingsModal({
             </FilterField>
           </SectionCard>
 
+          {/* ── Execution mode ── */}
+          <SectionCard title="Execution mode">
+            <Field label="Mode" fieldKey="executionMode" wide>
+              <select
+                value={settingsDraft.executionMode || 'managed'}
+                onChange={(e) => onChange('executionMode', e.target.value)}
+              >
+                <option value="managed">Managed — simulate with stops &amp; TP</option>
+                <option value="study_target_hits">Study target hits — measure forward outcomes from target-touch</option>
+              </select>
+            </Field>
+            <Field label="Forward horizons (minutes)" fieldKey="forwardHorizonsMinutes" wide>
+              <input
+                type="text"
+                value={(settingsDraft.forwardHorizonsMinutes || []).join(', ')}
+                onChange={(e) => {
+                  const parts = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+                  const nums = parts.map(p => parseInt(p, 10)).filter(n => Number.isFinite(n) && n > 0);
+                  onChange('forwardHorizonsMinutes', nums);
+                }}
+                placeholder="30, 60, 90, 120, 180"
+              />
+              <small style={{ display: 'block', color: '#64748b', marginTop: '4px' }}>
+                Comma-separated minutes. EOD is always appended automatically. Only applies in study mode.
+              </small>
+            </Field>
+          </SectionCard>
+
           {/* ── Trade management ── */}
           <SectionCard title="Trade management">
+            {settingsDraft.executionMode === 'study_target_hits' && (
+              <div style={{
+                gridColumn: '1 / -1',
+                fontSize: '12px',
+                color: '#94a3b8',
+                fontStyle: 'italic',
+                padding: '4px 0',
+                marginBottom: '4px',
+              }}>
+                Trade management is ignored in study mode. These values are preserved for when you switch back to managed mode.
+              </div>
+            )}
             {isDownMove ? (
               <>
                 <Field label="Long initial stop (pts)" fieldKey="longInitialStopPts">

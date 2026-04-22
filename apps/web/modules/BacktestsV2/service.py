@@ -947,6 +947,129 @@ def _measure_forward_outcomes(
     return out
 
 
+def _build_study_row(
+    *,
+    trade_date,
+    day_rows: List[Dict[str, Any]],
+    direction: str,   # "up" or "down"
+    zone: Dict[str, Any],
+    target_zone: Dict[str, Any],
+    pivot_idx: int,
+    pivot_price: float,
+    hit_idx: int,
+    clean_space_points: float,
+    forward_horizons_minutes: tuple[int, ...],
+    skew_put_delta_pct: Optional[float],
+    skew_call_delta_pct: Optional[float],
+    skew_atm_iv_delta_pct: Optional[float],
+    skew_threshold_passed: bool,
+) -> Dict[str, Any]:
+    """
+    Build a single study-mode result row for one target-touch event.
+    Anchors forward outcomes at the moment of target touch.
+    """
+    start_row = day_rows[pivot_idx]
+    target_row = day_rows[hit_idx]
+
+    # Anchor price: use close of the target-hit bar if available, else open, else pivot price
+    anchor_price = target_row.get("close")
+    if anchor_price is None:
+        anchor_price = target_row.get("open")
+    if anchor_price is None:
+        anchor_price = pivot_price
+
+    forward = _measure_forward_outcomes(
+        day_rows=day_rows,
+        anchor_idx=hit_idx,
+        anchor_price=float(anchor_price),
+        direction=direction,
+        horizons_minutes=forward_horizons_minutes,
+    )
+
+    if direction == "up":
+        target_level = float(target_zone["low"])
+        move_points = target_level - float(pivot_price)
+    else:
+        target_level = float(target_zone["high"])
+        move_points = float(pivot_price) - target_level
+
+    return {
+        "trade_date": str(trade_date),
+        "direction": direction,
+        "execution_mode": "study_target_hits",
+
+        # Source zone info
+        "source_zone_low": round(float(zone["low"]), 2),
+        "source_zone_high": round(float(zone["high"]), 2),
+        "source_zone_width": round(float(zone["width"]), 2),
+        "source_zone_levels": zone["levels_text"],
+
+        # Pivot anchor (for skew delta reference)
+        "start_ts_pt": str(start_row.get("ts_pt")),
+        "start_ts_utc": pd.Timestamp(start_row.get("ts_utc")).isoformat() if start_row.get("ts_utc") is not None else None,
+        "start_pivot_price": round(float(pivot_price), 2),
+
+        # Target touch (forward outcomes anchor)
+        "target_level": round(target_level, 2),
+        "target_zone_range": f"{target_zone['low']:.2f} – {target_zone['high']:.2f}",
+        "target_ts_pt": str(target_row.get("ts_pt")),
+        "target_ts_utc": pd.Timestamp(target_row.get("ts_utc")).isoformat() if target_row.get("ts_utc") is not None else None,
+        "target_price": round(float(anchor_price), 2),
+
+        # Move metadata
+        "move_points": round(float(move_points), 2),
+        "elapsed_bars": int(hit_idx - pivot_idx),
+        "clean_space_points": round(float(clean_space_points), 2),
+
+        # Skew deltas vs predicted at target touch
+        "skew_delta_put_pct":    None if skew_put_delta_pct is None else round(float(skew_put_delta_pct), 2),
+        "skew_delta_call_pct":   None if skew_call_delta_pct is None else round(float(skew_call_delta_pct), 2),
+        "skew_delta_atm_iv_pct": None if skew_atm_iv_delta_pct is None else round(float(skew_atm_iv_delta_pct), 2),
+        "skew_threshold_passed": bool(skew_threshold_passed),
+
+        # Forward outcomes dict
+        "forward_outcomes": forward,
+    }
+
+
+def _compute_skew_at_target(
+    trade_date,
+    day_rows: List[Dict[str, Any]],
+    pivot_idx: int,
+    hit_idx: int,
+) -> Dict[str, Optional[float]]:
+    """
+    Compute skew delta values at the target-hit timestamp, relative to
+    the pivot-entry timestamp. Returns dict with keys:
+      delta_put_skew_pct, delta_call_skew_pct, delta_atm_iv_pct
+    Any value may be None if skew data is missing.
+    Reuses the same math as _expected_skew_deltas_from_entry used in managed mode.
+    """
+    blank = {"delta_put_skew_pct": None, "delta_call_skew_pct": None, "delta_atm_iv_pct": None}
+    try:
+        entry_ts_pt = _normalize_pt_label(day_rows[pivot_idx].get("ts_pt"))
+        target_ts_pt = _normalize_pt_label(day_rows[hit_idx].get("ts_pt"))
+        if not entry_ts_pt or not target_ts_pt:
+            return blank
+        skew_df = _fetch_skew_rows_for_times(
+            str(trade_date), str(trade_date), [entry_ts_pt, target_ts_pt]
+        )
+        if skew_df.empty:
+            return blank
+        by_label: Dict[str, pd.Series] = {}
+        for _, row in skew_df.iterrows():
+            label = str(row.get("snapshot_pt_label") or "")
+            if label and label not in by_label:
+                by_label[label] = row
+        entry_skew = by_label.get(entry_ts_pt)
+        target_skew = by_label.get(target_ts_pt)
+        if entry_skew is None or target_skew is None:
+            return blank
+        return _expected_skew_deltas_from_entry(entry_skew, target_skew, str(trade_date))
+    except Exception:
+        return blank
+
+
 def _observe_consolidation_range(
         *,
         day_rows: List[Dict[str, Any]],
@@ -2321,6 +2444,67 @@ def _day_zone_results(
                     if recorder:
                         recorder.record("target_hit", StageResult(kept=True), direction="up")
 
+                    # ─────────────────────────────────────────────────────────
+                    # STUDY MODE: emit one study row per target-touch event.
+                    # Skip consolidation/prior-context/entry-band entirely.
+                    # Skew threshold still acts as a (tunable, bypassable) gate.
+                    # ─────────────────────────────────────────────────────────
+                    if execution_mode == "study_target_hits":
+                        # Compute skew at target touch vs pivot (reusing managed-mode math)
+                        skew_metrics = _compute_skew_at_target(
+                            trade_date, day_rows, pivot_idx, hit_idx
+                        )
+                        d_put = skew_metrics.get("delta_put_skew_pct")
+                        d_call = skew_metrics.get("delta_call_skew_pct")
+
+                        # Up-move short direction: skew passes if put-skew up AND call-skew capped
+                        if d_put is None or d_call is None:
+                            skew_passed = False
+                            skew_drop_reason = "missing_skew_data"
+                        elif (d_put >= float(short_put_skew_increase_pct)
+                              and d_call <= float(short_call_skew_max_pct)):
+                            skew_passed = True
+                            skew_drop_reason = None
+                        else:
+                            skew_passed = False
+                            skew_drop_reason = "threshold_not_met"
+
+                        # Record stage 10 so it still appears in the funnel
+                        if recorder:
+                            effective_kept = recorder.record(
+                                "skew_signal_fired",
+                                StageResult(kept=skew_passed, drop_reason=skew_drop_reason),
+                                direction="up",
+                            )
+                        else:
+                            effective_kept = skew_passed
+
+                        if effective_kept:
+                            study_row = _build_study_row(
+                                trade_date=trade_date,
+                                day_rows=day_rows,
+                                direction="up",
+                                zone=zone,
+                                target_zone=target_zone_up,
+                                pivot_idx=pivot_idx,
+                                pivot_price=pivot_price,
+                                hit_idx=hit_idx,
+                                clean_space_points=float(target_zone_up["low"]) - float(zone["high"]),
+                                forward_horizons_minutes=forward_horizons_minutes,
+                                skew_put_delta_pct=d_put,
+                                skew_call_delta_pct=d_call,
+                                skew_atm_iv_delta_pct=skew_metrics.get("delta_atm_iv_pct"),
+                                skew_threshold_passed=skew_passed,
+                            )
+                            results.append(study_row)
+                            diagnostics["valid_instances"] += 1
+                            if len(results) >= int(max_results):
+                                return results, diagnostics
+
+                        # Done with this pivot — don't run consolidation/prior-context/entry logic
+                        break
+                    # ─────────────────────────────────────────────────────────
+
                     # Record consolidation stages
                     if recorder:
                         if obs["status"] == "invalidated":
@@ -2597,6 +2781,63 @@ def _day_zone_results(
                     if recorder:
                         recorder.record("target_hit", StageResult(kept=True), direction="down")
 
+                    # ─────────────────────────────────────────────────────────
+                    # STUDY MODE: emit one study row per target-touch event.
+                    # Down-move direction.
+                    # ─────────────────────────────────────────────────────────
+                    if execution_mode == "study_target_hits":
+                        skew_metrics = _compute_skew_at_target(
+                            trade_date, day_rows, pivot_idx, hit_idx
+                        )
+                        d_put = skew_metrics.get("delta_put_skew_pct")
+                        d_call = skew_metrics.get("delta_call_skew_pct")
+
+                        # Down-move long direction: skew passes if put-skew DOWN AND call-skew UP
+                        if d_put is None or d_call is None:
+                            skew_passed = False
+                            skew_drop_reason = "missing_skew_data"
+                        elif (d_put <= -float(long_put_skew_min_decrease_pct)
+                              and d_call >= float(long_call_skew_min_increase_pct)):
+                            skew_passed = True
+                            skew_drop_reason = None
+                        else:
+                            skew_passed = False
+                            skew_drop_reason = "threshold_not_met"
+
+                        if recorder:
+                            effective_kept = recorder.record(
+                                "skew_signal_fired",
+                                StageResult(kept=skew_passed, drop_reason=skew_drop_reason),
+                                direction="down",
+                            )
+                        else:
+                            effective_kept = skew_passed
+
+                        if effective_kept:
+                            study_row = _build_study_row(
+                                trade_date=trade_date,
+                                day_rows=day_rows,
+                                direction="down",
+                                zone=zone,
+                                target_zone=target_zone_down,
+                                pivot_idx=pivot_idx,
+                                pivot_price=pivot_price,
+                                hit_idx=hit_idx,
+                                clean_space_points=float(zone["low"]) - float(target_zone_down["high"]),
+                                forward_horizons_minutes=forward_horizons_minutes,
+                                skew_put_delta_pct=d_put,
+                                skew_call_delta_pct=d_call,
+                                skew_atm_iv_delta_pct=skew_metrics.get("delta_atm_iv_pct"),
+                                skew_threshold_passed=skew_passed,
+                            )
+                            results.append(study_row)
+                            diagnostics["valid_instances"] += 1
+                            if len(results) >= int(max_results):
+                                return results, diagnostics
+
+                        break
+                    # ─────────────────────────────────────────────────────────
+
                     # Record consolidation stages for down moves
                     if recorder:
                         if obs["status"] == "invalidated":
@@ -2871,6 +3112,8 @@ def scan_gex_level_moves(
             long_trailing_stop_pts=float(long_trailing_stop_pts),
             long_take_profit_pts=float(long_take_profit_pts),
             recorder=recorder,
+            execution_mode=execution_mode,
+            forward_horizons_minutes=forward_horizons_minutes,
         )
         results.extend(day_results)
 
@@ -2927,6 +3170,49 @@ def scan_gex_level_moves(
         "sample_short_setups": sample_short_setups,
         "sample_trades": sample_trades,
     }
+
+    # Study mode: add per-horizon aggregate over all rows with forward outcomes
+    if execution_mode == "study_target_hits":
+        horizon_labels = [f"{m}m" for m in forward_horizons_minutes] + ["eod"]
+
+        def _median(xs):
+            if not xs:
+                return 0.0
+            s = sorted(xs)
+            n = len(s)
+            return s[n // 2] if n % 2 else 0.5 * (s[n // 2 - 1] + s[n // 2])
+
+        agg: Dict[str, Any] = {}
+        for hl in horizon_labels:
+            mfes:   List[float] = []
+            maes:   List[float] = []
+            closes: List[float] = []
+            for r in results:
+                fo = r.get("forward_outcomes") or {}
+                h = fo.get(hl)
+                if not h:
+                    continue
+                if h.get("mfe_pts")   is not None: mfes.append(float(h["mfe_pts"]))
+                if h.get("mae_pts")   is not None: maes.append(float(h["mae_pts"]))
+                if h.get("close_pts") is not None: closes.append(float(h["close_pts"]))
+
+            if not closes:
+                agg[hl] = {"count": 0}
+                continue
+
+            agg[hl] = {
+                "count":             len(closes),
+                "mfe_mean":          round(sum(mfes)   / len(mfes),   2) if mfes   else 0.0,
+                "mfe_median":        round(_median(mfes),  2),
+                "mae_mean":          round(sum(maes)   / len(maes),   2) if maes   else 0.0,
+                "mae_median":        round(_median(maes),  2),
+                "close_mean":        round(sum(closes) / len(closes), 2),
+                "close_median":      round(_median(closes),2),
+                "win_rate_at_close": round(sum(1 for c in closes if c > 0) / len(closes), 3),
+            }
+
+        diagnostics["forward_outcomes_aggregate"] = agg
+        diagnostics["entries_found"] = int(len(results))
 
     return {
         "rows": results,

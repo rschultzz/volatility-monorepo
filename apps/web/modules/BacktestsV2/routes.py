@@ -527,6 +527,11 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 max_minutes_before_close=int(settings.get("maxMinutesBeforeClose", 45)),
                 source_view=DEFAULT_SOURCE_VIEW,
                 bypass_filters=tuple(settings.get("bypassFilters") or ()),
+                execution_mode=str(settings.get("executionMode") or "managed").strip(),
+                forward_horizons_minutes=tuple(
+                    int(x) for x in (settings.get("forwardHorizonsMinutes") or [30, 60, 90, 120, 180])
+                    if str(x).strip().lstrip('-').isdigit() and int(x) > 0
+                ) or (30, 60, 90, 120, 180),
             )
 
             base_strategy_key = strategy_meta.get("baseStrategyKey") or item["base_registry_key"]
@@ -672,6 +677,11 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 long_take_profit_pts=float(settings.get("longTakeProfitPts", 35.0)),
                 source_view=DEFAULT_SOURCE_VIEW,
                 bypass_filters=tuple(settings.get("bypassFilters") or ()),
+                execution_mode=str(settings.get("executionMode") or "managed").strip(),
+                forward_horizons_minutes=tuple(
+                    int(x) for x in (settings.get("forwardHorizonsMinutes") or [30, 60, 90, 120, 180])
+                    if str(x).strip().lstrip('-').isdigit() and int(x) > 0
+                ) or (30, 60, 90, 120, 180),
             )
 
             base_strategy_key = strategy_meta.get("baseStrategyKey") or item["base_registry_key"]
