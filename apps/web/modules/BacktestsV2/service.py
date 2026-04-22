@@ -805,6 +805,148 @@ def _find_target_acceptance_rows(
     return []
 
 
+def _measure_forward_outcomes(
+    day_rows: List[Dict[str, Any]],
+    anchor_idx: int,
+    anchor_price: float,
+    direction: str,   # "up" for shorts (pnl = anchor - price), "down" for longs (pnl = price - anchor)
+    horizons_minutes: tuple[int, ...],
+) -> Dict[str, Any]:
+    """
+    Walk forward from anchor_idx for each horizon, capturing:
+      - mfe_pts: best favorable excursion (positive = good for the direction)
+      - mae_pts: worst adverse excursion (positive magnitude, always >= 0)
+      - close_pts: P&L if exited at the last bar of the horizon window
+      - window_bars: how many bars were actually observed
+      - reached_close: True if the window was truncated by RTH close (13:00 PT)
+    
+    Always appends an "eod" horizon = from anchor to last bar of the day.
+    
+    Sign convention:
+      - direction="up" (short trade analog): favorable = price goes DOWN
+          pnl(t) = anchor_price - price(t)
+      - direction="down" (long trade analog): favorable = price goes UP
+          pnl(t) = price(t) - anchor_price
+    
+    Returns:
+      {
+        "30m": {"mfe_pts": float, "mae_pts": float, "close_pts": float,
+                "window_bars": int, "reached_close": bool},
+        ...
+        "eod": {...},
+      }
+    """
+    if anchor_idx < 0 or anchor_idx >= len(day_rows):
+        return {}
+    
+    anchor_row = day_rows[anchor_idx]
+    anchor_price_f = float(anchor_price)
+    
+    def _pnl(price: float) -> float:
+        if direction == "up":
+            return anchor_price_f - float(price)
+        else:
+            return float(price) - anchor_price_f
+    
+    def _compute_horizon(end_bar_idx: int) -> Dict[str, Any]:
+        """Compute mfe/mae/close over [anchor_idx+1 ... end_bar_idx]."""
+        if end_bar_idx <= anchor_idx:
+            return {"mfe_pts": 0.0, "mae_pts": 0.0, "close_pts": 0.0,
+                    "window_bars": 0, "reached_close": False}
+        
+        mfe = float("-inf")
+        mae = float("-inf")  # tracked as magnitude of WORST pnl
+        last_close = None
+        bars = 0
+        reached_close = False
+        
+        for k in range(anchor_idx + 1, end_bar_idx + 1):
+            row = day_rows[k]
+            high = row.get("high")
+            low = row.get("low")
+            close_v = row.get("close")
+            if high is None or low is None:
+                continue
+            
+            # Best and worst excursions within the bar
+            pnl_high = _pnl(float(high))
+            pnl_low = _pnl(float(low))
+            bar_best = max(pnl_high, pnl_low)
+            bar_worst = min(pnl_high, pnl_low)
+            
+            mfe = max(mfe, bar_best)
+            # mae is magnitude of adverse move; negative pnl -> positive mae
+            if bar_worst < 0:
+                mae = max(mae, -bar_worst)
+            else:
+                mae = max(mae, 0.0)
+            
+            if close_v is not None:
+                last_close = float(close_v)
+            bars += 1
+            
+            # Check if this bar is past 13:00 PT (RTH close)
+            ts_pt = _normalize_pt_label(row.get("ts_pt"))
+            if ts_pt:
+                try:
+                    h = int(ts_pt[:2])
+                    if h >= 13:
+                        reached_close = True
+                except Exception:
+                    pass
+        
+        if mfe == float("-inf"):
+            mfe = 0.0
+        if mae == float("-inf"):
+            mae = 0.0
+        close_pts = _pnl(last_close) if last_close is not None else 0.0
+        
+        return {
+            "mfe_pts":       round(float(mfe), 2),
+            "mae_pts":       round(float(mae), 2),
+            "close_pts":     round(float(close_pts), 2),
+            "window_bars":   int(bars),
+            "reached_close": bool(reached_close),
+        }
+    
+    # Build horizon windows — assumes 1-minute bars. Stop at the RTH close or
+    # end of day_rows, whichever comes first.
+    last_bar_of_day = len(day_rows) - 1
+    
+    # For each horizon, find the last bar within that horizon window
+    out: Dict[str, Any] = {}
+    for mins in horizons_minutes:
+        end_bar = min(anchor_idx + int(mins), last_bar_of_day)
+        # Also clip at RTH close if we cross it
+        for k in range(anchor_idx + 1, end_bar + 1):
+            ts_pt = _normalize_pt_label(day_rows[k].get("ts_pt"))
+            if ts_pt:
+                try:
+                    h, m = int(ts_pt[:2]), int(ts_pt[3:5])
+                    if h >= 13:
+                        end_bar = k
+                        break
+                except Exception:
+                    pass
+        out[f"{mins}m"] = _compute_horizon(end_bar)
+    
+    # EOD horizon — anchor to last bar of day (respecting 13:00 cutoff)
+    eod_bar = last_bar_of_day
+    for k in range(anchor_idx + 1, last_bar_of_day + 1):
+        ts_pt = _normalize_pt_label(day_rows[k].get("ts_pt"))
+        if ts_pt:
+            try:
+                h = int(ts_pt[:2])
+                if h >= 13:
+                    eod_bar = k
+                    break
+            except Exception:
+                pass
+    out["eod"] = _compute_horizon(eod_bar)
+    
+    return out
+
+
 def _observe_consolidation_range(
         *,
         day_rows: List[Dict[str, Any]],
@@ -1991,6 +2133,8 @@ def _day_zone_results(
         long_trailing_stop_pts: float,
         long_take_profit_pts: float,
         recorder: Optional[FunnelRecorder] = None,
+        execution_mode: str = "managed",
+        forward_horizons_minutes: tuple[int, ...] = (30, 60, 90, 120, 180),
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     qualifying_levels = _collect_day_levels(day_rows, level_family, min_level_gex_bn)
 
@@ -2635,7 +2779,7 @@ def scan_gex_level_moves(
         long_take_profit_pts: float = 35.0,
         source_view: str | None = None,
         bypass_filters: tuple[str, ...] = (),
-        execution_mode: Literal["managed", "unmanaged"] = "managed",
+        execution_mode: str = "managed",
         forward_horizons_minutes: tuple[int, ...] = (30, 60, 90, 120, 180),
 ) -> Dict[str, Any]:
     level_family = (level_family or "primary").strip().lower()
