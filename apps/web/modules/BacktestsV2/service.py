@@ -28,7 +28,6 @@ THETA_ATM_PP_PER_SQRT_YEAR = -638
 MIN_TARGET_ACCEPTANCE_BARS = 3
 MAX_BARS_OUTSIDE_DURING_ACCEPTANCE = 1
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  FUNNEL PIPELINE INFRASTRUCTURE
 # ═══════════════════════════════════════════════════════════════════════════
@@ -45,11 +44,11 @@ class StageResult:
 
 @dataclass
 class FunnelStage:
-    key: str                 # stable machine id, e.g. "gex_level_qualifies"
-    label: str               # human label for UI
-    kind: StageKind          # filter | construction | evaluation
+    key: str  # stable machine id, e.g. "gex_level_qualifies"
+    label: str  # human label for UI
+    kind: StageKind  # filter | construction | evaluation
     scope: Literal["shared", "directional"] = "shared"
-    filter_param_keys: tuple[str, ...] = ()   # camelCase payload keys this stage reads
+    filter_param_keys: tuple[str, ...] = ()  # camelCase payload keys this stage reads
     bypassable: bool = True  # set False for construction-only stages
 
 
@@ -65,7 +64,7 @@ class FunnelRecorder:
                 }
             else:  # directional
                 self._counts[s.key] = {
-                    "up":   {"in": 0, "kept": 0, "dropped": 0, "drop_reasons": Counter()},
+                    "up": {"in": 0, "kept": 0, "dropped": 0, "drop_reasons": Counter()},
                     "down": {"in": 0, "kept": 0, "dropped": 0, "drop_reasons": Counter()},
                 }
 
@@ -73,10 +72,10 @@ class FunnelRecorder:
         return stage_key in self.bypass_set
 
     def record(
-        self,
-        stage_key: str,
-        result: StageResult,
-        direction: Optional[Literal["up", "down"]] = None,
+            self,
+            stage_key: str,
+            result: StageResult,
+            direction: Optional[Literal["up", "down"]] = None,
     ) -> bool:
         """
         Record a stage result. Returns the effective kept value.
@@ -137,15 +136,15 @@ class FunnelRecorder:
             else:
                 entry["up"] = {
                     "candidates_in": buckets["up"]["in"],
-                    "kept":          buckets["up"]["kept"],
-                    "dropped":       buckets["up"]["dropped"],
-                    "drop_reasons":  dict(buckets["up"]["drop_reasons"]),
+                    "kept": buckets["up"]["kept"],
+                    "dropped": buckets["up"]["dropped"],
+                    "drop_reasons": dict(buckets["up"]["drop_reasons"]),
                 }
                 entry["down"] = {
                     "candidates_in": buckets["down"]["in"],
-                    "kept":          buckets["down"]["kept"],
-                    "dropped":       buckets["down"]["dropped"],
-                    "drop_reasons":  dict(buckets["down"]["drop_reasons"]),
+                    "kept": buckets["down"]["kept"],
+                    "dropped": buckets["down"]["dropped"],
+                    "drop_reasons": dict(buckets["down"]["drop_reasons"]),
                 }
 
             out.append(entry)
@@ -510,14 +509,14 @@ def _find_last_pivot(day_rows: List[Dict[str, Any]], start_idx: int, end_idx: in
 
 
 def _first_target_hit(
-    day_rows: List[Dict[str, Any]],
-    *,
-    start_scan_idx: int,
-    direction: str,
-    zone: Dict[str, Any],
-    target_level: float,
-    target_proximity_pts: float,
-    max_zone_breach_pts: float,
+        day_rows: List[Dict[str, Any]],
+        *,
+        start_scan_idx: int,
+        direction: str,
+        zone: Dict[str, Any],
+        target_level: float,
+        target_proximity_pts: float,
+        max_zone_breach_pts: float,
 ) -> int | None:
     for j in range(start_scan_idx, len(day_rows)):
         row = day_rows[j]
@@ -760,17 +759,17 @@ def _close_near_target(row: Dict[str, Any], target_level: float, band_pts: float
 
 
 def _find_target_acceptance_rows(
-    *,
-    day_rows: List[Dict[str, Any]],
-    target_hit_idx: int,
-    target_level: float,
-    target_proximity_pts: float,
-    consolidation_window_minutes: int,
+        *,
+        day_rows: List[Dict[str, Any]],
+        target_hit_idx: int,
+        target_level: float,
+        target_proximity_pts: float,
+        consolidation_window_minutes: int,
 ) -> List[Dict[str, Any]]:
     max_bars = max(1, int(consolidation_window_minutes))
     end_idx = min(len(day_rows) - 1, target_hit_idx + max_bars - 1)
 
-    candidate_rows = day_rows[target_hit_idx : end_idx + 1]
+    candidate_rows = day_rows[target_hit_idx: end_idx + 1]
     band = float(target_proximity_pts)
 
     best_cluster: List[Dict[str, Any]] = []
@@ -807,15 +806,15 @@ def _find_target_acceptance_rows(
 
 
 def _observe_consolidation_range(
-    *,
-    day_rows: List[Dict[str, Any]],
-    start_idx: int,
-    consolidation_window_minutes: int,
-    wall_high: float,
-    max_zone_breach_pts: float,
-    pivot_price: float,
-    move_points: float,
-    max_move_loss_pct: float,
+        *,
+        day_rows: List[Dict[str, Any]],
+        start_idx: int,
+        consolidation_window_minutes: int,
+        wall_high: float,
+        max_zone_breach_pts: float,
+        pivot_price: float,
+        move_points: float,
+        max_move_loss_pct: float,
 ) -> Dict[str, Any]:
     """
     Observe bars from start_idx for up to consolidation_window_minutes, building
@@ -905,16 +904,16 @@ def _observe_consolidation_range(
 
 
 def _observe_consolidation_range_down(
-    *,
-    day_rows: List[Dict[str, Any]],
-    start_idx: int,
-    consolidation_window_minutes: int,
-    wall_high: float,
-    wall_low: float,
-    max_zone_breach_pts: float,
-    pivot_price: float,
-    move_points: float,
-    max_move_loss_pct: float,
+        *,
+        day_rows: List[Dict[str, Any]],
+        start_idx: int,
+        consolidation_window_minutes: int,
+        wall_high: float,
+        wall_low: float,
+        max_zone_breach_pts: float,
+        pivot_price: float,
+        move_points: float,
+        max_move_loss_pct: float,
 ) -> Dict[str, Any]:
     """
     Mirror of _observe_consolidation_range for DOWN moves → LONG trades.
@@ -927,26 +926,26 @@ def _observe_consolidation_range_down(
     CONFIRM:    window elapsed without either trigger.
     """
     max_bars = max(1, int(consolidation_window_minutes))
-    end_idx  = min(len(day_rows) - 1, start_idx + max_bars - 1)
+    end_idx = min(len(day_rows) - 1, start_idx + max_bars - 1)
 
     invalidation_ceiling = float(pivot_price) - float(move_points) * (1.0 - float(max_move_loss_pct))
-    breach_floor         = float(wall_high) - float(max_zone_breach_pts)
+    breach_floor = float(wall_high) - float(max_zone_breach_pts)
 
-    observed:   List[Dict[str, Any]] = []
-    range_high: Optional[float]      = None
-    range_low:  Optional[float]      = None
+    observed: List[Dict[str, Any]] = []
+    range_high: Optional[float] = None
+    range_low: Optional[float] = None
 
     for i in range(start_idx, end_idx + 1):
-        row     = day_rows[i]
-        high_v  = row.get("high")
-        low_v   = row.get("low")
+        row = day_rows[i]
+        high_v = row.get("high")
+        low_v = row.get("low")
         close_v = row.get("close")
 
         if high_v is not None and low_v is not None:
-            h  = float(high_v)
+            h = float(high_v)
             lo = float(low_v)
-            range_high = h  if range_high is None else max(range_high, h)
-            range_low  = lo if range_low  is None else min(range_low,  lo)
+            range_high = h if range_high is None else max(range_high, h)
+            range_low = lo if range_low is None else min(range_low, lo)
 
             # PROMOTE: bar low pushed below the wall — price is through,
             # advance to next zone down regardless of where it closed.
@@ -991,19 +990,19 @@ def _make_default_trade_fields(trade_reason: str = "not_evaluated") -> Dict[str,
 
 
 def _simulate_short_trade_from_signal(
-    *,
-    day_rows: List[Dict[str, Any]],
-    signal_idx: int,
-    seed_rows: List[Dict[str, Any]],
-    confirmed_range_high: Optional[float],
-    consolidation_end_idx: int,
-    entry_within_top_pts: float,
-    entry_search_window_minutes: int,
-    initial_stop_pts: float,
-    trail_activate_profit_pts: float,
-    trailing_stop_pts: float,
-    take_profit_pts: float,
-    max_minutes_before_close: int = 45,
+        *,
+        day_rows: List[Dict[str, Any]],
+        signal_idx: int,
+        seed_rows: List[Dict[str, Any]],
+        confirmed_range_high: Optional[float],
+        consolidation_end_idx: int,
+        entry_within_top_pts: float,
+        entry_search_window_minutes: int,
+        initial_stop_pts: float,
+        trail_activate_profit_pts: float,
+        trailing_stop_pts: float,
+        take_profit_pts: float,
+        max_minutes_before_close: int = 45,
 ) -> Dict[str, Any]:
     default = _make_default_trade_fields("no_entry_window")
 
@@ -1155,10 +1154,10 @@ def _simulate_short_trade_from_signal(
 
 
 def _compute_prior_move_context(
-    day_rows: List[Dict[str, Any]],
-    pivot_idx: int,
-    pivot_price: float,
-    up_move_pts: float,
+        day_rows: List[Dict[str, Any]],
+        pivot_idx: int,
+        pivot_price: float,
+        up_move_pts: float,
 ) -> Dict[str, Any]:
     """
     Look back from the start of the up move (pivot_idx) across the session so far
@@ -1234,28 +1233,28 @@ def _compute_prior_move_context(
 
 
 def _evaluate_up_short_setup(
-    *,
-    trade_date: dt.date,
-    day_rows: List[Dict[str, Any]],
-    entry_idx: int,
-    target_hit_idx: int,
-    target_level: float,
-    consolidation_window_minutes: int,
-    short_put_skew_increase_pct: float,
-    short_call_skew_max_pct: float,
-    entry_within_top_pts: float,
-    entry_search_window_minutes: int,
-    initial_stop_pts: float,
-    trail_activate_profit_pts: float,
-    trailing_stop_pts: float,
-    take_profit_pts: float,
-    prior_ctx: Dict[str, Any],
-    max_prior_down_up_ratio: float,
-    max_start_pct_of_range: float,
-    observed_rows: List[Dict[str, Any]],
-    confirmed_range_high: Optional[float],
-    max_minutes_before_close: int = 45,
-    recorder: Optional[FunnelRecorder] = None,
+        *,
+        trade_date: dt.date,
+        day_rows: List[Dict[str, Any]],
+        entry_idx: int,
+        target_hit_idx: int,
+        target_level: float,
+        consolidation_window_minutes: int,
+        short_put_skew_increase_pct: float,
+        short_call_skew_max_pct: float,
+        entry_within_top_pts: float,
+        entry_search_window_minutes: int,
+        initial_stop_pts: float,
+        trail_activate_profit_pts: float,
+        trailing_stop_pts: float,
+        take_profit_pts: float,
+        prior_ctx: Dict[str, Any],
+        max_prior_down_up_ratio: float,
+        max_start_pct_of_range: float,
+        observed_rows: List[Dict[str, Any]],
+        confirmed_range_high: Optional[float],
+        max_minutes_before_close: int = 45,
+        recorder: Optional[FunnelRecorder] = None,
 ) -> Dict[str, Any]:
     default = {
         "consolidation_minutes_observed": 0,
@@ -1275,11 +1274,11 @@ def _evaluate_up_short_setup(
     start_pct = prior_ctx.get("start_pct_of_session_range")
     ratio_breached = ratio is not None and float(ratio) > float(max_prior_down_up_ratio)
     pct_breached = start_pct is not None and float(start_pct) < float(max_start_pct_of_range)
-    
+
     if recorder:
         if not recorder.record("prior_context_valid", StageResult(
-            kept=not (ratio_breached and pct_breached),
-            drop_reason="prior_down_ratio_and_start_pct_breached" if (ratio_breached and pct_breached) else None
+                kept=not (ratio_breached and pct_breached),
+                drop_reason="prior_down_ratio_and_start_pct_breached" if (ratio_breached and pct_breached) else None
         ), direction="up"):
             default["short_setup_reason"] = "prior_context_invalidated"
             default["trade_entry_reason"] = "prior_context_invalidated"
@@ -1301,7 +1300,7 @@ def _evaluate_up_short_setup(
     skew_times = [entry_ts_pt] + acceptance_times
 
     skew_df = _fetch_skew_rows_for_times(str(trade_date), str(trade_date), skew_times)
-    
+
     if recorder:
         skew_bypassed = recorder.is_bypassed("skew_signal_fired")
         if skew_df.empty and not skew_bypassed:
@@ -1326,7 +1325,7 @@ def _evaluate_up_short_setup(
             by_label[label] = row
 
     entry_skew_row = by_label.get(entry_ts_pt)
-    
+
     if recorder:
         skew_bypassed = recorder.is_bypassed("skew_signal_fired")
         if entry_skew_row is None and not skew_bypassed:
@@ -1402,8 +1401,8 @@ def _evaluate_up_short_setup(
 
     if recorder:
         if not recorder.record("skew_signal_fired", StageResult(
-            kept=signal_found,
-            drop_reason="threshold_not_met" if not signal_found else None
+                kept=signal_found,
+                drop_reason="threshold_not_met" if not signal_found else None
         ), direction="up"):
             return {
                 "consolidation_minutes_observed": len(observed_rows),
@@ -1477,12 +1476,12 @@ def _evaluate_up_short_setup(
 # ─────────────────────────────────────────────────────────────
 
 def _compute_prior_move_context_down(
-    day_rows: List[Dict[str, Any]],
-    pivot_idx: int,
-    pivot_price: float,
-    down_move_pts: float,
-    target_hit_idx: int = 0,
-    target_level: float = 0.0,
+        day_rows: List[Dict[str, Any]],
+        pivot_idx: int,
+        pivot_price: float,
+        down_move_pts: float,
+        target_hit_idx: int = 0,
+        target_level: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Mirror of _compute_prior_move_context for down moves.
@@ -1508,7 +1507,7 @@ def _compute_prior_move_context_down(
 
     try:
         session_high = max(float(r["high"]) for r in range_rows if r.get("high") is not None)
-        session_low  = min(float(r["low"])  for r in range_rows if r.get("low")  is not None)
+        session_low = min(float(r["low"]) for r in range_rows if r.get("low") is not None)
     except (ValueError, TypeError):
         return empty
 
@@ -1521,11 +1520,11 @@ def _compute_prior_move_context_down(
     max_up = 0.0
     running_trough: Optional[float] = None
     for r in prior_rows:
-        h  = r.get("high")
+        h = r.get("high")
         lo = r.get("low")
         if h is None or lo is None:
             continue
-        h_f  = float(h)
+        h_f = float(h)
         lo_f = float(lo)
         running_trough = lo_f if running_trough is None else min(running_trough, lo_f)
         rally = h_f - running_trough
@@ -1543,19 +1542,19 @@ def _compute_prior_move_context_down(
 
 
 def _simulate_long_trade_from_signal(
-    *,
-    day_rows: List[Dict[str, Any]],
-    signal_idx: int,
-    seed_rows: List[Dict[str, Any]],
-    confirmed_range_low: Optional[float],
-    consolidation_end_idx: int,
-    entry_within_bottom_pts: float,
-    entry_search_window_minutes: int,
-    long_initial_stop_pts: float,
-    long_trail_activate_profit_pts: float,
-    long_trailing_stop_pts: float,
-    long_take_profit_pts: float,
-    max_minutes_before_close: int = 45,
+        *,
+        day_rows: List[Dict[str, Any]],
+        signal_idx: int,
+        seed_rows: List[Dict[str, Any]],
+        confirmed_range_low: Optional[float],
+        consolidation_end_idx: int,
+        entry_within_bottom_pts: float,
+        entry_search_window_minutes: int,
+        long_initial_stop_pts: float,
+        long_trail_activate_profit_pts: float,
+        long_trailing_stop_pts: float,
+        long_take_profit_pts: float,
+        max_minutes_before_close: int = 45,
 ) -> Dict[str, Any]:
     """Mirror of _simulate_short_trade_from_signal for LONG trades."""
     default = _make_default_trade_fields("no_entry_window")
@@ -1564,10 +1563,10 @@ def _simulate_long_trade_from_signal(
         default["trade_entry_reason"] = "invalid_signal_index"
         return default
 
-    seed_low  = min(float(r["low"])  for r in seed_rows if r.get("low")  is not None)
+    seed_low = min(float(r["low"]) for r in seed_rows if r.get("low") is not None)
     seed_high = max(float(r["high"]) for r in seed_rows if r.get("high") is not None)
     # Anchor entry band to the confirmed full-range low
-    range_low  = confirmed_range_low if confirmed_range_low is not None else seed_low
+    range_low = confirmed_range_low if confirmed_range_low is not None else seed_low
     range_high = seed_high
 
     # For longs, start entry search from the signal bar itself — unlike shorts
@@ -1577,11 +1576,11 @@ def _simulate_long_trade_from_signal(
     entry_search_start = signal_idx
     search_end_idx = min(len(day_rows) - 1, entry_search_start + max(1, int(entry_search_window_minutes)) - 1)
 
-    entry_idx: Optional[int]   = None
+    entry_idx: Optional[int] = None
     entry_price: Optional[float] = None
     entry_band_ceiling: Optional[float] = None
     range_high_at_entry: Optional[float] = None
-    range_low_at_entry:  Optional[float] = None
+    range_low_at_entry: Optional[float] = None
 
     for j in range(entry_search_start, search_end_idx + 1):
         row = day_rows[j]
@@ -1601,41 +1600,41 @@ def _simulate_long_trade_from_signal(
                     pass
 
         high_v = float(row["high"])
-        low_v  = float(row["low"])
-        range_low  = min(range_low,  low_v)
+        low_v = float(row["low"])
+        range_low = min(range_low, low_v)
         range_high = max(range_high, high_v)
 
         band_ceiling = range_low + float(entry_within_bottom_pts)
         if low_v <= band_ceiling:
-            entry_idx          = j
-            entry_price        = round(band_ceiling, 2)
+            entry_idx = j
+            entry_price = round(band_ceiling, 2)
             entry_band_ceiling = round(band_ceiling, 2)
             range_high_at_entry = round(range_high, 2)
-            range_low_at_entry  = round(range_low,  2)
+            range_low_at_entry = round(range_low, 2)
             break
 
     if entry_idx is None or entry_price is None:
         return default
 
     initial_stop_price = round(entry_price - float(long_initial_stop_pts), 2)
-    take_profit_price  = round(entry_price + float(long_take_profit_pts),  2)
+    take_profit_price = round(entry_price + float(long_take_profit_pts), 2)
 
     highest_high_since_entry = entry_price
-    trailing_active  = False
+    trailing_active = False
     trailing_stop_price: Optional[float] = None
     mfe_points = 0.0
     mae_points = 0.0
 
-    exit_ts_pt:  Optional[str]   = None
-    exit_price:  Optional[float] = None
-    exit_reason: Optional[str]   = None
+    exit_ts_pt: Optional[str] = None
+    exit_price: Optional[float] = None
+    exit_reason: Optional[str] = None
 
     for k in range(entry_idx + 1, len(day_rows)):
         row = day_rows[k]
         if row.get("high") is None or row.get("low") is None:
             continue
         high_v = float(row["high"])
-        low_v  = float(row["low"])
+        low_v = float(row["low"])
 
         highest_high_since_entry = max(highest_high_since_entry, high_v)
         mfe_points = max(mfe_points, high_v - entry_price)
@@ -1647,26 +1646,26 @@ def _simulate_long_trade_from_signal(
         active_stop_price = initial_stop_price
         if trailing_active:
             trailing_stop_price = round(highest_high_since_entry - float(long_trailing_stop_pts), 2)
-            active_stop_price   = trailing_stop_price
+            active_stop_price = trailing_stop_price
 
         if low_v <= active_stop_price:
-            exit_ts_pt  = _normalize_pt_label(row.get("ts_pt"))
-            exit_price  = round(active_stop_price, 2)
+            exit_ts_pt = _normalize_pt_label(row.get("ts_pt"))
+            exit_price = round(active_stop_price, 2)
             exit_reason = "trailing_stop" if trailing_active else "initial_stop"
             break
 
         if high_v >= take_profit_price:
-            exit_ts_pt  = _normalize_pt_label(row.get("ts_pt"))
-            exit_price  = round(take_profit_price, 2)
+            exit_ts_pt = _normalize_pt_label(row.get("ts_pt"))
+            exit_price = round(take_profit_price, 2)
             exit_reason = "take_profit"
             break
 
     if exit_price is None:
-        last_row   = day_rows[-1]
+        last_row = day_rows[-1]
         last_close = last_row.get("close")
         if last_close is not None:
-            exit_ts_pt  = _normalize_pt_label(last_row.get("ts_pt"))
-            exit_price  = round(float(last_close), 2)
+            exit_ts_pt = _normalize_pt_label(last_row.get("ts_pt"))
+            exit_price = round(float(last_close), 2)
             exit_reason = "end_of_day"
         else:
             exit_reason = "open_no_exit"
@@ -1682,56 +1681,56 @@ def _simulate_long_trade_from_signal(
         outcome = "flat"
 
     return {
-        "trade_entry_found":       True,
-        "trade_entry_ts_pt":       _normalize_pt_label(day_rows[entry_idx].get("ts_pt")),
-        "trade_entry_price":       entry_price,
-        "trade_entry_reason":      "entry_band_hit",
+        "trade_entry_found": True,
+        "trade_entry_ts_pt": _normalize_pt_label(day_rows[entry_idx].get("ts_pt")),
+        "trade_entry_price": entry_price,
+        "trade_entry_reason": "entry_band_hit",
         "trade_range_high_at_entry": range_high_at_entry,
-        "trade_range_low_at_entry":  range_low_at_entry,
-        "trade_entry_band_floor":  entry_band_ceiling,
+        "trade_range_low_at_entry": range_low_at_entry,
+        "trade_entry_band_floor": entry_band_ceiling,
         "trade_initial_stop_price": initial_stop_price,
-        "trade_take_profit_price":  take_profit_price,
-        "trade_trailing_active":    trailing_active,
+        "trade_take_profit_price": take_profit_price,
+        "trade_trailing_active": trailing_active,
         "trade_trailing_stop_price": trailing_stop_price,
-        "trade_exit_ts_pt":         exit_ts_pt,
-        "trade_exit_price":         exit_price,
-        "trade_exit_reason":        exit_reason,
-        "trade_realized_points":    realized,
-        "trade_mfe_points":         round(mfe_points, 2),
-        "trade_mae_points":         round(mae_points, 2),
-        "trade_outcome":            outcome,
+        "trade_exit_ts_pt": exit_ts_pt,
+        "trade_exit_price": exit_price,
+        "trade_exit_reason": exit_reason,
+        "trade_realized_points": realized,
+        "trade_mfe_points": round(mfe_points, 2),
+        "trade_mae_points": round(mae_points, 2),
+        "trade_outcome": outcome,
     }
 
 
 def _evaluate_down_long_setup(
-    *,
-    trade_date: dt.date,
-    day_rows: List[Dict[str, Any]],
-    entry_idx: int,
-    target_hit_idx: int,
-    target_level: float,
-    consolidation_window_minutes: int,
-    long_put_skew_min_decrease_pct: float,
-    long_call_skew_min_increase_pct: float,
-    entry_within_bottom_pts: float,
-    entry_search_window_minutes: int,
-    long_initial_stop_pts: float,
-    long_trail_activate_profit_pts: float,
-    long_trailing_stop_pts: float,
-    long_take_profit_pts: float,
-    prior_ctx: Dict[str, Any],
-    max_prior_down_up_ratio: float,
-    max_start_pct_of_range: float,
-    source_zone_low: float,
-    source_zone_high: float,
-    wall_low: float,
-    max_move_loss_pct: float,
-    pivot_price: float,
-    move_points: float,
-    observed_rows: List[Dict[str, Any]],
-    confirmed_range_low: Optional[float],
-    max_minutes_before_close: int = 45,
-    recorder: Optional[FunnelRecorder] = None,
+        *,
+        trade_date: dt.date,
+        day_rows: List[Dict[str, Any]],
+        entry_idx: int,
+        target_hit_idx: int,
+        target_level: float,
+        consolidation_window_minutes: int,
+        long_put_skew_min_decrease_pct: float,
+        long_call_skew_min_increase_pct: float,
+        entry_within_bottom_pts: float,
+        entry_search_window_minutes: int,
+        long_initial_stop_pts: float,
+        long_trail_activate_profit_pts: float,
+        long_trailing_stop_pts: float,
+        long_take_profit_pts: float,
+        prior_ctx: Dict[str, Any],
+        max_prior_down_up_ratio: float,
+        max_start_pct_of_range: float,
+        source_zone_low: float,
+        source_zone_high: float,
+        wall_low: float,
+        max_move_loss_pct: float,
+        pivot_price: float,
+        move_points: float,
+        observed_rows: List[Dict[str, Any]],
+        confirmed_range_low: Optional[float],
+        max_minutes_before_close: int = 45,
+        recorder: Optional[FunnelRecorder] = None,
 ) -> Dict[str, Any]:
     """
     Evaluate DOWN move → LONG trade from pre-built consolidation range.
@@ -1745,14 +1744,14 @@ def _evaluate_down_long_setup(
     """
     default = {
         "consolidation_minutes_observed": 0,
-        "consolidation_end_ts_pt":        None,
-        "long_setup_found":               False,
-        "long_signal_ts_pt":              None,
-        "long_signal_price":              None,
-        "long_signal_delta_atm_iv_pct":   None,
+        "consolidation_end_ts_pt": None,
+        "long_setup_found": False,
+        "long_signal_ts_pt": None,
+        "long_signal_price": None,
+        "long_signal_delta_atm_iv_pct": None,
         "long_signal_delta_call_skew_pct": None,
-        "long_signal_delta_put_skew_pct":  None,
-        "long_setup_reason":              "not_evaluated",
+        "long_signal_delta_put_skew_pct": None,
+        "long_setup_reason": "not_evaluated",
         **_make_default_trade_fields("setup_not_hit"),
     }
 
@@ -1762,56 +1761,56 @@ def _evaluate_down_long_setup(
     # We want longs near the bottom of the range — invalidate if the target is
     # above maxStartPctOfRange of the session range (e.g. 0.5 = top half is invalid).
     # Also invalidate if the prior up move was large relative to the current down move.
-    ratio     = prior_ctx.get("prior_up_vs_down_ratio")
+    ratio = prior_ctx.get("prior_up_vs_down_ratio")
     start_pct = prior_ctx.get("start_pct_of_session_range")
-    ratio_breached = ratio     is not None and float(ratio)     > float(max_prior_down_up_ratio)
-    pct_breached   = start_pct is not None and float(start_pct) > float(max_start_pct_of_range)
-    
+    ratio_breached = ratio is not None and float(ratio) > float(max_prior_down_up_ratio)
+    pct_breached = start_pct is not None and float(start_pct) > float(max_start_pct_of_range)
+
     if recorder:
         if not recorder.record("prior_context_valid", StageResult(
-            kept=not (pct_breached or ratio_breached),
-            drop_reason="prior_up_ratio_and_target_pct_breached" if (pct_breached or ratio_breached) else None
-        )):
-            default["long_setup_reason"]  = "prior_context_invalidated"
+                kept=not (pct_breached or ratio_breached),
+                drop_reason="prior_up_ratio_and_target_pct_breached" if (pct_breached or ratio_breached) else None
+        ), direction="down"):
+            default["long_setup_reason"] = "prior_context_invalidated"
             default["trade_entry_reason"] = "prior_context_invalidated"
             return default
     else:
         if pct_breached:
-            default["long_setup_reason"]  = "prior_context_invalidated"
+            default["long_setup_reason"] = "prior_context_invalidated"
             default["trade_entry_reason"] = "prior_context_invalidated"
             return default
         if ratio_breached:
-            default["long_setup_reason"]  = "prior_context_invalidated"
+            default["long_setup_reason"] = "prior_context_invalidated"
             default["trade_entry_reason"] = "prior_context_invalidated"
             return default
 
     # Range is pre-built by _observe_consolidation_range_down in _day_zone_results
     if not observed_rows:
-        default["long_setup_reason"]  = "no_target_consolidation"
+        default["long_setup_reason"] = "no_target_consolidation"
         default["trade_entry_reason"] = "no_setup"
         return default
 
-    entry_ts_pt      = _normalize_pt_label(day_rows[entry_idx].get("ts_pt"))
+    entry_ts_pt = _normalize_pt_label(day_rows[entry_idx].get("ts_pt"))
     acceptance_times = [_normalize_pt_label(r.get("ts_pt")) for r in observed_rows]
-    skew_times       = [entry_ts_pt] + acceptance_times
+    skew_times = [entry_ts_pt] + acceptance_times
 
     skew_df = _fetch_skew_rows_for_times(str(trade_date), str(trade_date), skew_times)
-    
+
     if recorder:
         skew_bypassed = recorder.is_bypassed("skew_signal_fired")
         if skew_df.empty and not skew_bypassed:
-            recorder.record("skew_signal_fired", StageResult(kept=False, drop_reason="missing_skew_data"))
+            recorder.record("skew_signal_fired", StageResult(kept=False, drop_reason="missing_skew_data"), direction="down")
             default["consolidation_minutes_observed"] = len(observed_rows)
-            default["consolidation_end_ts_pt"]        = _normalize_pt_label(observed_rows[-1].get("ts_pt"))
-            default["long_setup_reason"]              = "no_skew_data"
-            default["trade_entry_reason"]             = "no_setup"
+            default["consolidation_end_ts_pt"] = _normalize_pt_label(observed_rows[-1].get("ts_pt"))
+            default["long_setup_reason"] = "no_skew_data"
+            default["trade_entry_reason"] = "no_setup"
             return default
     else:
         if skew_df.empty:
             default["consolidation_minutes_observed"] = len(observed_rows)
-            default["consolidation_end_ts_pt"]        = _normalize_pt_label(observed_rows[-1].get("ts_pt"))
-            default["long_setup_reason"]              = "no_skew_data"
-            default["trade_entry_reason"]             = "no_setup"
+            default["consolidation_end_ts_pt"] = _normalize_pt_label(observed_rows[-1].get("ts_pt"))
+            default["long_setup_reason"] = "no_skew_data"
+            default["trade_entry_reason"] = "no_setup"
             return default
 
     by_label: Dict[str, pd.Series] = {}
@@ -1821,28 +1820,28 @@ def _evaluate_down_long_setup(
             by_label[label] = row
 
     entry_skew_row = by_label.get(entry_ts_pt)
-    
+
     if recorder:
         skew_bypassed = recorder.is_bypassed("skew_signal_fired")
         if entry_skew_row is None and not skew_bypassed:
-            recorder.record("skew_signal_fired", StageResult(kept=False, drop_reason="missing_entry_skew"))
+            recorder.record("skew_signal_fired", StageResult(kept=False, drop_reason="missing_entry_skew"), direction="down")
             default["consolidation_minutes_observed"] = len(observed_rows)
-            default["consolidation_end_ts_pt"]        = _normalize_pt_label(observed_rows[-1].get("ts_pt"))
-            default["long_setup_reason"]              = "missing_entry_skew"
-            default["trade_entry_reason"]             = "no_setup"
+            default["consolidation_end_ts_pt"] = _normalize_pt_label(observed_rows[-1].get("ts_pt"))
+            default["long_setup_reason"] = "missing_entry_skew"
+            default["trade_entry_reason"] = "no_setup"
             return default
     else:
         if entry_skew_row is None:
             default["consolidation_minutes_observed"] = len(observed_rows)
-            default["consolidation_end_ts_pt"]        = _normalize_pt_label(observed_rows[-1].get("ts_pt"))
-            default["long_setup_reason"]              = "missing_entry_skew"
-            default["trade_entry_reason"]             = "no_setup"
+            default["consolidation_end_ts_pt"] = _normalize_pt_label(observed_rows[-1].get("ts_pt"))
+            default["long_setup_reason"] = "missing_entry_skew"
+            default["trade_entry_reason"] = "no_setup"
             return default
 
     latest_metrics: Dict[str, Optional[float]] = {
-        "delta_atm_iv_pct":   None,
+        "delta_atm_iv_pct": None,
         "delta_call_skew_pct": None,
-        "delta_put_skew_pct":  None,
+        "delta_put_skew_pct": None,
     }
 
     signal_found = False
@@ -1861,7 +1860,7 @@ def _evaluate_down_long_setup(
         metrics = _expected_skew_deltas_from_entry(entry_skew_row, curr_skew_row, str(trade_date))
         latest_metrics = metrics
 
-        d_put  = metrics.get("delta_put_skew_pct")
+        d_put = metrics.get("delta_put_skew_pct")
         d_call = metrics.get("delta_call_skew_pct")
         if d_put is None or d_call is None:
             continue
@@ -1889,33 +1888,33 @@ def _evaluate_down_long_setup(
 
     if recorder:
         if not recorder.record("skew_signal_fired", StageResult(
-            kept=signal_found,
-            drop_reason="threshold_not_met" if not signal_found else None
-        )):
+                kept=signal_found,
+                drop_reason="threshold_not_met" if not signal_found else None
+        ), direction="down"):
             return {
-                "consolidation_minutes_observed":  len(observed_rows),
-                "consolidation_end_ts_pt":         _normalize_pt_label(observed_rows[-1].get("ts_pt")),
-                "long_setup_found":                False,
-                "long_signal_ts_pt":               None,
-                "long_signal_price":               None,
-                "long_signal_delta_atm_iv_pct":    None if latest_metrics["delta_atm_iv_pct"] is None else round(float(latest_metrics["delta_atm_iv_pct"]), 2),
+                "consolidation_minutes_observed": len(observed_rows),
+                "consolidation_end_ts_pt": _normalize_pt_label(observed_rows[-1].get("ts_pt")),
+                "long_setup_found": False,
+                "long_signal_ts_pt": None,
+                "long_signal_price": None,
+                "long_signal_delta_atm_iv_pct": None if latest_metrics["delta_atm_iv_pct"] is None else round(float(latest_metrics["delta_atm_iv_pct"]), 2),
                 "long_signal_delta_call_skew_pct": None if latest_metrics["delta_call_skew_pct"] is None else round(float(latest_metrics["delta_call_skew_pct"]), 2),
-                "long_signal_delta_put_skew_pct":  None if latest_metrics["delta_put_skew_pct"]  is None else round(float(latest_metrics["delta_put_skew_pct"]),  2),
-                "long_setup_reason":               "threshold_not_met",
+                "long_signal_delta_put_skew_pct": None if latest_metrics["delta_put_skew_pct"] is None else round(float(latest_metrics["delta_put_skew_pct"]), 2),
+                "long_setup_reason": "threshold_not_met",
                 **_make_default_trade_fields("no_setup"),
             }
     else:
         if not signal_found:
             return {
-                "consolidation_minutes_observed":  len(observed_rows),
-                "consolidation_end_ts_pt":         _normalize_pt_label(observed_rows[-1].get("ts_pt")),
-                "long_setup_found":                False,
-                "long_signal_ts_pt":               None,
-                "long_signal_price":               None,
-                "long_signal_delta_atm_iv_pct":    None if latest_metrics["delta_atm_iv_pct"] is None else round(float(latest_metrics["delta_atm_iv_pct"]), 2),
+                "consolidation_minutes_observed": len(observed_rows),
+                "consolidation_end_ts_pt": _normalize_pt_label(observed_rows[-1].get("ts_pt")),
+                "long_setup_found": False,
+                "long_signal_ts_pt": None,
+                "long_signal_price": None,
+                "long_signal_delta_atm_iv_pct": None if latest_metrics["delta_atm_iv_pct"] is None else round(float(latest_metrics["delta_atm_iv_pct"]), 2),
                 "long_signal_delta_call_skew_pct": None if latest_metrics["delta_call_skew_pct"] is None else round(float(latest_metrics["delta_call_skew_pct"]), 2),
-                "long_signal_delta_put_skew_pct":  None if latest_metrics["delta_put_skew_pct"]  is None else round(float(latest_metrics["delta_put_skew_pct"]),  2),
-                "long_setup_reason":               "threshold_not_met",
+                "long_signal_delta_put_skew_pct": None if latest_metrics["delta_put_skew_pct"] is None else round(float(latest_metrics["delta_put_skew_pct"]), 2),
+                "long_setup_reason": "threshold_not_met",
                 **_make_default_trade_fields("no_setup"),
             }
 
@@ -1946,55 +1945,55 @@ def _evaluate_down_long_setup(
             recorder.record("entry_band_hit", StageResult(kept=False, drop_reason="no_entry_band_hit_in_window"), direction="down")
 
     return {
-        "consolidation_minutes_observed":  len(observed_rows),
-        "consolidation_end_ts_pt":         _normalize_pt_label(observed_rows[-1].get("ts_pt")),
-        "long_setup_found":                True,
-        "long_signal_ts_pt":               signal_label,
-        "long_signal_price":               signal_price,
-        "long_signal_delta_atm_iv_pct":    None if latest_metrics["delta_atm_iv_pct"] is None else round(float(latest_metrics["delta_atm_iv_pct"]), 2),
+        "consolidation_minutes_observed": len(observed_rows),
+        "consolidation_end_ts_pt": _normalize_pt_label(observed_rows[-1].get("ts_pt")),
+        "long_setup_found": True,
+        "long_signal_ts_pt": signal_label,
+        "long_signal_price": signal_price,
+        "long_signal_delta_atm_iv_pct": None if latest_metrics["delta_atm_iv_pct"] is None else round(float(latest_metrics["delta_atm_iv_pct"]), 2),
         "long_signal_delta_call_skew_pct": round(float(latest_metrics["delta_call_skew_pct"]), 2),
-        "long_signal_delta_put_skew_pct":  round(float(latest_metrics["delta_put_skew_pct"]),  2),
-        "long_setup_reason":               "threshold_hit",
+        "long_signal_delta_put_skew_pct": round(float(latest_metrics["delta_put_skew_pct"]), 2),
+        "long_setup_reason": "threshold_hit",
         **trade_eval,
     }
 
 
 def _day_zone_results(
-    trade_date: dt.date,
-    day_rows: List[Dict[str, Any]],
-    *,
-    level_family: str,
-    min_level_gex_bn: float,
-    zone_merge_distance_pts: float,
-    min_clean_move_points: float,
-    target_proximity_pts: float,
-    max_zone_breach_pts: float,
-    pivot_strength_bars: int,
-    max_results: int,
-    consolidation_window_minutes: int,
-    short_put_skew_increase_pct: float,
-    short_call_skew_max_pct: float,
-    entry_within_top_pts: float,
-    entry_search_window_minutes: int,
-    initial_stop_pts: float,
-    trail_activate_profit_pts: float,
-    trailing_stop_pts: float,
-    take_profit_pts: float,
-    max_prior_down_up_ratio: float,
-    max_start_pct_of_range: float,
-    max_move_loss_pct: float,
-    min_minutes_after_open: int,
-    long_put_skew_min_decrease_pct: float,
-    long_call_skew_min_increase_pct: float,
-    max_minutes_before_close: int,
-    long_initial_stop_pts: float,
-    long_trail_activate_profit_pts: float,
-    long_trailing_stop_pts: float,
-    long_take_profit_pts: float,
-    recorder: Optional[FunnelRecorder] = None,
+        trade_date: dt.date,
+        day_rows: List[Dict[str, Any]],
+        *,
+        level_family: str,
+        min_level_gex_bn: float,
+        zone_merge_distance_pts: float,
+        min_clean_move_points: float,
+        target_proximity_pts: float,
+        max_zone_breach_pts: float,
+        pivot_strength_bars: int,
+        max_results: int,
+        consolidation_window_minutes: int,
+        short_put_skew_increase_pct: float,
+        short_call_skew_max_pct: float,
+        entry_within_top_pts: float,
+        entry_search_window_minutes: int,
+        initial_stop_pts: float,
+        trail_activate_profit_pts: float,
+        trailing_stop_pts: float,
+        take_profit_pts: float,
+        max_prior_down_up_ratio: float,
+        max_start_pct_of_range: float,
+        max_move_loss_pct: float,
+        min_minutes_after_open: int,
+        long_put_skew_min_decrease_pct: float,
+        long_call_skew_min_increase_pct: float,
+        max_minutes_before_close: int,
+        long_initial_stop_pts: float,
+        long_trail_activate_profit_pts: float,
+        long_trailing_stop_pts: float,
+        long_take_profit_pts: float,
+        recorder: Optional[FunnelRecorder] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     qualifying_levels = _collect_day_levels(day_rows, level_family, min_level_gex_bn)
-    
+
     # Record gex_level_qualifies stage (shared scope - no direction)
     if recorder:
         for row in day_rows:
@@ -2004,9 +2003,9 @@ def _day_zone_results(
                     kept=kept,
                     drop_reason="below_min_bn" if not kept else None
                 ))
-    
+
     zones = _build_zones(qualifying_levels, zone_merge_distance_pts)
-    
+
     # Record zone_built stage (construction, always kept)
     if recorder:
         for _ in zones:
@@ -2051,14 +2050,14 @@ def _day_zone_results(
             for seg_start, seg_end in episodes:
                 diagnostics["zone_episodes_considered"] += 1
                 seg_min_low = min(float(day_rows[i]["low"]) for i in range(seg_start, seg_end + 1))
-                
+
                 # Record zone_episode_valid stage
                 if recorder:
                     kept = seg_min_low >= float(zone["low"]) - float(max_zone_breach_pts)
                     if not recorder.record("zone_episode_valid", StageResult(
-                        kept=kept,
-                        drop_reason="breached_low_of_zone" if not kept else None
-                    )):
+                            kept=kept,
+                            drop_reason="breached_low_of_zone" if not kept else None
+                    ), direction="up"):
                         continue
                 else:
                     if seg_min_low < float(zone["low"]) - float(max_zone_breach_pts):
@@ -2081,11 +2080,11 @@ def _day_zone_results(
                                     drop_reason = "pivot_too_early"
                             except Exception:
                                 pass  # unparseable timestamp — treat as kept (default)
-                    
+
                     effective_kept = recorder.record(
                         "pivot_after_open",
-                        StageResult(kept=pivot_kept, drop_reason=drop_reason)
-                    )
+                        StageResult(kept=pivot_kept, drop_reason=drop_reason),
+                        direction="up")
                     if not effective_kept:
                         continue
                 else:
@@ -2114,20 +2113,20 @@ def _day_zone_results(
                         StageResult(
                             kept=has_any_clean_target,
                             drop_reason="clean_space_below_min" if not has_any_clean_target else None
-                        )
-                    )
+                        ),
+                        direction="up")
                     if not effective_kept:
-                        continue   # skip to next episode's pivot
+                        continue  # skip to next episode's pivot
 
                 # Walk up through candidate target zones, promoting if price
                 # pushes through a wall before consolidating.
                 scan_from_idx = seg_end + 1
                 target_hit_found = False
-                
+
                 for target_zone_offset, t_zone_idx in enumerate(candidate_target_zone_indices):
                     target_zone_up = zones[t_zone_idx]
                     clean_space_up = float(target_zone_up["low"]) - float(zone["high"])
-                    
+
                     # Silent filter inside construction — no recorder call
                     if clean_space_up < float(min_clean_move_points):
                         continue
@@ -2144,7 +2143,7 @@ def _day_zone_results(
                         target_proximity_pts=target_proximity_pts,
                         max_zone_breach_pts=max_zone_breach_pts,
                     )
-                    
+
                     if hit_idx is None:
                         # exhausted this zone without touching it — try the next one up
                         continue
@@ -2171,12 +2170,12 @@ def _day_zone_results(
                         # Promotion is NOT a filter drop — it's control flow.
                         scan_from_idx = obs["promote_idx"]
                         continue
-                    
+
                     # Non-promoted outcome — this is the terminal target
                     # Target hit and observation complete — record target_hit once per pivot
                     target_hit_found = True
                     if recorder:
-                        recorder.record("target_hit", StageResult(kept=True))
+                        recorder.record("target_hit", StageResult(kept=True), direction="up")
 
                     # Record consolidation stages
                     if recorder:
@@ -2184,23 +2183,23 @@ def _day_zone_results(
                             effective_kept = recorder.record("consolidation_not_invalidated", StageResult(
                                 kept=False,
                                 drop_reason="invalidated_by_max_move_loss_pct"
-                            ))
+                            ), direction="up")
                             if effective_kept:
                                 # Bypassed: use partial observed_rows, fall through to next stage
                                 observed_rows = obs["rows"]
                                 # Also record stage 8 as kept=True since we're continuing
-                                recorder.record("consolidation_window_complete", StageResult(kept=True))
+                                recorder.record("consolidation_window_complete", StageResult(kept=True), direction="up")
                             else:
                                 # Not bypassed: invalidation is terminal for this pivot
                                 break
                         else:
-                            recorder.record("consolidation_not_invalidated", StageResult(kept=True))
-                        
+                            recorder.record("consolidation_not_invalidated", StageResult(kept=True), direction="up")
+
                         if obs["status"] == "insufficient":
                             effective_kept = recorder.record("consolidation_window_complete", StageResult(
                                 kept=False,
                                 drop_reason="insufficient_bars_before_eod"
-                            ))
+                            ), direction="up")
                             if effective_kept:
                                 # Bypassed: use partial observed_rows
                                 observed_rows = obs["rows"]
@@ -2209,7 +2208,7 @@ def _day_zone_results(
                                 break
                         elif obs["status"] != "invalidated":
                             # status == "confirmed" — record stage 8 as kept
-                            recorder.record("consolidation_window_complete", StageResult(kept=True))
+                            recorder.record("consolidation_window_complete", StageResult(kept=True), direction="up")
                     else:
                         if obs["status"] in ("invalidated", "insufficient"):
                             # Move gave back too much or ran out of day — no setup.
@@ -2318,10 +2317,10 @@ def _day_zone_results(
 
                     # Range confirmed and result recorded — stop walking up zones.
                     break
-                
+
                 # If we exhausted all target zones without a confirmed hit, record target_hit as dropped
                 if not target_hit_found and recorder:
-                    recorder.record("target_hit", StageResult(kept=False, drop_reason="no_target_hit"))
+                    recorder.record("target_hit", StageResult(kept=False, drop_reason="no_target_hit"), direction="up")
 
         if zone_idx > 0:
             # Gather all zones below as potential targets (walking downward)
@@ -2330,14 +2329,14 @@ def _day_zone_results(
             for seg_start, seg_end in episodes:
                 diagnostics["zone_episodes_considered"] += 1
                 seg_max_high = max(float(day_rows[i]["high"]) for i in range(seg_start, seg_end + 1))
-                
+
                 # Record zone_episode_valid stage for down moves
                 if recorder:
                     kept = seg_max_high <= float(zone["high"]) + float(max_zone_breach_pts)
                     if not recorder.record("zone_episode_valid", StageResult(
-                        kept=kept,
-                        drop_reason="breached_high_of_zone" if not kept else None
-                    )):
+                            kept=kept,
+                            drop_reason="breached_high_of_zone" if not kept else None
+                    ), direction="down"):
                         continue
                 else:
                     if seg_max_high > float(zone["high"]) + float(max_zone_breach_pts):
@@ -2360,11 +2359,11 @@ def _day_zone_results(
                                     drop_reason = "pivot_too_early"
                             except Exception:
                                 pass  # unparseable timestamp — treat as kept (default)
-                    
+
                     effective_kept = recorder.record(
                         "pivot_after_open",
-                        StageResult(kept=pivot_kept, drop_reason=drop_reason)
-                    )
+                        StageResult(kept=pivot_kept, drop_reason=drop_reason),
+                        direction="down")
                     if not effective_kept:
                         continue
                 else:
@@ -2391,8 +2390,8 @@ def _day_zone_results(
                         StageResult(
                             kept=has_any_clean_target,
                             drop_reason="clean_space_below_min" if not has_any_clean_target else None
-                        )
-                    )
+                        ),
+                        direction="down")
                     if not effective_kept:
                         continue
 
@@ -2401,11 +2400,11 @@ def _day_zone_results(
                 scan_from_idx = seg_end + 1
                 final_hit_idx = None
                 target_hit_found = False
-                
+
                 for target_zone_offset, t_zone_idx in enumerate(candidate_target_zone_indices_down):
                     target_zone_down = zones[t_zone_idx]
                     clean_space_down = float(zone["low"]) - float(target_zone_down["high"])
-                    
+
                     # Silent filter inside construction — no recorder call
                     if clean_space_down < float(min_clean_move_points):
                         continue
@@ -2422,7 +2421,7 @@ def _day_zone_results(
                         target_proximity_pts=target_proximity_pts,
                         max_zone_breach_pts=max_zone_breach_pts,
                     )
-                    
+
                     if hit_idx is None:
                         # exhausted this zone without touching it — try the next one down
                         continue
@@ -2452,7 +2451,7 @@ def _day_zone_results(
                     # Target hit and observation complete — record target_hit once per pivot
                     target_hit_found = True
                     if recorder:
-                        recorder.record("target_hit", StageResult(kept=True))
+                        recorder.record("target_hit", StageResult(kept=True), direction="down")
 
                     # Record consolidation stages for down moves
                     if recorder:
@@ -2460,23 +2459,23 @@ def _day_zone_results(
                             effective_kept = recorder.record("consolidation_not_invalidated", StageResult(
                                 kept=False,
                                 drop_reason="invalidated_by_max_move_loss_pct"
-                            ))
+                            ), direction="down")
                             if effective_kept:
                                 # Bypassed: use partial observed_rows, fall through to next stage
                                 observed_rows = obs["rows"]
                                 # Also record stage 8 as kept=True since we're continuing
-                                recorder.record("consolidation_window_complete", StageResult(kept=True))
+                                recorder.record("consolidation_window_complete", StageResult(kept=True), direction="down")
                             else:
                                 # Not bypassed: invalidation is terminal for this pivot
                                 break
                         else:
-                            recorder.record("consolidation_not_invalidated", StageResult(kept=True))
-                        
+                            recorder.record("consolidation_not_invalidated", StageResult(kept=True), direction="down")
+
                         if obs["status"] == "insufficient":
                             effective_kept = recorder.record("consolidation_window_complete", StageResult(
                                 kept=False,
                                 drop_reason="insufficient_bars_before_eod"
-                            ))
+                            ), direction="down")
                             if effective_kept:
                                 # Bypassed: use partial observed_rows
                                 observed_rows = obs["rows"]
@@ -2485,16 +2484,16 @@ def _day_zone_results(
                                 break
                         elif obs["status"] != "invalidated":
                             # status == "confirmed" — record stage 8 as kept
-                            recorder.record("consolidation_window_complete", StageResult(kept=True))
+                            recorder.record("consolidation_window_complete", StageResult(kept=True), direction="down")
                     else:
                         if obs["status"] in ("invalidated", "insufficient"):
                             break
 
                     # Confirmed — evaluate setup
                     observed_rows = obs["rows"]
-                    start_row   = day_rows[pivot_idx]
-                    target_row  = day_rows[final_hit_idx]
-                    start_open  = start_row.get("open")
+                    start_row = day_rows[pivot_idx]
+                    target_row = day_rows[final_hit_idx]
+                    start_open = start_row.get("open")
                     target_open = target_row.get("open")
 
                     prior_ctx = _compute_prior_move_context_down(
@@ -2538,26 +2537,26 @@ def _day_zone_results(
 
                     results.append(
                         {
-                            "trade_date":           str(trade_date),
-                            "direction":            "down",
-                            "source_zone_low":      round(float(zone["low"]),  2),
-                            "source_zone_high":     round(float(zone["high"]), 2),
-                            "source_zone_width":    round(float(zone["width"]),2),
-                            "source_zone_levels":   zone["levels_text"],
-                            "target_level":         round(float(target_zone_down["high"]), 2),
-                            "target_zone_range":    f"{target_zone_down['low']:.2f} – {target_zone_down['high']:.2f}",
-                            "clean_space_points":   round(float(clean_space_down), 2),
-                            "start_ts_pt":          str(start_row.get("ts_pt")),
-                            "start_ts_utc":         pd.Timestamp(start_row.get("ts_utc")).isoformat(),
-                            "start_open":           round(float(start_open), 2) if start_open is not None else None,
-                            "start_pivot_price":    round(float(pivot_price), 2),
-                            "start_context":        "last pivot high in source zone",
-                            "target_ts_pt":         str(target_row.get("ts_pt")),
-                            "target_ts_utc":        pd.Timestamp(target_row.get("ts_utc")).isoformat(),
-                            "target_open":          round(float(target_open), 2) if target_open is not None else None,
+                            "trade_date": str(trade_date),
+                            "direction": "down",
+                            "source_zone_low": round(float(zone["low"]), 2),
+                            "source_zone_high": round(float(zone["high"]), 2),
+                            "source_zone_width": round(float(zone["width"]), 2),
+                            "source_zone_levels": zone["levels_text"],
+                            "target_level": round(float(target_zone_down["high"]), 2),
+                            "target_zone_range": f"{target_zone_down['low']:.2f} – {target_zone_down['high']:.2f}",
+                            "clean_space_points": round(float(clean_space_down), 2),
+                            "start_ts_pt": str(start_row.get("ts_pt")),
+                            "start_ts_utc": pd.Timestamp(start_row.get("ts_utc")).isoformat(),
+                            "start_open": round(float(start_open), 2) if start_open is not None else None,
+                            "start_pivot_price": round(float(pivot_price), 2),
+                            "start_context": "last pivot high in source zone",
+                            "target_ts_pt": str(target_row.get("ts_pt")),
+                            "target_ts_utc": pd.Timestamp(target_row.get("ts_utc")).isoformat(),
+                            "target_open": round(float(target_open), 2) if target_open is not None else None,
                             "target_trigger_price": round(float(target_zone_down["high"]) + float(target_proximity_pts), 2),
-                            "move_points":          round(float(move_points), 2),
-                            "elapsed_bars":         int(final_hit_idx - pivot_idx),
+                            "move_points": round(float(move_points), 2),
+                            "elapsed_bars": int(final_hit_idx - pivot_idx),
                             **prior_ctx,
                             **setup_eval,
                         }
@@ -2576,10 +2575,10 @@ def _day_zone_results(
                         return results, diagnostics
 
                     break
-                
+
                 # If we exhausted all target zones without a confirmed terminal hit, record as dropped
                 if not target_hit_found and recorder:
-                    recorder.record("target_hit", StageResult(kept=False, drop_reason="no_target_hit"))
+                    recorder.record("target_hit", StageResult(kept=False, drop_reason="no_target_hit"), direction="down")
 
     # Deduplicate down-move rows: if multiple source zones produced a result
     # with the same target level and target bar, keep only the one with the
@@ -2603,41 +2602,41 @@ def _day_zone_results(
 
 
 def scan_gex_level_moves(
-    *,
-    start_date: str,
-    end_date: str,
-    min_level_gex_bn: float,
-    zone_merge_distance_pts: float,
-    min_clean_move_points: float,
-    target_proximity_pts: float,
-    max_zone_breach_pts: float,
-    pivot_strength_bars: int,
-    level_family: str,
-    max_results: int,
-    consolidation_window_minutes: int,
-    short_put_skew_increase_pct: float,
-    short_call_skew_max_pct: float,
-    entry_within_top_pts: float,
-    entry_search_window_minutes: int,
-    initial_stop_pts: float,
-    trail_activate_profit_pts: float,
-    trailing_stop_pts: float,
-    take_profit_pts: float,
-    max_prior_down_up_ratio: float = 2.0,
-    max_start_pct_of_range: float = 0.20,
-    max_move_loss_pct: float = 0.75,
-    min_minutes_after_open: int = 15,
-    long_put_skew_min_decrease_pct: float = 80.0,
-    long_call_skew_min_increase_pct: float = 30.0,
-    max_minutes_before_close: int = 45,
-    long_initial_stop_pts: float = 10.0,
-    long_trail_activate_profit_pts: float = 20.0,
-    long_trailing_stop_pts: float = 10.0,
-    long_take_profit_pts: float = 35.0,
-    source_view: str | None = None,
-    bypass_filters: tuple[str, ...] = (),
-    execution_mode: Literal["managed", "unmanaged"] = "managed",
-    forward_horizons_minutes: tuple[int, ...] = (30, 60, 90, 120, 180),
+        *,
+        start_date: str,
+        end_date: str,
+        min_level_gex_bn: float,
+        zone_merge_distance_pts: float,
+        min_clean_move_points: float,
+        target_proximity_pts: float,
+        max_zone_breach_pts: float,
+        pivot_strength_bars: int,
+        level_family: str,
+        max_results: int,
+        consolidation_window_minutes: int,
+        short_put_skew_increase_pct: float,
+        short_call_skew_max_pct: float,
+        entry_within_top_pts: float,
+        entry_search_window_minutes: int,
+        initial_stop_pts: float,
+        trail_activate_profit_pts: float,
+        trailing_stop_pts: float,
+        take_profit_pts: float,
+        max_prior_down_up_ratio: float = 2.0,
+        max_start_pct_of_range: float = 0.20,
+        max_move_loss_pct: float = 0.75,
+        min_minutes_after_open: int = 15,
+        long_put_skew_min_decrease_pct: float = 80.0,
+        long_call_skew_min_increase_pct: float = 30.0,
+        max_minutes_before_close: int = 45,
+        long_initial_stop_pts: float = 10.0,
+        long_trail_activate_profit_pts: float = 20.0,
+        long_trailing_stop_pts: float = 10.0,
+        long_take_profit_pts: float = 35.0,
+        source_view: str | None = None,
+        bypass_filters: tuple[str, ...] = (),
+        execution_mode: Literal["managed", "unmanaged"] = "managed",
+        forward_horizons_minutes: tuple[int, ...] = (30, 60, 90, 120, 180),
 ) -> Dict[str, Any]:
     level_family = (level_family or "primary").strip().lower()
     if level_family not in {"primary", "strong", "both"}:
