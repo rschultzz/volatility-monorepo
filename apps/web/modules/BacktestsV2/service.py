@@ -994,6 +994,19 @@ def _build_study_row(
         target_level = float(target_zone["high"])
         move_points = float(pivot_price) - target_level
 
+    # Realized vs implied movement per horizon (short-vol analysis).
+    # Uses IV at entry and anchor price to compute implied 1σ; compares to
+    # the forward_outcomes close/MFE/MAE we already measured.
+    iv_atm = None
+    if entry_iv is not None:
+        iv_atm = entry_iv.get("atm_0dte_pct")
+    realized_vs_implied = _compute_realized_vs_implied(
+        forward_outcomes=forward,
+        iv_atm_0dte_pct=iv_atm,
+        anchor_price=float(anchor_price),
+        horizons_minutes=forward_horizons_minutes,
+    )
+
     return {
         "trade_date": str(trade_date),
         "direction": direction,
@@ -1031,6 +1044,11 @@ def _build_study_row(
         # IV snapshot at entry (extensible — currently just 0DTE ATM)
         "iv": entry_iv if entry_iv is not None else {"atm_0dte_pct": None},
 
+        # Realized vs implied movement per horizon (short-vol lens).
+        # Keyed by horizon label, each horizon has implied_1sigma_pts, close_over_1sigma,
+        # range_over_1sigma, inside_1sigma, inside_2sigma, etc.
+        "realized_vs_implied": realized_vs_implied,
+
         # Forward outcomes dict
         "forward_outcomes": forward,
     }
@@ -1045,6 +1063,10 @@ def _extract_iv_from_skew_row(skew_row) -> Dict[str, Optional[float]]:
     intentional so future extensions (smile anchors like put_25d, call_25d;
     non-0DTE expirations like atm_7dte_pct) can be added without changing
     any callers or frontend accessors.
+
+    Sanity filter: treats IV values over 100% as bad data (typically stale or
+    malformed skew snapshots). Real SPX 0DTE ATM IV essentially never exceeds
+    100% — even during COVID the peak was ~80%. A 100%+ reading is a data issue.
     """
     blank = {"atm_0dte_pct": None}
     if skew_row is None:
@@ -1053,11 +1075,109 @@ def _extract_iv_from_skew_row(skew_row) -> Dict[str, Optional[float]]:
         vol50 = skew_row.get("vol50")
         if vol50 is None or pd.isna(vol50):
             return blank
-        # vol50 is stored as decimal annualized vol (e.g. 0.15 for 15%).
-        # Surface as a percentage-point number for trader readability.
-        return {"atm_0dte_pct": round(float(vol50) * 100.0, 2)}
+        iv_pct = round(float(vol50) * 100.0, 2)
+        # Sanity filter: reject obviously bad data
+        if iv_pct <= 0 or iv_pct > 100:
+            return blank
+        return {"atm_0dte_pct": iv_pct}
     except Exception:
         return blank
+
+
+# Calendar-time convention for implied vol math (standard SPX options convention).
+# 1-sigma move over T years = spot * sigma * sqrt(T)
+# For H minutes: T = H / (60 * 24 * 365)
+_MINUTES_PER_CALENDAR_YEAR = 60.0 * 24.0 * 365.0
+
+
+def _implied_sigma_move(iv_pct: Optional[float], spot: Optional[float], minutes: int) -> Optional[float]:
+    """
+    Compute implied 1-sigma price move over `minutes` using calendar-time convention.
+    Returns None if any input is missing or invalid.
+    """
+    if iv_pct is None or spot is None:
+        return None
+    try:
+        iv_f = float(iv_pct)
+        spot_f = float(spot)
+        if iv_f <= 0 or spot_f <= 0 or minutes <= 0:
+            return None
+        T = minutes / _MINUTES_PER_CALENDAR_YEAR
+        return spot_f * (iv_f / 100.0) * math.sqrt(T)
+    except Exception:
+        return None
+
+
+def _compute_realized_vs_implied(
+    forward_outcomes: Dict[str, Any],
+    iv_atm_0dte_pct: Optional[float],
+    anchor_price: float,
+    horizons_minutes: tuple[int, ...],
+) -> Dict[str, Any]:
+    """
+    For each horizon, compare realized price movement to implied 1-sigma move.
+
+    Returns a dict keyed by horizon label ("30m", "60m", ..., "eod") with:
+      - implied_1sigma_pts: expected 1-sigma absolute price move
+      - close_abs_pts: |close_pts| at that horizon
+      - close_over_1sigma: |close| / implied_1sigma (<1 = realized tighter than priced)
+      - range_pts: MFE + MAE (band price traveled)
+      - range_over_1sigma: range / implied_1sigma (Brownian baseline ≈ 1.60)
+      - inside_1sigma: True if |close_pts| < implied_1sigma
+      - inside_2sigma: True if |close_pts| < 2 * implied_1sigma
+
+    EOD is skipped — implied-sigma math requires a known minute count, and the
+    EOD horizon is variable-duration per day. Users who want an EOD read can
+    look at 180m as a proxy (close enough for most intraday setups).
+
+    Any entries where IV is missing return a blank dict for that horizon.
+    """
+    blank_horizon = {
+        "implied_1sigma_pts": None,
+        "close_abs_pts": None,
+        "close_over_1sigma": None,
+        "range_pts": None,
+        "range_over_1sigma": None,
+        "inside_1sigma": None,
+        "inside_2sigma": None,
+    }
+    out: Dict[str, Any] = {}
+
+    if iv_atm_0dte_pct is None or anchor_price is None:
+        for m in horizons_minutes:
+            out[f"{m}m"] = dict(blank_horizon)
+        return out
+
+    for m in horizons_minutes:
+        key = f"{m}m"
+        horizon_data = forward_outcomes.get(key) if forward_outcomes else None
+        if not horizon_data:
+            out[key] = dict(blank_horizon)
+            continue
+
+        impl = _implied_sigma_move(iv_atm_0dte_pct, anchor_price, m)
+        if impl is None or impl <= 0:
+            out[key] = dict(blank_horizon)
+            continue
+
+        close_pts = horizon_data.get("close_pts")
+        mfe = horizon_data.get("mfe_pts")
+        mae = horizon_data.get("mae_pts")
+
+        close_abs = abs(float(close_pts)) if close_pts is not None else None
+        rng = (float(mfe) + float(mae)) if (mfe is not None and mae is not None) else None
+
+        out[key] = {
+            "implied_1sigma_pts": round(impl, 2),
+            "close_abs_pts":      None if close_abs is None else round(close_abs, 2),
+            "close_over_1sigma":  None if close_abs is None else round(close_abs / impl, 3),
+            "range_pts":          None if rng is None else round(rng, 2),
+            "range_over_1sigma":  None if rng is None else round(rng / impl, 3),
+            "inside_1sigma":      None if close_abs is None else bool(close_abs < impl),
+            "inside_2sigma":      None if close_abs is None else bool(close_abs < 2 * impl),
+        }
+
+    return out
 
 
 def _compute_skew_at_target(
@@ -3254,6 +3374,73 @@ def scan_gex_level_moves(
 
         diagnostics["forward_outcomes_aggregate"] = agg
         diagnostics["entries_found"] = int(len(results))
+
+        # ── Realized vs Implied aggregate (short-vol lens) ──
+        # For each horizon, compute:
+        #   - n with valid IV/implied data
+        #   - median IV at entry across those trades
+        #   - median implied_1sigma points
+        #   - median range/implied ratio (Brownian baseline ~1.60)
+        #   - % of trades where |close| < 1σ (normality baseline 68%)
+        #   - % of trades where |close| < 2σ (normality baseline 95%)
+        # EOD is skipped — per-row realized_vs_implied doesn't include it
+        # because implied-sigma math requires a fixed minute count.
+        short_vol_labels = [f"{m}m" for m in forward_horizons_minutes]
+        sv_agg: Dict[str, Any] = {}
+        ivs_all: List[float] = []
+        for hl in short_vol_labels:
+            ivs:       List[float] = []
+            impl_pts:  List[float] = []
+            range_rat: List[float] = []
+            close_rat: List[float] = []
+            inside_1:  List[bool]  = []
+            inside_2:  List[bool]  = []
+            for r in results:
+                rvi = r.get("realized_vs_implied") or {}
+                h = rvi.get(hl)
+                if not h or h.get("implied_1sigma_pts") is None:
+                    continue
+                iv_val = (r.get("iv") or {}).get("atm_0dte_pct")
+                if iv_val is not None:
+                    ivs.append(float(iv_val))
+                    if hl == short_vol_labels[0]:  # only accumulate IV once per row
+                        ivs_all.append(float(iv_val))
+                impl_pts.append(float(h["implied_1sigma_pts"]))
+                if h.get("range_over_1sigma") is not None:
+                    range_rat.append(float(h["range_over_1sigma"]))
+                if h.get("close_over_1sigma") is not None:
+                    close_rat.append(float(h["close_over_1sigma"]))
+                if h.get("inside_1sigma") is not None:
+                    inside_1.append(bool(h["inside_1sigma"]))
+                if h.get("inside_2sigma") is not None:
+                    inside_2.append(bool(h["inside_2sigma"]))
+
+            n = len(impl_pts)
+            if n == 0:
+                sv_agg[hl] = {"count": 0}
+                continue
+
+            sv_agg[hl] = {
+                "count":                 n,
+                "iv_median":             round(_median(ivs), 2) if ivs else None,
+                "implied_1sigma_median": round(_median(impl_pts), 2),
+                "range_over_1sigma_median": round(_median(range_rat), 3) if range_rat else None,
+                "close_over_1sigma_median": round(_median(close_rat), 3) if close_rat else None,
+                "pct_inside_1sigma":     round(sum(inside_1) / len(inside_1), 3) if inside_1 else None,
+                "pct_inside_2sigma":     round(sum(inside_2) / len(inside_2), 3) if inside_2 else None,
+            }
+
+        diagnostics["realized_vs_implied_aggregate"] = sv_agg
+        if ivs_all:
+            s_iv = sorted(ivs_all)
+            diagnostics["iv_at_entry_summary"] = {
+                "count":  len(s_iv),
+                "min":    round(min(s_iv), 2),
+                "p25":    round(s_iv[len(s_iv)//4], 2),
+                "median": round(_median(s_iv), 2),
+                "p75":    round(s_iv[3*len(s_iv)//4], 2),
+                "max":    round(max(s_iv), 2),
+            }
 
     return {
         "rows": results,

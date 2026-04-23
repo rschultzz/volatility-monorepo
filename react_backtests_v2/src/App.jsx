@@ -118,6 +118,9 @@ const DEFAULT_COLUMNS = [
   { id: 'fwd_eod_close', label: 'Close EOD', visible: false, className: 'study-col' },
 
   { id: 'iv_atm_0dte', label: 'IV ATM 0DTE', visible: false, className: 'study-col' },
+
+  { id: 'rvi_ratio_120m',     label: '|Close|/1σ 120m', visible: false, className: 'study-col' },
+  { id: 'rvi_inside_1s_120m', label: 'Inside ±1σ 120m', visible: false, className: 'study-col' },
 ];
 
 // Columns that represent managed-mode-only data (hidden in study mode)
@@ -141,6 +144,7 @@ const STUDY_ONLY_COLUMNS = new Set([
   'fwd_180m_mfe', 'fwd_180m_mae', 'fwd_180m_close',
   'fwd_eod_mfe',  'fwd_eod_mae',  'fwd_eod_close',
   'iv_atm_0dte',
+  'rvi_ratio_120m', 'rvi_inside_1s_120m',
 ]);
 
 const COLUMNS_STORAGE_KEY = 'bt2-results-table-columns';

@@ -92,6 +92,10 @@ const COLUMN_DATA_MAP = {
 
   // IV snapshot at entry (study mode)
   iv_atm_0dte: (row) => row.iv?.atm_0dte_pct,
+
+  // Realized vs implied at 120m (short-vol lens)
+  rvi_ratio_120m: (row) => row.realized_vs_implied?.['120m']?.close_over_1sigma,
+  rvi_inside_1s_120m: (row) => row.realized_vs_implied?.['120m']?.inside_1sigma,
 };
 
 const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns }, ref) => {
@@ -382,6 +386,24 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
         const v = row.iv?.atm_0dte_pct;
         if (v === null || v === undefined) return '—';
         return <span>{fmt(v, 2)}</span>;
+      }
+
+      // Realized vs implied at 120m: |close| / implied_1sigma
+      // Color green if <1 (realized tighter than priced), red if >=1
+      case 'rvi_ratio_120m': {
+        const v = row.realized_vs_implied?.['120m']?.close_over_1sigma;
+        if (v === null || v === undefined) return '—';
+        const color = v < 1.0 ? '#86efac' : v < 2.0 ? '#fcd34d' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{fmt(v, 2)}</span>;
+      }
+
+      // Inside ±1σ at 120m: ✓ if price stayed within the implied band
+      case 'rvi_inside_1s_120m': {
+        const v = row.realized_vs_implied?.['120m']?.inside_1sigma;
+        if (v === null || v === undefined) return '—';
+        return v
+          ? <span style={{ color: '#86efac', fontWeight: 700 }}>✓</span>
+          : <span style={{ color: '#fca5a5', fontWeight: 700 }}>✗</span>;
       }
 
       default: return null;
