@@ -89,6 +89,9 @@ const COLUMN_DATA_MAP = {
   fwd_eod_mfe:   (row) => row.forward_outcomes?.['eod']?.mfe_pts,
   fwd_eod_mae:   (row) => row.forward_outcomes?.['eod']?.mae_pts,
   fwd_eod_close: (row) => row.forward_outcomes?.['eod']?.close_pts,
+
+  // IV snapshot at entry (study mode)
+  iv_atm_0dte: (row) => row.iv?.atm_0dte_pct,
 };
 
 const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns }, ref) => {
@@ -372,6 +375,13 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
         if (v === null || v === undefined) return '—';
         const color = v > 0 ? '#fca5a5' : '#94a3b8';
         return <span style={{ color }}>{fmt(v)}</span>;
+      }
+
+      // IV at entry (0DTE ATM) — plain numeric, no color prejudice
+      case 'iv_atm_0dte': {
+        const v = row.iv?.atm_0dte_pct;
+        if (v === null || v === undefined) return '—';
+        return <span>{fmt(v, 2)}</span>;
       }
 
       default: return null;

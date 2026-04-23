@@ -963,6 +963,7 @@ def _build_study_row(
     skew_call_delta_pct: Optional[float],
     skew_atm_iv_delta_pct: Optional[float],
     skew_threshold_passed: bool,
+    entry_iv: Optional[Dict[str, Optional[float]]] = None,
 ) -> Dict[str, Any]:
     """
     Build a single study-mode result row for one target-touch event.
@@ -1027,9 +1028,36 @@ def _build_study_row(
         "skew_delta_atm_iv_pct": None if skew_atm_iv_delta_pct is None else round(float(skew_atm_iv_delta_pct), 2),
         "skew_threshold_passed": bool(skew_threshold_passed),
 
+        # IV snapshot at entry (extensible — currently just 0DTE ATM)
+        "iv": entry_iv if entry_iv is not None else {"atm_0dte_pct": None},
+
         # Forward outcomes dict
         "forward_outcomes": forward,
     }
+
+
+def _extract_iv_from_skew_row(skew_row) -> Dict[str, Optional[float]]:
+    """
+    Extract IV metrics from a fetched skew row for study-mode IV-at-entry analysis.
+
+    Currently returns just the ATM IV at 0DTE (pulled from the standard skew
+    snapshot used throughout the pipeline). The nested-dict return shape is
+    intentional so future extensions (smile anchors like put_25d, call_25d;
+    non-0DTE expirations like atm_7dte_pct) can be added without changing
+    any callers or frontend accessors.
+    """
+    blank = {"atm_0dte_pct": None}
+    if skew_row is None:
+        return blank
+    try:
+        vol50 = skew_row.get("vol50")
+        if vol50 is None or pd.isna(vol50):
+            return blank
+        # vol50 is stored as decimal annualized vol (e.g. 0.15 for 15%).
+        # Surface as a percentage-point number for trader readability.
+        return {"atm_0dte_pct": round(float(vol50) * 100.0, 2)}
+    except Exception:
+        return blank
 
 
 def _compute_skew_at_target(
@@ -1037,15 +1065,24 @@ def _compute_skew_at_target(
     day_rows: List[Dict[str, Any]],
     pivot_idx: int,
     hit_idx: int,
-) -> Dict[str, Optional[float]]:
+) -> Dict[str, Any]:
     """
     Compute skew delta values at the target-hit timestamp, relative to
-    the pivot-entry timestamp. Returns dict with keys:
-      delta_put_skew_pct, delta_call_skew_pct, delta_atm_iv_pct
+    the pivot-entry timestamp. Also returns IV metrics at entry, extracted
+    from the same fetched skew row (no extra query).
+
+    Returns dict with keys:
+      delta_put_skew_pct, delta_call_skew_pct, delta_atm_iv_pct  (deltas vs predicted)
+      entry_iv: nested dict of IV metrics at entry, e.g. {"atm_0dte_pct": 15.2}
     Any value may be None if skew data is missing.
     Reuses the same math as _expected_skew_deltas_from_entry used in managed mode.
     """
-    blank = {"delta_put_skew_pct": None, "delta_call_skew_pct": None, "delta_atm_iv_pct": None}
+    blank = {
+        "delta_put_skew_pct": None,
+        "delta_call_skew_pct": None,
+        "delta_atm_iv_pct": None,
+        "entry_iv": {"atm_0dte_pct": None},
+    }
     try:
         entry_ts_pt = _normalize_pt_label(day_rows[pivot_idx].get("ts_pt"))
         target_ts_pt = _normalize_pt_label(day_rows[hit_idx].get("ts_pt"))
@@ -1065,7 +1102,9 @@ def _compute_skew_at_target(
         target_skew = by_label.get(target_ts_pt)
         if entry_skew is None or target_skew is None:
             return blank
-        return _expected_skew_deltas_from_entry(entry_skew, target_skew, str(trade_date))
+        deltas = _expected_skew_deltas_from_entry(entry_skew, target_skew, str(trade_date))
+        entry_iv = _extract_iv_from_skew_row(entry_skew)
+        return {**deltas, "entry_iv": entry_iv}
     except Exception:
         return blank
 
@@ -2495,6 +2534,7 @@ def _day_zone_results(
                                 skew_call_delta_pct=d_call,
                                 skew_atm_iv_delta_pct=skew_metrics.get("delta_atm_iv_pct"),
                                 skew_threshold_passed=skew_passed,
+                                entry_iv=skew_metrics.get("entry_iv"),
                             )
                             results.append(study_row)
                             diagnostics["valid_instances"] += 1
@@ -2829,6 +2869,7 @@ def _day_zone_results(
                                 skew_call_delta_pct=d_call,
                                 skew_atm_iv_delta_pct=skew_metrics.get("delta_atm_iv_pct"),
                                 skew_threshold_passed=skew_passed,
+                                entry_iv=skew_metrics.get("entry_iv"),
                             )
                             results.append(study_row)
                             diagnostics["valid_instances"] += 1
