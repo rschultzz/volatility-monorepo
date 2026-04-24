@@ -93,6 +93,9 @@ const COLUMN_DATA_MAP = {
   // IV snapshot at entry (study mode)
   iv_atm_0dte: (row) => row.iv?.atm_0dte_pct,
 
+  // SPX cash index level at target touch (used for condor strike sizing)
+  target_spx_price: (row) => row.target_spx_price,
+
   // Realized vs implied at 120m (short-vol lens)
   rvi_ratio_120m: (row) => row.realized_vs_implied?.['120m']?.close_over_1sigma,
   rvi_inside_1s_120m: (row) => row.realized_vs_implied?.['120m']?.inside_1sigma,
@@ -390,6 +393,13 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
       // IV at entry (0DTE ATM) — plain numeric, no color prejudice
       case 'iv_atm_0dte': {
         const v = row.iv?.atm_0dte_pct;
+        if (v === null || v === undefined) return '—';
+        return <span>{fmt(v, 2)}</span>;
+      }
+
+      // SPX cash level at target touch (from ORATS monies)
+      case 'target_spx_price': {
+        const v = row.target_spx_price;
         if (v === null || v === undefined) return '—';
         return <span>{fmt(v, 2)}</span>;
       }

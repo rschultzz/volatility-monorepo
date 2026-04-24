@@ -120,6 +120,8 @@ const DEFAULT_COLUMNS = [
 
   { id: 'iv_atm_0dte', label: 'IV ATM 0DTE', visible: false, className: 'study-col' },
 
+  { id: 'target_spx_price', label: 'SPX @ Target', visible: false, className: 'study-col' },
+
   { id: 'rvi_ratio_120m',     label: '|Close|/1σ 120m', visible: false, className: 'study-col' },
   { id: 'rvi_inside_1s_120m', label: 'Inside ±1σ 120m', visible: false, className: 'study-col' },
 
@@ -151,6 +153,7 @@ const STUDY_ONLY_COLUMNS = new Set([
   'fwd_180m_mfe', 'fwd_180m_mae', 'fwd_180m_close',
   'fwd_eod_mfe',  'fwd_eod_mae',  'fwd_eod_close',
   'iv_atm_0dte',
+  'target_spx_price',
   'rvi_ratio_120m', 'rvi_inside_1s_120m',
   'condor_short_put', 'condor_long_put', 'condor_short_call', 'condor_long_call',
 ]);

@@ -965,6 +965,7 @@ def _build_study_row(
     skew_threshold_passed: bool,
     entry_iv: Optional[Dict[str, Optional[float]]] = None,
     condor_wing_width_pts: float = 10.0,
+    target_spx_price: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Build a single study-mode result row for one target-touch event.
@@ -1009,16 +1010,23 @@ def _build_study_row(
     )
 
     # Hypothetical 120m iron condor at ±1σ (short-vol strike sizing).
-    # Anchor is target-touch price, IV is target-touch ATM IV.
-    # This gives traders concrete strikes to paste into a broker platform
-    # (OptionStrat, Thinkorswim, etc.) for premium-collection verification.
+    # Anchor is SPX cash level at target touch (from ORATS monies stock_price),
+    # falling back to ES target price if SPX data is missing. IV is target-touch
+    # ATM IV. This gives traders concrete strikes to paste into a broker platform
+    # (OptionStrat, Thinkorswim, etc.) for premium-collection verification on
+    # actual SPX options, not ES-basis-shifted approximations.
+    condor_anchor = target_spx_price if target_spx_price is not None else float(anchor_price)
     hypothetical_condor = _compute_hypothetical_condor(
-        anchor_price=float(anchor_price),
+        anchor_price=float(condor_anchor),
         iv_atm_0dte_pct=iv_atm,
         horizon_minutes=120,
         wing_width_pts=float(condor_wing_width_pts),
         strike_increment=5.0,
     )
+    # Tag whether we used the SPX anchor (accurate) or fell back to ES
+    if hypothetical_condor.get("short_put_strike") is not None:
+        hypothetical_condor["anchor_source"] = "SPX" if target_spx_price is not None else "ES_fallback"
+        hypothetical_condor["anchor_price"] = round(float(condor_anchor), 2)
 
     return {
         "trade_date": str(trade_date),
@@ -1056,6 +1064,11 @@ def _build_study_row(
 
         # IV snapshot at entry (extensible — currently just 0DTE ATM)
         "iv": entry_iv if entry_iv is not None else {"atm_0dte_pct": None},
+
+        # SPX cash index level at target touch (from ORATS monies).
+        # Used as anchor for SPX option strike sizing. ES futures price is
+        # available via target_price above.
+        "target_spx_price": target_spx_price,
 
         # Realized vs implied movement per horizon (short-vol lens).
         # Keyed by horizon label, each horizon has implied_1sigma_pts, close_over_1sigma,
@@ -1282,12 +1295,18 @@ def _compute_skew_at_target(
 ) -> Dict[str, Any]:
     """
     Compute skew delta values at the target-hit timestamp, relative to
-    the pivot-entry timestamp. Also returns IV metrics at entry, extracted
-    from the same fetched skew row (no extra query).
+    the pivot-entry timestamp. Also returns IV metrics at entry and the
+    SPX spot price at target touch (both extracted from the same fetched
+    skew row — no extra query).
 
     Returns dict with keys:
       delta_put_skew_pct, delta_call_skew_pct, delta_atm_iv_pct  (deltas vs predicted)
       entry_iv: nested dict of IV metrics at entry, e.g. {"atm_0dte_pct": 15.2}
+      target_spx_price: SPX cash index level at target touch (Optional[float]).
+        Pulled from ORATS monies `stock_price` field. For SPX-ticker skew data,
+        this is the cash index, which is the correct anchor for SPX option
+        strike sizing. ES futures price is available separately via day_rows.
+
     Any value may be None if skew data is missing.
     Reuses the same math as _expected_skew_deltas_from_entry used in managed mode.
     """
@@ -1296,6 +1315,7 @@ def _compute_skew_at_target(
         "delta_call_skew_pct": None,
         "delta_atm_iv_pct": None,
         "entry_iv": {"atm_0dte_pct": None},
+        "target_spx_price": None,
     }
     try:
         entry_ts_pt = _normalize_pt_label(day_rows[pivot_idx].get("ts_pt"))
@@ -1321,7 +1341,19 @@ def _compute_skew_at_target(
         # moment we'd actually enter a short-vol trade. The skew deltas above
         # compare pivot-bar to target-touch, which is a separate signal.
         entry_iv = _extract_iv_from_skew_row(target_skew)
-        return {**deltas, "entry_iv": entry_iv}
+        # SPX spot at target touch — from ORATS monies `stock_price` field.
+        # Used as the anchor for SPX option strike sizing (vs ES futures price
+        # from the bar table, which would be off by the ES-SPX basis).
+        target_spx_price = None
+        try:
+            sp = target_skew.get("stock_price")
+            if sp is not None and not pd.isna(sp):
+                sp_f = float(sp)
+                if sp_f > 0:
+                    target_spx_price = round(sp_f, 2)
+        except Exception:
+            target_spx_price = None
+        return {**deltas, "entry_iv": entry_iv, "target_spx_price": target_spx_price}
     except Exception:
         return blank
 
@@ -2754,6 +2786,7 @@ def _day_zone_results(
                                 skew_threshold_passed=skew_passed,
                                 entry_iv=skew_metrics.get("entry_iv"),
                                 condor_wing_width_pts=float(condor_wing_width_pts),
+                                target_spx_price=skew_metrics.get("target_spx_price"),
                             )
                             results.append(study_row)
                             diagnostics["valid_instances"] += 1
@@ -3090,6 +3123,7 @@ def _day_zone_results(
                                 skew_threshold_passed=skew_passed,
                                 entry_iv=skew_metrics.get("entry_iv"),
                                 condor_wing_width_pts=float(condor_wing_width_pts),
+                                target_spx_price=skew_metrics.get("target_spx_price"),
                             )
                             results.append(study_row)
                             diagnostics["valid_instances"] += 1
