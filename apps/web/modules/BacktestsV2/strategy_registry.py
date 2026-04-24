@@ -49,6 +49,7 @@ def _base_defaults() -> Dict[str, Any]:
         "bypassFilters": [],
         "executionMode": "managed",
         "forwardHorizonsMinutes": [30, 60, 90, 120, 180],
+        "condorWingWidthPts": 10.0,
     }
 
 

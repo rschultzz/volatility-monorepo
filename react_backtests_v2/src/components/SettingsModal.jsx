@@ -356,6 +356,18 @@ export default function SettingsModal({
                 Comma-separated minutes. EOD is always appended automatically. Only applies in study mode.
               </small>
             </Field>
+            <Field label="Condor wing width (pts)" fieldKey="condorWingWidthPts">
+              <input
+                type="number"
+                step="5"
+                min="5"
+                value={settingsDraft.condorWingWidthPts ?? 10}
+                onChange={(e) => onChange('condorWingWidthPts', Number(e.target.value))}
+              />
+              <small style={{ display: 'block', color: '#64748b', marginTop: '4px' }}>
+                Distance from short strikes to long wings on hypothetical ±1σ iron condors. Study mode only.
+              </small>
+            </Field>
           </SectionCard>
 
           {/* ── Trade management ── */}

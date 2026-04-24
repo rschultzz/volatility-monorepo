@@ -96,6 +96,12 @@ const COLUMN_DATA_MAP = {
   // Realized vs implied at 120m (short-vol lens)
   rvi_ratio_120m: (row) => row.realized_vs_implied?.['120m']?.close_over_1sigma,
   rvi_inside_1s_120m: (row) => row.realized_vs_implied?.['120m']?.inside_1sigma,
+
+  // Hypothetical 120m iron condor strikes
+  condor_short_put:  (row) => row.hypothetical_condor_120m?.short_put_strike,
+  condor_long_put:   (row) => row.hypothetical_condor_120m?.long_put_strike,
+  condor_short_call: (row) => row.hypothetical_condor_120m?.short_call_strike,
+  condor_long_call:  (row) => row.hypothetical_condor_120m?.long_call_strike,
 };
 
 const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns }, ref) => {
@@ -404,6 +410,30 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
         return v
           ? <span style={{ color: '#86efac', fontWeight: 700 }}>✓</span>
           : <span style={{ color: '#fca5a5', fontWeight: 700 }}>✗</span>;
+      }
+
+      // Hypothetical 120m iron condor strikes.
+      // Short strikes colored (amber) — they're the ones the trade "stays below/above"
+      // Long strikes faded — they're the defensive wings.
+      case 'condor_short_put': {
+        const v = row.hypothetical_condor_120m?.short_put_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#fcd34d', fontWeight: 600 }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_short_call': {
+        const v = row.hypothetical_condor_120m?.short_call_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#fcd34d', fontWeight: 600 }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_long_put': {
+        const v = row.hypothetical_condor_120m?.long_put_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#94a3b8' }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_long_call': {
+        const v = row.hypothetical_condor_120m?.long_call_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#94a3b8' }}>{fmt(v, 0)}</span>;
       }
 
       default: return null;

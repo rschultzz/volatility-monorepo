@@ -532,6 +532,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                     int(x) for x in (settings.get("forwardHorizonsMinutes") or [30, 60, 90, 120, 180])
                     if str(x).strip().lstrip('-').isdigit() and int(x) > 0
                 ) or (30, 60, 90, 120, 180),
+                condor_wing_width_pts=float(settings.get("condorWingWidthPts") or 10.0),
             )
 
             base_strategy_key = strategy_meta.get("baseStrategyKey") or item["base_registry_key"]
@@ -682,6 +683,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                     int(x) for x in (settings.get("forwardHorizonsMinutes") or [30, 60, 90, 120, 180])
                     if str(x).strip().lstrip('-').isdigit() and int(x) > 0
                 ) or (30, 60, 90, 120, 180),
+                condor_wing_width_pts=float(settings.get("condorWingWidthPts") or 10.0),
             )
 
             base_strategy_key = strategy_meta.get("baseStrategyKey") or item["base_registry_key"]

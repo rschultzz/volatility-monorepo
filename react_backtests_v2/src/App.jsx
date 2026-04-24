@@ -45,6 +45,7 @@ const FALLBACK_DEFAULT_SETTINGS = {
   bypassFilters: [],
   executionMode: 'managed',
   forwardHorizonsMinutes: [30, 60, 90, 120, 180],
+  condorWingWidthPts: 10.0,
 };
 
 const DEFAULT_COLUMNS = [
@@ -121,6 +122,12 @@ const DEFAULT_COLUMNS = [
 
   { id: 'rvi_ratio_120m',     label: '|Close|/1σ 120m', visible: false, className: 'study-col' },
   { id: 'rvi_inside_1s_120m', label: 'Inside ±1σ 120m', visible: false, className: 'study-col' },
+
+  // Hypothetical 120m iron condor strikes (±1σ from target-touch anchor)
+  { id: 'condor_short_put',  label: 'Short Put',  visible: false, className: 'study-col' },
+  { id: 'condor_long_put',   label: 'Long Put',   visible: false, className: 'study-col' },
+  { id: 'condor_short_call', label: 'Short Call', visible: false, className: 'study-col' },
+  { id: 'condor_long_call',  label: 'Long Call',  visible: false, className: 'study-col' },
 ];
 
 // Columns that represent managed-mode-only data (hidden in study mode)
@@ -145,6 +152,7 @@ const STUDY_ONLY_COLUMNS = new Set([
   'fwd_eod_mfe',  'fwd_eod_mae',  'fwd_eod_close',
   'iv_atm_0dte',
   'rvi_ratio_120m', 'rvi_inside_1s_120m',
+  'condor_short_put', 'condor_long_put', 'condor_short_call', 'condor_long_call',
 ]);
 
 const COLUMNS_STORAGE_KEY = 'bt2-results-table-columns';
@@ -195,6 +203,9 @@ function normalizeNumericSettings(nextSettings) {
     forwardHorizonsMinutes: Array.isArray(nextSettings.forwardHorizonsMinutes)
       ? nextSettings.forwardHorizonsMinutes.map(Number).filter(n => Number.isFinite(n) && n > 0)
       : [30, 60, 90, 120, 180],
+    condorWingWidthPts: Number.isFinite(Number(nextSettings.condorWingWidthPts)) && Number(nextSettings.condorWingWidthPts) > 0
+      ? Number(nextSettings.condorWingWidthPts)
+      : 10.0,
   };
 }
 

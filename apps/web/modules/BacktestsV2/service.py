@@ -964,6 +964,7 @@ def _build_study_row(
     skew_atm_iv_delta_pct: Optional[float],
     skew_threshold_passed: bool,
     entry_iv: Optional[Dict[str, Optional[float]]] = None,
+    condor_wing_width_pts: float = 10.0,
 ) -> Dict[str, Any]:
     """
     Build a single study-mode result row for one target-touch event.
@@ -1007,6 +1008,18 @@ def _build_study_row(
         horizons_minutes=forward_horizons_minutes,
     )
 
+    # Hypothetical 120m iron condor at ±1σ (short-vol strike sizing).
+    # Anchor is target-touch price, IV is target-touch ATM IV.
+    # This gives traders concrete strikes to paste into a broker platform
+    # (OptionStrat, Thinkorswim, etc.) for premium-collection verification.
+    hypothetical_condor = _compute_hypothetical_condor(
+        anchor_price=float(anchor_price),
+        iv_atm_0dte_pct=iv_atm,
+        horizon_minutes=120,
+        wing_width_pts=float(condor_wing_width_pts),
+        strike_increment=5.0,
+    )
+
     return {
         "trade_date": str(trade_date),
         "direction": direction,
@@ -1048,6 +1061,11 @@ def _build_study_row(
         # Keyed by horizon label, each horizon has implied_1sigma_pts, close_over_1sigma,
         # range_over_1sigma, inside_1sigma, inside_2sigma, etc.
         "realized_vs_implied": realized_vs_implied,
+
+        # Hypothetical 120m iron condor at ±1σ (short-vol strike sizing).
+        # Contains: short_put_strike, long_put_strike, short_call_strike,
+        # long_call_strike, implied_1sigma_pts, short_strike_width, wing_width_pts
+        "hypothetical_condor_120m": hypothetical_condor,
 
         # Forward outcomes dict
         "forward_outcomes": forward,
@@ -1180,6 +1198,82 @@ def _compute_realized_vs_implied(
     return out
 
 
+def _round_to_strike(price: float, increment: float = 5.0) -> float:
+    """Round a theoretical price to the nearest tradeable strike increment."""
+    if price is None:
+        return None
+    return round(round(float(price) / increment) * increment, 2)
+
+
+def _compute_hypothetical_condor(
+    anchor_price: Optional[float],
+    iv_atm_0dte_pct: Optional[float],
+    horizon_minutes: int,
+    wing_width_pts: float,
+    strike_increment: float = 5.0,
+) -> Dict[str, Any]:
+    """
+    Compute the four strikes for a hypothetical iron condor sized at ±1σ
+    from anchor_price, using IV at entry to determine sigma for the horizon.
+
+    Strikes are rounded to the nearest tradeable increment. Wings sit
+    wing_width_pts beyond the short strikes (also rounded).
+
+    Returns dict with:
+      short_put_strike:  anchor - 1σ, rounded down to strike grid
+      long_put_strike:   short_put_strike - wing_width_pts (rounded)
+      short_call_strike: anchor + 1σ, rounded up to strike grid
+      long_call_strike:  short_call_strike + wing_width_pts (rounded)
+      implied_1sigma_pts: the raw 1σ number used (pre-rounding)
+      short_strike_width: actual distance between short strikes (post-rounding)
+      wing_width_pts: wing width used (echoed back for reference)
+
+    All values are None if IV or anchor are missing.
+    """
+    blank = {
+        "short_put_strike":   None,
+        "long_put_strike":    None,
+        "short_call_strike":  None,
+        "long_call_strike":   None,
+        "implied_1sigma_pts": None,
+        "short_strike_width": None,
+        "wing_width_pts":     float(wing_width_pts),
+    }
+    if anchor_price is None or iv_atm_0dte_pct is None or horizon_minutes <= 0:
+        return blank
+    impl = _implied_sigma_move(iv_atm_0dte_pct, anchor_price, horizon_minutes)
+    if impl is None or impl <= 0:
+        return blank
+
+    anchor_f = float(anchor_price)
+    # Round short strikes OUT from anchor (conservative: expand the box slightly)
+    # For puts, round DOWN (further from anchor); for calls, round UP
+    raw_short_put  = anchor_f - impl
+    raw_short_call = anchor_f + impl
+
+    inc = float(strike_increment)
+    short_put  = math.floor(raw_short_put  / inc) * inc
+    short_call = math.ceil(raw_short_call / inc) * inc
+
+    long_put  = short_put  - float(wing_width_pts)
+    long_call = short_call + float(wing_width_pts)
+
+    # Round wings to increment too (wings typically land on strikes naturally
+    # when wing_width is a multiple of increment, but safeguard anyway)
+    long_put  = round(long_put  / inc) * inc
+    long_call = round(long_call / inc) * inc
+
+    return {
+        "short_put_strike":   round(short_put, 2),
+        "long_put_strike":    round(long_put, 2),
+        "short_call_strike":  round(short_call, 2),
+        "long_call_strike":   round(long_call, 2),
+        "implied_1sigma_pts": round(impl, 2),
+        "short_strike_width": round(short_call - short_put, 2),
+        "wing_width_pts":     float(wing_width_pts),
+    }
+
+
 def _compute_skew_at_target(
     trade_date,
     day_rows: List[Dict[str, Any]],
@@ -1223,7 +1317,10 @@ def _compute_skew_at_target(
         if entry_skew is None or target_skew is None:
             return blank
         deltas = _expected_skew_deltas_from_entry(entry_skew, target_skew, str(trade_date))
-        entry_iv = _extract_iv_from_skew_row(entry_skew)
+        # IV for strike sizing is pulled from the target-touch bar — that's the
+        # moment we'd actually enter a short-vol trade. The skew deltas above
+        # compare pivot-bar to target-touch, which is a separate signal.
+        entry_iv = _extract_iv_from_skew_row(target_skew)
         return {**deltas, "entry_iv": entry_iv}
     except Exception:
         return blank
@@ -2417,6 +2514,7 @@ def _day_zone_results(
         recorder: Optional[FunnelRecorder] = None,
         execution_mode: str = "managed",
         forward_horizons_minutes: tuple[int, ...] = (30, 60, 90, 120, 180),
+        condor_wing_width_pts: float = 10.0,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     qualifying_levels = _collect_day_levels(day_rows, level_family, min_level_gex_bn)
 
@@ -2655,6 +2753,7 @@ def _day_zone_results(
                                 skew_atm_iv_delta_pct=skew_metrics.get("delta_atm_iv_pct"),
                                 skew_threshold_passed=skew_passed,
                                 entry_iv=skew_metrics.get("entry_iv"),
+                                condor_wing_width_pts=float(condor_wing_width_pts),
                             )
                             results.append(study_row)
                             diagnostics["valid_instances"] += 1
@@ -2990,6 +3089,7 @@ def _day_zone_results(
                                 skew_atm_iv_delta_pct=skew_metrics.get("delta_atm_iv_pct"),
                                 skew_threshold_passed=skew_passed,
                                 entry_iv=skew_metrics.get("entry_iv"),
+                                condor_wing_width_pts=float(condor_wing_width_pts),
                             )
                             results.append(study_row)
                             diagnostics["valid_instances"] += 1
@@ -3183,6 +3283,7 @@ def scan_gex_level_moves(
         bypass_filters: tuple[str, ...] = (),
         execution_mode: str = "managed",
         forward_horizons_minutes: tuple[int, ...] = (30, 60, 90, 120, 180),
+        condor_wing_width_pts: float = 10.0,
 ) -> Dict[str, Any]:
     level_family = (level_family or "primary").strip().lower()
     if level_family not in {"primary", "strong", "both"}:
@@ -3275,6 +3376,7 @@ def scan_gex_level_moves(
             recorder=recorder,
             execution_mode=execution_mode,
             forward_horizons_minutes=forward_horizons_minutes,
+            condor_wing_width_pts=condor_wing_width_pts,
         )
         results.extend(day_results)
 
