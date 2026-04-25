@@ -389,11 +389,15 @@ def _collect_day_levels(day_rows: List[Dict[str, Any]], level_family: str, min_l
                 by_level[key] = {
                     "level": float(item["level"]),
                     "max_abs_gex_bn": abs(float(item["gex_bn"])),
+                    "signed_gex_bn": float(item["gex_bn"]),
                     "families": {str(item["family"])},
                     "labels": {str(item["label"])},
                 }
             else:
-                existing["max_abs_gex_bn"] = max(existing["max_abs_gex_bn"], abs(float(item["gex_bn"])))
+                new_abs = abs(float(item["gex_bn"]))
+                if new_abs > existing["max_abs_gex_bn"]:
+                    existing["max_abs_gex_bn"] = new_abs
+                    existing["signed_gex_bn"] = float(item["gex_bn"])
                 existing["families"].add(str(item["family"]))
                 existing["labels"].add(str(item["label"]))
 
@@ -419,6 +423,7 @@ def _make_zone(items: List[Dict[str, Any]], zone_id: int) -> Dict[str, Any]:
         "levels": levels,
         "levels_text": ", ".join(f"{x:.0f}" if float(x).is_integer() else f"{x:.2f}" for x in levels),
         "max_abs_gex_bn": round(max(float(x["max_abs_gex_bn"]) for x in sorted_items), 2),
+        "signed_gex_bn": round(float(max(sorted_items, key=lambda x: float(x["max_abs_gex_bn"]))["signed_gex_bn"]), 2),
         "items": sorted_items,
     }
 
@@ -738,12 +743,29 @@ def _fetch_skew_rows_for_times(trade_date: str, expiration_iso: str, times_pt: L
     if not clean_times:
         return pd.DataFrame()
 
-    df = fetch_skew_data(trade_date, expiration_iso, clean_times)
+    # +1 min offset: ES bar ts_pt is bar-open time; ORATS snapshot_pt
+    # is taken at bar-close (open + 1 min). Must shift to get the right row.
+    def _plus1(hhmm: str) -> str:
+        h, m = int(hhmm[:2]), int(hhmm[3:])
+        m += 1
+        if m >= 60:
+            m -= 60
+            h += 1
+        return f"{h:02d}:{m:02d}"
+
+    shifted = [_plus1(t) for t in clean_times]
+    # Map shifted time → original so callers can still do by_label.get("07:25")
+    orig_by_shifted = {s: o for o, s in zip(clean_times, shifted)}
+
+    df = fetch_skew_data(trade_date, expiration_iso, shifted)
     if df is None or df.empty:
         return pd.DataFrame()
 
     out = df.copy()
-    out["snapshot_pt_label"] = out["snapshot_pt"].apply(_normalize_pt_label)
+    # Label each row by the ORIGINAL requested time, not the shifted snapshot time
+    out["snapshot_pt_label"] = out["snapshot_pt"].apply(
+        lambda v: orig_by_shifted.get(_normalize_pt_label(v), _normalize_pt_label(v))
+    )
     out = out.sort_values("snapshot_pt")
     return out
 
@@ -1060,6 +1082,7 @@ def _build_study_row(
 
         # Target touch (forward outcomes anchor)
         "target_level": round(target_level, 2),
+        "target_level_gex_bn": round(float(target_zone["signed_gex_bn"]), 2),
         "target_zone_range": f"{target_zone['low']:.2f} – {target_zone['high']:.2f}",
         "target_ts_pt": str(target_row.get("ts_pt")),
         "target_ts_utc": pd.Timestamp(target_row.get("ts_utc")).isoformat() if target_row.get("ts_utc") is not None else None,
@@ -2961,6 +2984,7 @@ def _day_zone_results(
                         "source_zone_width": round(float(zone["width"]), 2),
                         "source_zone_levels": zone["levels_text"],
                         "target_level": round(float(target_zone_up["low"]), 2),
+                        "target_level_gex_bn": round(float(target_zone_up["signed_gex_bn"]), 2),
                         "target_zone_range": f"{target_zone_up['low']:.2f} – {target_zone_up['high']:.2f}",
                         "clean_space_points": round(float(clean_space_up), 2),
                         "start_ts_pt": str(start_row.get("ts_pt")),
@@ -3310,6 +3334,7 @@ def _day_zone_results(
                             "source_zone_width": round(float(zone["width"]), 2),
                             "source_zone_levels": zone["levels_text"],
                             "target_level": round(float(target_zone_down["high"]), 2),
+                            "target_level_gex_bn": round(float(target_zone_down["signed_gex_bn"]), 2),
                             "target_zone_range": f"{target_zone_down['low']:.2f} – {target_zone_down['high']:.2f}",
                             "clean_space_points": round(float(clean_space_down), 2),
                             "start_ts_pt": str(start_row.get("ts_pt")),

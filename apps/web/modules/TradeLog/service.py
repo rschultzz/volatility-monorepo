@@ -14,8 +14,12 @@ import json
 import logging
 import os
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import math
+import numpy as np
+from packages.shared.surface_compare import k_for_abs_delta as _k_for_abs_delta
+SURFACE_COMPARE_AVAILABLE = True
 
 import psycopg2
 import psycopg2.extras
@@ -37,6 +41,12 @@ MULTIPLIERS = {
     'NQ':  20,
 }
 DEFAULT_MULTIPLIER = 5  # fallback
+
+ET  = ZoneInfo('America/New_York')
+_EPS_T                      = 1e-4
+_BETA_VOLPTS_PER_1PCT       = 4.5
+_BETA_MAX_SHIFT_PP          = 6.0
+_THETA_ATM_PP_PER_SQRT_YEAR = -638
 
 # Month codes for futures contract symbol stripping
 _MONTH_CODES = frozenset('FGHJKMNQUVXZ')
@@ -655,16 +665,86 @@ def get_aggregate(date_filter: str | None = None) -> dict:
 # Context computation
 # ══════════════════════════════════════════════════════════════
 
-def recompute_context(trade_id: int) -> dict:
-    """
-    Fetch market context for a trade using its current
-    setup_start_ts_pt and setup_target_ts_pt.
+def _years_to_exp(snap_shot_date_utc, expir_date_str: str) -> float:
+    import datetime as _dt
+    if snap_shot_date_utc is None:
+        return _EPS_T
+    # Handle string — psycopg2 may return snap_shot_date as a string
+    if isinstance(snap_shot_date_utc, str):
+        snap_shot_date_utc = _dt.datetime.fromisoformat(snap_shot_date_utc.replace('Z', '+00:00'))
+    if snap_shot_date_utc.tzinfo is None:
+        snap_shot_date_utc = snap_shot_date_utc.replace(tzinfo=timezone.utc)
+    ts_et = snap_shot_date_utc.astimezone(ET)
+    exp_date  = _dt.date.fromisoformat(expir_date_str)
+    exp_dt_et = _dt.datetime.combine(exp_date, _dt.time(16, 0)).replace(tzinfo=ET)
+    rem = exp_dt_et - ts_et
+    T   = max(0.0, rem.total_seconds() / (365.0 * 24 * 3600))
+    return max(T, _EPS_T)
 
-    Uses the same fetch_skew_data + skew math as Skew callbacks.py.
-    """
+
+def _available_buckets(row: dict) -> list:
+    buckets = []
+    for c in row.keys():
+        if c.startswith('vol') and c[3:].isdigit():
+            n = int(c[3:])
+            if 1 <= n <= 99:
+                buckets.append(n)
+    puts  = sorted([n for n in buckets if n >= 50], reverse=True)
+    calls = sorted([n for n in buckets if n < 50],  reverse=True)
+    out, seen = [], set()
+    for n in puts + calls:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def _abs_delta_is_put(bucket: int):
+    if bucket == 50:  return 0.50, False
+    if bucket > 50:   return (100 - bucket) / 100.0, True
+    return bucket / 100.0, False
+
+
+def _prev_smile_interp(row: dict, T_prev: float):
+    atm_prev = float(row['vol50'])
+    buckets  = _available_buckets(row)
+    k_list, s_list = [], []
+    for n in buckets:
+        v = row.get(f'vol{n}')
+        if v is None:
+            continue
+        if n == 50:
+            k = 0.0
+        else:
+            p, is_put = _abs_delta_is_put(n)
+            k = _k_for_abs_delta(p, is_put=is_put, sigma=atm_prev, T=T_prev)
+        k_list.append(k)
+        s_list.append(float(v))
+    k_np = np.array(k_list, float)
+    s_np = np.array(s_list, float)
+    mask = np.concatenate(([True], np.diff(k_np) > 1e-12))
+    k_np, s_np = k_np[mask], s_np[mask]
+    if k_np.size < 3:
+        raise ValueError('k-grid degenerate')
+    return k_np, s_np
+
+
+def _interp_linear_extrap(kq: float, k_grid, s_grid) -> float:
+    if kq <= k_grid[0]:
+        x0, x1, y0, y1 = k_grid[0], k_grid[1], s_grid[0], s_grid[1]
+        return float(y0 + (y1 - y0) * (kq - x0) / (x1 - x0))
+    if kq >= k_grid[-1]:
+        x0, x1, y0, y1 = k_grid[-2], k_grid[-1], s_grid[-2], s_grid[-1]
+        return float(y1 + (y1 - y0) * (kq - x1) / (x1 - x0))
+    return float(np.interp(kq, k_grid, s_grid))
+
+def recompute_context(trade_id: int) -> dict:
+    print(f"DEBUG recompute_context called trade={trade_id}", flush=True)
     trade = get_trade(trade_id)
     if not trade:
         return {'ok': False, 'error': 'Trade not found'}
+
+    print(f"DEBUG SURFACE_COMPARE_AVAILABLE={SURFACE_COMPARE_AVAILABLE}", flush=True)
 
     ctx = {
         'context_iv_atm_0dte_pct':     None,
@@ -675,46 +755,122 @@ def recompute_context(trade_id: int) -> dict:
         'context_minutes_to_close':    None,
     }
 
-    if SKEW_HELPERS_AVAILABLE:
-        trade_date  = trade.get('trade_date')
-        start_raw   = trade.get('setup_start_ts_pt')
-        target_raw  = trade.get('setup_target_ts_pt')
+    trade_date = trade.get('trade_date')
+    start_raw  = trade.get('setup_start_ts_pt')
+    target_raw = trade.get('setup_target_ts_pt')
 
-        if trade_date and start_raw and target_raw:
+    print(f"DEBUG trade_date={trade_date} start={start_raw} target={target_raw}", flush=True)
+
+
+    if trade_date and start_raw and target_raw:
+        try:
+            start_dt  = datetime.fromisoformat(start_raw).astimezone(PT)
+            target_dt = datetime.fromisoformat(target_raw).astimezone(PT)
+
+            start_hhmm  = (start_dt  + timedelta(minutes=1)).strftime('%H:%M')
+            target_hhmm = (target_dt + timedelta(minutes=1)).strftime('%H:%M')
+
+            print(f"DEBUG querying start={start_hhmm} target={target_hhmm}", flush=True)
+
+            expir_date = trade_date
+
+            conn = get_conn()
             try:
-                start_dt  = datetime.fromisoformat(start_raw).astimezone(PT)
-                target_dt = datetime.fromisoformat(target_raw).astimezone(PT)
-                start_hhmm  = start_dt.strftime('%H:%M')
-                target_hhmm = target_dt.strftime('%H:%M')
+                with conn.cursor() as cur:
+                    row_sql = """
+                        SELECT *
+                        FROM orats_monies_minute
+                        WHERE trade_date = %s
+                          AND expir_date = %s
+                          AND TO_CHAR(snapshot_pt, 'HH24:MI') = %s
+                        ORDER BY snapshot_pt
+                        LIMIT 1
+                    """
+                    cur.execute(row_sql, (trade_date, expir_date, start_hhmm))
+                    start_row = cur.fetchone()
+                    cur.execute(row_sql, (trade_date, expir_date, target_hhmm))
+                    target_row = cur.fetchone()
+            finally:
+                conn.close()
 
-                # SPX 0DTE — expiration same day as trade
-                expiration_iso = trade_date
+            print(f"DEBUG start_row={start_row is not None} target_row={target_row is not None}", flush=True)
+            print(f"DEBUG start_row expir={start_row.get('expir_date')} snap={start_row.get('snapshot_pt')} vol50={start_row.get('vol50')}", flush=True)
+            print(f"DEBUG target_row expir={target_row.get('expir_date')} snap={target_row.get('snapshot_pt')} vol50={target_row.get('vol50')}", flush=True)
 
-                # fetch_skew_data returns a DataFrame sorted by snapshot_pt
-                df = _fetch_skew_data(trade_date, expiration_iso,
-                                      sorted([start_hhmm, target_hhmm]))
+            if start_row and target_row:
+                start_row  = dict(start_row)
+                target_row = dict(target_row)
 
-                if df is not None and not df.empty and len(df) >= 2:
-                    df = df.sort_values('snapshot_pt')
-                    row_start  = df.iloc[0]
-                    row_target = df.iloc[-1]
+                atm_s, call_s, put_s = _skews_from_row(start_row)
+                atm_t, call_t, put_t = _skews_from_row(target_row)
 
-                    atm_start, call_start, put_start = _skews_from_row(row_start)
-                    atm_target, call_target, put_target = _skews_from_row(row_target)
+                stock_s = float(start_row.get('stock_price') or 0) or None
+                stock_t = float(target_row.get('stock_price') or 0) or None
 
-                    ctx['context_iv_atm_0dte_pct']     = round(atm_start * 100.0, 4)
-                    ctx['context_target_spx_price']    = float(row_target.get('stock_price') or 0) or None
-                    ctx['context_skew_delta_put_pct']  = _pct_change_pp(put_target, put_start)
-                    ctx['context_skew_delta_call_pct'] = _pct_change_pp(call_target, call_start)
-                    ctx['context_skew_delta_atm_iv']   = _pct_change_frac(atm_target, atm_start)
+                print(f"DEBUG atm_s={atm_s} call_s={call_s} put_s={put_s}", flush=True)
+                print(f"DEBUG atm_t={atm_t} call_t={call_t} put_t={put_t}", flush=True)
+                print(f"DEBUG stock_s={stock_s} stock_t={stock_t}", flush=True)
 
-                # minutes to session close (13:00 PT) from setup start
-                start_mins = start_dt.hour * 60 + start_dt.minute
-                close_mins = 13 * 60   # 13:00 PT
-                ctx['context_minutes_to_close'] = max(0, close_mins - start_mins)
+                ctx['context_iv_atm_0dte_pct']  = round(atm_s * 100.0, 4)
+                ctx['context_target_spx_price'] = stock_t
 
-            except Exception as e:
-                log.warning('Context computation error for trade %s: %s', trade_id, e)
+                if SURFACE_COMPARE_AVAILABLE and stock_s and stock_t:
+                    try:
+                        T_s = _years_to_exp(start_row.get('snap_shot_date'),  expir_date)
+                        T_t = _years_to_exp(target_row.get('snap_shot_date'), expir_date)
+                        print(f"DEBUG T_s={T_s} T_t={T_t}", flush=True)
+
+                        k_prev, s_prev = _prev_smile_interp(start_row, T_s)
+                        k_shift  = math.log(stock_t / stock_s)
+                        ret_frac = (stock_t - stock_s) / stock_s
+
+                        exp_atm_shape  = _interp_linear_extrap(k_shift, k_prev, s_prev)
+                        level_shift_pp = max(-_BETA_MAX_SHIFT_PP,
+                                            min(_BETA_MAX_SHIFT_PP,
+                                                (-ret_frac) * 100.0 * _BETA_VOLPTS_PER_1PCT))
+                        droot        = max(0.0, math.sqrt(max(T_s, _EPS_T)) - math.sqrt(max(T_t, _EPS_T)))
+                        atm_theta_pp = _THETA_ATM_PP_PER_SQRT_YEAR * droot
+                        atm_exp      = exp_atm_shape + (level_shift_pp / 100.0) + (atm_theta_pp / 100.0)
+
+                        k_c25_t = _k_for_abs_delta(0.25, is_put=False, sigma=atm_t, T=T_t)
+                        k_p25_t = _k_for_abs_delta(0.25, is_put=True,  sigma=atm_t, T=T_t)
+
+                        exp_c25_shape = _interp_linear_extrap(k_c25_t + k_shift, k_prev, s_prev)
+                        exp_p25_shape = _interp_linear_extrap(k_p25_t + k_shift, k_prev, s_prev)
+
+                        shift_frac = atm_exp - exp_atm_shape
+                        exp_c25    = exp_c25_shape + shift_frac
+                        exp_p25    = exp_p25_shape + shift_frac
+
+                        exp_call_skew_pp = (exp_c25 - atm_exp) * 100.0
+                        exp_put_skew_pp  = (exp_p25 - atm_exp) * 100.0
+
+                        print(f"DEBUG exp_call_skew_pp={exp_call_skew_pp} exp_put_skew_pp={exp_put_skew_pp}", flush=True)
+
+                        ctx['context_skew_delta_call_pct'] = _pct_change_pp(call_t, exp_call_skew_pp)
+                        ctx['context_skew_delta_put_pct']  = _pct_change_pp(put_t,  exp_put_skew_pp)
+                        ctx['context_skew_delta_atm_iv']   = _pct_change_frac(atm_t, atm_exp)
+
+                        print(f"DEBUG final call_delta={ctx['context_skew_delta_call_pct']} put_delta={ctx['context_skew_delta_put_pct']}", flush=True)
+
+                    except Exception as ss_err:
+                        print(f"DEBUG SS calc failed: {ss_err}", flush=True)
+                        ctx['context_skew_delta_call_pct'] = _pct_change_pp(call_t, call_s)
+                        ctx['context_skew_delta_put_pct']  = _pct_change_pp(put_t,  put_s)
+                        ctx['context_skew_delta_atm_iv']   = _pct_change_frac(atm_t, atm_s)
+                else:
+                    print(f"DEBUG falling back to OFF-mode", flush=True)
+                    ctx['context_skew_delta_call_pct'] = _pct_change_pp(call_t, call_s)
+                    ctx['context_skew_delta_put_pct']  = _pct_change_pp(put_t,  put_s)
+                    ctx['context_skew_delta_atm_iv']   = _pct_change_frac(atm_t, atm_s)
+            else:
+                print(f"DEBUG rows not found for {start_hhmm}→{target_hhmm} on {trade_date}", flush=True)
+
+            start_mins = start_dt.hour * 60 + start_dt.minute
+            ctx['context_minutes_to_close'] = max(0, 13 * 60 - start_mins)
+
+        except Exception as e:
+            print(f"DEBUG outer exception: {e}", flush=True)
 
     ctx['context_computed_at'] = datetime.now(timezone.utc)
 
@@ -736,4 +892,4 @@ def recompute_context(trade_id: int) -> dict:
     finally:
         conn.close()
 
-    return {'ok': True, 'trade': get_trade(trade_id), 'helpers_available': SKEW_HELPERS_AVAILABLE}
+    return {'ok': True, 'trade': get_trade(trade_id), 'helpers_available': True}

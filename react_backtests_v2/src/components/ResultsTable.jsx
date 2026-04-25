@@ -32,6 +32,7 @@ const COLUMN_DATA_MAP = {
   target_time: 'target_ts_pt',
   target_open: 'target_open',
   target_level: 'target_level',
+  target_level_gex: (row) => row.target_level_gex_bn,
   clean_space: 'clean_space_points',
   move_pts: 'move_points',
   bars: 'elapsed_bars',
@@ -182,6 +183,11 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
               case 'target_level':
                 val = `${fmt(row.target_level)}${row.target_zone_range ? ' (' + row.target_zone_range + ')' : ''}`;
                 break;
+              case 'target_level_gex': {
+                const v = row.target_level_gex_bn;
+                val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
               case 'consol_mins':
                 val = `${row.consolidation_minutes_observed ?? ''}${row.consolidation_end_ts_pt ? ' ' + row.consolidation_end_ts_pt : ''}`;
                 break;
@@ -285,6 +291,15 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
             <div className="subcell">{row.target_zone_range}</div>
           </>
         );
+      case 'target_level_gex': {
+        const v = row.target_level_gex_bn;
+        if (v === null || v === undefined) return '—';
+        const sign = v > 0 ? '+' : '';
+        // Green = positive GEX (dealers long gamma → resistance/pin expected)
+        // Red   = negative GEX (dealers short gamma → acceleration expected)
+        const color = v > 0 ? '#86efac' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
+      }
       case 'clean_space': return fmt(row.clean_space_points);
       case 'move_pts': return fmt(row.move_points);
       case 'bars': return row.elapsed_bars;

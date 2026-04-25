@@ -61,6 +61,7 @@ const DEFAULT_COLUMNS = [
   { id: 'target_time', label: 'Target Time (PT)', visible: true },
   { id: 'target_open', label: 'Target Open', visible: true },
   { id: 'target_level', label: 'Target Level', visible: true },
+  { id: 'target_level_gex', label: 'Target GEX (BN)', visible: true },
   { id: 'clean_space', label: 'Clean Space', visible: true },
   { id: 'move_pts', label: 'Move Pts', visible: true },
   { id: 'bars', label: 'Bars', visible: true },
