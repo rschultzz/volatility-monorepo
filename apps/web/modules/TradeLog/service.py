@@ -660,8 +660,7 @@ def recompute_context(trade_id: int) -> dict:
     Fetch market context for a trade using its current
     setup_start_ts_pt and setup_target_ts_pt.
 
-    Queries orats_monies_minute directly — same table, same columns
-    as the Skew callbacks — to guarantee matching numbers.
+    Uses the same fetch_skew_data + skew math as Skew callbacks.py.
     """
     trade = get_trade(trade_id)
     if not trade:
@@ -676,73 +675,46 @@ def recompute_context(trade_id: int) -> dict:
         'context_minutes_to_close':    None,
     }
 
-    trade_date  = trade.get('trade_date')
-    start_raw   = trade.get('setup_start_ts_pt')
-    target_raw  = trade.get('setup_target_ts_pt')
+    if SKEW_HELPERS_AVAILABLE:
+        trade_date  = trade.get('trade_date')
+        start_raw   = trade.get('setup_start_ts_pt')
+        target_raw  = trade.get('setup_target_ts_pt')
 
-    if trade_date and start_raw and target_raw:
-        try:
-            start_dt  = datetime.fromisoformat(start_raw).astimezone(PT)
-            target_dt = datetime.fromisoformat(target_raw).astimezone(PT)
-
-            # +1 min shift: bar labeled 07:16 has snapshot stored at 07:17
-            from datetime import timedelta
-            start_hhmm  = (start_dt + timedelta(minutes=1)).strftime('%H:%M')
-            target_hhmm = (target_dt + timedelta(minutes=1)).strftime('%H:%M')
-
-            expir_date = trade_date   # SPX 0DTE
-
-            conn = get_conn()
+        if trade_date and start_raw and target_raw:
             try:
-                with conn.cursor() as cur:
-                    # Fetch the single row closest to each target PT time.
-                    # TO_CHAR(..., 'HH24:MI') extracts the PT hour:minute
-                    # from snapshot_pt so we match exactly what the skew
-                    # table displays.
-                    row_sql = """
-                        SELECT vol50, vol25, vol75, stock_price, snapshot_pt
-                        FROM orats_monies_minute
-                        WHERE trade_date = %s
-                          AND expir_date = %s
-                          AND TO_CHAR(
-                                snapshot_pt AT TIME ZONE 'America/Los_Angeles',
-                                'HH24:MI'
-                              ) = %s
-                        ORDER BY snapshot_pt
-                        LIMIT 1
-                    """
-                    cur.execute(row_sql, (trade_date, expir_date, start_hhmm))
-                    start_row = cur.fetchone()
+                start_dt  = datetime.fromisoformat(start_raw).astimezone(PT)
+                target_dt = datetime.fromisoformat(target_raw).astimezone(PT)
+                start_hhmm  = start_dt.strftime('%H:%M')
+                target_hhmm = target_dt.strftime('%H:%M')
 
-                    cur.execute(row_sql, (trade_date, expir_date, target_hhmm))
-                    target_row = cur.fetchone()
+                # SPX 0DTE — expiration same day as trade
+                expiration_iso = trade_date
 
-            finally:
-                conn.close()
+                # fetch_skew_data returns a DataFrame sorted by snapshot_pt
+                df = _fetch_skew_data(trade_date, expiration_iso,
+                                      sorted([start_hhmm, target_hhmm]))
 
-            if start_row and target_row:
-                atm_s, call_s, put_s = _skews_from_row(start_row)
-                atm_t, call_t, put_t = _skews_from_row(target_row)
+                if df is not None and not df.empty and len(df) >= 2:
+                    df = df.sort_values('snapshot_pt')
+                    row_start  = df.iloc[0]
+                    row_target = df.iloc[-1]
 
-                ctx['context_iv_atm_0dte_pct']     = round(atm_s * 100.0, 4)
-                ctx['context_target_spx_price']    = (
-                    float(target_row.get('stock_price') or 0) or None
-                )
-                ctx['context_skew_delta_put_pct']  = _pct_change_pp(put_t, put_s)
-                ctx['context_skew_delta_call_pct'] = _pct_change_pp(call_t, call_s)
-                ctx['context_skew_delta_atm_iv']   = _pct_change_frac(atm_t, atm_s)
-            else:
-                log.warning(
-                    'recompute_context trade %s: rows not found for %s→%s on %s',
-                    trade_id, start_hhmm, target_hhmm, trade_date
-                )
+                    atm_start, call_start, put_start = _skews_from_row(row_start)
+                    atm_target, call_target, put_target = _skews_from_row(row_target)
 
-            # Minutes to session close (13:00 PT) from setup start
-            start_mins = start_dt.hour * 60 + start_dt.minute
-            ctx['context_minutes_to_close'] = max(0, 13 * 60 - start_mins)
+                    ctx['context_iv_atm_0dte_pct']     = round(atm_start * 100.0, 4)
+                    ctx['context_target_spx_price']    = float(row_target.get('stock_price') or 0) or None
+                    ctx['context_skew_delta_put_pct']  = _pct_change_pp(put_target, put_start)
+                    ctx['context_skew_delta_call_pct'] = _pct_change_pp(call_target, call_start)
+                    ctx['context_skew_delta_atm_iv']   = _pct_change_frac(atm_target, atm_start)
 
-        except Exception as e:
-            log.warning('Context computation error for trade %s: %s', trade_id, e)
+                # minutes to session close (13:00 PT) from setup start
+                start_mins = start_dt.hour * 60 + start_dt.minute
+                close_mins = 13 * 60   # 13:00 PT
+                ctx['context_minutes_to_close'] = max(0, close_mins - start_mins)
+
+            except Exception as e:
+                log.warning('Context computation error for trade %s: %s', trade_id, e)
 
     ctx['context_computed_at'] = datetime.now(timezone.utc)
 
@@ -764,4 +736,4 @@ def recompute_context(trade_id: int) -> dict:
     finally:
         conn.close()
 
-    return {'ok': True, 'trade': get_trade(trade_id), 'helpers_available': True}
+    return {'ok': True, 'trade': get_trade(trade_id), 'helpers_available': SKEW_HELPERS_AVAILABLE}
