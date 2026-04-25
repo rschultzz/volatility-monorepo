@@ -604,6 +604,13 @@ export default function PriceChart({
   onInteractionActiveChange,
   skewData = [],
   smileData = null,
+  // Snapshots and anchor controls
+  smileSnapshots = null,
+  activeBandsAnchorTime = null,
+  onBandsAnchorChange = null,
+  // Computed band levels to draw on chart (ES coords, basis-corrected)
+  // Shape: { shiftedStart, shiftedEnd, sigmaUpper, sigmaLower, shortPut, longPut, shortCall, longCall, anchorEs }
+  bandsLevels = null,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -612,6 +619,7 @@ export default function PriceChart({
   const liveTradeSeriesRef = useRef(null)
   const gexSeriesRefs = useRef([])
   const expectedMoveSeriesRefs = useRef([])
+  const bandsSeriesRefs = useRef([])
   const intervalRef = useRef(interval)
   const shiftedCandlesRef = useRef([])
   const dragRef = useRef({ active: false, lastY: 0 })
@@ -632,7 +640,7 @@ export default function PriceChart({
 
   const [localSelectedTimes, setLocalSelectedTimes] = useState(normalizeTimes(parentSelectedTimes))
   const selectedTimes = useMemo(() => normalizeTimes(parentSelectedTimes), [parentSelectedTimes])
-  
+
   const [sessionBands, setSessionBands] = useState([])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [draftGexMinAbsB, setDraftGexMinAbsB] = useState(() => coerceGexMinAbsB(gexMinAbsB, 10))
@@ -1654,6 +1662,100 @@ export default function PriceChart({
     expectedMoveSeriesRefs.current = nextRefs
   }, [normalizedExpectedMoveLevels])
 
+  // ── Sigma bands + condor strike lines ────────────────────────────────
+  // Renders ±1σ horizontal lines and 4 condor strike lines (ES coords) when
+  // an anchor is active. Pattern mirrors the expectedMoveLevels effect above.
+  // Colors: σ lines in cyan-ish, short strikes in amber, long strikes in muted gray.
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) {
+      console.log('[bands-render] no chart ref yet', { bandsLevels })
+      return
+    }
+
+    // Tear down any prior series
+    for (const series of bandsSeriesRefs.current) {
+      try {
+        chart.removeSeries(series)
+      } catch (err) {
+        // ignore
+      }
+    }
+    bandsSeriesRefs.current = []
+
+    if (!bandsLevels) {
+      console.log('[bands-render] no bandsLevels — clearing only')
+      return
+    }
+
+    console.log('[bands-render] drawing lines', bandsLevels)
+
+    const shiftedStart = Number(bandsLevels.shiftedStart)
+    const shiftedEnd = Number(bandsLevels.shiftedEnd)
+    if (!Number.isFinite(shiftedStart) || !Number.isFinite(shiftedEnd) || shiftedEnd <= shiftedStart) {
+      return
+    }
+
+    const baseOptions = {
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+      pointMarkersVisible: false,
+    }
+
+    // Neon-orange σ band lines — bright enough to stand out from candles, GEX zones,
+    // and the red expected-move lines. Strike lines use amber/gray to stay readable
+    // but distinguishable from σ bands.
+    const SIGMA_COLOR = '#ff6a00'         // neon orange
+    const SHORT_STRIKE_COLOR = '#fcd34d'  // amber — strike "defense" levels
+    const LONG_STRIKE_COLOR = '#94a3b8'   // muted gray — defensive wings
+
+    const linesToDraw = [
+      { value: bandsLevels.sigmaUpper, color: SIGMA_COLOR, width: 3, style: 0, label: '+1σ' },
+      { value: bandsLevels.sigmaLower, color: SIGMA_COLOR, width: 3, style: 0, label: '-1σ' },
+      { value: bandsLevels.shortCall,  color: SHORT_STRIKE_COLOR, width: 1, style: 2, label: 'Short Call' },
+      { value: bandsLevels.shortPut,   color: SHORT_STRIKE_COLOR, width: 1, style: 2, label: 'Short Put' },
+      { value: bandsLevels.longCall,   color: LONG_STRIKE_COLOR, width: 1, style: 2, label: 'Long Call' },
+      { value: bandsLevels.longPut,    color: LONG_STRIKE_COLOR, width: 1, style: 2, label: 'Long Put' },
+    ]
+
+    const nextRefs = []
+
+    for (const line of linesToDraw) {
+      const v = Number(line.value)
+      if (!Number.isFinite(v)) {
+        console.log('[bands-render] skipping line with bad value', line)
+        continue
+      }
+      try {
+        const opts = {
+          ...baseOptions,
+          color: line.color,
+          lineWidth: line.width,
+          lastValueVisible: true,
+          priceLineVisible: false,
+        }
+        // Only set lineStyle when explicitly non-solid; solid (0) is default.
+        // Skipping when 0 avoids any chance the API rejects 0 in some versions.
+        if (line.style && line.style !== 0) {
+          opts.lineStyle = line.style
+        }
+        const series = chart.addSeries(LineSeries, opts)
+        series.setData([
+          { time: shiftedStart, value: v },
+          { time: shiftedEnd, value: v },
+        ])
+        nextRefs.push(series)
+      } catch (err) {
+        console.error('[bands-render] failed to add line', line, err)
+      }
+    }
+
+    console.log(`[bands-render] added ${nextRefs.length} of ${linesToDraw.length} lines`)
+
+    bandsSeriesRefs.current = nextRefs
+  }, [bandsLevels])
+
   const handleFloatingMouseDown = (e) => {
     // Only drag if not clicking on collapse button
     if (e.target.closest('.smile-collapse-btn')) return
@@ -1848,24 +1950,24 @@ export default function PriceChart({
               overflow: 'hidden'
             }}
           >
-            <div style={{ 
-              display: 'flex', 
-              justifyContent: 'space-between', 
-              alignItems: 'center', 
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
               marginBottom: smileCollapsed ? '0' : '8px',
               height: smileCollapsed ? '32px' : 'auto'
             }}>
-              <div style={{ 
-                fontWeight: 800, 
-                color: smileCollapsed ? '#60a5fa' : '#94a3b8', 
-                fontSize: smileCollapsed ? '13px' : '11px', 
-                textTransform: 'uppercase', 
-                letterSpacing: '0.05em' 
+              <div style={{
+                fontWeight: 800,
+                color: smileCollapsed ? '#60a5fa' : '#94a3b8',
+                fontSize: smileCollapsed ? '13px' : '11px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em'
               }}>
                 {smileCollapsed ? 'SMILE' : 'Overview'}
               </div>
               {!smileCollapsed && (
-                <button 
+                <button
                   className="smile-collapse-btn"
                   onClick={toggleSmileCollapsed}
                   style={{
@@ -1890,14 +1992,17 @@ export default function PriceChart({
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                 {smileData && smileData.traces && smileData.traces.length > 0 && (
                   <div style={{ flex: '1', minHeight: 0, marginBottom: '4px' }}>
-                    <SmileChart 
-                      data={smileData} 
-                      width={smileWindowSize.width - 28} 
-                      height={Math.max(150, smileWindowSize.height - (skewData?.length ? (skewData.length * 25 + 80) : 60))} 
+                    <SmileChart
+                      data={smileData}
+                      width={smileWindowSize.width - 28}
+                      height={Math.max(150, smileWindowSize.height - (skewData?.length ? (skewData.length * 25 + 80) : 60))}
+                      snapshots={smileSnapshots}
+                      activeAnchorTime={activeBandsAnchorTime}
+                      onAnchorChange={onBandsAnchorChange}
                     />
                   </div>
                 )}
-                
+
                 <div style={{ flex: '0 0 auto', overflowY: 'auto' }}>
                   {skewData && skewData.length > 0 ? (
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>

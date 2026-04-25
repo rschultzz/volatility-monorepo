@@ -1691,6 +1691,7 @@ def _build_react_smile_payload(
     times_sorted = sorted(times or [])
     
     traces = []
+    snapshots = []  # NEW: per-snapshot metadata for downstream features (sigma bands, condor strikes)
     
     prev_row = None
     prev_stock = None
@@ -1729,6 +1730,35 @@ def _build_react_smile_payload(
                 stock_now = float(stock_val) if stock_val is not None and not pd.isna(stock_val) else None
                 ts_et = pt_minute_to_et(trade_date, hhmm_pt)
                 T_now = _years_to_exp(ts_et, expiration_date)
+
+                # ── NEW: surface snapshot metadata for sigma-band drawing ──
+                # Sanity-filter IV at the same threshold we use elsewhere (>100% = bad data)
+                atm_iv_pct_filtered = None
+                try:
+                    vol50 = row_now.get("vol50")
+                    if vol50 is not None and not pd.isna(vol50):
+                        candidate = float(vol50) * 100.0
+                        if 0 < candidate <= 100:
+                            atm_iv_pct_filtered = round(candidate, 4)
+                except Exception:
+                    pass
+
+                # Compute remaining minutes to 0DTE expiration for time-scaled sigma
+                mins_to_expiry = None
+                if trade_date == expiration_date:
+                    try:
+                        mins_to_expiry = _minutes_to_exp_0dte(ts_et)
+                    except Exception:
+                        pass
+
+                snapshots.append({
+                    "time": hhmm_pt,
+                    "label": f"{hhmm_pt} PT",
+                    "stock_price": round(stock_now, 4) if stock_now is not None else None,
+                    "atm_iv_pct": atm_iv_pct_filtered,
+                    "minutes_to_expiry": int(mins_to_expiry) if mins_to_expiry is not None else None,
+                    "is_live": False,
+                })
 
                 if expected_on and prev_row is not None and prev_stock is not None and prev_T is not None and stock_now is not None:
                     try:
@@ -1784,6 +1814,36 @@ def _build_react_smile_payload(
                     stock_live = float(live_row.get("stock_price")) if not pd.isna(live_row.get("stock_price")) else None
                     live_T = _years_to_exp(now_et, expiration_date)
 
+                    # ── NEW: surface live snapshot metadata ──
+                    live_iv_filtered = None
+                    try:
+                        vol50_live = live_row.get("vol50")
+                        if vol50_live is not None and not pd.isna(vol50_live):
+                            candidate = float(vol50_live) * 100.0
+                            if 0 < candidate <= 100:
+                                live_iv_filtered = round(candidate, 4)
+                    except Exception:
+                        pass
+
+                    live_mins = None
+                    try:
+                        live_mins = _minutes_to_exp_0dte(now_et)
+                    except Exception:
+                        pass
+
+                    # Use a "Live" time label aligned with the now-pt timestamp so the
+                    # frontend can match it to the most recent ES bar.
+                    now_pt = now_et.astimezone(ZoneInfo("America/Los_Angeles"))
+                    live_hhmm = now_pt.strftime("%H:%M")
+                    snapshots.append({
+                        "time": live_hhmm,
+                        "label": "Live",
+                        "stock_price": round(stock_live, 4) if stock_live is not None else None,
+                        "atm_iv_pct": live_iv_filtered,
+                        "minutes_to_expiry": int(live_mins) if live_mins is not None else None,
+                        "is_live": True,
+                    })
+
                     if expected_on and ref_row is not None and ref_stock is not None and ref_T is not None and stock_live is not None:
                         try:
                             labels_exp_live, y_exp_live, atm_exp_pct_live = _expected_curve_shifted(
@@ -1807,7 +1867,7 @@ def _build_react_smile_payload(
                         except Exception: pass
         except Exception: pass
 
-    return {"traces": traces}, 200
+    return {"traces": traces, "snapshots": snapshots}, 200
 
 
 def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
