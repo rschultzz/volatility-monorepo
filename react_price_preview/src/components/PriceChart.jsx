@@ -8,6 +8,7 @@ import {
 } from 'lightweight-charts'
 import SmileChart from './SmileChart'
 import SignalPanel from './SignalPanel'
+import TradeAnnotationPanel from './TradeAnnotationPanel'
 
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
@@ -662,6 +663,53 @@ export default function PriceChart({
     return false
   })
   const smileResizeRef = useRef(null)
+
+  // ── Trade annotation mode ─────────────────────────────────────
+  const [annotationState, setAnnotationState] = useState(null)
+  const annotationStateRef = useRef(null)
+
+  // Poll annotation state every 1.5s
+  useEffect(() => {
+    let cancelled = false
+    async function poll() {
+      try {
+        const res = await fetch('/api/trade-log/annotation-state')
+        const data = await res.json()
+        if (cancelled) return
+        const next = (data.ok && data.state) ? data.state : null
+        annotationStateRef.current = next
+        setAnnotationState(next)
+      } catch { /* non-critical — silently skip */ }
+    }
+    poll()
+    const id = setInterval(poll, 1500)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
+  // Clear annotation mode when user navigates to a different trade date
+  useEffect(() => {
+    const ann = annotationStateRef.current
+    if (!ann || !tradeDate) return
+    if (ann.trade_date !== tradeDate) {
+      fetch('/api/trade-log/annotation-state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }).catch(() => {})
+      annotationStateRef.current = null
+      setAnnotationState(null)
+    }
+  }, [tradeDate])
+
+  function clearAnnotationState() {
+    fetch('/api/trade-log/annotation-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }).catch(() => {})
+    annotationStateRef.current = null
+    setAnnotationState(null)
+  }
 
   useEffect(() => {
     if (!stageRef.current || (smileWindowSize.width > 0 && smileWindowSize.height > 0)) return
@@ -1928,6 +1976,17 @@ export default function PriceChart({
               </>
             )}
           </div>
+
+          {/* Trade Annotation Panel — appears when a Trade Log trade is being annotated */}
+          {annotationState && (
+            <TradeAnnotationPanel
+              annotationState={annotationState}
+              selectedTimes={localSelectedTimes}
+              tradeDate={tradeDate}
+              onSaved={clearAnnotationState}
+              onCancel={clearAnnotationState}
+            />
+          )}
 
           {/* Signal Panel — separate floating window, self-managed fetch */}
           <SignalPanel

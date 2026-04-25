@@ -15,6 +15,17 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 // ── Formatting helpers ────────────────────────────────────────
 
+function fmtHHMM(isoStr) {
+  // Returns HH:MM in PT from an ISO datetime string
+  if (!isoStr) return ''
+  try {
+    return new Date(isoStr).toLocaleTimeString('en-US', {
+      timeZone: 'America/Los_Angeles',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+  } catch { return '' }
+}
+
 function fmtTime(isoStr) {
   if (!isoStr) return '—'
   try {
@@ -282,7 +293,57 @@ function DetailPanel({ trade, onClose, onSaved }) {
   const [ann, setAnn]         = useState(EMPTY_ANNOTATION)
   const [saving, setSaving]   = useState(false)
   const [recomp, setRecomp]   = useState(false)
+  const [viewingChart, setViewingChart] = useState(false)
   const [error, setError]     = useState('')
+
+  async function handleViewOnChart() {
+    if (!trade) return
+    setViewingChart(true)
+    setError('')
+    try {
+      // 1. Drive Dash to switch to Price Chart tab + highlight bars.
+      //    If the trade has saved setup times, pass them as start/target
+      //    so Dash automatically adds them to the timeslice list and the
+      //    smile/skew data loads immediately.
+      await fetch('/api/backtests-v2/select-trade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          trade_date:        trade.trade_date,
+          start_ts_pt:       fmtHHMM(trade.setup_start_ts_pt)  || '',
+          target_ts_pt:      fmtHHMM(trade.setup_target_ts_pt) || '',
+          signal_ts_pt:      '',
+          trade_entry_ts_pt: fmtHHMM(trade.entry_ts_pt),
+          trade_exit_ts_pt:  fmtHHMM(trade.exit_ts_pt),
+        }),
+      })
+      // 2. Set annotation state so Price Chart shows the annotation panel
+      await fetch('/api/trade-log/annotation-state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          trade_id:           trade.id,
+          trade_date:         trade.trade_date,
+          entry_ts_pt:        trade.entry_ts_pt,
+          exit_ts_pt:         trade.exit_ts_pt,
+          entry_hhmm:         fmtHHMM(trade.entry_ts_pt),
+          exit_hhmm:          fmtHHMM(trade.exit_ts_pt),
+          direction:          trade.direction,
+          symbol:             trade.symbol,
+          entry_price:        trade.entry_price,
+          exit_price:         trade.exit_price,
+          realized_pts:       trade.realized_pts,
+          net_pnl_usd:        trade.net_pnl_usd,
+          setup_start_ts_pt:  trade.setup_start_ts_pt,
+          setup_target_ts_pt: trade.setup_target_ts_pt,
+        }),
+      })
+    } catch (e) {
+      setError('Could not open chart: ' + e.message)
+    } finally {
+      setViewingChart(false)
+    }
+  }
 
   // Populate form whenever selected trade changes
   useEffect(() => {
@@ -370,14 +431,50 @@ function DetailPanel({ trade, onClose, onSaved }) {
             </span>
           </div>
         </div>
-        <button
-          className="ghost-button"
-          onClick={onClose}
-          style={{ padding: '4px 8px', fontSize: 12 }}
-        >
-          ✕
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+          <button
+            className="ghost-button"
+            onClick={onClose}
+            style={{ padding: '4px 8px', fontSize: 12 }}
+          >
+            ✕
+          </button>
+          <button
+            onClick={handleViewOnChart}
+            disabled={viewingChart}
+            title="Jump to Price Chart with this trade's bars highlighted and open the annotation panel"
+            style={{
+              padding: '5px 10px', borderRadius: 10, fontSize: 11, fontWeight: 700,
+              background: 'rgba(37,99,235,0.15)', border: '1px solid #2563eb',
+              color: '#93c5fd', cursor: 'pointer', whiteSpace: 'nowrap',
+            }}
+          >
+            {viewingChart ? '…' : '📈 View on Chart'}
+          </button>
+        </div>
       </div>
+
+      {/* Saved Setup — prominent display of stored annotation times */}
+      {(trade.setup_start_ts_pt || trade.setup_target_ts_pt) && (
+        <div style={{
+          background: 'rgba(37,99,235,0.08)', border: '1px solid rgba(37,99,235,0.25)',
+          borderRadius: 10, padding: '10px 14px',
+        }}>
+          <div style={{ color: '#93c5fd', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>
+            Saved Setup
+            <span style={{ color: '#334155', fontWeight: 400, marginLeft: 6 }}>click View on Chart to load these bars</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <SetupTimeBox label="Start" isoStr={trade.setup_start_ts_pt} />
+            <SetupTimeBox label="Target" isoStr={trade.setup_target_ts_pt} />
+          </div>
+          {trade.setup_direction && (
+            <div style={{ marginTop: 6, fontSize: 11, color: '#64748b' }}>
+              Direction: <span style={{ color: '#e5e7eb', fontWeight: 600 }}>{trade.setup_direction}</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Fill summary (read-only) */}
       <div style={{
@@ -458,27 +555,91 @@ function DetailPanel({ trade, onClose, onSaved }) {
         </div>
       </div>
 
-      {/* Computed context (read-only) */}
+      {/* Market Context */}
       {ctx.context_computed_at && (
         <div>
           <div style={{ color: '#93c5fd', fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 10 }}>
             Market Context
-            <span style={{ color: '#475569', fontWeight: 400, marginLeft: 8 }}>
+            <span style={{ color: '#475569', fontWeight: 400, marginLeft: 8, fontSize: 10 }}>
               computed {fmtTime(ctx.context_computed_at)} PT
             </span>
           </div>
+
+          {/* Primary skew deltas — most actionable */}
           <div style={{
-            display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8,
+            background: '#020617', border: '1px solid #1f2937',
+            borderRadius: 10, padding: '10px 14px', marginBottom: 8,
           }}>
-            <CtxCard label="IV ATM 0DTE" value={fmtIv(ctx.context_iv_atm_0dte_pct)} />
-            <CtxCard label="SPX @ Target" value={ctx.context_target_spx_price?.toFixed(2)} />
-            <CtxCard label="Min to Close" value={ctx.context_minutes_to_close?.toFixed(0)} />
-            <CtxCard label="Δ Put Skew" value={fmtPct(ctx.context_skew_delta_put_pct)} color={ctx.context_skew_delta_put_pct > 0 ? '#4ade80' : '#f87171'} />
-            <CtxCard label="Δ Call Skew" value={fmtPct(ctx.context_skew_delta_call_pct)} color={ctx.context_skew_delta_call_pct > 0 ? '#4ade80' : '#f87171'} />
-            <CtxCard label="Δ ATM IV" value={fmtPct(ctx.context_skew_delta_atm_iv)} />
+            <div style={{ color: '#64748b', fontSize: 10, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Skew Deltas (Start → Target)
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+              <SkewDeltaCard label="Δ Put Skew"  value={ctx.context_skew_delta_put_pct}  unit="%" />
+              <SkewDeltaCard label="Δ Call Skew" value={ctx.context_skew_delta_call_pct} unit="%" />
+              <SkewDeltaCard label="Δ ATM IV"    value={ctx.context_skew_delta_atm_iv}   unit="%" />
+            </div>
+          </div>
+
+          {/* Secondary context */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+            <CtxCard label="IV ATM 0DTE"   value={ctx.context_iv_atm_0dte_pct != null ? ctx.context_iv_atm_0dte_pct.toFixed(2) + '%' : null} />
+            <CtxCard label="SPX @ Target"  value={ctx.context_target_spx_price?.toFixed(2)} />
+            <CtxCard label="Min to Close"  value={ctx.context_minutes_to_close?.toFixed(0)} />
           </div>
         </div>
       )}
+
+      {/* If no context yet, prompt to recompute */}
+      {!ctx.context_computed_at && (trade.setup_start_ts_pt || trade.setup_target_ts_pt) && (
+        <div style={{
+          border: '1px dashed #334155', borderRadius: 10, padding: '10px 14px',
+          color: '#64748b', fontSize: 12, textAlign: 'center',
+        }}>
+          Setup times saved — click <strong style={{ color: '#93c5fd' }}>⟳ Recompute Context</strong> to calculate skew deltas
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SetupTimeBox({ label, isoStr }) {
+  const hhmm = isoStr ? (() => {
+    try {
+      return new Date(isoStr).toLocaleTimeString('en-US', {
+        timeZone: 'America/Los_Angeles', hour: '2-digit', minute: '2-digit', hour12: false,
+      })
+    } catch { return '—' }
+  })() : '—'
+  const dateStr = isoStr ? (() => {
+    try {
+      return new Date(isoStr).toLocaleDateString('en-US', {
+        timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric',
+      })
+    } catch { return '' }
+  })() : ''
+  return (
+    <div style={{
+      background: '#0f172a', border: '1px solid #2563eb33',
+      borderRadius: 8, padding: '6px 10px',
+    }}>
+      <div style={{ color: '#64748b', fontSize: 10, marginBottom: 2 }}>{label}</div>
+      <div style={{ color: '#93c5fd', fontWeight: 700, fontSize: 15 }}>{hhmm}</div>
+      {dateStr && <div style={{ color: '#475569', fontSize: 10 }}>{dateStr} PT</div>}
+    </div>
+  )
+}
+
+function SkewDeltaCard({ label, value, unit = '' }) {
+  const n = value != null ? Number(value) : null
+  const color = n == null ? '#475569' : n > 0 ? '#4ade80' : n < 0 ? '#f87171' : '#94a3b8'
+  const display = n == null ? '—' : (n > 0 ? '+' : '') + n.toFixed(2) + unit
+  return (
+    <div style={{
+      background: '#0f172a', border: `1px solid ${n == null ? '#1f2937' : color + '33'}`,
+      borderRadius: 8, padding: '8px 10px', textAlign: 'center',
+    }}>
+      <div style={{ color: '#64748b', fontSize: 10, marginBottom: 4 }}>{label}</div>
+      <div style={{ color, fontWeight: 800, fontSize: 16, fontVariantNumeric: 'tabular-nums' }}>{display}</div>
     </div>
   )
 }

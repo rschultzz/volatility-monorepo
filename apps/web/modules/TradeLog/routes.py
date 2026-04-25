@@ -21,6 +21,30 @@ log = logging.getLogger(__name__)
 
 trade_log_bp = Blueprint('trade_log', __name__, url_prefix='/api/trade-log')
 
+# ── In-memory annotation state ────────────────────────────────
+# Holds the trade currently being annotated on the Price Chart.
+# Keyed as a plain dict; reset to {} to clear.
+# Fine for single-user or small-team use — no DB persistence needed.
+_annotation_state: dict = {}
+
+
+@trade_log_bp.get('/annotation-state')
+def get_annotation_state():
+    """GET /api/trade-log/annotation-state — returns active annotation trade or null."""
+    return jsonify({'ok': True, 'state': _annotation_state or None})
+
+
+@trade_log_bp.post('/annotation-state')
+def set_annotation_state():
+    """
+    POST /api/trade-log/annotation-state
+    Body: trade info dict to enter annotation mode, or {} to clear.
+    """
+    global _annotation_state
+    body = request.get_json(silent=True) or {}
+    _annotation_state = body if body.get('trade_id') else {}
+    return jsonify({'ok': True})
+
 
 # ── Upload ────────────────────────────────────────────────────
 
