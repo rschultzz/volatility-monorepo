@@ -554,6 +554,8 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary }) {
       }}>
         Baselines: <strong>Range/1σ ≈ 1.60</strong> for random walk, <strong>68%</strong> inside ±1σ,
         <strong> 95%</strong> inside ±2σ under normality. Green cells beat baseline.
+        Implied σ is capped at time-to-session-close per trade, so ratios are honest across setups
+        with different amounts of time remaining.
       </div>
 
       <div style={{

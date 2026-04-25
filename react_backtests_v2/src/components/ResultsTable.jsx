@@ -96,6 +96,13 @@ const COLUMN_DATA_MAP = {
   // SPX cash index level at target touch (used for condor strike sizing)
   target_spx_price: (row) => row.target_spx_price,
 
+  // Minutes remaining in session at target touch
+  minutes_to_close: (row) => row.minutes_to_close,
+
+  // Skew deltas at target touch vs predicted (the signal that fired study-mode)
+  skew_delta_put:  (row) => row.skew_delta_put_pct,
+  skew_delta_call: (row) => row.skew_delta_call_pct,
+
   // Realized vs implied at 120m (short-vol lens)
   rvi_ratio_120m: (row) => row.realized_vs_implied?.['120m']?.close_over_1sigma,
   rvi_inside_1s_120m: (row) => row.realized_vs_implied?.['120m']?.inside_1sigma,
@@ -402,6 +409,41 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
         const v = row.target_spx_price;
         if (v === null || v === undefined) return '—';
         return <span>{fmt(v, 2)}</span>;
+      }
+
+      // Minutes remaining in session. Color-coded for tradable window:
+      // red if < 30m (tight theta window, may not be worth it)
+      // amber if 30-60m (usable but compressed)
+      // green if 60m+ (ample time for a 0DTE condor to work)
+      case 'minutes_to_close': {
+        const v = row.minutes_to_close;
+        if (v === null || v === undefined) return '—';
+        const color = v < 30 ? '#fca5a5' : v < 60 ? '#fcd34d' : '#86efac';
+        return <span style={{ color, fontWeight: 600 }}>{v}</span>;
+      }
+
+      // Skew delta on puts (observed vs predicted, in %).
+      // For up-move shorts, higher positive = stronger "dealers bidding puts" signal.
+      // Color-coded by magnitude, sign-neutral (both directions informative).
+      case 'skew_delta_put': {
+        const v = row.skew_delta_put_pct;
+        if (v === null || v === undefined) return '—';
+        const mag = Math.abs(v);
+        const color = mag >= 100 ? '#86efac' : mag >= 50 ? '#fcd34d' : '#94a3b8';
+        const sign = v > 0 ? '+' : '';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}%</span>;
+      }
+
+      // Skew delta on calls (observed vs predicted, in %).
+      // For up-move shorts, threshold is the ceiling — large positive values
+      // mean call-side is also being bid (less clean signal).
+      case 'skew_delta_call': {
+        const v = row.skew_delta_call_pct;
+        if (v === null || v === undefined) return '—';
+        const mag = Math.abs(v);
+        const color = mag >= 100 ? '#fcd34d' : '#94a3b8';
+        const sign = v > 0 ? '+' : '';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}%</span>;
       }
 
       // Realized vs implied at 120m: |close| / implied_1sigma

@@ -3,6 +3,7 @@ import SettingsModal from './components/SettingsModal';
 import ResultsTable from './components/ResultsTable';
 import DiagnosticsPanel from './components/DiagnosticsPanel';
 import ColumnSettingsModal from './components/ColumnSettingsModal';
+import TradeLog from './components/TradeLog';   // ← NEW
 
 function isoDateOffset(days) {
   const d = new Date();
@@ -90,7 +91,6 @@ const DEFAULT_COLUMNS = [
   { id: 'prior_down_ratio', label: 'Down/Up Ratio', visible: true },
   { id: 'start_pct_range', label: 'Start % of Range', visible: true },
 
-  // ── Study mode columns (hidden by default; auto-shown in study mode) ──
   { id: 'skew_passed', label: 'Skew Passed', visible: false },
   { id: 'target_price', label: 'Target Px', visible: false },
 
@@ -121,18 +121,19 @@ const DEFAULT_COLUMNS = [
   { id: 'iv_atm_0dte', label: 'IV ATM 0DTE', visible: false, className: 'study-col' },
 
   { id: 'target_spx_price', label: 'SPX @ Target', visible: false, className: 'study-col' },
+  { id: 'minutes_to_close', label: 'Min Remaining', visible: false, className: 'study-col' },
+  { id: 'skew_delta_put',   label: 'ΔPut Skew %',  visible: false, className: 'study-col' },
+  { id: 'skew_delta_call',  label: 'ΔCall Skew %', visible: false, className: 'study-col' },
 
   { id: 'rvi_ratio_120m',     label: '|Close|/1σ 120m', visible: false, className: 'study-col' },
   { id: 'rvi_inside_1s_120m', label: 'Inside ±1σ 120m', visible: false, className: 'study-col' },
 
-  // Hypothetical 120m iron condor strikes (±1σ from target-touch anchor)
   { id: 'condor_short_put',  label: 'Short Put',  visible: false, className: 'study-col' },
   { id: 'condor_long_put',   label: 'Long Put',   visible: false, className: 'study-col' },
   { id: 'condor_short_call', label: 'Short Call', visible: false, className: 'study-col' },
   { id: 'condor_long_call',  label: 'Long Call',  visible: false, className: 'study-col' },
 ];
 
-// Columns that represent managed-mode-only data (hidden in study mode)
 const MANAGED_ONLY_COLUMNS = new Set([
   'signal_time', 'signal_px', 'put_skew', 'call_skew',
   'trade', 'range_high', 'range_low', 'entry_band',
@@ -143,7 +144,6 @@ const MANAGED_ONLY_COLUMNS = new Set([
   'reason', 'consol_mins', 'setup',
 ]);
 
-// Columns that are study-mode-specific (shown only in study mode)
 const STUDY_ONLY_COLUMNS = new Set([
   'skew_passed', 'target_price',
   'fwd_30m_mfe',  'fwd_30m_mae',  'fwd_30m_close',
@@ -154,6 +154,8 @@ const STUDY_ONLY_COLUMNS = new Set([
   'fwd_eod_mfe',  'fwd_eod_mae',  'fwd_eod_close',
   'iv_atm_0dte',
   'target_spx_price',
+  'minutes_to_close',
+  'skew_delta_put', 'skew_delta_call',
   'rvi_ratio_120m', 'rvi_inside_1s_120m',
   'condor_short_put', 'condor_long_put', 'condor_short_call', 'condor_long_call',
 ]);
@@ -200,7 +202,6 @@ function normalizeNumericSettings(nextSettings) {
     longTrailActivateProfitPts: Number(nextSettings.longTrailActivateProfitPts),
     longTrailingStopPts: Number(nextSettings.longTrailingStopPts),
     longTakeProfitPts: Number(nextSettings.longTakeProfitPts),
-    // Pass through non-numeric fields
     bypassFilters: nextSettings.bypassFilters || [],
     executionMode: nextSettings.executionMode || 'managed',
     forwardHorizonsMinutes: Array.isArray(nextSettings.forwardHorizonsMinutes)
@@ -226,7 +227,7 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isColumnsOpen, setIsColumnsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('diagnostics');
-  
+
   const [columns, setColumns] = useState(() => {
     const saved = localStorage.getItem(COLUMNS_STORAGE_KEY);
     if (saved) {
@@ -261,22 +262,13 @@ export default function App() {
     localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(columns));
   }, [columns]);
 
-  // When in study mode: auto-show study columns and auto-hide managed-only columns.
-  // When in managed mode: auto-hide study columns and restore managed columns to user preference.
-  // This doesn't mutate the stored `columns` state — user's visibility preferences are preserved.
   const effectiveExecutionMode = settings?.executionMode || 'managed';
   const effectiveColumns = useMemo(() => {
     const isStudy = effectiveExecutionMode === 'study_target_hits';
     return columns.map(col => {
-      if (isStudy && STUDY_ONLY_COLUMNS.has(col.id)) {
-        return { ...col, visible: true };
-      }
-      if (isStudy && MANAGED_ONLY_COLUMNS.has(col.id)) {
-        return { ...col, visible: false };
-      }
-      if (!isStudy && STUDY_ONLY_COLUMNS.has(col.id)) {
-        return { ...col, visible: false };
-      }
+      if (isStudy && STUDY_ONLY_COLUMNS.has(col.id))    return { ...col, visible: true };
+      if (isStudy && MANAGED_ONLY_COLUMNS.has(col.id))  return { ...col, visible: false };
+      if (!isStudy && STUDY_ONLY_COLUMNS.has(col.id))   return { ...col, visible: false };
       return col;
     });
   }, [columns, effectiveExecutionMode]);
@@ -316,16 +308,12 @@ export default function App() {
         if (!isMounted) return;
         setError(err.message || 'Could not load strategies');
       } finally {
-        if (isMounted) {
-          setBootstrapping(false);
-        }
+        if (isMounted) setBootstrapping(false);
       }
     }
 
     loadStrategies();
-    return () => {
-      isMounted = false;
-    };
+    return () => { isMounted = false; };
   }, []);
 
   function updateDraft(name, value) {
@@ -491,48 +479,55 @@ export default function App() {
     }
   }
 
+  // Trade Log tab doesn't use the strategy toolbar, so hide it when active
+  const showStrategyToolbar = activeTab !== 'trade_log';
+
   return (
     <div className="page">
       <div className="workspace-card">
         {error ? <div className="error-banner">{error}</div> : null}
 
-        <div className="results-header" style={{ alignItems: 'center', marginBottom: 0, padding: '4px 0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1 }}>
-            <select
-              value={selectedStrategyKey}
-              onChange={(e) => applyStrategyDefaults(e.target.value)}
-              disabled={bootstrapping || loading}
-              style={{
-                backgroundColor: '#111827',
-                border: '1px solid #374151',
-                color: 'white',
-                borderRadius: '6px',
-                padding: '6px 10px',
-                fontSize: '13px'
-              }}
-            >
-              {strategies.map((s) => (
-                <option key={s.key} value={s.key}>{s.displayName || s.label}</option>
-              ))}
-            </select>
-          </div>
-          
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => setIsColumnsOpen(true)}>
-              ⚙️ Columns
-            </button>
-            <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => setIsSettingsOpen(true)}>
-              Settings
-            </button>
-            <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={handleSaveDefaults} disabled={savingDefaults}>
-              {savingDefaults ? 'Saving…' : 'Save'}
-            </button>
-            <button className="primary-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => runScan(settings)} disabled={loading}>
-              {loading ? 'Running…' : 'Run Scan'}
-            </button>
-          </div>
-        </div>
+        {/* Strategy selector + action buttons — hidden on Trade Log tab */}
+        {showStrategyToolbar && (
+          <div className="results-header" style={{ alignItems: 'center', marginBottom: 0, padding: '4px 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1 }}>
+              <select
+                value={selectedStrategyKey}
+                onChange={(e) => applyStrategyDefaults(e.target.value)}
+                disabled={bootstrapping || loading}
+                style={{
+                  backgroundColor: '#111827',
+                  border: '1px solid #374151',
+                  color: 'white',
+                  borderRadius: '6px',
+                  padding: '6px 10px',
+                  fontSize: '13px'
+                }}
+              >
+                {strategies.map((s) => (
+                  <option key={s.key} value={s.key}>{s.displayName || s.label}</option>
+                ))}
+              </select>
+            </div>
 
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => setIsColumnsOpen(true)}>
+                ⚙️ Columns
+              </button>
+              <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => setIsSettingsOpen(true)}>
+                Settings
+              </button>
+              <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={handleSaveDefaults} disabled={savingDefaults}>
+                {savingDefaults ? 'Saving…' : 'Save'}
+              </button>
+              <button className="primary-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => runScan(settings)} disabled={loading}>
+                {loading ? 'Running…' : 'Run Scan'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Tab bar */}
         <div className="tab-bar">
           <button
             className={`tab-button ${activeTab === 'diagnostics' ? 'active' : ''}`}
@@ -548,6 +543,12 @@ export default function App() {
             {rows.length > 0 && (
               <span className="tab-badge">{rows.length}</span>
             )}
+          </button>
+          <button
+            className={`tab-button ${activeTab === 'trade_log' ? 'active' : ''}`}
+            onClick={() => setActiveTab('trade_log')}
+          >
+            Trade Log
           </button>
         </div>
 
@@ -568,14 +569,7 @@ export default function App() {
                 <span style={{ color: '#64748b', fontSize: 12 }}>{rows.length} trades found</span>
                 <button
                   className="ghost-button"
-                  style={{
-                    padding: '4px 10px',
-                    fontSize: '12px',
-                    marginLeft: '4px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px'
-                  }}
+                  style={{ padding: '4px 10px', fontSize: '12px', marginLeft: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}
                   onClick={() => tableRef.current?.downloadCSV()}
                   disabled={!rows.length}
                 >
@@ -592,6 +586,11 @@ export default function App() {
               columns={effectiveColumns}
             />
           </div>
+        )}
+
+        {/* Trade Log tab — TradeLog is fully self-contained */}
+        {activeTab === 'trade_log' && (
+          <TradeLog />
         )}
       </div>
 

@@ -1002,31 +1002,45 @@ def _build_study_row(
     iv_atm = None
     if entry_iv is not None:
         iv_atm = entry_iv.get("atm_0dte_pct")
+
+    # Minutes remaining from target-touch bar to RTH close (13:00 PT).
+    # Used to cap both the condor horizon AND the realized-vs-implied
+    # calculations — keeps both sides of ratio comparisons consistent with
+    # the clipped window _measure_forward_outcomes actually measured.
+    minutes_to_close = _minutes_to_session_close(target_row.get("ts_pt"))
+
     realized_vs_implied = _compute_realized_vs_implied(
         forward_outcomes=forward,
         iv_atm_0dte_pct=iv_atm,
         anchor_price=float(anchor_price),
         horizons_minutes=forward_horizons_minutes,
+        minutes_to_close=minutes_to_close,
     )
 
-    # Hypothetical 120m iron condor at ±1σ (short-vol strike sizing).
+    # Hypothetical iron condor at ±1σ, sized to the ACTUAL tradable window:
+    # capped at min(120, minutes_to_close). For a trade with 25 min left,
+    # this produces strikes sized for 25 minutes, not 120 — matching what
+    # would actually expire at the session close.
+    #
     # Anchor is SPX cash level at target touch (from ORATS monies stock_price),
-    # falling back to ES target price if SPX data is missing. IV is target-touch
-    # ATM IV. This gives traders concrete strikes to paste into a broker platform
-    # (OptionStrat, Thinkorswim, etc.) for premium-collection verification on
-    # actual SPX options, not ES-basis-shifted approximations.
+    # falling back to ES target price if SPX data is missing. This gives
+    # strikes in SPX cash coordinates for pasting into broker platforms.
     condor_anchor = target_spx_price if target_spx_price is not None else float(anchor_price)
+    condor_horizon = 120
+    if minutes_to_close is not None and minutes_to_close > 0:
+        condor_horizon = min(120, int(minutes_to_close))
     hypothetical_condor = _compute_hypothetical_condor(
         anchor_price=float(condor_anchor),
         iv_atm_0dte_pct=iv_atm,
-        horizon_minutes=120,
+        horizon_minutes=condor_horizon,
         wing_width_pts=float(condor_wing_width_pts),
         strike_increment=5.0,
     )
-    # Tag whether we used the SPX anchor (accurate) or fell back to ES
+    # Tag whether we used the SPX anchor and the effective horizon used
     if hypothetical_condor.get("short_put_strike") is not None:
         hypothetical_condor["anchor_source"] = "SPX" if target_spx_price is not None else "ES_fallback"
         hypothetical_condor["anchor_price"] = round(float(condor_anchor), 2)
+        hypothetical_condor["effective_horizon_minutes"] = int(condor_horizon)
 
     return {
         "trade_date": str(trade_date),
@@ -1069,6 +1083,11 @@ def _build_study_row(
         # Used as anchor for SPX option strike sizing. ES futures price is
         # available via target_price above.
         "target_spx_price": target_spx_price,
+
+        # Minutes remaining in session at target touch (anchor → 13:00 PT).
+        # Used to cap condor horizon and realized-vs-implied aggregate math.
+        # Lets traders see at a glance how long the actual trade window was.
+        "minutes_to_close": minutes_to_close,
 
         # Realized vs implied movement per horizon (short-vol lens).
         # Keyed by horizon label, each horizon has implied_1sigma_pts, close_over_1sigma,
@@ -1139,17 +1158,56 @@ def _implied_sigma_move(iv_pct: Optional[float], spot: Optional[float], minutes:
         return None
 
 
+def _minutes_to_session_close(ts_pt_label: Optional[str]) -> Optional[int]:
+    """
+    Given a PT timestamp label (e.g. "2025-11-13 12:35:00" or "12:35:00"),
+    return minutes remaining until RTH close (13:00 PT).
+
+    Returns None if the label can't be parsed. Returns 0 if already past close.
+    """
+    if not ts_pt_label:
+        return None
+    try:
+        s = str(ts_pt_label).strip()
+        # Try to find "HH:MM" in the string — works for either full datetime or bare time
+        # Handles formats like: "2025-11-13 12:35:00", "2025-11-13T12:35:00", "12:35:00"
+        time_part = s
+        if " " in s:
+            time_part = s.split(" ", 1)[1]
+        elif "T" in s:
+            time_part = s.split("T", 1)[1]
+        # Extract HH:MM
+        hh = int(time_part[:2])
+        mm = int(time_part[3:5])
+        minutes_into_day = hh * 60 + mm
+        close_minutes_into_day = 13 * 60  # 13:00 PT
+        remaining = close_minutes_into_day - minutes_into_day
+        return max(0, int(remaining))
+    except Exception:
+        return None
+
+
 def _compute_realized_vs_implied(
     forward_outcomes: Dict[str, Any],
     iv_atm_0dte_pct: Optional[float],
     anchor_price: float,
     horizons_minutes: tuple[int, ...],
+    minutes_to_close: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     For each horizon, compare realized price movement to implied 1-sigma move.
 
+    If `minutes_to_close` is provided and is less than a given horizon, the
+    effective horizon is capped to minutes_to_close for BOTH sides of the
+    ratio. This keeps the realized side (which _measure_forward_outcomes
+    already clips at 13:00 PT) and the implied side consistent — we compare
+    realized movement over the actual window to implied sigma over that same
+    window, using the market's IV quote scaled appropriately.
+
     Returns a dict keyed by horizon label ("30m", "60m", ..., "eod") with:
       - implied_1sigma_pts: expected 1-sigma absolute price move
+      - effective_minutes: minute window actually used (may be less than
+        the nominal horizon if clipped by session close)
       - close_abs_pts: |close_pts| at that horizon
       - close_over_1sigma: |close| / implied_1sigma (<1 = realized tighter than priced)
       - range_pts: MFE + MAE (band price traveled)
@@ -1165,6 +1223,7 @@ def _compute_realized_vs_implied(
     """
     blank_horizon = {
         "implied_1sigma_pts": None,
+        "effective_minutes": None,
         "close_abs_pts": None,
         "close_over_1sigma": None,
         "range_pts": None,
@@ -1186,7 +1245,17 @@ def _compute_realized_vs_implied(
             out[key] = dict(blank_horizon)
             continue
 
-        impl = _implied_sigma_move(iv_atm_0dte_pct, anchor_price, m)
+        # Cap the effective horizon at minutes_to_close. This is what the
+        # forward_outcomes measurement already did (it stops at 13:00 PT),
+        # so the implied sigma must match for a fair ratio comparison.
+        effective_m = m
+        if minutes_to_close is not None and minutes_to_close > 0:
+            effective_m = min(m, int(minutes_to_close))
+        if effective_m <= 0:
+            out[key] = dict(blank_horizon)
+            continue
+
+        impl = _implied_sigma_move(iv_atm_0dte_pct, anchor_price, effective_m)
         if impl is None or impl <= 0:
             out[key] = dict(blank_horizon)
             continue
@@ -1200,6 +1269,7 @@ def _compute_realized_vs_implied(
 
         out[key] = {
             "implied_1sigma_pts": round(impl, 2),
+            "effective_minutes":  int(effective_m),
             "close_abs_pts":      None if close_abs is None else round(close_abs, 2),
             "close_over_1sigma":  None if close_abs is None else round(close_abs / impl, 3),
             "range_pts":          None if rng is None else round(rng, 2),
@@ -2769,6 +2839,17 @@ def _day_zone_results(
                             effective_kept = skew_passed
 
                         if effective_kept:
+                            # Liquidity filter: skip setups where less than 15 minutes
+                            # remain in the session. Bid/ask on 0DTE options widens
+                            # dramatically in the final minutes, and the whole trade
+                            # thesis (sell premium, let theta work) falls apart when
+                            # there isn't enough time for meaningful theta capture.
+                            _mtc_check = _minutes_to_session_close(day_rows[hit_idx].get("ts_pt"))
+                            if _mtc_check is not None and _mtc_check < 15:
+                                # Skip emission for this setup; count it as a liquidity drop.
+                                # Do not break — fall through to next pivot search.
+                                break
+
                             study_row = _build_study_row(
                                 trade_date=trade_date,
                                 day_rows=day_rows,
@@ -3106,6 +3187,11 @@ def _day_zone_results(
                             effective_kept = skew_passed
 
                         if effective_kept:
+                            # Liquidity filter: skip setups with <15 min to session close.
+                            _mtc_check = _minutes_to_session_close(day_rows[hit_idx].get("ts_pt"))
+                            if _mtc_check is not None and _mtc_check < 15:
+                                break
+
                             study_row = _build_study_row(
                                 trade_date=trade_date,
                                 day_rows=day_rows,
