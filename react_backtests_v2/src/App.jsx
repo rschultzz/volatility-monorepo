@@ -4,6 +4,7 @@ import ResultsTable from './components/ResultsTable';
 import DiagnosticsPanel from './components/DiagnosticsPanel';
 import ColumnSettingsModal from './components/ColumnSettingsModal';
 import TradeLog from './components/TradeLog';   // ← NEW
+import SavedScans from './components/SavedScans'; // ← NEW
 
 function isoDateOffset(days) {
   const d = new Date();
@@ -481,7 +482,7 @@ export default function App() {
   }
 
   // Trade Log tab doesn't use the strategy toolbar, so hide it when active
-  const showStrategyToolbar = activeTab !== 'trade_log';
+  const showStrategyToolbar = activeTab !== 'trade_log' && activeTab !== 'saved_scans';
 
   return (
     <div className="page">
@@ -551,6 +552,12 @@ export default function App() {
           >
             Trade Log
           </button>
+          <button
+            className={`tab-button ${activeTab === 'saved_scans' ? 'active' : ''}`}
+            onClick={() => setActiveTab('saved_scans')}
+          >
+            Saved Scans
+          </button>
         </div>
 
         {activeTab === 'diagnostics' && (
@@ -592,6 +599,11 @@ export default function App() {
         {/* Trade Log tab — TradeLog is fully self-contained */}
         {activeTab === 'trade_log' && (
           <TradeLog />
+        )}
+
+        {/* Saved Scans tab — SavedScans is fully self-contained */}
+        {activeTab === 'saved_scans' && (
+          <SavedScans />
         )}
       </div>
 

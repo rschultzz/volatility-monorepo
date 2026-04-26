@@ -527,12 +527,6 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 max_minutes_before_close=int(settings.get("maxMinutesBeforeClose", 45)),
                 source_view=DEFAULT_SOURCE_VIEW,
                 bypass_filters=tuple(settings.get("bypassFilters") or ()),
-                execution_mode=str(settings.get("executionMode") or "managed").strip(),
-                forward_horizons_minutes=tuple(
-                    int(x) for x in (settings.get("forwardHorizonsMinutes") or [30, 60, 90, 120, 180])
-                    if str(x).strip().lstrip('-').isdigit() and int(x) > 0
-                ) or (30, 60, 90, 120, 180),
-                condor_wing_width_pts=float(settings.get("condorWingWidthPts") or 10.0),
             )
 
             base_strategy_key = strategy_meta.get("baseStrategyKey") or item["base_registry_key"]
@@ -678,12 +672,6 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 long_take_profit_pts=float(settings.get("longTakeProfitPts", 35.0)),
                 source_view=DEFAULT_SOURCE_VIEW,
                 bypass_filters=tuple(settings.get("bypassFilters") or ()),
-                execution_mode=str(settings.get("executionMode") or "managed").strip(),
-                forward_horizons_minutes=tuple(
-                    int(x) for x in (settings.get("forwardHorizonsMinutes") or [30, 60, 90, 120, 180])
-                    if str(x).strip().lstrip('-').isdigit() and int(x) > 0
-                ) or (30, 60, 90, 120, 180),
-                condor_wing_width_pts=float(settings.get("condorWingWidthPts") or 10.0),
             )
 
             base_strategy_key = strategy_meta.get("baseStrategyKey") or item["base_registry_key"]
@@ -848,6 +836,300 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Saved Scan Cache
+    # ─────────────────────────────────────────────────────────────────────
+    # Persists full scan results (rows + diagnostics + funnel + params) to
+    # bt2_scan_cache table for fast load/filter without rescanning.
+    #
+    # Workflow:
+    #   1. POST /api/backtests-v2/saved-scans/run       — runs a scan with
+    #      maximally-permissive filters and saves the result. Returns scan_id.
+    #   2. GET  /api/backtests-v2/saved-scans            — list all saved scans
+    #   3. GET  /api/backtests-v2/saved-scans/<scan_id>  — load a saved scan
+    #      (rows + diagnostics + funnel)
+    #   4. DELETE /api/backtests-v2/saved-scans/<scan_id> — remove a saved scan
+
+    def _ensure_scan_cache_table_exists(conn):
+        """Idempotent table creation. Cheap to call on every request."""
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS public.bt2_scan_cache (
+              scan_id        BIGSERIAL PRIMARY KEY,
+              created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+              label          VARCHAR(200),
+              direction      VARCHAR(8) NOT NULL,
+              start_date     DATE NOT NULL,
+              end_date       DATE NOT NULL,
+              params         JSONB NOT NULL,
+              funnel         JSONB,
+              diagnostics    JSONB,
+              rows           JSONB NOT NULL,
+              row_count      INT NOT NULL,
+              notes          TEXT
+            )
+        """))
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_bt2_scan_cache_created
+              ON public.bt2_scan_cache (created_at DESC)
+        """))
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_bt2_scan_cache_dir_dates
+              ON public.bt2_scan_cache (direction, start_date, end_date)
+        """))
+
+    def saved_scans_run_api():
+        """
+        Run a scan with permissive filters and persist the full result.
+        Body: {
+          direction: 'up' | 'down',
+          start_date, end_date,
+          label?, notes?,
+          params?: {...overrides for the scan...}
+        }
+        """
+        raw_payload = _normalize_payload_aliases(request.get_json(silent=True) or {})
+        direction = str(raw_payload.get("direction") or "").strip().lower()
+        if direction not in ("up", "down"):
+            return jsonify({"ok": False, "error": "direction must be 'up' or 'down'"}), 400
+
+        start_date = str(raw_payload.get("startDate") or raw_payload.get("start_date") or "").strip()
+        end_date   = str(raw_payload.get("endDate")   or raw_payload.get("end_date")   or "").strip()
+        if not start_date or not end_date:
+            return jsonify({"ok": False, "error": "startDate and endDate are required"}), 400
+
+        label = _normalize_name(raw_payload.get("label"), f"{direction.upper()} {start_date} to {end_date}")
+        notes = _normalize_notes(raw_payload.get("notes"))
+
+        # Pick the right base strategy and resolve full defaults
+        resolved = _resolve_strategy_payloads()
+        base_key = "up_move_short" if direction == "up" else "down_move_scan"
+        item = None
+        for v in resolved.values():
+            if v.get("base_registry_key") == base_key:
+                item = v
+                break
+        if item is None:
+            return jsonify({"ok": False, "error": f"No registered strategy for direction={direction}"}), 500
+
+        strategy = item["spec"]
+        strategy_meta = item["serialized"]
+
+        # Build maximally-permissive settings for the cached scan.
+        # Skew bypass + study mode on by default — gives the broadest set of rows
+        # so that downstream filters can subset without rescanning.
+        permissive = dict(strategy_meta["defaults"])
+        permissive["startDate"] = start_date
+        permissive["endDate"]   = end_date
+        permissive["executionMode"] = "study_target_hits"
+        # Bypass the skew gate so we capture every target-touch event,
+        # regardless of skew configuration.
+        existing_bypass = list(permissive.get("bypassFilters") or [])
+        if "skew_signal_fired" not in existing_bypass:
+            existing_bypass.append("skew_signal_fired")
+        permissive["bypassFilters"] = existing_bypass
+
+        # Apply any user overrides on top
+        overrides = raw_payload.get("params") or {}
+        if isinstance(overrides, dict):
+            permissive.update(overrides)
+
+        try:
+            data = strategy.runner(
+                start_date=permissive["startDate"],
+                end_date=permissive["endDate"],
+                min_level_gex_bn=float(permissive["minLevelGexBn"]),
+                zone_merge_distance_pts=float(permissive["zoneMergeDistancePts"]),
+                min_clean_move_points=float(permissive["minCleanMovePoints"]),
+                target_proximity_pts=float(permissive["targetProximityPts"]),
+                max_zone_breach_pts=float(permissive["maxZoneBreachPts"]),
+                pivot_strength_bars=int(permissive["pivotStrengthBars"]),
+                level_family=str(permissive["levelFamily"]),
+                max_results=int(permissive["maxResults"]),
+                consolidation_window_minutes=int(permissive["consolidationWindowMinutes"]),
+                short_put_skew_increase_pct=float(permissive["shortPutSkewIncreasePct"]),
+                short_call_skew_max_pct=float(permissive["shortCallSkewMaxPct"]),
+                entry_within_top_pts=float(permissive["entryWithinTopPts"]),
+                entry_search_window_minutes=int(permissive["entrySearchWindowMinutes"]),
+                initial_stop_pts=float(permissive["initialStopPts"]),
+                trail_activate_profit_pts=float(permissive["trailActivateProfitPts"]),
+                trailing_stop_pts=float(permissive["trailingStopPts"]),
+                take_profit_pts=float(permissive["takeProfitPts"]),
+                max_prior_down_up_ratio=float(permissive.get("maxPriorDownUpRatio", 2.0)),
+                max_start_pct_of_range=float(permissive.get("maxStartPctOfRange", 0.20)),
+                max_move_loss_pct=float(permissive.get("maxMoveLossPct", 0.75)),
+                min_minutes_after_open=int(permissive.get("minMinutesAfterOpen", 15)),
+                long_put_skew_min_decrease_pct=float(permissive.get("longPutSkewMinDecreasePct", 80.0)),
+                long_call_skew_min_increase_pct=float(permissive.get("longCallSkewMinIncreasePct", 30.0)),
+                max_minutes_before_close=int(permissive.get("maxMinutesBeforeClose", 45)),
+                source_view=DEFAULT_SOURCE_VIEW,
+                bypass_filters=tuple(permissive.get("bypassFilters") or ()),
+                execution_mode=str(permissive.get("executionMode") or "study_target_hits"),
+                forward_horizons_minutes=tuple(
+                    int(x) for x in (permissive.get("forwardHorizonsMinutes") or [30, 60, 90, 120, 180])
+                    if str(x).strip().lstrip('-').isdigit() and int(x) > 0
+                ) or (30, 60, 90, 120, 180),
+                condor_wing_width_pts=float(permissive.get("condorWingWidthPts") or 10.0),
+            )
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"scan failed: {exc}"}), 400
+
+        raw_rows = data.get("rows") or []
+        rows = _filtered_rows(raw_rows, base_key)
+        diagnostics = _rebuild_diagnostics(rows, strategy_meta["key"], data.get("diagnostics"))
+        funnel = _filter_funnel_for_direction(data.get("funnel", []), direction)
+
+        # Persist
+        try:
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                result = conn.execute(text("""
+                    INSERT INTO public.bt2_scan_cache
+                      (label, direction, start_date, end_date, params, funnel, diagnostics, rows, row_count, notes)
+                    VALUES
+                      (:label, :direction, :start_date, :end_date,
+                       CAST(:params AS JSONB),
+                       CAST(:funnel AS JSONB),
+                       CAST(:diagnostics AS JSONB),
+                       CAST(:rows AS JSONB),
+                       :row_count,
+                       :notes)
+                    RETURNING scan_id, created_at
+                """), {
+                    "label": label,
+                    "direction": direction,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "params": json.dumps(permissive),
+                    "funnel": json.dumps(funnel),
+                    "diagnostics": json.dumps(diagnostics),
+                    "rows": json.dumps(rows),
+                    "row_count": len(rows),
+                    "notes": notes or None,
+                })
+                row = result.fetchone()
+                scan_id = int(row[0])
+                created_at = row[1].isoformat() if row[1] is not None else None
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"persist failed: {exc}"}), 500
+
+        return jsonify({
+            "ok": True,
+            "scan_id": scan_id,
+            "created_at": created_at,
+            "label": label,
+            "direction": direction,
+            "start_date": start_date,
+            "end_date": end_date,
+            "row_count": len(rows),
+        })
+
+    def saved_scans_list_api():
+        """
+        List metadata for all saved scans (no rows).
+        Optional query params: direction=up|down
+        """
+        direction_filter = str(request.args.get("direction") or "").strip().lower()
+        try:
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                if direction_filter in ("up", "down"):
+                    result = conn.execute(text("""
+                        SELECT scan_id, created_at, label, direction, start_date, end_date,
+                               row_count, notes,
+                               (params->>'executionMode') AS execution_mode
+                        FROM public.bt2_scan_cache
+                        WHERE direction = :direction
+                        ORDER BY created_at DESC
+                    """), {"direction": direction_filter})
+                else:
+                    result = conn.execute(text("""
+                        SELECT scan_id, created_at, label, direction, start_date, end_date,
+                               row_count, notes,
+                               (params->>'executionMode') AS execution_mode
+                        FROM public.bt2_scan_cache
+                        ORDER BY created_at DESC
+                    """))
+                items = []
+                for r in result:
+                    items.append({
+                        "scan_id": int(r[0]),
+                        "created_at": r[1].isoformat() if r[1] is not None else None,
+                        "label": r[2],
+                        "direction": r[3],
+                        "start_date": r[4].isoformat() if r[4] is not None else None,
+                        "end_date": r[5].isoformat() if r[5] is not None else None,
+                        "row_count": int(r[6]) if r[6] is not None else 0,
+                        "notes": r[7],
+                        "execution_mode": r[8],
+                    })
+            return jsonify({"ok": True, "scans": items})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    def saved_scans_load_api(scan_id):
+        """Return the full saved scan: rows + diagnostics + funnel."""
+        try:
+            sid = int(scan_id)
+        except Exception:
+            return jsonify({"ok": False, "error": "scan_id must be integer"}), 400
+
+        try:
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                result = conn.execute(text("""
+                    SELECT scan_id, created_at, label, direction, start_date, end_date,
+                           params, funnel, diagnostics, rows, row_count, notes
+                    FROM public.bt2_scan_cache
+                    WHERE scan_id = :scan_id
+                """), {"scan_id": sid})
+                row = result.fetchone()
+                if row is None:
+                    return jsonify({"ok": False, "error": "scan not found"}), 404
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+        return jsonify({
+            "ok": True,
+            "scan_id": int(row[0]),
+            "created_at": row[1].isoformat() if row[1] is not None else None,
+            "label": row[2],
+            "direction": row[3],
+            "start_date": row[4].isoformat() if row[4] is not None else None,
+            "end_date": row[5].isoformat() if row[5] is not None else None,
+            "params": row[6],          # already a dict via JSONB → SQLAlchemy
+            "funnel": row[7] or [],
+            "diagnostics": row[8] or {},
+            "rows": row[9] or [],
+            "row_count": int(row[10]) if row[10] is not None else 0,
+            "notes": row[11],
+        })
+
+    def saved_scans_delete_api(scan_id):
+        """Delete a saved scan."""
+        try:
+            sid = int(scan_id)
+        except Exception:
+            return jsonify({"ok": False, "error": "scan_id must be integer"}), 400
+
+        try:
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                result = conn.execute(text("""
+                    DELETE FROM public.bt2_scan_cache
+                    WHERE scan_id = :scan_id
+                    RETURNING scan_id
+                """), {"scan_id": sid})
+                row = result.fetchone()
+                if row is None:
+                    return jsonify({"ok": False, "error": "scan not found"}), 404
+            return jsonify({"ok": True, "scan_id": sid})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
     if "backtests_v2_preview_index" not in server.view_functions:
         server.add_url_rule("/backtests-v2-preview", endpoint="backtests_v2_preview_index", view_func=index)
 
@@ -911,4 +1193,37 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             endpoint="backtests_v2_label_signal",
             view_func=label_signal_api,
             methods=["POST"],
+        )
+
+    # ── Saved Scan Cache ──
+    if "backtests_v2_saved_scans_run" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/run",
+            endpoint="backtests_v2_saved_scans_run",
+            view_func=saved_scans_run_api,
+            methods=["POST"],
+        )
+
+    if "backtests_v2_saved_scans_list" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans",
+            endpoint="backtests_v2_saved_scans_list",
+            view_func=saved_scans_list_api,
+            methods=["GET"],
+        )
+
+    if "backtests_v2_saved_scans_load" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/<scan_id>",
+            endpoint="backtests_v2_saved_scans_load",
+            view_func=saved_scans_load_api,
+            methods=["GET"],
+        )
+
+    if "backtests_v2_saved_scans_delete" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/<scan_id>",
+            endpoint="backtests_v2_saved_scans_delete",
+            view_func=saved_scans_delete_api,
+            methods=["DELETE"],
         )
