@@ -125,7 +125,7 @@ export default function App() {
   });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isColumnsOpen, setIsColumnsOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState('diagnostics');
+  const [activeTab, setActiveTab] = useState('saved_scans');
 
   const [columns, setColumns] = useState(() => {
     const saved = localStorage.getItem(COLUMNS_STORAGE_KEY);
@@ -417,19 +417,10 @@ export default function App() {
         {/* Tab bar */}
         <div className="tab-bar">
           <button
-            className={`tab-button ${activeTab === 'diagnostics' ? 'active' : ''}`}
-            onClick={() => setActiveTab('diagnostics')}
+            className={`tab-button ${activeTab === 'saved_scans' ? 'active' : ''}`}
+            onClick={() => setActiveTab('saved_scans')}
           >
-            Diagnostics
-          </button>
-          <button
-            className={`tab-button ${activeTab === 'instances' ? 'active' : ''}`}
-            onClick={() => setActiveTab('instances')}
-          >
-            Instances
-            {rows.length > 0 && (
-              <span className="tab-badge">{rows.length}</span>
-            )}
+            Saved Scans
           </button>
           <button
             className={`tab-button ${activeTab === 'trade_log' ? 'active' : ''}`}
@@ -437,54 +428,7 @@ export default function App() {
           >
             Trade Log
           </button>
-          <button
-            className={`tab-button ${activeTab === 'saved_scans' ? 'active' : ''}`}
-            onClick={() => setActiveTab('saved_scans')}
-          >
-            Saved Scans
-          </button>
         </div>
-
-        {activeTab === 'diagnostics' && (
-          <DiagnosticsPanel
-            diagnostics={diagnostics}
-            rows={rows}
-            funnel={funnel}
-            executionMode={effectiveExecutionMode}
-          />
-        )}
-
-        {activeTab === 'instances' && (
-          <div className="results-card" style={{ flex: 1 }}>
-            <div className="results-header">
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-                <h2 style={{ fontSize: 16 }}>Instances</h2>
-                <span style={{ color: '#64748b', fontSize: 12 }}>{rows.length} trades found</span>
-                <button
-                  className="ghost-button"
-                  style={{ padding: '4px 10px', fontSize: '12px', marginLeft: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}
-                  onClick={() => tableRef.current?.downloadCSV()}
-                  disabled={!rows.length}
-                >
-                  📥 CSV
-                </button>
-              </div>
-            </div>
-
-            <ResultsTable
-              ref={tableRef}
-              rows={rows}
-              selectedRowKey={selectedRowKey}
-              onSelectRow={handleSelectRow}
-              columns={effectiveColumns}
-            />
-          </div>
-        )}
-
-        {/* Trade Log tab — TradeLog is fully self-contained */}
-        {activeTab === 'trade_log' && (
-          <TradeLog />
-        )}
 
         {/* Saved Scans tab — uses the same row-selection handler so picking
             a saved-scan row drives the price chart + smile snapshots the
@@ -493,6 +437,11 @@ export default function App() {
           <SavedScans
             onSelectRow={handleSelectRow}
           />
+        )}
+
+        {/* Trade Log tab — TradeLog is fully self-contained */}
+        {activeTab === 'trade_log' && (
+          <TradeLog />
         )}
       </div>
 
