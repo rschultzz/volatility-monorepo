@@ -1,10 +1,25 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DiagnosticsPanel from './DiagnosticsPanel';
 import ResultsTable from './ResultsTable';
+import ColumnSettingsModal from './ColumnSettingsModal';
+import {
+  DEFAULT_COLUMNS,
+  computeEffectiveColumns,
+  mergeColumnsWithDefaults,
+} from './columnsConfig';
 
 // ──────────────────────────────────────────────────────────────────────
-// Saved Scans tab — Phase 3: reactive filters that subset cached rows
-// and propagate through to all diagnostics.
+// Saved Scans tab
+//
+// Persists scan results in DB, lets user filter and explore without re-running.
+//
+// Feature parity with the live Instances tab:
+//   - Full DEFAULT_COLUMNS list
+//   - Column visibility/order via ColumnSettingsModal
+//   - Separate localStorage key for persistence (don't share with live tab)
+//   - CSV export
+//   - Row selection drives the price chart + smile snapshots via the
+//     parent's handleSelectRow (same handler as the live Instances tab)
 // ──────────────────────────────────────────────────────────────────────
 
 function isoDateOffset(days) {
@@ -21,19 +36,21 @@ const DEFAULT_NEW_SCAN = {
   notes: '',
 };
 
-// Filter state shape
 const DEFAULT_FILTERS = {
-  gammaRegime: 'all',     // 'all' | 'positive' | 'negative' | 'neutral' | 'non_neutral'
-  skewPassed: 'all',      // 'all' | 'yes' | 'no'
-  ivMin: '',              // empty = no lower bound (string for input compatibility)
-  ivMax: '',              // empty = no upper bound
+  gammaRegime: 'all',
+  skewPassed: 'all',
+  ivMin: '',
+  ivMax: '',
   minMinutesRemaining: '',
-  startDate: '',          // empty = use scan's start date
+  startDate: '',
   endDate: '',
 };
 
+// Separate localStorage key — saved-scan column prefs don't sync with live.
+const COLUMNS_STORAGE_KEY = 'bt2-savedscans-table-columns';
 
-export default function SavedScans() {
+
+export default function SavedScans({ onSelectRow }) {
   const [scans, setScans] = useState([])
   const [scansLoading, setScansLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -42,17 +59,39 @@ export default function SavedScans() {
   const [loadedScan, setLoadedScan] = useState(null)
   const [scanLoading, setScanLoading] = useState(false)
 
-  // Run & save dialog state
   const [showRunDialog, setShowRunDialog] = useState(false)
   const [newScan, setNewScan] = useState(DEFAULT_NEW_SCAN)
   const [running, setRunning] = useState(false)
 
-  // Inner Diagnostics/Instances tab
   const [innerTab, setInnerTab] = useState('diagnostics')
-
-  // Filter state
   const [filters, setFilters] = useState(DEFAULT_FILTERS)
 
+  // Selected row key for visual highlighting in the table
+  const [selectedRowKey, setSelectedRowKey] = useState(null)
+  const tableRef = useRef(null)
+
+  // ── Column state with localStorage persistence ──
+  const [columns, setColumns] = useState(() => {
+    try {
+      const saved = localStorage.getItem(COLUMNS_STORAGE_KEY)
+      if (saved) return mergeColumnsWithDefaults(JSON.parse(saved))
+    } catch (e) {
+      // fall through to default
+    }
+    return DEFAULT_COLUMNS
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(columns))
+    } catch (e) {
+      // localStorage might be full or disabled; fail silently
+    }
+  }, [columns])
+
+  const [isColumnsOpen, setIsColumnsOpen] = useState(false)
+
+  // ── Server fetches ──
   const refreshScans = useCallback(async () => {
     setScansLoading(true)
     setError(null)
@@ -81,7 +120,8 @@ export default function SavedScans() {
       setLoadedScan(data)
       setSelectedScanId(scanId)
       setInnerTab('diagnostics')
-      setFilters(DEFAULT_FILTERS)  // reset filters when loading a different scan
+      setFilters(DEFAULT_FILTERS)
+      setSelectedRowKey(null)
     } catch (err) {
       setError(String(err.message || err))
     } finally {
@@ -128,6 +168,7 @@ export default function SavedScans() {
       if (selectedScanId === scanId) {
         setSelectedScanId(null)
         setLoadedScan(null)
+        setSelectedRowKey(null)
       }
       await refreshScans()
     } catch (err) {
@@ -135,17 +176,31 @@ export default function SavedScans() {
     }
   }, [refreshScans, selectedScanId])
 
-  // ── Filtered rows derived from loaded scan + filters ──
+  // ── Row selection (drives price chart + smile via parent handler) ──
+  const handleSelectRowLocal = useCallback(async (row, idx) => {
+    const key = `${row.trade_date}-${row.start_ts_utc}-${row.target_ts_utc}-${idx}`
+    setSelectedRowKey(key)
+    if (typeof onSelectRow === 'function') {
+      // The parent handler (App.handleSelectRow) posts to /select-trade
+      // which drives the price chart navigation and smile snapshots.
+      // It also sets its OWN selectedRowKey state which is wired to the
+      // live Instances tab; that's harmless since our table is a separate
+      // ResultsTable instance.
+      try {
+        await onSelectRow(row, idx)
+      } catch (err) {
+        setError(String(err.message || err))
+      }
+    }
+  }, [onSelectRow])
+
+  // ── Filtered rows ──
   const allRows = loadedScan?.rows || []
   const filteredRows = useMemo(
     () => applyFilters(allRows, filters),
     [allRows, filters]
   )
 
-  // ── Recompute diagnostics from filteredRows ──
-  // Server-computed aggregates (forward_outcomes_aggregate, etc.) reflect the
-  // FULL saved scan. When filters are active, we recompute these in JS so the
-  // tables match the histograms (which always use rows directly).
   const filteredDiagnostics = useMemo(() => {
     if (!loadedScan) return null
     return computeFilteredDiagnostics(loadedScan, filteredRows, filters)
@@ -153,6 +208,12 @@ export default function SavedScans() {
 
   const effectiveExecutionMode =
     loadedScan?.params?.executionMode || 'study_target_hits'
+
+  // Apply study/managed visibility rules on top of user's column prefs
+  const effectiveColumns = useMemo(
+    () => computeEffectiveColumns(columns, effectiveExecutionMode),
+    [columns, effectiveExecutionMode]
+  )
 
   const filtersAreActive = useMemo(
     () => filtersAreNonDefault(filters),
@@ -255,16 +316,35 @@ export default function SavedScans() {
           {innerTab === 'instances' && (
             <div className="results-card" style={{ flex: 1 }}>
               <div className="results-header">
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
                   <h2 style={{ fontSize: 16 }}>Instances</h2>
                   <span style={{ color: '#64748b', fontSize: 12 }}>
                     {filteredRows.length}{filtersAreActive ? ` of ${allRows.length}` : ''} trades
                   </span>
+                  <button
+                    className="ghost-button"
+                    style={{ padding: '4px 10px', fontSize: 12, marginLeft: 4, display: 'flex', alignItems: 'center', gap: 4 }}
+                    onClick={() => setIsColumnsOpen(true)}
+                  >
+                    ⚙ Columns
+                  </button>
+                  <button
+                    className="ghost-button"
+                    style={{ padding: '4px 10px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}
+                    onClick={() => tableRef.current?.downloadCSV()}
+                    disabled={!filteredRows.length}
+                  >
+                    📥 CSV
+                  </button>
                 </div>
               </div>
+
               <ResultsTable
+                ref={tableRef}
                 rows={filteredRows}
-                columns={defaultStudyColumnsForRows(filteredRows)}
+                selectedRowKey={selectedRowKey}
+                onSelectRow={handleSelectRowLocal}
+                columns={effectiveColumns}
               />
             </div>
           )}
@@ -281,6 +361,13 @@ export default function SavedScans() {
           Select a saved scan above to view its results.
         </div>
       )}
+
+      <ColumnSettingsModal
+        isOpen={isColumnsOpen}
+        onClose={() => setIsColumnsOpen(false)}
+        columns={columns}
+        onUpdateColumns={setColumns}
+      />
     </div>
   )
 }
@@ -300,7 +387,6 @@ function applyFilters(rows, f) {
   const dateEnd   = (f.endDate || '').trim()
 
   return rows.filter(row => {
-    // Gamma regime
     if (f.gammaRegime !== 'all') {
       const r = row.target_gamma_regime || 'unknown'
       if (f.gammaRegime === 'non_neutral') {
@@ -310,14 +396,12 @@ function applyFilters(rows, f) {
       }
     }
 
-    // Skew passed
     if (f.skewPassed !== 'all') {
       const passed = row.skew_threshold_passed === true
       if (f.skewPassed === 'yes' && !passed) return false
       if (f.skewPassed === 'no' && passed) return false
     }
 
-    // IV range
     const iv = row.iv?.atm_0dte_pct
     if (ivMin != null && Number.isFinite(ivMin)) {
       if (iv == null || iv < ivMin) return false
@@ -326,13 +410,11 @@ function applyFilters(rows, f) {
       if (iv == null || iv > ivMax) return false
     }
 
-    // Min minutes remaining
     if (minMtc != null && Number.isFinite(minMtc)) {
       const mtc = row.minutes_to_close
       if (mtc == null || mtc < minMtc) return false
     }
 
-    // Date range
     if (dateStart && row.trade_date && String(row.trade_date) < dateStart) return false
     if (dateEnd && row.trade_date && String(row.trade_date) > dateEnd) return false
 
@@ -356,25 +438,17 @@ function filtersAreNonDefault(f) {
 // ──────────────────────────────────────────────────────────────────────
 // Diagnostics recomputation from filtered rows
 // ──────────────────────────────────────────────────────────────────────
-// Rebuilds the parts of `diagnostics` that depend on the row set, so that
-// the headline tables (Forward Outcomes, Realized vs Implied, IV summary)
-// match the filtered population that the histograms see. Falls back to
-// the original server-computed values for fields we don't recompute.
 
 function computeFilteredDiagnostics(loadedScan, filteredRows, filters) {
   const base = { ...(loadedScan?.diagnostics || {}) }
 
-  // If filters aren't active, return the original diagnostics object as-is —
-  // matches the unfiltered scan exactly.
   if (!filtersAreNonDefault(filters)) {
     return base
   }
 
-  // Update simple counts that the StatCells display
   base.entries_found = filteredRows.length
   base.valid_instances = filteredRows.length
 
-  // Recompute IV summary
   const ivs = []
   for (const r of filteredRows) {
     const v = r?.iv?.atm_0dte_pct
@@ -394,10 +468,7 @@ function computeFilteredDiagnostics(loadedScan, filteredRows, filters) {
     base.iv_at_entry_summary = null
   }
 
-  // Recompute forward_outcomes_aggregate
   base.forward_outcomes_aggregate = computeForwardOutcomesAggregate(filteredRows)
-
-  // Recompute realized_vs_implied_aggregate
   base.realized_vs_implied_aggregate = computeRvIAggregate(filteredRows)
 
   return base
@@ -406,7 +477,6 @@ function computeFilteredDiagnostics(loadedScan, filteredRows, filters) {
 function computeForwardOutcomesAggregate(rows) {
   const horizons = ['30m', '60m', '90m', '120m', '180m', 'eod']
   const out = {}
-
   for (const h of horizons) {
     const mfes = [], maes = [], closes = []
     for (const r of rows) {
@@ -437,11 +507,9 @@ function computeForwardOutcomesAggregate(rows) {
 function computeRvIAggregate(rows) {
   const horizons = ['30m', '60m', '90m', '120m', '180m']
   const out = {}
-
   for (const h of horizons) {
     const ivs = [], implPts = [], rangeRatios = [], closeRatios = []
     let inside1 = 0, inside2 = 0, total = 0
-
     for (const r of rows) {
       const rvi = r?.realized_vs_implied?.[h]
       if (!rvi || rvi.implied_1sigma_pts == null) continue
@@ -454,7 +522,6 @@ function computeRvIAggregate(rows) {
       if (rvi.inside_1sigma === true) inside1++
       if (rvi.inside_2sigma === true) inside2++
     }
-
     if (total === 0) {
       out[h] = { count: 0 }
       continue
@@ -472,7 +539,6 @@ function computeRvIAggregate(rows) {
   return out
 }
 
-// Tiny stat helpers
 function median(arr) {
   if (!arr.length) return 0
   const s = [...arr].sort((a, b) => a - b)
@@ -496,7 +562,6 @@ function FiltersPanel({ filters, setFilters, scan, filteredCount, allCount }) {
   const reset = () => setFilters(DEFAULT_FILTERS)
   const active = filtersAreNonDefault(filters)
 
-  // Count regime distribution in the unfiltered scan (helps user pick filters)
   const regimeCounts = useMemo(() => {
     const counts = { positive: 0, negative: 0, neutral: 0, unknown: 0 }
     for (const r of scan?.rows || []) {
@@ -541,12 +606,11 @@ function FiltersPanel({ filters, setFilters, scan, filteredCount, allCount }) {
           <span style={{ fontSize: 13, fontWeight: 700, color: active ? '#93c5fd' : '#cbd5e1' }}>
             Filters
           </span>
-          {active && (
+          {active ? (
             <span style={{ fontSize: 11, color: '#fcd34d' }}>
               {filteredCount} of {allCount} rows match
             </span>
-          )}
-          {!active && (
+          ) : (
             <span style={{ fontSize: 11, color: '#64748b' }}>
               All {allCount} rows
             </span>
@@ -564,14 +628,9 @@ function FiltersPanel({ filters, setFilters, scan, filteredCount, allCount }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10 }}>
-        {/* Gamma regime */}
         <div>
           <span style={labelStyle}>Gamma regime</span>
-          <select
-            style={inputStyle}
-            value={filters.gammaRegime}
-            onChange={(e) => update('gammaRegime', e.target.value)}
-          >
+          <select style={inputStyle} value={filters.gammaRegime} onChange={(e) => update('gammaRegime', e.target.value)}>
             <option value="all">All ({allCount})</option>
             <option value="positive">Positive ({regimeCounts.positive})</option>
             <option value="negative">Negative ({regimeCounts.negative})</option>
@@ -580,28 +639,19 @@ function FiltersPanel({ filters, setFilters, scan, filteredCount, allCount }) {
           </select>
         </div>
 
-        {/* Skew passed */}
         <div>
           <span style={labelStyle}>Skew passed</span>
-          <select
-            style={inputStyle}
-            value={filters.skewPassed}
-            onChange={(e) => update('skewPassed', e.target.value)}
-          >
+          <select style={inputStyle} value={filters.skewPassed} onChange={(e) => update('skewPassed', e.target.value)}>
             <option value="all">All</option>
             <option value="yes">Yes</option>
             <option value="no">No</option>
           </select>
         </div>
 
-        {/* IV min */}
         <div>
           <span style={labelStyle}>IV min %</span>
           <input
-            type="number"
-            step="0.5"
-            min="0"
-            max="100"
+            type="number" step="0.5" min="0" max="100"
             style={inputStyle}
             value={filters.ivMin}
             onChange={(e) => update('ivMin', e.target.value)}
@@ -609,14 +659,10 @@ function FiltersPanel({ filters, setFilters, scan, filteredCount, allCount }) {
           />
         </div>
 
-        {/* IV max */}
         <div>
           <span style={labelStyle}>IV max %</span>
           <input
-            type="number"
-            step="0.5"
-            min="0"
-            max="100"
+            type="number" step="0.5" min="0" max="100"
             style={inputStyle}
             value={filters.ivMax}
             onChange={(e) => update('ivMax', e.target.value)}
@@ -624,13 +670,10 @@ function FiltersPanel({ filters, setFilters, scan, filteredCount, allCount }) {
           />
         </div>
 
-        {/* Min minutes remaining */}
         <div>
           <span style={labelStyle}>Min remaining (min)</span>
           <input
-            type="number"
-            step="5"
-            min="0"
+            type="number" step="5" min="0"
             style={inputStyle}
             value={filters.minMinutesRemaining}
             onChange={(e) => update('minMinutesRemaining', e.target.value)}
@@ -638,12 +681,10 @@ function FiltersPanel({ filters, setFilters, scan, filteredCount, allCount }) {
           />
         </div>
 
-        {/* Date start */}
         <div>
           <span style={labelStyle}>Date start</span>
           <input
-            type="date"
-            style={inputStyle}
+            type="date" style={inputStyle}
             value={filters.startDate}
             onChange={(e) => update('startDate', e.target.value)}
             min={scan?.start_date}
@@ -651,12 +692,10 @@ function FiltersPanel({ filters, setFilters, scan, filteredCount, allCount }) {
           />
         </div>
 
-        {/* Date end */}
         <div>
           <span style={labelStyle}>Date end</span>
           <input
-            type="date"
-            style={inputStyle}
+            type="date" style={inputStyle}
             value={filters.endDate}
             onChange={(e) => update('endDate', e.target.value)}
             min={scan?.start_date}
@@ -754,11 +793,7 @@ function RunScanDialog({ newScan, setNewScan, onSubmit, onCancel, running }) {
         <div className="form-grid">
           <label className="field">
             <span>Direction</span>
-            <select
-              value={newScan.direction}
-              onChange={(e) => setNewScan({ ...newScan, direction: e.target.value })}
-              disabled={running}
-            >
+            <select value={newScan.direction} onChange={(e) => setNewScan({ ...newScan, direction: e.target.value })} disabled={running}>
               <option value="down">Down → Long bounce</option>
               <option value="up">Up → Short rejection</option>
             </select>
@@ -850,47 +885,4 @@ function LoadedScanHeader({ scan, allCount, filteredCount, filtersActive }) {
       </div>
     </div>
   )
-}
-
-
-function defaultStudyColumnsForRows(rows) {
-  const isStudy = rows.length > 0 && rows[0]?.forward_outcomes
-  if (!isStudy) {
-    return [
-      { id: 'date', label: 'Date', visible: true },
-      { id: 'direction', label: 'Dir', visible: true },
-      { id: 'source_zone', label: 'Source Zone', visible: true },
-      { id: 'target_level', label: 'Target', visible: true },
-      { id: 'move_pts', label: 'Move Pts', visible: true },
-      { id: 'bars', label: 'Bars', visible: true },
-    ]
-  }
-  return [
-    { id: 'date', label: 'Date', visible: true },
-    { id: 'direction', label: 'Dir', visible: true },
-    { id: 'start_time', label: 'Start Time', visible: true },
-    { id: 'pivot_px', label: 'Pivot Px', visible: true },
-    { id: 'target_time', label: 'Target Time', visible: true },
-    { id: 'target_level', label: 'Target', visible: true },
-    { id: 'target_price', label: 'Target Px', visible: true },
-    { id: 'move_pts', label: 'Move Pts', visible: true },
-    { id: 'iv_atm_0dte', label: 'IV ATM', visible: true },
-    { id: 'target_spx_price', label: 'SPX', visible: true },
-    { id: 'minutes_to_close', label: 'Min Rem', visible: true },
-    { id: 'skew_passed', label: 'Skew', visible: true },
-    { id: 'skew_delta_put', label: 'ΔPut', visible: true },
-    { id: 'skew_delta_call', label: 'ΔCall', visible: true },
-    { id: 'fwd_30m_close',  label: 'Close 30m',  visible: true },
-    { id: 'fwd_60m_close',  label: 'Close 60m',  visible: true },
-    { id: 'fwd_90m_close',  label: 'Close 90m',  visible: true },
-    { id: 'fwd_120m_close', label: 'Close 120m', visible: true },
-    { id: 'fwd_180m_close', label: 'Close 180m', visible: true },
-    { id: 'fwd_eod_close',  label: 'Close EOD',  visible: true },
-    { id: 'rvi_ratio_120m', label: '|Close|/1σ 120m', visible: true },
-    { id: 'rvi_inside_1s_120m', label: 'Inside ±1σ', visible: true },
-    { id: 'condor_short_put',  label: 'Short Put',  visible: true },
-    { id: 'condor_long_put',   label: 'Long Put',   visible: true },
-    { id: 'condor_short_call', label: 'Short Call', visible: true },
-    { id: 'condor_long_call',  label: 'Long Call',  visible: true },
-  ]
 }

@@ -1,0 +1,149 @@
+// Shared column definitions for the Backtests V2 results table.
+// Used by both the live "Instances" tab in App.jsx and the
+// "Saved Scans" tab.
+
+export const DEFAULT_COLUMNS = [
+  { id: 'select', label: 'Select', visible: true, alwaysVisible: true },
+  { id: 'date', label: 'Date', visible: true },
+  { id: 'direction', label: 'Dir', visible: true },
+  { id: 'source_zone', label: 'Source Zone', visible: true },
+  { id: 'zone_levels', label: 'Zone Levels', visible: true, className: 'wrap-cell' },
+  { id: 'start_time', label: 'Start Time (PT)', visible: true },
+  { id: 'start_open', label: 'Start Open', visible: true },
+  { id: 'pivot_px', label: 'Pivot Px', visible: true },
+  { id: 'target_time', label: 'Target Time (PT)', visible: true },
+  { id: 'target_open', label: 'Target Open', visible: true },
+  { id: 'target_level', label: 'Target Level', visible: true },
+  { id: 'target_level_gex', label: 'Target GEX (BN)', visible: true },
+  { id: 'clean_space', label: 'Clean Space', visible: true },
+  { id: 'move_pts', label: 'Move Pts', visible: true },
+  { id: 'bars', label: 'Bars', visible: true },
+  { id: 'consol_mins', label: 'Consol. Mins', visible: true },
+  { id: 'setup', label: 'Setup', visible: true },
+  { id: 'signal_time', label: 'Signal Time (PT)', visible: true },
+  { id: 'signal_px', label: 'Signal Px', visible: true },
+  { id: 'put_skew', label: 'Δ Put Skew %', visible: true },
+  { id: 'call_skew', label: 'Δ Call Skew %', visible: true },
+  { id: 'trade', label: 'Trade', visible: true },
+  { id: 'range_high', label: 'Range High', visible: true },
+  { id: 'range_low', label: 'Range Low', visible: true },
+  { id: 'entry_band', label: 'Entry Band Floor', visible: true },
+  { id: 'entry_time', label: 'Entry Time (PT)', visible: true },
+  { id: 'entry_px', label: 'Entry Px', visible: true },
+  { id: 'init_stop', label: 'Init Stop', visible: true },
+  { id: 'take_profit', label: 'Take Profit', visible: true },
+  { id: 'trailing_stop', label: 'Trailing Stop', visible: true },
+  { id: 'exit_time', label: 'Exit Time (PT)', visible: true },
+  { id: 'exit_px', label: 'Exit Px', visible: true },
+  { id: 'exit_reason', label: 'Exit Reason', visible: true },
+  { id: 'realized_pts', label: 'Realized Pts', visible: true },
+  { id: 'mfe', label: 'MFE', visible: true },
+  { id: 'mae', label: 'MAE', visible: true },
+  { id: 'outcome', label: 'Outcome', visible: true },
+  { id: 'reason', label: 'Reason', visible: true, className: 'wrap-cell' },
+  { id: 'prior_down_pts', label: 'Prior Down (pts)', visible: true },
+  { id: 'prior_down_ratio', label: 'Down/Up Ratio', visible: true },
+  { id: 'start_pct_range', label: 'Start % of Range', visible: true },
+
+  { id: 'skew_passed', label: 'Skew Passed', visible: false },
+  { id: 'target_price', label: 'Target Px', visible: false },
+
+  { id: 'fwd_30m_mfe',   label: 'MFE 30m',   visible: false, className: 'study-col' },
+  { id: 'fwd_30m_mae',   label: 'MAE 30m',   visible: false, className: 'study-col' },
+  { id: 'fwd_30m_close', label: 'Close 30m', visible: false, className: 'study-col' },
+
+  { id: 'fwd_60m_mfe',   label: 'MFE 60m',   visible: false, className: 'study-col' },
+  { id: 'fwd_60m_mae',   label: 'MAE 60m',   visible: false, className: 'study-col' },
+  { id: 'fwd_60m_close', label: 'Close 60m', visible: false, className: 'study-col' },
+
+  { id: 'fwd_90m_mfe',   label: 'MFE 90m',   visible: false, className: 'study-col' },
+  { id: 'fwd_90m_mae',   label: 'MAE 90m',   visible: false, className: 'study-col' },
+  { id: 'fwd_90m_close', label: 'Close 90m', visible: false, className: 'study-col' },
+
+  { id: 'fwd_120m_mfe',   label: 'MFE 120m',   visible: false, className: 'study-col' },
+  { id: 'fwd_120m_mae',   label: 'MAE 120m',   visible: false, className: 'study-col' },
+  { id: 'fwd_120m_close', label: 'Close 120m', visible: false, className: 'study-col' },
+
+  { id: 'fwd_180m_mfe',   label: 'MFE 180m',   visible: false, className: 'study-col' },
+  { id: 'fwd_180m_mae',   label: 'MAE 180m',   visible: false, className: 'study-col' },
+  { id: 'fwd_180m_close', label: 'Close 180m', visible: false, className: 'study-col' },
+
+  { id: 'fwd_eod_mfe',   label: 'MFE EOD',   visible: false, className: 'study-col' },
+  { id: 'fwd_eod_mae',   label: 'MAE EOD',   visible: false, className: 'study-col' },
+  { id: 'fwd_eod_close', label: 'Close EOD', visible: false, className: 'study-col' },
+
+  { id: 'iv_atm_0dte', label: 'IV ATM 0DTE', visible: false, className: 'study-col' },
+
+  { id: 'target_spx_price', label: 'SPX @ Target', visible: false, className: 'study-col' },
+  { id: 'minutes_to_close', label: 'Min Remaining', visible: false, className: 'study-col' },
+  { id: 'skew_delta_put',   label: 'ΔPut Skew %',  visible: false, className: 'study-col' },
+  { id: 'skew_delta_call',  label: 'ΔCall Skew %', visible: false, className: 'study-col' },
+
+  { id: 'rvi_ratio_120m',     label: '|Close|/1σ 120m', visible: false, className: 'study-col' },
+  { id: 'rvi_inside_1s_120m', label: 'Inside ±1σ 120m', visible: false, className: 'study-col' },
+
+  { id: 'condor_short_put',  label: 'Short Put',  visible: false, className: 'study-col' },
+  { id: 'condor_long_put',   label: 'Long Put',   visible: false, className: 'study-col' },
+  { id: 'condor_short_call', label: 'Short Call', visible: false, className: 'study-col' },
+  { id: 'condor_long_call',  label: 'Long Call',  visible: false, className: 'study-col' },
+];
+
+export const MANAGED_ONLY_COLUMNS = new Set([
+  'signal_time', 'signal_px', 'put_skew', 'call_skew',
+  'trade', 'range_high', 'range_low', 'entry_band',
+  'entry_time', 'entry_px',
+  'init_stop', 'take_profit', 'trailing_stop',
+  'exit_time', 'exit_px', 'exit_reason',
+  'realized_pts', 'mfe', 'mae', 'outcome',
+  'reason', 'consol_mins', 'setup',
+]);
+
+export const STUDY_ONLY_COLUMNS = new Set([
+  'skew_passed', 'target_price',
+  'fwd_30m_mfe',  'fwd_30m_mae',  'fwd_30m_close',
+  'fwd_60m_mfe',  'fwd_60m_mae',  'fwd_60m_close',
+  'fwd_90m_mfe',  'fwd_90m_mae',  'fwd_90m_close',
+  'fwd_120m_mfe', 'fwd_120m_mae', 'fwd_120m_close',
+  'fwd_180m_mfe', 'fwd_180m_mae', 'fwd_180m_close',
+  'fwd_eod_mfe',  'fwd_eod_mae',  'fwd_eod_close',
+  'iv_atm_0dte',
+  'target_spx_price',
+  'minutes_to_close',
+  'skew_delta_put', 'skew_delta_call',
+  'rvi_ratio_120m', 'rvi_inside_1s_120m',
+  'condor_short_put', 'condor_long_put', 'condor_short_call', 'condor_long_call',
+]);
+
+// Compute which columns should be visible given the executionMode.
+// In study mode: study-only columns force-visible, managed-only force-hidden.
+// In managed mode: study-only force-hidden, others use user preference.
+export function computeEffectiveColumns(columns, executionMode) {
+  const isStudy = executionMode === 'study_target_hits';
+  return columns.map(col => {
+    if (isStudy && STUDY_ONLY_COLUMNS.has(col.id))    return { ...col, visible: true };
+    if (isStudy && MANAGED_ONLY_COLUMNS.has(col.id))  return { ...col, visible: false };
+    if (!isStudy && STUDY_ONLY_COLUMNS.has(col.id))   return { ...col, visible: false };
+    return col;
+  });
+}
+
+// Merge a saved column preferences array (from localStorage) with the current
+// DEFAULT_COLUMNS. Preserves visibility/order from the saved version, picks up
+// any new columns we've added since.
+export function mergeColumnsWithDefaults(saved) {
+  if (!Array.isArray(saved) || saved.length === 0) return DEFAULT_COLUMNS;
+  const savedById = new Map(saved.map(c => [c.id, c]));
+  // Saved-order columns first, then any new columns from defaults
+  const ordered = saved
+    .map(s => {
+      const def = DEFAULT_COLUMNS.find(d => d.id === s.id);
+      if (!def) return null; // dropped from defaults
+      return { ...def, visible: s.visible !== false };
+    })
+    .filter(Boolean);
+  const seenIds = new Set(ordered.map(c => c.id));
+  for (const def of DEFAULT_COLUMNS) {
+    if (!seenIds.has(def.id)) ordered.push(def);
+  }
+  return ordered;
+}
