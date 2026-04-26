@@ -393,6 +393,160 @@ def get_backtests_v2_selection_since(last_seq: int | None):
     return current_seq, _SELECTION_STATE.get("payload")
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Saved Scan defaults — owned entirely by the saved-scan module.
+# These are the ONLY values used at scan-run time when the user doesn't
+# specify them. Intentionally NOT pulled from strategy_registry — saved
+# scans are decoupled from the legacy strategy-defaults system so that
+# nothing outside this module can affect saved-scan outcomes.
+# ─────────────────────────────────────────────────────────────────────
+
+SAVED_SCAN_DEFAULTS: Dict[str, Any] = {
+    # ── Scan identity (set by user on each scan) ──
+    # direction, startDate, endDate, label, notes — provided in payload
+
+    # ── Move detection ──
+    "minLevelGexBn":          50,
+    "levelFamily":            "primary",     # "primary" | "primary+strong"
+    "zoneMergeDistancePts":   10,
+    "minCleanMovePoints":     20,
+    "targetProximityPts":     5,
+    "maxZoneBreachPts":       5,
+    "pivotStrengthBars":      3,
+    "minMinutesAfterOpen":    15,
+    "maxMinutesBeforeClose":  45,
+    "maxPriorDownUpRatio":    2.0,
+    "maxStartPctOfRange":     0.20,
+    "maxMoveLossPct":         0.75,
+
+    # ── Range / consolidation (used to invalidate moves but skipped in study mode;
+    #    kept here so the runner contract is satisfied) ──
+    "consolidationWindowMinutes": 15,
+
+    # ── Saved scans always run in study mode with skew bypassed ──
+    "executionMode":          "study_target_hits",
+    "bypassFilters":          ["skew_signal_fired"],
+    "forwardHorizonsMinutes": [30, 60, 90, 120, 180],
+    "condorWingWidthPts":     10.0,
+    "maxResults":             10000,
+
+    # ── Skew thresholds: NOT actually used by saved scans (skew gate is
+    #    bypassed) but the runner signature requires them. Set to permissive
+    #    sentinel values so even if bypass is disabled the gate stays open.
+    "shortPutSkewIncreasePct":      0.0,
+    "shortCallSkewMaxPct":         1e9,
+    "longPutSkewMinDecreasePct":    0.0,
+    "longCallSkewMinIncreasePct":   0.0,
+
+    # ── Trade entry/management: NOT used in study mode but required by the
+    #    runner signature. Set to inert values.
+    "entryWithinTopPts":           2,
+    "entrySearchWindowMinutes":    30,
+    "initialStopPts":              6,
+    "trailActivateProfitPts":      10,
+    "trailingStopPts":             6,
+    "takeProfitPts":               20,
+    "longInitialStopPts":          10.0,
+    "longTrailActivateProfitPts":  20.0,
+    "longTrailingStopPts":         10.0,
+    "longTakeProfitPts":           35.0,
+}
+
+# Whitelist of keys the run/update endpoints accept from the user.
+# Anything outside this list is silently dropped (defense against accidentally
+# carrying through legacy strategy-registry params).
+SAVED_SCAN_USER_OVERRIDABLE_KEYS = frozenset({
+    "minLevelGexBn",
+    "levelFamily",
+    "zoneMergeDistancePts",
+    "minCleanMovePoints",
+    "targetProximityPts",
+    "maxZoneBreachPts",
+    "pivotStrengthBars",
+    "minMinutesAfterOpen",
+    "maxMinutesBeforeClose",
+    "maxPriorDownUpRatio",
+    "maxStartPctOfRange",
+    "maxMoveLossPct",
+    "forwardHorizonsMinutes",
+    "condorWingWidthPts",
+    "maxResults",
+})
+
+
+def _build_saved_scan_params(
+    user_params: Dict[str, Any] | None,
+    start_date: str,
+    end_date: str,
+) -> Dict[str, Any]:
+    """
+    Build the full parameter dict for a saved-scan run. Starts from
+    SAVED_SCAN_DEFAULTS, layers in user overrides (whitelist-filtered),
+    and pins the date range. Does NOT consult the strategy registry.
+    """
+    out: Dict[str, Any] = dict(SAVED_SCAN_DEFAULTS)
+    if isinstance(user_params, dict):
+        for k, v in user_params.items():
+            if k in SAVED_SCAN_USER_OVERRIDABLE_KEYS and v is not None:
+                out[k] = v
+    out["startDate"] = start_date
+    out["endDate"]   = end_date
+    return out
+
+
+def _execute_saved_scan(direction: str, params: Dict[str, Any]):
+    """
+    Run scan_gex_level_moves with the given params. Direction picks the
+    base strategy purely for the row-direction filter; we do NOT pull
+    defaults from the strategy registry — params is the full source of
+    truth. Returns the raw scan output (dict with rows, diagnostics, funnel).
+    """
+    # We still need the runner callable + the direction filter key.
+    # Build a minimal registry just for that — its DEFAULTS are unused.
+    registry = build_strategy_registry(scan_gex_level_moves)
+    base_key = "up_move_short" if direction == "up" else "down_move_scan"
+    if base_key not in registry:
+        raise RuntimeError(f"No strategy registered for direction={direction}")
+    runner = registry[base_key].runner
+
+    return runner(
+        start_date=params["startDate"],
+        end_date=params["endDate"],
+        min_level_gex_bn=float(params["minLevelGexBn"]),
+        zone_merge_distance_pts=float(params["zoneMergeDistancePts"]),
+        min_clean_move_points=float(params["minCleanMovePoints"]),
+        target_proximity_pts=float(params["targetProximityPts"]),
+        max_zone_breach_pts=float(params["maxZoneBreachPts"]),
+        pivot_strength_bars=int(params["pivotStrengthBars"]),
+        level_family=str(params["levelFamily"]),
+        max_results=int(params["maxResults"]),
+        consolidation_window_minutes=int(params["consolidationWindowMinutes"]),
+        short_put_skew_increase_pct=float(params["shortPutSkewIncreasePct"]),
+        short_call_skew_max_pct=float(params["shortCallSkewMaxPct"]),
+        entry_within_top_pts=float(params["entryWithinTopPts"]),
+        entry_search_window_minutes=int(params["entrySearchWindowMinutes"]),
+        initial_stop_pts=float(params["initialStopPts"]),
+        trail_activate_profit_pts=float(params["trailActivateProfitPts"]),
+        trailing_stop_pts=float(params["trailingStopPts"]),
+        take_profit_pts=float(params["takeProfitPts"]),
+        max_prior_down_up_ratio=float(params["maxPriorDownUpRatio"]),
+        max_start_pct_of_range=float(params["maxStartPctOfRange"]),
+        max_move_loss_pct=float(params["maxMoveLossPct"]),
+        min_minutes_after_open=int(params["minMinutesAfterOpen"]),
+        long_put_skew_min_decrease_pct=float(params["longPutSkewMinDecreasePct"]),
+        long_call_skew_min_increase_pct=float(params["longCallSkewMinIncreasePct"]),
+        max_minutes_before_close=int(params["maxMinutesBeforeClose"]),
+        source_view=DEFAULT_SOURCE_VIEW,
+        bypass_filters=tuple(params.get("bypassFilters") or ()),
+        execution_mode=str(params.get("executionMode") or "study_target_hits"),
+        forward_horizons_minutes=tuple(
+            int(x) for x in (params.get("forwardHorizonsMinutes") or [30, 60, 90, 120, 180])
+            if str(x).strip().lstrip('-').isdigit() and int(x) > 0
+        ) or (30, 60, 90, 120, 180),
+        condor_wing_width_pts=float(params.get("condorWingWidthPts") or 10.0),
+    )
+
+
 def register_backtests_v2_routes(server, repo_root: Path) -> None:
     dist_dir = (Path(repo_root) / "react_backtests_v2" / "dist").resolve()
 
@@ -879,13 +1033,17 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
 
     def saved_scans_run_api():
         """
-        Run a scan with permissive filters and persist the full result.
+        Run a scan and persist the full result.
         Body: {
           direction: 'up' | 'down',
-          start_date, end_date,
+          startDate, endDate,
           label?, notes?,
           params?: {...overrides for the scan...}
         }
+
+        Defaults come EXCLUSIVELY from SAVED_SCAN_DEFAULTS in this module.
+        The legacy strategy_registry is used only to resolve the runner
+        callable for the given direction, never for parameter values.
         """
         raw_payload = _normalize_payload_aliases(request.get_json(silent=True) or {})
         direction = str(raw_payload.get("direction") or "").strip().lower()
@@ -900,82 +1058,21 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
         label = _normalize_name(raw_payload.get("label"), f"{direction.upper()} {start_date} to {end_date}")
         notes = _normalize_notes(raw_payload.get("notes"))
 
-        # Pick the right base strategy and resolve full defaults
-        resolved = _resolve_strategy_payloads()
+        # Build the full param set from saved-scan defaults + user overrides.
+        # User can override any key in SAVED_SCAN_USER_OVERRIDABLE_KEYS;
+        # all other keys retain their defaults.
+        user_overrides = raw_payload.get("params") or {}
+        permissive = _build_saved_scan_params(user_overrides, start_date, end_date)
         base_key = "up_move_short" if direction == "up" else "down_move_scan"
-        item = None
-        for v in resolved.values():
-            if v.get("base_registry_key") == base_key:
-                item = v
-                break
-        if item is None:
-            return jsonify({"ok": False, "error": f"No registered strategy for direction={direction}"}), 500
-
-        strategy = item["spec"]
-        strategy_meta = item["serialized"]
-
-        # Build maximally-permissive settings for the cached scan.
-        # Skew bypass + study mode on by default — gives the broadest set of rows
-        # so that downstream filters can subset without rescanning.
-        permissive = dict(strategy_meta["defaults"])
-        permissive["startDate"] = start_date
-        permissive["endDate"]   = end_date
-        permissive["executionMode"] = "study_target_hits"
-        # Bypass the skew gate so we capture every target-touch event,
-        # regardless of skew configuration.
-        existing_bypass = list(permissive.get("bypassFilters") or [])
-        if "skew_signal_fired" not in existing_bypass:
-            existing_bypass.append("skew_signal_fired")
-        permissive["bypassFilters"] = existing_bypass
-
-        # Apply any user overrides on top
-        overrides = raw_payload.get("params") or {}
-        if isinstance(overrides, dict):
-            permissive.update(overrides)
 
         try:
-            data = strategy.runner(
-                start_date=permissive["startDate"],
-                end_date=permissive["endDate"],
-                min_level_gex_bn=float(permissive["minLevelGexBn"]),
-                zone_merge_distance_pts=float(permissive["zoneMergeDistancePts"]),
-                min_clean_move_points=float(permissive["minCleanMovePoints"]),
-                target_proximity_pts=float(permissive["targetProximityPts"]),
-                max_zone_breach_pts=float(permissive["maxZoneBreachPts"]),
-                pivot_strength_bars=int(permissive["pivotStrengthBars"]),
-                level_family=str(permissive["levelFamily"]),
-                max_results=int(permissive["maxResults"]),
-                consolidation_window_minutes=int(permissive["consolidationWindowMinutes"]),
-                short_put_skew_increase_pct=float(permissive["shortPutSkewIncreasePct"]),
-                short_call_skew_max_pct=float(permissive["shortCallSkewMaxPct"]),
-                entry_within_top_pts=float(permissive["entryWithinTopPts"]),
-                entry_search_window_minutes=int(permissive["entrySearchWindowMinutes"]),
-                initial_stop_pts=float(permissive["initialStopPts"]),
-                trail_activate_profit_pts=float(permissive["trailActivateProfitPts"]),
-                trailing_stop_pts=float(permissive["trailingStopPts"]),
-                take_profit_pts=float(permissive["takeProfitPts"]),
-                max_prior_down_up_ratio=float(permissive.get("maxPriorDownUpRatio", 2.0)),
-                max_start_pct_of_range=float(permissive.get("maxStartPctOfRange", 0.20)),
-                max_move_loss_pct=float(permissive.get("maxMoveLossPct", 0.75)),
-                min_minutes_after_open=int(permissive.get("minMinutesAfterOpen", 15)),
-                long_put_skew_min_decrease_pct=float(permissive.get("longPutSkewMinDecreasePct", 80.0)),
-                long_call_skew_min_increase_pct=float(permissive.get("longCallSkewMinIncreasePct", 30.0)),
-                max_minutes_before_close=int(permissive.get("maxMinutesBeforeClose", 45)),
-                source_view=DEFAULT_SOURCE_VIEW,
-                bypass_filters=tuple(permissive.get("bypassFilters") or ()),
-                execution_mode=str(permissive.get("executionMode") or "study_target_hits"),
-                forward_horizons_minutes=tuple(
-                    int(x) for x in (permissive.get("forwardHorizonsMinutes") or [30, 60, 90, 120, 180])
-                    if str(x).strip().lstrip('-').isdigit() and int(x) > 0
-                ) or (30, 60, 90, 120, 180),
-                condor_wing_width_pts=float(permissive.get("condorWingWidthPts") or 10.0),
-            )
+            data = _execute_saved_scan(direction, permissive)
         except Exception as exc:
             return jsonify({"ok": False, "error": f"scan failed: {exc}"}), 400
 
         raw_rows = data.get("rows") or []
         rows = _filtered_rows(raw_rows, base_key)
-        diagnostics = _rebuild_diagnostics(rows, strategy_meta["key"], data.get("diagnostics"))
+        diagnostics = _rebuild_diagnostics(rows, base_key, data.get("diagnostics"))
         funnel = _filter_funnel_for_direction(data.get("funnel", []), direction)
 
         # Persist
@@ -1068,6 +1165,18 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 500
 
+    def saved_scans_defaults_api():
+        """
+        Return the current saved-scan default parameters and the whitelist of
+        keys the user can override. Used by the frontend dialog to pre-populate
+        controls when running a new scan.
+        """
+        return jsonify({
+            "ok": True,
+            "defaults": dict(SAVED_SCAN_DEFAULTS),
+            "overridable_keys": sorted(SAVED_SCAN_USER_OVERRIDABLE_KEYS),
+        })
+
     def saved_scans_load_api(scan_id):
         """Return the full saved scan: rows + diagnostics + funnel."""
         try:
@@ -1129,6 +1238,208 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             return jsonify({"ok": True, "scan_id": sid})
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 500
+
+    def saved_scans_update_api(scan_id):
+        """
+        Update a saved scan in place.
+
+        Body: {
+          label?, notes?,
+          startDate?, endDate?,
+          params?  (overrides for re-scan)
+        }
+
+        Behavior:
+          - If only label/notes changed: just updates metadata (instant).
+          - If date range changed (or params override provided): re-runs the
+            scan and replaces rows + diagnostics + funnel + params on the
+            same scan_id. Updates created_at to reflect the fresh run.
+
+        Direction CANNOT be changed via this endpoint — that would change
+        what the scan conceptually IS. To change direction, save a new scan.
+        """
+        try:
+            sid = int(scan_id)
+        except Exception:
+            return jsonify({"ok": False, "error": "scan_id must be integer"}), 400
+
+        payload = _normalize_payload_aliases(request.get_json(silent=True) or {})
+
+        # Load existing scan to get its current direction + params
+        try:
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                existing = conn.execute(text("""
+                    SELECT scan_id, label, notes, direction,
+                           start_date::text AS start_date_str,
+                           end_date::text   AS end_date_str,
+                           params
+                    FROM public.bt2_scan_cache
+                    WHERE scan_id = :scan_id
+                """), {"scan_id": sid}).fetchone()
+                if existing is None:
+                    return jsonify({"ok": False, "error": "scan not found"}), 404
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+        existing_direction  = existing[3]
+        existing_start_date = existing[4]
+        existing_end_date   = existing[5]
+        existing_params     = existing[6] or {}
+
+        # Reject direction changes outright (silently ignore if matches)
+        if "direction" in payload:
+            requested_dir = str(payload.get("direction") or "").strip().lower()
+            if requested_dir and requested_dir != existing_direction:
+                return jsonify({
+                    "ok": False,
+                    "error": "direction cannot be changed on an existing scan; create a new scan instead",
+                }), 400
+
+        # Resolve final values: payload wins, otherwise keep existing
+        new_label = payload.get("label", existing[1])
+        if new_label is not None:
+            new_label = str(new_label).strip()[:200] or None
+        new_notes = payload.get("notes", existing[2])
+        if new_notes is not None:
+            new_notes = str(new_notes) or None
+
+        new_start_date = (
+            str(payload.get("startDate") or payload.get("start_date") or "").strip()
+            or existing_start_date
+        )
+        new_end_date = (
+            str(payload.get("endDate") or payload.get("end_date") or "").strip()
+            or existing_end_date
+        )
+
+        # Detect whether scan params changed and a re-scan is needed.
+        # If date range moved, definitely re-scan. If a 'params' override was
+        # provided, also re-scan (caller can use this to tweak any setting).
+        date_range_changed = (
+            new_start_date != existing_start_date or
+            new_end_date   != existing_end_date
+        )
+        params_override = payload.get("params") or {}
+        params_overrides_provided = isinstance(params_override, dict) and len(params_override) > 0
+
+        needs_rescan = date_range_changed or params_overrides_provided
+
+        # ── Path A: metadata-only update (instant) ──
+        if not needs_rescan:
+            updates: Dict[str, Any] = {}
+            if new_label != existing[1]:
+                updates["label"] = new_label
+            if new_notes != existing[2]:
+                updates["notes"] = new_notes
+
+            if not updates:
+                return jsonify({
+                    "ok": True,
+                    "scan_id": sid,
+                    "rescanned": False,
+                    "no_change": True,
+                })
+
+            set_clauses = ", ".join(f"{k} = :{k}" for k in updates.keys())
+            sql = text(f"""
+                UPDATE public.bt2_scan_cache
+                SET {set_clauses}
+                WHERE scan_id = :scan_id
+                RETURNING scan_id, label, notes
+            """)
+            try:
+                with engine.begin() as conn:
+                    result = conn.execute(sql, {**updates, "scan_id": sid})
+                    row = result.fetchone()
+                return jsonify({
+                    "ok": True,
+                    "scan_id": int(row[0]),
+                    "label": row[1],
+                    "notes": row[2],
+                    "rescanned": False,
+                })
+            except Exception as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 500
+
+        # ── Path B: re-scan and replace in place ──
+        # Build params: start from existing scan's saved params (which were
+        # built from SAVED_SCAN_DEFAULTS at original-run time), then layer
+        # any new user overrides on top, then pin the new date range.
+        # Filter to whitelist so legacy keys can't sneak through.
+        base_key = "up_move_short" if existing_direction == "up" else "down_move_scan"
+
+        merged_user_params: Dict[str, Any] = {}
+        if isinstance(existing_params, dict):
+            for k, v in existing_params.items():
+                if k in SAVED_SCAN_USER_OVERRIDABLE_KEYS:
+                    merged_user_params[k] = v
+        if params_overrides_provided:
+            for k, v in params_override.items():
+                if k in SAVED_SCAN_USER_OVERRIDABLE_KEYS:
+                    merged_user_params[k] = v
+
+        permissive = _build_saved_scan_params(
+            merged_user_params, new_start_date, new_end_date
+        )
+
+        try:
+            data = _execute_saved_scan(existing_direction, permissive)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"scan failed: {exc}"}), 400
+
+        raw_rows = data.get("rows") or []
+        rows = _filtered_rows(raw_rows, base_key)
+        diagnostics = _rebuild_diagnostics(rows, base_key, data.get("diagnostics"))
+        funnel = _filter_funnel_for_direction(data.get("funnel", []), existing_direction)
+
+        # Replace the row in place. Update created_at since the data is fresh.
+        try:
+            with engine.begin() as conn:
+                result = conn.execute(text("""
+                    UPDATE public.bt2_scan_cache
+                    SET label = :label,
+                        notes = :notes,
+                        start_date = :start_date,
+                        end_date   = :end_date,
+                        params     = CAST(:params AS JSONB),
+                        funnel     = CAST(:funnel AS JSONB),
+                        diagnostics = CAST(:diagnostics AS JSONB),
+                        rows       = CAST(:rows AS JSONB),
+                        row_count  = :row_count,
+                        created_at = now()
+                    WHERE scan_id = :scan_id
+                    RETURNING scan_id, created_at
+                """), {
+                    "scan_id":    sid,
+                    "label":      new_label,
+                    "notes":      new_notes,
+                    "start_date": new_start_date,
+                    "end_date":   new_end_date,
+                    "params":     json.dumps(permissive),
+                    "funnel":     json.dumps(funnel),
+                    "diagnostics": json.dumps(diagnostics),
+                    "rows":       json.dumps(rows),
+                    "row_count":  len(rows),
+                })
+                row = result.fetchone()
+                created_at = row[1].isoformat() if row[1] is not None else None
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"persist failed: {exc}"}), 500
+
+        return jsonify({
+            "ok": True,
+            "scan_id": sid,
+            "created_at": created_at,
+            "label": new_label,
+            "notes": new_notes,
+            "direction": existing_direction,
+            "start_date": new_start_date,
+            "end_date": new_end_date,
+            "row_count": len(rows),
+            "rescanned": True,
+        })
 
     if "backtests_v2_preview_index" not in server.view_functions:
         server.add_url_rule("/backtests-v2-preview", endpoint="backtests_v2_preview_index", view_func=index)
@@ -1212,6 +1523,14 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             methods=["GET"],
         )
 
+    if "backtests_v2_saved_scans_defaults" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/defaults",
+            endpoint="backtests_v2_saved_scans_defaults",
+            view_func=saved_scans_defaults_api,
+            methods=["GET"],
+        )
+
     if "backtests_v2_saved_scans_load" not in server.view_functions:
         server.add_url_rule(
             "/api/backtests-v2/saved-scans/<scan_id>",
@@ -1226,4 +1545,12 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             endpoint="backtests_v2_saved_scans_delete",
             view_func=saved_scans_delete_api,
             methods=["DELETE"],
+        )
+
+    if "backtests_v2_saved_scans_update" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/<scan_id>/update",
+            endpoint="backtests_v2_saved_scans_update",
+            view_func=saved_scans_update_api,
+            methods=["POST"],
         )

@@ -28,12 +28,36 @@ function isoDateOffset(days) {
   return d.toISOString().slice(0, 10);
 }
 
+// Saved-scan-side defaults that match the backend SAVED_SCAN_DEFAULTS.
+// Used as a fallback if /api/backtests-v2/saved-scans/defaults can't be reached.
+// The backend fetch overrides these on mount so they stay in sync.
+const FALLBACK_SCAN_DEFAULTS = {
+  // Basic tier
+  minLevelGexBn:           50,
+  levelFamily:             'primary',
+  minCleanMovePoints:      20,
+  pivotStrengthBars:       3,
+  // Advanced tier
+  zoneMergeDistancePts:    10,
+  targetProximityPts:      5,
+  maxZoneBreachPts:        5,
+  minMinutesAfterOpen:     15,
+  maxMinutesBeforeClose:   45,
+  maxPriorDownUpRatio:     2.0,
+  maxStartPctOfRange:      0.20,
+  maxMoveLossPct:          0.75,
+  forwardHorizonsMinutes:  [30, 60, 90, 120, 180],
+  condorWingWidthPts:      10.0,
+  maxResults:              10000,
+}
+
 const DEFAULT_NEW_SCAN = {
   direction: 'down',
   startDate: isoDateOffset(-90),
   endDate: isoDateOffset(0),
   label: '',
   notes: '',
+  params: { ...FALLBACK_SCAN_DEFAULTS },
 };
 
 const DEFAULT_FILTERS = {
@@ -63,6 +87,11 @@ export default function SavedScans({ onSelectRow }) {
   const [newScan, setNewScan] = useState(DEFAULT_NEW_SCAN)
   const [running, setRunning] = useState(false)
 
+  // Backend's authoritative defaults for the scan params. Fetched on mount.
+  // Used to seed RunScanDialog so it pre-populates with whatever the backend
+  // currently considers default. Falls back to FALLBACK_SCAN_DEFAULTS.
+  const [serverDefaults, setServerDefaults] = useState(FALLBACK_SCAN_DEFAULTS)
+
   const [innerTab, setInnerTab] = useState('diagnostics')
   const [filters, setFilters] = useState(DEFAULT_FILTERS)
 
@@ -91,6 +120,10 @@ export default function SavedScans({ onSelectRow }) {
 
   const [isColumnsOpen, setIsColumnsOpen] = useState(false)
 
+  // Edit-scan dialog state
+  const [editingScan, setEditingScan] = useState(null) // the scan object being edited, or null
+  const [editing, setEditing] = useState(false)        // submission in progress
+
   // ── Server fetches ──
   const refreshScans = useCallback(async () => {
     setScansLoading(true)
@@ -108,6 +141,36 @@ export default function SavedScans({ onSelectRow }) {
   }, [])
 
   useEffect(() => { refreshScans() }, [refreshScans])
+
+  // Fetch the backend's saved-scan defaults so the run dialog pre-populates
+  // with current values rather than stale frontend constants.
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/backtests-v2/saved-scans/defaults')
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return
+        if (data?.ok && data?.defaults) {
+          // Pick out only the fields we actually expose in the form
+          const known = Object.keys(FALLBACK_SCAN_DEFAULTS)
+          const next = { ...FALLBACK_SCAN_DEFAULTS }
+          for (const k of known) {
+            if (data.defaults[k] !== undefined) next[k] = data.defaults[k]
+          }
+          setServerDefaults(next)
+          // Also seed newScan.params if it's still untouched (matches fallback)
+          setNewScan(prev => {
+            const isUntouched = JSON.stringify(prev.params) === JSON.stringify(FALLBACK_SCAN_DEFAULTS)
+            if (isUntouched) return { ...prev, params: next }
+            return prev
+          })
+        }
+      })
+      .catch(() => {
+        // Stay on FALLBACK_SCAN_DEFAULTS — no UI error since this is a soft enhancement
+      })
+    return () => { cancelled = true }
+  }, [])
 
   const loadScan = useCallback(async (scanId) => {
     if (!scanId) return
@@ -142,12 +205,14 @@ export default function SavedScans({ onSelectRow }) {
           endDate: newScan.endDate,
           label: newScan.label || null,
           notes: newScan.notes || null,
+          params: newScan.params || {},
         }),
       })
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || 'Scan failed')
       setShowRunDialog(false)
-      setNewScan(DEFAULT_NEW_SCAN)
+      // Reset to defaults but seed with serverDefaults so next-run is sane
+      setNewScan({ ...DEFAULT_NEW_SCAN, params: { ...serverDefaults } })
       await refreshScans()
       if (data.scan_id) await loadScan(data.scan_id)
     } catch (err) {
@@ -155,7 +220,7 @@ export default function SavedScans({ onSelectRow }) {
     } finally {
       setRunning(false)
     }
-  }, [newScan, refreshScans, loadScan])
+  }, [newScan, refreshScans, loadScan, serverDefaults])
 
   const deleteScan = useCallback(async (scanId) => {
     if (!scanId) return
@@ -175,6 +240,79 @@ export default function SavedScans({ onSelectRow }) {
       setError(String(err.message || err))
     }
   }, [refreshScans, selectedScanId])
+
+  // ── Edit handlers ──
+  const openEditDialog = useCallback((scan) => {
+    setEditingScan(scan)
+  }, [])
+
+  const closeEditDialog = useCallback(() => {
+    if (editing) return // don't allow close mid-submit
+    setEditingScan(null)
+  }, [editing])
+
+  const submitEdit = useCallback(async (form) => {
+    if (!editingScan) return
+    setEditing(true)
+    setError(null)
+    try {
+      const res = await fetch(
+        `/api/backtests-v2/saved-scans/${editingScan.scan_id}/update`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            label: form.label || null,
+            notes: form.notes || null,
+            startDate: form.startDate,
+            endDate: form.endDate,
+            params: form.params || {},
+          }),
+        }
+      )
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || 'Update failed')
+      setEditingScan(null)
+      await refreshScans()
+      if (selectedScanId === editingScan.scan_id) {
+        await loadScan(editingScan.scan_id)
+      }
+    } catch (err) {
+      setError(String(err.message || err))
+    } finally {
+      setEditing(false)
+    }
+  }, [editingScan, refreshScans, selectedScanId, loadScan])
+
+  // Duplicate a saved scan: pre-populate the run dialog with this scan's
+  // params (and label/dates as a starting point) and open it.
+  const duplicateScan = useCallback(async (scan) => {
+    if (!scan?.scan_id) return
+    setError(null)
+    try {
+      // Need full row to access params (the list endpoint omits params for size)
+      const res = await fetch(`/api/backtests-v2/saved-scans/${scan.scan_id}`)
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || 'Failed to load scan for duplication')
+      const sourceParams = data.params || {}
+      // Project sourceParams onto the form's known keys; anything else is dropped
+      const formParams = { ...serverDefaults }
+      for (const k of Object.keys(FALLBACK_SCAN_DEFAULTS)) {
+        if (sourceParams[k] !== undefined) formParams[k] = sourceParams[k]
+      }
+      setNewScan({
+        direction: data.direction || 'down',
+        startDate: data.start_date || isoDateOffset(-90),
+        endDate:   data.end_date   || isoDateOffset(0),
+        label:    `${data.label || `Scan #${scan.scan_id}`} (copy)`,
+        notes:    data.notes || '',
+        params:   formParams,
+      })
+      setShowRunDialog(true)
+    } catch (err) {
+      setError(String(err.message || err))
+    }
+  }, [serverDefaults])
 
   // ── Row selection (drives price chart + smile via parent handler) ──
   const handleSelectRowLocal = useCallback(async (row, idx) => {
@@ -249,6 +387,8 @@ export default function SavedScans({ onSelectRow }) {
           selectedScanId={selectedScanId}
           onSelect={loadScan}
           onDelete={deleteScan}
+          onEdit={openEditDialog}
+          onDuplicate={duplicateScan}
         />
       </div>
 
@@ -259,6 +399,15 @@ export default function SavedScans({ onSelectRow }) {
           onSubmit={runAndSave}
           onCancel={() => { setShowRunDialog(false); setNewScan(DEFAULT_NEW_SCAN) }}
           running={running}
+        />
+      )}
+
+      {editingScan && (
+        <EditScanDialog
+          scan={editingScan}
+          onSubmit={submitEdit}
+          onCancel={closeEditDialog}
+          submitting={editing}
         />
       )}
 
@@ -708,7 +857,7 @@ function FiltersPanel({ filters, setFilters, scan, filteredCount, allCount }) {
 }
 
 
-function SavedScansList({ scans, loading, selectedScanId, onSelect, onDelete }) {
+function SavedScansList({ scans, loading, selectedScanId, onSelect, onDelete, onEdit, onDuplicate }) {
   if (loading && scans.length === 0) {
     return <div style={{ color: '#94a3b8' }}>Loading…</div>
   }
@@ -759,6 +908,21 @@ function SavedScansList({ scans, loading, selectedScanId, onSelect, onDelete }) 
                 <td style={{ padding: '8px 10px', textAlign: 'right' }}>
                   <button
                     className="ghost-button"
+                    style={{ padding: '4px 10px', fontSize: 11, marginRight: 6 }}
+                    onClick={(e) => { e.stopPropagation(); onDuplicate && onDuplicate(scan) }}
+                    title="Open the run dialog pre-filled with this scan's params"
+                  >
+                    Duplicate
+                  </button>
+                  <button
+                    className="ghost-button"
+                    style={{ padding: '4px 10px', fontSize: 11, marginRight: 6 }}
+                    onClick={(e) => { e.stopPropagation(); onEdit && onEdit(scan) }}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className="ghost-button"
                     style={{ padding: '4px 10px', fontSize: 11 }}
                     onClick={(e) => { e.stopPropagation(); onDelete(scan.scan_id) }}
                   >
@@ -778,7 +942,7 @@ function SavedScansList({ scans, loading, selectedScanId, onSelect, onDelete }) 
 function RunScanDialog({ newScan, setNewScan, onSubmit, onCancel, running }) {
   return (
     <div className="modal-backdrop" onClick={running ? undefined : onCancel}>
-      <div className="modal-card" style={{ width: 560 }} onClick={(e) => e.stopPropagation()}>
+      <div className="modal-card" style={{ width: 720, maxHeight: '90vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div>
             <div className="eyebrow">Saved Scans</div>
@@ -837,6 +1001,12 @@ function RunScanDialog({ newScan, setNewScan, onSubmit, onCancel, running }) {
           </label>
         </div>
 
+        <ScanParamsForm
+          params={newScan.params || {}}
+          onChange={(nextParams) => setNewScan({ ...newScan, params: nextParams })}
+          disabled={running}
+        />
+
         {running && (
           <div className="helper-note" style={{ color: '#fcd34d' }}>
             Running scan… this may take a few minutes for long date ranges. Don't close the page.
@@ -883,6 +1053,350 @@ function LoadedScanHeader({ scan, allCount, filteredCount, filtersActive }) {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+
+function EditScanDialog({ scan, onSubmit, onCancel, submitting }) {
+  // Local form state seeded from the scan being edited.
+  const [form, setForm] = React.useState({
+    label: scan.label || '',
+    notes: scan.notes || '',
+    startDate: scan.start_date || '',
+    endDate: scan.end_date || '',
+    params: { ...FALLBACK_SCAN_DEFAULTS },
+  })
+
+  // We don't get scan.params from the list endpoint — fetch the full scan
+  // on mount so the params form starts with the actual current values.
+  const [paramsLoaded, setParamsLoaded] = React.useState(false)
+  React.useEffect(() => {
+    let cancelled = false
+    if (!scan?.scan_id) return
+    fetch(`/api/backtests-v2/saved-scans/${scan.scan_id}`)
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return
+        if (data?.ok) {
+          const sourceParams = data.params || {}
+          const formParams = { ...FALLBACK_SCAN_DEFAULTS }
+          for (const k of Object.keys(FALLBACK_SCAN_DEFAULTS)) {
+            if (sourceParams[k] !== undefined) formParams[k] = sourceParams[k]
+          }
+          setForm(prev => ({ ...prev, params: formParams }))
+        }
+        setParamsLoaded(true)
+      })
+      .catch(() => setParamsLoaded(true))
+    return () => { cancelled = true }
+  }, [scan?.scan_id])
+
+  // Detect whether anything that requires re-scanning has changed.
+  // Date range changes always re-scan. Param changes also re-scan.
+  const datesChanged = (
+    form.startDate !== (scan.start_date || '') ||
+    form.endDate   !== (scan.end_date || '')
+  )
+  const paramsChanged = paramsLoaded && (() => {
+    // Compare against currently-loaded params
+    // We don't have the original here without re-fetching; we approximate
+    // by saying "if datesChanged, treat as re-scan; otherwise check params
+    // against FALLBACK_SCAN_DEFAULTS would be wrong."
+    // Better: just always send params; backend will re-scan if any scan-
+    // affecting key changed. The user-visible "Re-run" indicator is just for
+    // dates since that's the most obvious trigger.
+    return false
+  })()
+  const willRescan = datesChanged || paramsChanged
+
+  return (
+    <div className="modal-backdrop" onClick={submitting ? undefined : onCancel}>
+      <div className="modal-card" style={{ width: 720, maxHeight: '90vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <div className="eyebrow">Edit Saved Scan</div>
+            <h2 style={{ fontSize: 18 }}>{scan.label || `Scan #${scan.scan_id}`}</h2>
+            <p style={{ color: '#94a3b8', fontSize: 12, margin: '4px 0 0' }}>
+              Editing label/notes saves instantly. Changing dates or any
+              scan parameter re-runs the scan and replaces the cached results.
+            </p>
+          </div>
+          <button className="ghost-button" onClick={onCancel} disabled={submitting}>×</button>
+        </div>
+
+        <div className="form-grid">
+          <label className="field">
+            <span>Direction</span>
+            <input
+              type="text"
+              value={scan.direction}
+              disabled
+              readOnly
+              style={{ opacity: 0.6, cursor: 'not-allowed' }}
+            />
+          </label>
+          <label className="field">
+            <span>Label</span>
+            <input
+              type="text"
+              value={form.label}
+              onChange={(e) => setForm({ ...form, label: e.target.value })}
+              placeholder="Scan label"
+              disabled={submitting}
+            />
+          </label>
+          <label className="field">
+            <span>Start date</span>
+            <input
+              type="date"
+              value={form.startDate}
+              onChange={(e) => setForm({ ...form, startDate: e.target.value })}
+              disabled={submitting}
+            />
+          </label>
+          <label className="field">
+            <span>End date</span>
+            <input
+              type="date"
+              value={form.endDate}
+              onChange={(e) => setForm({ ...form, endDate: e.target.value })}
+              disabled={submitting}
+            />
+          </label>
+          <label className="field field-wide">
+            <span>Notes</span>
+            <textarea
+              value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              placeholder="Anything you want to remember about this scan..."
+              disabled={submitting}
+            />
+          </label>
+        </div>
+
+        {paramsLoaded ? (
+          <ScanParamsForm
+            params={form.params}
+            onChange={(nextParams) => setForm({ ...form, params: nextParams })}
+            disabled={submitting}
+          />
+        ) : (
+          <div className="helper-note" style={{ color: '#94a3b8' }}>Loading parameters…</div>
+        )}
+
+        {willRescan && (
+          <div className="helper-note" style={{ color: '#fcd34d' }}>
+            ⚠ Date range changed — clicking Save will re-run the scan with the
+            new range and replace the cached rows. Changing scan parameters also
+            triggers a re-run.
+          </div>
+        )}
+
+        {submitting && (
+          <div className="helper-note" style={{ color: '#fcd34d' }}>
+            {willRescan
+              ? "Re-running scan… this may take a few minutes. Don't close the page."
+              : "Saving…"}
+          </div>
+        )}
+
+        <div className="modal-actions">
+          <button className="ghost-button" onClick={onCancel} disabled={submitting}>Cancel</button>
+          <button
+            className="primary-button"
+            onClick={() => onSubmit(form)}
+            disabled={submitting || !form.startDate || !form.endDate || !paramsLoaded}
+          >
+            {submitting
+              ? (willRescan ? 'Re-running…' : 'Saving…')
+              : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+// ──────────────────────────────────────────────────────────────────────
+// ScanParamsForm — Basic + Advanced controls for a saved scan's params.
+// Used by both RunScanDialog and EditScanDialog.
+// `params` is an object containing all overridable keys.
+// `onChange` receives a new params object when any field changes.
+// ──────────────────────────────────────────────────────────────────────
+
+function ScanParamsForm({ params, onChange, disabled = false }) {
+  const [showAdvanced, setShowAdvanced] = React.useState(false)
+
+  const update = (key, value) => onChange({ ...params, [key]: value })
+
+  // Helpers for the comma-separated horizons list
+  const horizonsString = Array.isArray(params.forwardHorizonsMinutes)
+    ? params.forwardHorizonsMinutes.join(', ')
+    : ''
+  const updateHorizons = (str) => {
+    const parts = String(str).split(',').map(s => s.trim()).filter(Boolean)
+    const nums = parts.map(p => parseInt(p, 10)).filter(n => Number.isFinite(n) && n > 0)
+    update('forwardHorizonsMinutes', nums)
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div className="eyebrow" style={{ marginTop: 8 }}>Move Detection — Basic</div>
+      <div className="form-grid">
+        <label className="field">
+          <span>Min level GEX (BN)</span>
+          <input
+            type="number" step="5" min="0"
+            value={params.minLevelGexBn ?? ''}
+            onChange={(e) => update('minLevelGexBn', Number(e.target.value))}
+            disabled={disabled}
+          />
+        </label>
+        <label className="field">
+          <span>Level family</span>
+          <select
+            value={params.levelFamily ?? 'primary'}
+            onChange={(e) => update('levelFamily', e.target.value)}
+            disabled={disabled}
+          >
+            <option value="primary">Primary only</option>
+            <option value="primary+strong">Primary + Strong</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>Min clean move (pts)</span>
+          <input
+            type="number" step="1" min="0"
+            value={params.minCleanMovePoints ?? ''}
+            onChange={(e) => update('minCleanMovePoints', Number(e.target.value))}
+            disabled={disabled}
+          />
+        </label>
+        <label className="field">
+          <span>Pivot strength (bars)</span>
+          <input
+            type="number" step="1" min="1"
+            value={params.pivotStrengthBars ?? ''}
+            onChange={(e) => update('pivotStrengthBars', Number(e.target.value))}
+            disabled={disabled}
+          />
+        </label>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setShowAdvanced(v => !v)}
+        style={{
+          background: 'none',
+          border: '1px solid #334155',
+          color: '#93c5fd',
+          padding: '6px 12px',
+          borderRadius: 8,
+          cursor: 'pointer',
+          fontSize: 11,
+          fontWeight: 600,
+          textTransform: 'uppercase',
+          letterSpacing: '0.04em',
+          alignSelf: 'flex-start',
+        }}
+        disabled={disabled}
+      >
+        {showAdvanced ? '▼ Hide advanced' : '▶ Show advanced'}
+      </button>
+
+      {showAdvanced && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="eyebrow">Move Detection — Advanced</div>
+          <div className="form-grid">
+            <label className="field">
+              <span>Zone merge dist (pts)</span>
+              <input type="number" step="1" min="0"
+                value={params.zoneMergeDistancePts ?? ''}
+                onChange={(e) => update('zoneMergeDistancePts', Number(e.target.value))}
+                disabled={disabled} />
+            </label>
+            <label className="field">
+              <span>Target proximity (pts)</span>
+              <input type="number" step="1" min="0"
+                value={params.targetProximityPts ?? ''}
+                onChange={(e) => update('targetProximityPts', Number(e.target.value))}
+                disabled={disabled} />
+            </label>
+            <label className="field">
+              <span>Max zone breach (pts)</span>
+              <input type="number" step="1" min="0"
+                value={params.maxZoneBreachPts ?? ''}
+                onChange={(e) => update('maxZoneBreachPts', Number(e.target.value))}
+                disabled={disabled} />
+            </label>
+            <label className="field">
+              <span>Min minutes after open</span>
+              <input type="number" step="5" min="0"
+                value={params.minMinutesAfterOpen ?? ''}
+                onChange={(e) => update('minMinutesAfterOpen', Number(e.target.value))}
+                disabled={disabled} />
+            </label>
+            <label className="field">
+              <span>Max minutes before close</span>
+              <input type="number" step="5" min="0"
+                value={params.maxMinutesBeforeClose ?? ''}
+                onChange={(e) => update('maxMinutesBeforeClose', Number(e.target.value))}
+                disabled={disabled} />
+            </label>
+            <label className="field">
+              <span>Max prior down/up ratio</span>
+              <input type="number" step="0.1" min="0"
+                value={params.maxPriorDownUpRatio ?? ''}
+                onChange={(e) => update('maxPriorDownUpRatio', Number(e.target.value))}
+                disabled={disabled} />
+            </label>
+            <label className="field">
+              <span>Max start % of range</span>
+              <input type="number" step="0.05" min="0" max="1"
+                value={params.maxStartPctOfRange ?? ''}
+                onChange={(e) => update('maxStartPctOfRange', Number(e.target.value))}
+                disabled={disabled} />
+            </label>
+            <label className="field">
+              <span>Max move loss %</span>
+              <input type="number" step="0.05" min="0" max="1"
+                value={params.maxMoveLossPct ?? ''}
+                onChange={(e) => update('maxMoveLossPct', Number(e.target.value))}
+                disabled={disabled} />
+            </label>
+            <label className="field">
+              <span>Max results</span>
+              <input type="number" step="100" min="100"
+                value={params.maxResults ?? ''}
+                onChange={(e) => update('maxResults', Number(e.target.value))}
+                disabled={disabled} />
+            </label>
+          </div>
+
+          <div className="eyebrow">Forward Outcome Measurement</div>
+          <div className="form-grid">
+            <label className="field field-wide">
+              <span>Forward horizons (minutes)</span>
+              <input
+                type="text"
+                value={horizonsString}
+                onChange={(e) => updateHorizons(e.target.value)}
+                placeholder="30, 60, 90, 120, 180"
+                disabled={disabled}
+              />
+            </label>
+            <label className="field">
+              <span>Condor wing width (pts)</span>
+              <input type="number" step="1" min="0"
+                value={params.condorWingWidthPts ?? ''}
+                onChange={(e) => update('condorWingWidthPts', Number(e.target.value))}
+                disabled={disabled} />
+            </label>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -20,11 +20,12 @@ Requirements:
     pip install requests python-dotenv sqlalchemy psycopg pandas pandas-market-calendars
 
 Usage:
-    python backfill_orats_oi_gamma.py                # interactive
+    python backfill_orats_oi_gamma.py                # interactive, default 2025 range
     python backfill_orats_oi_gamma.py --dry-run      # show plan, don't execute
     python backfill_orats_oi_gamma.py --yes          # skip confirmation
     python backfill_orats_oi_gamma.py --skip-backfill  # only run legacy cleanup
     python backfill_orats_oi_gamma.py --skip-legacy    # only run backfill
+    python backfill_orats_oi_gamma.py --start-date 2024-01-02 --end-date 2024-12-31 --skip-legacy
 """
 
 import argparse
@@ -371,6 +372,8 @@ def confirm(prompt: str) -> bool:
 
 
 def main():
+    global BACKFILL_API_START, BACKFILL_API_END
+
     p = argparse.ArgumentParser()
     p.add_argument("--env", default=".env", help="Path to .env file")
     p.add_argument("--dry-run", action="store_true", help="Show plan only")
@@ -381,7 +384,21 @@ def main():
                    help="Skip legacy cleanup; only run main backfill")
     p.add_argument("--no-resume", action="store_true",
                    help="Don't skip dates that already have rows in the DB")
+    p.add_argument("--start-date", default=None,
+                   help=f"Override BACKFILL_API_START (YYYY-MM-DD). "
+                        f"Default: {BACKFILL_API_START}")
+    p.add_argument("--end-date", default=None,
+                   help=f"Override BACKFILL_API_END (YYYY-MM-DD). "
+                        f"Default: {BACKFILL_API_END}")
     args = p.parse_args()
+
+    # Apply CLI overrides for the backfill range
+    if args.start_date:
+        BACKFILL_API_START = dt.date.fromisoformat(args.start_date)
+    if args.end_date:
+        BACKFILL_API_END = dt.date.fromisoformat(args.end_date)
+    if BACKFILL_API_START > BACKFILL_API_END:
+        sys.exit("ERROR: --start-date must be on or before --end-date.")
 
     env_path = Path(args.env)
     if env_path.exists():
