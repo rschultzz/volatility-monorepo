@@ -337,33 +337,54 @@ def _classify_gex_regime(signed_gex_bn: Optional[float]) -> str:
 @lru_cache(maxsize=512)
 def _load_signed_gex_for_date(trade_date_iso: str) -> pd.DataFrame:
     """
-    Load 0DTE call/put gex per strike for a given trade date, taking the most
-    recent updated_at row per strike. Returns empty DataFrame on miss.
+    Load signed net GEX per discounted_level for a given trade date.
+    Returns one row per discounted_level (closest SPX strike's coordinate),
+    with TWO signed sums:
+      - signed_gex_0dte: SUM(gex_call - gex_put) for expir_date = trade_date
+      - signed_gex_all:  SUM(gex_call - gex_put) across all expirations
 
-    Cached per process — same scan reuses the same fetch across many lookups.
+    The 'all' sum aggregates every listed strike at the same discounted_level —
+    i.e., it's analogous to gex_walls_daily_rounded.net_gex_level but signed
+    instead of gross.
+
+    For both columns, we take the most recent updated_at row per
+    (strike, expir_date) before aggregating.
+
+    Returns empty DataFrame on miss. Cached per process via lru_cache.
     """
     sql = text(
         """
-        WITH ranked AS (SELECT strike,
-                               discounted_level,
-                               gex_call,
-                               gex_put,
-                               ROW_NUMBER() OVER (
-                    PARTITION BY strike
+        WITH ranked AS (
+            SELECT
+                strike,
+                discounted_level,
+                expir_date,
+                gex_call,
+                gex_put,
+                ROW_NUMBER() OVER (
+                    PARTITION BY strike, expir_date
                     ORDER BY updated_at DESC NULLS LAST
                 ) AS rn
-                        FROM public.orats_oi_gamma
-                        WHERE ticker = 'SPX'
-                          AND trade_date = :trade_date
-                          AND expir_date = :trade_date)
-        SELECT strike,
-               discounted_level,
-               gex_call,
-               gex_put,
-               (COALESCE(gex_call, 0) - COALESCE(gex_put, 0)) AS signed_gex
-        FROM ranked
-        WHERE rn = 1
-          AND discounted_level IS NOT NULL
+            FROM public.orats_oi_gamma
+            WHERE ticker = 'SPX'
+              AND trade_date = :trade_date
+        ),
+        per_row AS (
+            SELECT
+                strike,
+                discounted_level,
+                expir_date,
+                (COALESCE(gex_call, 0) - COALESCE(gex_put, 0)) AS signed_gex
+            FROM ranked
+            WHERE rn = 1
+              AND discounted_level IS NOT NULL
+        )
+        SELECT
+            discounted_level,
+            SUM(CASE WHEN expir_date = :trade_date THEN signed_gex ELSE 0 END) AS signed_gex_0dte,
+            SUM(signed_gex) AS signed_gex_all
+        FROM per_row
+        GROUP BY discounted_level
         ORDER BY discounted_level
         """
     )
@@ -372,31 +393,40 @@ def _load_signed_gex_for_date(trade_date_iso: str) -> pd.DataFrame:
             df = pd.read_sql(sql, conn, params={"trade_date": trade_date_iso})
         return df
     except Exception:
-        return pd.DataFrame(columns=["strike", "discounted_level", "gex_call", "gex_put", "signed_gex"])
+        return pd.DataFrame(columns=["discounted_level", "signed_gex_0dte", "signed_gex_all"])
 
 
 def _signed_gex_at_es_level(
-        trade_date_iso: str,
-        es_level: float,
-        window_pts: float = _GEX_MATCH_WINDOW_PTS,
+    trade_date_iso: str,
+    es_level: float,
+    window_pts: float = _GEX_MATCH_WINDOW_PTS,
 ) -> Dict[str, Any]:
     """
     Return signed net GEX (in billions) at the given ES level by looking up
-    the closest discounted_level in orats_oi_gamma (0DTE, SPX) within window_pts.
+    the closest discounted_level in orats_oi_gamma (SPX) within window_pts.
+
+    Returns BOTH 0DTE-only and all-expiration scopes.
 
     Returns dict with keys:
-      signed_gex_bn:    float | None  (gex_call - gex_put, in billions, signed)
-      regime:           str           ('positive' | 'negative' | 'neutral' | 'unknown')
-      matched_strike:   float | None  (SPX strike of the matched row)
-      matched_dl:       float | None  (the matched row's discounted_level)
-      match_distance:   float | None  (|es_level - matched_dl|)
+      signed_gex_bn:        float | None  (0DTE-only signed sum at matched level, BN)
+      regime:               str           (regime classification of 0DTE value)
+      signed_gex_bn_all:    float | None  (all-expirations signed sum at matched level, BN)
+      regime_all:           str           (regime classification of all-exp value)
+      matched_dl:           float | None  (the matched row's discounted_level)
+      match_distance:       float | None  (|es_level - matched_dl|)
+
+    Note: 'matched_strike' is no longer returned — the underlying load now
+    aggregates across strikes that share the same discounted_level, so a
+    single SPX strike isn't always meaningful. matched_dl is the canonical
+    location identifier.
     """
     blank = {
-        "signed_gex_bn": None,
-        "regime": "unknown",
-        "matched_strike": None,
-        "matched_dl": None,
-        "match_distance": None,
+        "signed_gex_bn":      None,
+        "regime":             "unknown",
+        "signed_gex_bn_all":  None,
+        "regime_all":         "unknown",
+        "matched_dl":         None,
+        "match_distance":     None,
     }
     if es_level is None:
         return blank
@@ -411,28 +441,30 @@ def _signed_gex_at_es_level(
     if df is None or df.empty:
         return blank
 
-    # Find the row whose discounted_level is closest to the target.
     diffs = (df["discounted_level"].astype(float) - target).abs()
     if diffs.empty:
         return blank
     idx = diffs.idxmin()
     distance = float(diffs.loc[idx])
     if distance > float(window_pts):
-        # Closest match is beyond our acceptance window; treat as no match.
         out = dict(blank)
         out["match_distance"] = round(distance, 4)
         return out
 
     row = df.loc[idx]
-    raw_signed = float(row.get("signed_gex") or 0.0)
-    signed_bn = raw_signed / 1_000_000_000.0
+    raw_0dte = float(row.get("signed_gex_0dte") or 0.0)
+    raw_all  = float(row.get("signed_gex_all")  or 0.0)
+    signed_bn_0dte = raw_0dte / 1_000_000_000.0
+    signed_bn_all  = raw_all  / 1_000_000_000.0
     return {
-        "signed_gex_bn": round(signed_bn, 4),
-        "regime": _classify_gex_regime(signed_bn),
-        "matched_strike": float(row.get("strike")) if row.get("strike") is not None else None,
-        "matched_dl": float(row.get("discounted_level")) if row.get("discounted_level") is not None else None,
-        "match_distance": round(distance, 4),
+        "signed_gex_bn":     round(signed_bn_0dte, 4),
+        "regime":            _classify_gex_regime(signed_bn_0dte),
+        "signed_gex_bn_all": round(signed_bn_all, 4),
+        "regime_all":        _classify_gex_regime(signed_bn_all),
+        "matched_dl":        float(row.get("discounted_level")) if row.get("discounted_level") is not None else None,
+        "match_distance":    round(distance, 4),
     }
+
 
 
 def load_source_rows(start_date: str, end_date: str, source_view: str | None = None) -> pd.DataFrame:
@@ -972,11 +1004,11 @@ def _find_target_acceptance_rows(
 
 
 def _measure_forward_outcomes(
-        day_rows: List[Dict[str, Any]],
-        anchor_idx: int,
-        anchor_price: float,
-        direction: str,  # "up" for shorts (pnl = anchor - price), "down" for longs (pnl = price - anchor)
-        horizons_minutes: tuple[int, ...],
+    day_rows: List[Dict[str, Any]],
+    anchor_idx: int,
+    anchor_price: float,
+    direction: str,   # "up" for shorts (pnl = anchor - price), "down" for longs (pnl = price - anchor)
+    horizons_minutes: tuple[int, ...],
 ) -> Dict[str, Any]:
     """
     Walk forward from anchor_idx for each horizon, capturing:
@@ -985,15 +1017,15 @@ def _measure_forward_outcomes(
       - close_pts: P&L if exited at the last bar of the horizon window
       - window_bars: how many bars were actually observed
       - reached_close: True if the window was truncated by RTH close (13:00 PT)
-
+    
     Always appends an "eod" horizon = from anchor to last bar of the day.
-
+    
     Sign convention:
       - direction="up" (short trade analog): favorable = price goes DOWN
           pnl(t) = anchor_price - price(t)
       - direction="down" (long trade analog): favorable = price goes UP
           pnl(t) = price(t) - anchor_price
-
+    
     Returns:
       {
         "30m": {"mfe_pts": float, "mae_pts": float, "close_pts": float,
@@ -1004,28 +1036,28 @@ def _measure_forward_outcomes(
     """
     if anchor_idx < 0 or anchor_idx >= len(day_rows):
         return {}
-
+    
     anchor_row = day_rows[anchor_idx]
     anchor_price_f = float(anchor_price)
-
+    
     def _pnl(price: float) -> float:
         if direction == "up":
             return anchor_price_f - float(price)
         else:
             return float(price) - anchor_price_f
-
+    
     def _compute_horizon(end_bar_idx: int) -> Dict[str, Any]:
         """Compute mfe/mae/close over [anchor_idx+1 ... end_bar_idx]."""
         if end_bar_idx <= anchor_idx:
             return {"mfe_pts": 0.0, "mae_pts": 0.0, "close_pts": 0.0,
                     "window_bars": 0, "reached_close": False}
-
+        
         mfe = float("-inf")
         mae = float("-inf")  # tracked as magnitude of WORST pnl
         last_close = None
         bars = 0
         reached_close = False
-
+        
         for k in range(anchor_idx + 1, end_bar_idx + 1):
             row = day_rows[k]
             high = row.get("high")
@@ -1033,24 +1065,24 @@ def _measure_forward_outcomes(
             close_v = row.get("close")
             if high is None or low is None:
                 continue
-
+            
             # Best and worst excursions within the bar
             pnl_high = _pnl(float(high))
             pnl_low = _pnl(float(low))
             bar_best = max(pnl_high, pnl_low)
             bar_worst = min(pnl_high, pnl_low)
-
+            
             mfe = max(mfe, bar_best)
             # mae is magnitude of adverse move; negative pnl -> positive mae
             if bar_worst < 0:
                 mae = max(mae, -bar_worst)
             else:
                 mae = max(mae, 0.0)
-
+            
             if close_v is not None:
                 last_close = float(close_v)
             bars += 1
-
+            
             # Check if this bar is past 13:00 PT (RTH close)
             ts_pt = _normalize_pt_label(row.get("ts_pt"))
             if ts_pt:
@@ -1060,25 +1092,25 @@ def _measure_forward_outcomes(
                         reached_close = True
                 except Exception:
                     pass
-
+        
         if mfe == float("-inf"):
             mfe = 0.0
         if mae == float("-inf"):
             mae = 0.0
         close_pts = _pnl(last_close) if last_close is not None else 0.0
-
+        
         return {
-            "mfe_pts": round(float(mfe), 2),
-            "mae_pts": round(float(mae), 2),
-            "close_pts": round(float(close_pts), 2),
-            "window_bars": int(bars),
+            "mfe_pts":       round(float(mfe), 2),
+            "mae_pts":       round(float(mae), 2),
+            "close_pts":     round(float(close_pts), 2),
+            "window_bars":   int(bars),
             "reached_close": bool(reached_close),
         }
-
+    
     # Build horizon windows — assumes 1-minute bars. Stop at the RTH close or
     # end of day_rows, whichever comes first.
     last_bar_of_day = len(day_rows) - 1
-
+    
     # For each horizon, find the last bar within that horizon window
     out: Dict[str, Any] = {}
     for mins in horizons_minutes:
@@ -1095,7 +1127,7 @@ def _measure_forward_outcomes(
                 except Exception:
                     pass
         out[f"{mins}m"] = _compute_horizon(end_bar)
-
+    
     # EOD horizon — anchor to last bar of day (respecting 13:00 cutoff)
     eod_bar = last_bar_of_day
     for k in range(anchor_idx + 1, last_bar_of_day + 1):
@@ -1109,29 +1141,29 @@ def _measure_forward_outcomes(
             except Exception:
                 pass
     out["eod"] = _compute_horizon(eod_bar)
-
+    
     return out
 
 
 def _build_study_row(
-        *,
-        trade_date,
-        day_rows: List[Dict[str, Any]],
-        direction: str,  # "up" or "down"
-        zone: Dict[str, Any],
-        target_zone: Dict[str, Any],
-        pivot_idx: int,
-        pivot_price: float,
-        hit_idx: int,
-        clean_space_points: float,
-        forward_horizons_minutes: tuple[int, ...],
-        skew_put_delta_pct: Optional[float],
-        skew_call_delta_pct: Optional[float],
-        skew_atm_iv_delta_pct: Optional[float],
-        skew_threshold_passed: bool,
-        entry_iv: Optional[Dict[str, Optional[float]]] = None,
-        condor_wing_width_pts: float = 10.0,
-        target_spx_price: Optional[float] = None,
+    *,
+    trade_date,
+    day_rows: List[Dict[str, Any]],
+    direction: str,   # "up" or "down"
+    zone: Dict[str, Any],
+    target_zone: Dict[str, Any],
+    pivot_idx: int,
+    pivot_price: float,
+    hit_idx: int,
+    clean_space_points: float,
+    forward_horizons_minutes: tuple[int, ...],
+    skew_put_delta_pct: Optional[float],
+    skew_call_delta_pct: Optional[float],
+    skew_atm_iv_delta_pct: Optional[float],
+    skew_threshold_passed: bool,
+    entry_iv: Optional[Dict[str, Optional[float]]] = None,
+    condor_wing_width_pts: float = 10.0,
+    target_spx_price: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Build a single study-mode result row for one target-touch event.
@@ -1236,8 +1268,12 @@ def _build_study_row(
         "source_zone_high": round(float(zone["high"]), 2),
         "source_zone_width": round(float(zone["width"]), 2),
         "source_zone_levels": zone["levels_text"],
-        "source_zone_signed_gex_bn": source_signed_lookup["signed_gex_bn"],
-        "source_zone_gamma_regime": source_signed_lookup["regime"],
+        # Source zone signed gex — closest SPX strike to the source zone's
+        # near-edge ES level. Both 0DTE-only and all-expiration scopes:
+        "source_zone_signed_gex_bn":     source_signed_lookup["signed_gex_bn"],
+        "source_zone_gamma_regime":      source_signed_lookup["regime"],
+        "source_zone_signed_gex_bn_all": source_signed_lookup.get("signed_gex_bn_all"),
+        "source_zone_gamma_regime_all":  source_signed_lookup.get("regime_all", "unknown"),
 
         # Pivot anchor (for skew delta reference)
         "start_ts_pt": str(start_row.get("ts_pt")),
@@ -1250,8 +1286,12 @@ def _build_study_row(
         # in billions, looked up from orats_oi_gamma at the closest discounted_level.
         # Negative means put-heavy (short dealer gamma → amplifying flow).
         # Positive means call-heavy (long dealer gamma → mean-reverting flow).
-        "target_level_gex_bn": target_signed_lookup["signed_gex_bn"],
-        "target_gamma_regime": target_signed_lookup["regime"],
+        # _all_exp variants sum across all listed expirations (broader structural
+        # positioning), while the unsuffixed fields are 0DTE-only (intraday flow).
+        "target_level_gex_bn":         target_signed_lookup["signed_gex_bn"],
+        "target_gamma_regime":         target_signed_lookup["regime"],
+        "target_level_gex_bn_all_exp": target_signed_lookup.get("signed_gex_bn_all"),
+        "target_gamma_regime_all_exp": target_signed_lookup.get("regime_all", "unknown"),
         "target_zone_range": f"{target_zone['low']:.2f} – {target_zone['high']:.2f}",
         "target_ts_pt": str(target_row.get("ts_pt")),
         "target_ts_utc": pd.Timestamp(target_row.get("ts_utc")).isoformat() if target_row.get("ts_utc") is not None else None,
@@ -1263,8 +1303,8 @@ def _build_study_row(
         "clean_space_points": round(float(clean_space_points), 2),
 
         # Skew deltas vs predicted at target touch
-        "skew_delta_put_pct": None if skew_put_delta_pct is None else round(float(skew_put_delta_pct), 2),
-        "skew_delta_call_pct": None if skew_call_delta_pct is None else round(float(skew_call_delta_pct), 2),
+        "skew_delta_put_pct":    None if skew_put_delta_pct is None else round(float(skew_put_delta_pct), 2),
+        "skew_delta_call_pct":   None if skew_call_delta_pct is None else round(float(skew_call_delta_pct), 2),
         "skew_delta_atm_iv_pct": None if skew_atm_iv_delta_pct is None else round(float(skew_atm_iv_delta_pct), 2),
         "skew_threshold_passed": bool(skew_threshold_passed),
 
@@ -1380,11 +1420,11 @@ def _minutes_to_session_close(ts_pt_label: Optional[str]) -> Optional[int]:
 
 
 def _compute_realized_vs_implied(
-        forward_outcomes: Dict[str, Any],
-        iv_atm_0dte_pct: Optional[float],
-        anchor_price: float,
-        horizons_minutes: tuple[int, ...],
-        minutes_to_close: Optional[int] = None,
+    forward_outcomes: Dict[str, Any],
+    iv_atm_0dte_pct: Optional[float],
+    anchor_price: float,
+    horizons_minutes: tuple[int, ...],
+    minutes_to_close: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     For each horizon, compare realized price movement to implied 1-sigma move.
@@ -1461,13 +1501,13 @@ def _compute_realized_vs_implied(
 
         out[key] = {
             "implied_1sigma_pts": round(impl, 2),
-            "effective_minutes": int(effective_m),
-            "close_abs_pts": None if close_abs is None else round(close_abs, 2),
-            "close_over_1sigma": None if close_abs is None else round(close_abs / impl, 3),
-            "range_pts": None if rng is None else round(rng, 2),
-            "range_over_1sigma": None if rng is None else round(rng / impl, 3),
-            "inside_1sigma": None if close_abs is None else bool(close_abs < impl),
-            "inside_2sigma": None if close_abs is None else bool(close_abs < 2 * impl),
+            "effective_minutes":  int(effective_m),
+            "close_abs_pts":      None if close_abs is None else round(close_abs, 2),
+            "close_over_1sigma":  None if close_abs is None else round(close_abs / impl, 3),
+            "range_pts":          None if rng is None else round(rng, 2),
+            "range_over_1sigma":  None if rng is None else round(rng / impl, 3),
+            "inside_1sigma":      None if close_abs is None else bool(close_abs < impl),
+            "inside_2sigma":      None if close_abs is None else bool(close_abs < 2 * impl),
         }
 
     return out
@@ -1481,11 +1521,11 @@ def _round_to_strike(price: float, increment: float = 5.0) -> float:
 
 
 def _compute_hypothetical_condor(
-        anchor_price: Optional[float],
-        iv_atm_0dte_pct: Optional[float],
-        horizon_minutes: int,
-        wing_width_pts: float,
-        strike_increment: float = 5.0,
+    anchor_price: Optional[float],
+    iv_atm_0dte_pct: Optional[float],
+    horizon_minutes: int,
+    wing_width_pts: float,
+    strike_increment: float = 5.0,
 ) -> Dict[str, Any]:
     """
     Compute the four strikes for a hypothetical iron condor sized at ±1σ
@@ -1506,13 +1546,13 @@ def _compute_hypothetical_condor(
     All values are None if IV or anchor are missing.
     """
     blank = {
-        "short_put_strike": None,
-        "long_put_strike": None,
-        "short_call_strike": None,
-        "long_call_strike": None,
+        "short_put_strike":   None,
+        "long_put_strike":    None,
+        "short_call_strike":  None,
+        "long_call_strike":   None,
         "implied_1sigma_pts": None,
         "short_strike_width": None,
-        "wing_width_pts": float(wing_width_pts),
+        "wing_width_pts":     float(wing_width_pts),
     }
     if anchor_price is None or iv_atm_0dte_pct is None or horizon_minutes <= 0:
         return blank
@@ -1523,37 +1563,37 @@ def _compute_hypothetical_condor(
     anchor_f = float(anchor_price)
     # Round short strikes OUT from anchor (conservative: expand the box slightly)
     # For puts, round DOWN (further from anchor); for calls, round UP
-    raw_short_put = anchor_f - impl
+    raw_short_put  = anchor_f - impl
     raw_short_call = anchor_f + impl
 
     inc = float(strike_increment)
-    short_put = math.floor(raw_short_put / inc) * inc
+    short_put  = math.floor(raw_short_put  / inc) * inc
     short_call = math.ceil(raw_short_call / inc) * inc
 
-    long_put = short_put - float(wing_width_pts)
+    long_put  = short_put  - float(wing_width_pts)
     long_call = short_call + float(wing_width_pts)
 
     # Round wings to increment too (wings typically land on strikes naturally
     # when wing_width is a multiple of increment, but safeguard anyway)
-    long_put = round(long_put / inc) * inc
+    long_put  = round(long_put  / inc) * inc
     long_call = round(long_call / inc) * inc
 
     return {
-        "short_put_strike": round(short_put, 2),
-        "long_put_strike": round(long_put, 2),
-        "short_call_strike": round(short_call, 2),
-        "long_call_strike": round(long_call, 2),
+        "short_put_strike":   round(short_put, 2),
+        "long_put_strike":    round(long_put, 2),
+        "short_call_strike":  round(short_call, 2),
+        "long_call_strike":   round(long_call, 2),
         "implied_1sigma_pts": round(impl, 2),
         "short_strike_width": round(short_call - short_put, 2),
-        "wing_width_pts": float(wing_width_pts),
+        "wing_width_pts":     float(wing_width_pts),
     }
 
 
 def _compute_skew_at_target(
-        trade_date,
-        day_rows: List[Dict[str, Any]],
-        pivot_idx: int,
-        hit_idx: int,
+    trade_date,
+    day_rows: List[Dict[str, Any]],
+    pivot_idx: int,
+    hit_idx: int,
 ) -> Dict[str, Any]:
     """
     Compute skew delta values at the target-hit timestamp, relative to
@@ -3155,11 +3195,15 @@ def _day_zone_results(
                         "source_zone_high": round(float(zone["high"]), 2),
                         "source_zone_width": round(float(zone["width"]), 2),
                         "source_zone_levels": zone["levels_text"],
-                        "source_zone_signed_gex_bn": _src_lookup_up["signed_gex_bn"],
-                        "source_zone_gamma_regime": _src_lookup_up["regime"],
+                        "source_zone_signed_gex_bn":     _src_lookup_up["signed_gex_bn"],
+                        "source_zone_gamma_regime":      _src_lookup_up["regime"],
+                        "source_zone_signed_gex_bn_all": _src_lookup_up.get("signed_gex_bn_all"),
+                        "source_zone_gamma_regime_all":  _src_lookup_up.get("regime_all", "unknown"),
                         "target_level": round(float(target_zone_up["low"]), 2),
-                        "target_level_gex_bn": _tgt_lookup_up["signed_gex_bn"],
-                        "target_gamma_regime": _tgt_lookup_up["regime"],
+                        "target_level_gex_bn":           _tgt_lookup_up["signed_gex_bn"],
+                        "target_gamma_regime":           _tgt_lookup_up["regime"],
+                        "target_level_gex_bn_all_exp":   _tgt_lookup_up.get("signed_gex_bn_all"),
+                        "target_gamma_regime_all_exp":   _tgt_lookup_up.get("regime_all", "unknown"),
                         "target_zone_range": f"{target_zone_up['low']:.2f} – {target_zone_up['high']:.2f}",
                         "clean_space_points": round(float(clean_space_up), 2),
                         "start_ts_pt": str(start_row.get("ts_pt")),
@@ -3500,6 +3544,11 @@ def _day_zone_results(
                         recorder=recorder,
                     )
 
+                    # Compute signed-gex lookups ONCE per row (cached at lower
+                    # layer too, but this avoids redundant dict construction)
+                    _tgt_lookup_dn = _signed_gex_at_es_level(str(trade_date), float(target_zone_down["high"]))
+                    _src_lookup_dn = _signed_gex_at_es_level(str(trade_date), float(zone["low"]))
+
                     results.append(
                         {
                             "trade_date": str(trade_date),
@@ -3508,11 +3557,15 @@ def _day_zone_results(
                             "source_zone_high": round(float(zone["high"]), 2),
                             "source_zone_width": round(float(zone["width"]), 2),
                             "source_zone_levels": zone["levels_text"],
-                            "source_zone_signed_gex_bn": _signed_gex_at_es_level(str(trade_date), float(zone["low"]))["signed_gex_bn"],
-                            "source_zone_gamma_regime": _signed_gex_at_es_level(str(trade_date), float(zone["low"]))["regime"],
+                            "source_zone_signed_gex_bn":     _src_lookup_dn["signed_gex_bn"],
+                            "source_zone_gamma_regime":      _src_lookup_dn["regime"],
+                            "source_zone_signed_gex_bn_all": _src_lookup_dn.get("signed_gex_bn_all"),
+                            "source_zone_gamma_regime_all":  _src_lookup_dn.get("regime_all", "unknown"),
                             "target_level": round(float(target_zone_down["high"]), 2),
-                            "target_level_gex_bn": _signed_gex_at_es_level(str(trade_date), float(target_zone_down["high"]))["signed_gex_bn"],
-                            "target_gamma_regime": _signed_gex_at_es_level(str(trade_date), float(target_zone_down["high"]))["regime"],
+                            "target_level_gex_bn":           _tgt_lookup_dn["signed_gex_bn"],
+                            "target_gamma_regime":           _tgt_lookup_dn["regime"],
+                            "target_level_gex_bn_all_exp":   _tgt_lookup_dn.get("signed_gex_bn_all"),
+                            "target_gamma_regime_all_exp":   _tgt_lookup_dn.get("regime_all", "unknown"),
                             "target_zone_range": f"{target_zone_down['low']:.2f} – {target_zone_down['high']:.2f}",
                             "clean_space_points": round(float(clean_space_down), 2),
                             "start_ts_pt": str(start_row.get("ts_pt")),
@@ -3770,16 +3823,16 @@ def scan_gex_level_moves(
 
         agg: Dict[str, Any] = {}
         for hl in horizon_labels:
-            mfes: List[float] = []
-            maes: List[float] = []
+            mfes:   List[float] = []
+            maes:   List[float] = []
             closes: List[float] = []
             for r in results:
                 fo = r.get("forward_outcomes") or {}
                 h = fo.get(hl)
                 if not h:
                     continue
-                if h.get("mfe_pts") is not None: mfes.append(float(h["mfe_pts"]))
-                if h.get("mae_pts") is not None: maes.append(float(h["mae_pts"]))
+                if h.get("mfe_pts")   is not None: mfes.append(float(h["mfe_pts"]))
+                if h.get("mae_pts")   is not None: maes.append(float(h["mae_pts"]))
                 if h.get("close_pts") is not None: closes.append(float(h["close_pts"]))
 
             if not closes:
@@ -3787,13 +3840,13 @@ def scan_gex_level_moves(
                 continue
 
             agg[hl] = {
-                "count": len(closes),
-                "mfe_mean": round(sum(mfes) / len(mfes), 2) if mfes else 0.0,
-                "mfe_median": round(_median(mfes), 2),
-                "mae_mean": round(sum(maes) / len(maes), 2) if maes else 0.0,
-                "mae_median": round(_median(maes), 2),
-                "close_mean": round(sum(closes) / len(closes), 2),
-                "close_median": round(_median(closes), 2),
+                "count":             len(closes),
+                "mfe_mean":          round(sum(mfes)   / len(mfes),   2) if mfes   else 0.0,
+                "mfe_median":        round(_median(mfes),  2),
+                "mae_mean":          round(sum(maes)   / len(maes),   2) if maes   else 0.0,
+                "mae_median":        round(_median(maes),  2),
+                "close_mean":        round(sum(closes) / len(closes), 2),
+                "close_median":      round(_median(closes),2),
                 "win_rate_at_close": round(sum(1 for c in closes if c > 0) / len(closes), 3),
             }
 
@@ -3814,12 +3867,12 @@ def scan_gex_level_moves(
         sv_agg: Dict[str, Any] = {}
         ivs_all: List[float] = []
         for hl in short_vol_labels:
-            ivs: List[float] = []
-            impl_pts: List[float] = []
+            ivs:       List[float] = []
+            impl_pts:  List[float] = []
             range_rat: List[float] = []
             close_rat: List[float] = []
-            inside_1: List[bool] = []
-            inside_2: List[bool] = []
+            inside_1:  List[bool]  = []
+            inside_2:  List[bool]  = []
             for r in results:
                 rvi = r.get("realized_vs_implied") or {}
                 h = rvi.get(hl)
@@ -3846,25 +3899,25 @@ def scan_gex_level_moves(
                 continue
 
             sv_agg[hl] = {
-                "count": n,
-                "iv_median": round(_median(ivs), 2) if ivs else None,
+                "count":                 n,
+                "iv_median":             round(_median(ivs), 2) if ivs else None,
                 "implied_1sigma_median": round(_median(impl_pts), 2),
                 "range_over_1sigma_median": round(_median(range_rat), 3) if range_rat else None,
                 "close_over_1sigma_median": round(_median(close_rat), 3) if close_rat else None,
-                "pct_inside_1sigma": round(sum(inside_1) / len(inside_1), 3) if inside_1 else None,
-                "pct_inside_2sigma": round(sum(inside_2) / len(inside_2), 3) if inside_2 else None,
+                "pct_inside_1sigma":     round(sum(inside_1) / len(inside_1), 3) if inside_1 else None,
+                "pct_inside_2sigma":     round(sum(inside_2) / len(inside_2), 3) if inside_2 else None,
             }
 
         diagnostics["realized_vs_implied_aggregate"] = sv_agg
         if ivs_all:
             s_iv = sorted(ivs_all)
             diagnostics["iv_at_entry_summary"] = {
-                "count": len(s_iv),
-                "min": round(min(s_iv), 2),
-                "p25": round(s_iv[len(s_iv) // 4], 2),
+                "count":  len(s_iv),
+                "min":    round(min(s_iv), 2),
+                "p25":    round(s_iv[len(s_iv)//4], 2),
                 "median": round(_median(s_iv), 2),
-                "p75": round(s_iv[3 * len(s_iv) // 4], 2),
-                "max": round(max(s_iv), 2),
+                "p75":    round(s_iv[3*len(s_iv)//4], 2),
+                "max":    round(max(s_iv), 2),
             }
 
     return {

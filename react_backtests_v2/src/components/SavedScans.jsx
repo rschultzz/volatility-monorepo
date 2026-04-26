@@ -537,7 +537,10 @@ function applyFilters(rows, f) {
 
   return rows.filter(row => {
     if (f.gammaRegime !== 'all') {
-      const r = row.target_gamma_regime || 'unknown'
+      // Filter operates on the ALL-EXPIRATION regime (broader structural
+      // positioning), not 0DTE. The 0DTE regime is still in row data and
+      // visible in the table — it's just not the filter target.
+      const r = row.target_gamma_regime_all_exp || 'unknown'
       if (f.gammaRegime === 'non_neutral') {
         if (r !== 'positive' && r !== 'negative') return false
       } else if (r !== f.gammaRegime) {
@@ -714,7 +717,8 @@ function FiltersPanel({ filters, setFilters, scan, filteredCount, allCount }) {
   const regimeCounts = useMemo(() => {
     const counts = { positive: 0, negative: 0, neutral: 0, unknown: 0 }
     for (const r of scan?.rows || []) {
-      const k = r?.target_gamma_regime || 'unknown'
+      // Counts reflect the ALL-EXPIRATION regime (matches what the filter does)
+      const k = r?.target_gamma_regime_all_exp || 'unknown'
       counts[k] = (counts[k] || 0) + 1
     }
     return counts
@@ -778,7 +782,7 @@ function FiltersPanel({ filters, setFilters, scan, filteredCount, allCount }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10 }}>
         <div>
-          <span style={labelStyle}>Gamma regime</span>
+          <span style={labelStyle}>Gamma regime (All Exp)</span>
           <select style={inputStyle} value={filters.gammaRegime} onChange={(e) => update('gammaRegime', e.target.value)}>
             <option value="all">All ({allCount})</option>
             <option value="positive">Positive ({regimeCounts.positive})</option>

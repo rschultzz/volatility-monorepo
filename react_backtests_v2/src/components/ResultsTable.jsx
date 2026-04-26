@@ -7,6 +7,35 @@ function fmt(value, digits = 2) {
   return num.toFixed(digits);
 }
 
+// Render the gamma regime as a small color-coded chip.
+// positive (call-heavy / dealer-long-gamma) — green
+// negative (put-heavy  / dealer-short-gamma) — red
+// neutral / unknown — muted gray
+function regimeChip(regime) {
+  if (!regime || regime === 'unknown') return <span style={{ color: '#64748b' }}>—</span>;
+  const palette = {
+    positive: { bg: 'rgba(34, 197, 94, 0.18)', border: 'rgba(34, 197, 94, 0.35)', fg: '#bbf7d0' },
+    negative: { bg: 'rgba(239, 68, 68, 0.18)', border: 'rgba(239, 68, 68, 0.35)', fg: '#fecaca' },
+    neutral:  { bg: 'rgba(148, 163, 184, 0.16)', border: 'rgba(148, 163, 184, 0.30)', fg: '#cbd5e1' },
+  };
+  const p = palette[regime] || palette.neutral;
+  return (
+    <span style={{
+      display: 'inline-block',
+      padding: '2px 8px',
+      borderRadius: '999px',
+      fontSize: '10px',
+      fontWeight: 700,
+      textTransform: 'uppercase',
+      background: p.bg,
+      border: `1px solid ${p.border}`,
+      color: p.fg,
+    }}>
+      {regime}
+    </span>
+  );
+}
+
 function rowKey(row, idx) {
   return `${row.trade_date}-${row.start_ts_utc}-${row.target_ts_utc}-${idx}`;
 }
@@ -33,6 +62,13 @@ const COLUMN_DATA_MAP = {
   target_open: 'target_open',
   target_level: 'target_level',
   target_level_gex: (row) => row.target_level_gex_bn,
+  target_gamma_regime: (row) => row.target_gamma_regime,
+  target_level_gex_all_exp: (row) => row.target_level_gex_bn_all_exp,
+  target_gamma_regime_all_exp: (row) => row.target_gamma_regime_all_exp,
+  source_zone_signed_gex: (row) => row.source_zone_signed_gex_bn,
+  source_zone_gamma_regime: (row) => row.source_zone_gamma_regime,
+  source_zone_signed_gex_all_exp: (row) => row.source_zone_signed_gex_bn_all,
+  source_zone_gamma_regime_all_exp: (row) => row.source_zone_gamma_regime_all,
   clean_space: 'clean_space_points',
   move_pts: 'move_points',
   bars: 'elapsed_bars',
@@ -188,6 +224,33 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
                 val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
                 break;
               }
+              case 'target_level_gex_all_exp': {
+                const v = row.target_level_gex_bn_all_exp;
+                val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'target_gamma_regime':
+                val = row.target_gamma_regime || '';
+                break;
+              case 'target_gamma_regime_all_exp':
+                val = row.target_gamma_regime_all_exp || '';
+                break;
+              case 'source_zone_signed_gex': {
+                const v = row.source_zone_signed_gex_bn;
+                val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'source_zone_signed_gex_all_exp': {
+                const v = row.source_zone_signed_gex_bn_all;
+                val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'source_zone_gamma_regime':
+                val = row.source_zone_gamma_regime || '';
+                break;
+              case 'source_zone_gamma_regime_all_exp':
+                val = row.source_zone_gamma_regime_all || '';
+                break;
               case 'consol_mins':
                 val = `${row.consolidation_minutes_observed ?? ''}${row.consolidation_end_ts_pt ? ' ' + row.consolidation_end_ts_pt : ''}`;
                 break;
@@ -300,6 +363,35 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
         const color = v > 0 ? '#86efac' : '#fca5a5';
         return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
       }
+      case 'target_level_gex_all_exp': {
+        const v = row.target_level_gex_bn_all_exp;
+        if (v === null || v === undefined) return '—';
+        const sign = v > 0 ? '+' : '';
+        const color = v > 0 ? '#86efac' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
+      }
+      case 'target_gamma_regime':
+        return regimeChip(row.target_gamma_regime);
+      case 'target_gamma_regime_all_exp':
+        return regimeChip(row.target_gamma_regime_all_exp);
+      case 'source_zone_signed_gex': {
+        const v = row.source_zone_signed_gex_bn;
+        if (v === null || v === undefined) return '—';
+        const sign = v > 0 ? '+' : '';
+        const color = v > 0 ? '#86efac' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
+      }
+      case 'source_zone_signed_gex_all_exp': {
+        const v = row.source_zone_signed_gex_bn_all;
+        if (v === null || v === undefined) return '—';
+        const sign = v > 0 ? '+' : '';
+        const color = v > 0 ? '#86efac' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
+      }
+      case 'source_zone_gamma_regime':
+        return regimeChip(row.source_zone_gamma_regime);
+      case 'source_zone_gamma_regime_all_exp':
+        return regimeChip(row.source_zone_gamma_regime_all);
       case 'clean_space': return fmt(row.clean_space_points);
       case 'move_pts': return fmt(row.move_points);
       case 'bars': return row.elapsed_bars;
