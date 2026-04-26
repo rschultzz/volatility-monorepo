@@ -62,10 +62,10 @@ function computePerformance(rows) {
 function FunnelStage({ stage, index }) {
   const { label, kind, bypassed, candidates_in, kept, dropped, drop_reasons } = stage;
   const pct = candidates_in > 0 ? (kept / candidates_in) * 100 : 0;
-  
+
   const kindColor = kind === 'construction' ? '#3b82f6' : kind === 'filter' ? '#10b981' : '#64748b';
   const barColor = bypassed ? '#475569' : kindColor;
-  
+
   return (
     <div style={{
       background: '#0f172a',
@@ -76,17 +76,17 @@ function FunnelStage({ stage, index }) {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ 
-            fontSize: '11px', 
-            fontWeight: '700', 
+          <span style={{
+            fontSize: '11px',
+            fontWeight: '700',
             color: '#64748b',
             minWidth: '20px',
           }}>
             {index + 1}.
           </span>
-          <span style={{ 
-            fontSize: '13px', 
-            fontWeight: '600', 
+          <span style={{
+            fontSize: '13px',
+            fontWeight: '600',
             color: bypassed ? '#64748b' : '#e2e8f0',
             opacity: bypassed ? 0.6 : 1,
           }}>
@@ -115,7 +115,7 @@ function FunnelStage({ stage, index }) {
           )}
         </div>
       </div>
-      
+
       <div style={{
         height: '6px',
         background: '#1e293b',
@@ -129,7 +129,7 @@ function FunnelStage({ stage, index }) {
           transition: 'width 0.3s ease',
         }} />
       </div>
-      
+
       {!bypassed && dropped > 0 && drop_reasons && Object.keys(drop_reasons).length > 0 && (
         <div style={{ marginTop: '8px', fontSize: '11px', color: '#64748b' }}>
           {Object.entries(drop_reasons).map(([reason, count]) => (
@@ -454,17 +454,30 @@ function Histogram({ title, values }) {
           );
         })}
       </svg>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        fontSize: '10px',
-        color: '#64748b',
-        marginTop: '4px',
-      }}>
-        <span>{firstBinStart.toFixed(0)}</span>
-        <span>0</span>
-        <span>{(lastBinStart + binWidth).toFixed(0)}</span>
-      </div>
+      {/* Axis labels: min on the left, max on the right, and "0" anchored at
+          the actual zero position (which usually isn't the geometric middle).
+          We use absolute positioning relative to a wrapper so the "0" lands
+          on top of the dashed zero line in the SVG above. */}
+      {(() => {
+        const totalBinSpan = (lastBinStart + binWidth) - firstBinStart;
+        // Fractional x-position of zero within the chart [0..1]
+        const zeroFrac = totalBinSpan > 0
+          ? Math.max(0, Math.min(1, (0 - firstBinStart) / totalBinSpan))
+          : 0.5;
+        return (
+          <div style={{ position: 'relative', height: '14px', marginTop: '4px', fontSize: '10px', color: '#64748b' }}>
+            <span style={{ position: 'absolute', left: 0 }}>{firstBinStart.toFixed(0)}</span>
+            <span style={{
+              position: 'absolute',
+              left: `${zeroFrac * 100}%`,
+              transform: 'translateX(-50%)',
+            }}>
+              0
+            </span>
+            <span style={{ position: 'absolute', right: 0 }}>{(lastBinStart + binWidth).toFixed(0)}</span>
+          </div>
+        );
+      })()}
     </div>
   );
 }
