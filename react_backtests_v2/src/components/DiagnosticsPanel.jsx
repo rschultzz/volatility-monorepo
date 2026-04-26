@@ -1,3 +1,5 @@
+import React from 'react';
+
 function fmt(value, digits = 2) {
   if (value === null || value === undefined || value === '') return '—';
   const num = Number(value);
@@ -199,6 +201,7 @@ export default function DiagnosticsPanel({ diagnostics, rows = [], funnel = [], 
         <RealizedVsImpliedAggregate
           aggregate={diagnostics.realized_vs_implied_aggregate}
           ivSummary={diagnostics.iv_at_entry_summary}
+          rows={rows}
         />
       )}
     </div>
@@ -474,11 +477,155 @@ function Histogram({ title, values }) {
 //  Realized vs Implied aggregate table (short-vol lens)
 // ─────────────────────────────────────────────────────────────────────
 
-function RealizedVsImpliedAggregate({ aggregate, ivSummary }) {
-  const horizonOrder = ['30m', '60m', '90m', '120m', '180m'];
-  const horizons = horizonOrder.filter(h => aggregate[h] && aggregate[h].count > 0);
+// Helper functions for normal distribution probability
+function erf(x) {
+  const sign = x < 0 ? -1 : 1;
+  const ax = Math.abs(x);
+  const a1 = 0.254829592;
+  const a2 = -0.284496736;
+  const a3 = 1.421413741;
+  const a4 = -1.453152027;
+  const a5 = 1.061405429;
+  const p = 0.3275911;
+  const t = 1.0 / (1.0 + p * ax);
+  const y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-ax * ax);
+  return sign * y;
+}
 
-  if (!horizons.length) return null;
+const normalProbInside = (x) => {
+  if (!Number.isFinite(x) || x <= 0) return 0;
+  return erf(x / Math.SQRT2);
+};
+
+function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
+  const [sigma1, setSigma1] = React.useState(1.0);
+  const [sigma2, setSigma2] = React.useState(2.0);
+
+  const fixedHorizons = ['30m', '60m', '90m', '120m', '180m'];
+  const horizonsToShow = [
+    ...fixedHorizons.filter(h => aggregate[h] && aggregate[h].count > 0),
+    'eod',
+  ];
+
+  // Live computation of stats from rows
+  const liveStats = React.useMemo(() => {
+    const median = (arr) => {
+      if (!arr.length) return null;
+      const sorted = [...arr].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    };
+
+    const stats = {};
+
+    // Process fixed horizons
+    for (const h of fixedHorizons) {
+      const contributors = [];
+      const ivValues = [];
+      const impliedValues = [];
+      const rangeRatios = [];
+      const closeRatios = [];
+      let insideSigma1 = 0;
+      let insideSigma2 = 0;
+
+      for (const row of rows) {
+        const rvi = row.realized_vs_implied?.[h];
+        if (!rvi) continue;
+        
+        const closeOverSigma = rvi.close_over_1sigma;
+        if (closeOverSigma === null || closeOverSigma === undefined) continue;
+
+        contributors.push(row);
+        
+        if (row.iv?.atm_0dte_pct !== null && row.iv?.atm_0dte_pct !== undefined) {
+          ivValues.push(row.iv.atm_0dte_pct);
+        }
+        
+        if (rvi.implied_1sigma !== null && rvi.implied_1sigma !== undefined) {
+          impliedValues.push(rvi.implied_1sigma);
+        }
+        
+        if (rvi.range_over_1sigma !== null && rvi.range_over_1sigma !== undefined) {
+          rangeRatios.push(rvi.range_over_1sigma);
+        }
+        
+        closeRatios.push(closeOverSigma);
+        
+        if (closeOverSigma < sigma1) insideSigma1++;
+        if (closeOverSigma < sigma2) insideSigma2++;
+      }
+
+      if (contributors.length > 0) {
+        stats[h] = {
+          count: contributors.length,
+          iv_median: median(ivValues),
+          implied_1sigma_median: median(impliedValues),
+          range_over_1sigma_median: median(rangeRatios),
+          close_over_1sigma_median: median(closeRatios),
+          pct_inside_sigma1: insideSigma1 / contributors.length,
+          pct_inside_sigma2: insideSigma2 / contributors.length,
+        };
+      }
+    }
+
+    // Process EOD
+    const eodContributors = [];
+    const eodIvValues = [];
+    const eodImpliedValues = [];
+    const eodRangeRatios = [];
+    const eodCloseRatios = [];
+    let eodInsideSigma1 = 0;
+    let eodInsideSigma2 = 0;
+
+    for (const row of rows) {
+      const ivAtm = row.iv?.atm_0dte_pct;
+      const spx = row.target_spx_price;
+      const mtc = row.minutes_to_close;
+      const fo = row.forward_outcomes?.eod;
+      const closePts = fo?.close_pts;
+      const mfe = fo?.mfe_pts;
+      const mae = fo?.mae_pts;
+
+      if (
+        ivAtm === null || ivAtm === undefined ||
+        spx === null || spx === undefined ||
+        mtc === null || mtc === undefined || mtc <= 0 ||
+        closePts === null || closePts === undefined
+      ) continue;
+
+      const impl = spx * (ivAtm / 100) * Math.sqrt(mtc / (60 * 24 * 365));
+      if (impl <= 0) continue;
+
+      const closeRatio = Math.abs(closePts) / impl;
+      
+      eodContributors.push(row);
+      eodIvValues.push(ivAtm);
+      eodImpliedValues.push(impl);
+      eodCloseRatios.push(closeRatio);
+      
+      if (mfe !== null && mfe !== undefined && mae !== null && mae !== undefined) {
+        const rangeRatio = (mfe + mae) / impl;
+        eodRangeRatios.push(rangeRatio);
+      }
+      
+      if (closeRatio < sigma1) eodInsideSigma1++;
+      if (closeRatio < sigma2) eodInsideSigma2++;
+    }
+
+    if (eodContributors.length > 0) {
+      stats.eod = {
+        count: eodContributors.length,
+        iv_median: median(eodIvValues),
+        implied_1sigma_median: median(eodImpliedValues),
+        range_over_1sigma_median: median(eodRangeRatios),
+        close_over_1sigma_median: median(eodCloseRatios),
+        pct_inside_sigma1: eodInsideSigma1 / eodContributors.length,
+        pct_inside_sigma2: eodInsideSigma2 / eodContributors.length,
+      };
+    }
+
+    return stats;
+  }, [rows, sigma1, sigma2]);
 
   const cellStyle = {
     padding: '8px 12px',
@@ -510,16 +657,21 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary }) {
     if (v < 1.60) return '#fcd34d';   // slightly below
     return '#fca5a5';                 // at or above random walk
   };
-  // Hit rate vs normality baseline (68% for 1σ, 95% for 2σ)
-  const hitRateColor = (v, baseline) => {
-    if (v === null || v === undefined) return '#64748b';
-    const edge = v - baseline;
-    if (edge >= 0.10) return '#86efac';   // >10pts above baseline
-    if (edge >= 0.00) return '#fcd34d';   // at or slightly above
-    return '#fca5a5';                     // below baseline
+  
+  // Hit rate vs normality baseline - now uses dynamic sigma threshold
+  const hitRateColor = (observed, sigmaThreshold) => {
+    if (observed === null || observed === undefined) return '#64748b';
+    const baseline = normalProbInside(sigmaThreshold);
+    const edge = observed - baseline;
+    if (edge >= 0.10) return '#86efac';   // 10+ points above normality → green
+    if (edge >= 0.00) return '#fcd34d';   // at or slightly above → yellow
+    return '#fca5a5';                     // below → red
   };
 
   const pct = (v) => (v !== null && v !== undefined) ? `${(v * 100).toFixed(0)}%` : '—';
+
+  const prob1Pct = Math.round(normalProbInside(sigma1) * 100);
+  const prob2Pct = Math.round(normalProbInside(sigma2) * 100);
 
   return (
     <div style={{ marginBottom: '24px' }}>
@@ -550,12 +702,78 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary }) {
       <div style={{
         fontSize: '10px',
         color: '#64748b',
-        marginBottom: '8px',
+        marginBottom: '12px',
       }}>
-        Baselines: <strong>Range/1σ ≈ 1.60</strong> for random walk, <strong>68%</strong> inside ±1σ,
-        <strong> 95%</strong> inside ±2σ under normality. Green cells beat baseline.
+        Baselines: <strong>Range/1σ ≈ 1.60</strong> for random walk. Green cells beat normality baseline.
         Implied σ is capped at time-to-session-close per trade, so ratios are honest across setups
-        with different amounts of time remaining.
+        with different amounts of time remaining. Use the sliders below to adjust sigma thresholds.
+      </div>
+
+      {/* Sigma sliders */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: '16px',
+        marginBottom: '12px',
+        padding: '12px',
+        background: '#0f172a',
+        border: '1px solid #1e293b',
+        borderRadius: '8px',
+      }}>
+        <div>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '6px',
+          }}>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: '#cbd5e1' }}>
+              Inner σ: {sigma1.toFixed(1)}
+            </label>
+            <span style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 500 }}>
+              ≈ {prob1Pct}% normal
+            </span>
+          </div>
+          <input
+            type="range"
+            min="0.3"
+            max="3.0"
+            step="0.1"
+            value={sigma1}
+            onChange={(e) => setSigma1(parseFloat(e.target.value))}
+            style={{
+              width: '100%',
+              accentColor: '#3b82f6',
+            }}
+          />
+        </div>
+        <div>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '6px',
+          }}>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: '#cbd5e1' }}>
+              Outer σ: {sigma2.toFixed(1)}
+            </label>
+            <span style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 500 }}>
+              ≈ {prob2Pct}% normal
+            </span>
+          </div>
+          <input
+            type="range"
+            min="0.3"
+            max="3.0"
+            step="0.1"
+            value={sigma2}
+            onChange={(e) => setSigma2(parseFloat(e.target.value))}
+            style={{
+              width: '100%',
+              accentColor: '#3b82f6',
+            }}
+          />
+        </div>
       </div>
 
       <div style={{
@@ -573,19 +791,25 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary }) {
               <th style={headerStyle}>Impl 1σ</th>
               <th style={headerStyle}>Range / 1σ</th>
               <th style={headerStyle}>|Close| / 1σ</th>
-              <th style={headerStyle}>Inside ±1σ</th>
-              <th style={headerStyle}>Inside ±2σ</th>
+              <th style={headerStyle}>
+                Inside ±{sigma1.toFixed(1)}σ{' '}
+                <span style={{ color: '#94a3b8', fontWeight: 500 }}>({prob1Pct}%)</span>
+              </th>
+              <th style={headerStyle}>
+                Inside ±{sigma2.toFixed(1)}σ{' '}
+                <span style={{ color: '#94a3b8', fontWeight: 500 }}>({prob2Pct}%)</span>
+              </th>
             </tr>
           </thead>
           <tbody>
-            {horizons.map(h => {
-              const a = aggregate[h] || {};
+            {horizonsToShow.map(h => {
+              const a = liveStats[h] || {};
               return (
                 <tr key={h}>
                   <td style={labelCellStyle}>{h}</td>
                   <td style={cellStyle}>{a.count ?? '—'}</td>
-                  <td style={cellStyle}>{a.iv_median !== null && a.iv_median !== undefined ? `${a.iv_median}%` : '—'}</td>
-                  <td style={cellStyle}>{a.implied_1sigma_median ?? '—'}</td>
+                  <td style={cellStyle}>{a.iv_median !== null && a.iv_median !== undefined ? `${a.iv_median.toFixed(1)}%` : '—'}</td>
+                  <td style={cellStyle}>{a.implied_1sigma_median !== null && a.implied_1sigma_median !== undefined ? a.implied_1sigma_median.toFixed(2) : '—'}</td>
                   <td style={{ ...cellStyle, color: rangeRatioColor(a.range_over_1sigma_median), fontWeight: 700 }}>
                     {a.range_over_1sigma_median !== null && a.range_over_1sigma_median !== undefined
                       ? a.range_over_1sigma_median.toFixed(2)
@@ -596,11 +820,11 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary }) {
                       ? a.close_over_1sigma_median.toFixed(2)
                       : '—'}
                   </td>
-                  <td style={{ ...cellStyle, color: hitRateColor(a.pct_inside_1sigma, 0.68), fontWeight: 700 }}>
-                    {pct(a.pct_inside_1sigma)}
+                  <td style={{ ...cellStyle, color: hitRateColor(a.pct_inside_sigma1, sigma1), fontWeight: 700 }}>
+                    {pct(a.pct_inside_sigma1)}
                   </td>
-                  <td style={{ ...cellStyle, color: hitRateColor(a.pct_inside_2sigma, 0.95), fontWeight: 700 }}>
-                    {pct(a.pct_inside_2sigma)}
+                  <td style={{ ...cellStyle, color: hitRateColor(a.pct_inside_sigma2, sigma2), fontWeight: 700 }}>
+                    {pct(a.pct_inside_sigma2)}
                   </td>
                 </tr>
               );
