@@ -97,6 +97,9 @@ export default function SavedScans({ onSelectRow }) {
   const [innerTab, setInnerTab] = useState('diagnostics')
   const [columnFilters, setColumnFilters] = useState(DEFAULT_COLUMN_FILTERS)
 
+  // Collapsible state for saved scans browser
+  const [scansCollapsed, setScansCollapsed] = useState(false)
+
   // Selected row key for visual highlighting in the table
   const [selectedRowKey, setSelectedRowKey] = useState(null)
   const tableRef = useRef(null)
@@ -388,13 +391,33 @@ export default function SavedScans({ onSelectRow }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1, minHeight: 0 }}>
       {/* Saved scans browser */}
       <div className="diag-card" style={{ flex: '0 0 auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <div>
-            <div className="eyebrow">Saved Scans</div>
-            <h2 style={{ fontSize: 18 }}>Cached scan results</h2>
-            <p style={{ color: '#94a3b8', fontSize: 12, margin: '4px 0 0' }}>
-              Run a permissive scan once, then explore the result without re-scanning.
-            </p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: scansCollapsed ? 0 : 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button
+              onClick={() => setScansCollapsed(!scansCollapsed)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#93c5fd',
+                cursor: 'pointer',
+                fontSize: 16,
+                padding: 4,
+                display: 'flex',
+                alignItems: 'center',
+              }}
+              title={scansCollapsed ? 'Expand' : 'Collapse'}
+            >
+              {scansCollapsed ? '▶' : '▼'}
+            </button>
+            <div>
+              <div className="eyebrow">Saved Scans</div>
+              <h2 style={{ fontSize: 18 }}>Cached scan results</h2>
+              {!scansCollapsed && (
+                <p style={{ color: '#94a3b8', fontSize: 12, margin: '4px 0 0' }}>
+                  Run a permissive scan once, then explore the result without re-scanning.
+                </p>
+              )}
+            </div>
           </div>
           <button
             className="primary-button"
@@ -405,17 +428,21 @@ export default function SavedScans({ onSelectRow }) {
           </button>
         </div>
 
-        {error && <div className="error-banner" style={{ marginBottom: 12 }}>{error}</div>}
+        {!scansCollapsed && (
+          <>
+            {error && <div className="error-banner" style={{ marginBottom: 12 }}>{error}</div>}
 
-        <SavedScansList
-          scans={scans}
-          loading={scansLoading}
-          selectedScanId={selectedScanId}
-          onSelect={loadScan}
-          onDelete={deleteScan}
-          onEdit={openEditDialog}
-          onDuplicate={duplicateScan}
-        />
+            <SavedScansList
+              scans={scans}
+              loading={scansLoading}
+              selectedScanId={selectedScanId}
+              onSelect={loadScan}
+              onDelete={deleteScan}
+              onEdit={openEditDialog}
+              onDuplicate={duplicateScan}
+            />
+          </>
+        )}
       </div>
 
       {showRunDialog && (
@@ -478,13 +505,19 @@ export default function SavedScans({ onSelectRow }) {
               Instances
               {filteredRows.length > 0 && <span className="tab-badge">{filteredRows.length}</span>}
             </button>
+            <button
+              className={`tab-button ${innerTab === 'pipeline' ? 'active' : ''}`}
+              onClick={() => setInnerTab('pipeline')}
+            >
+              Pipeline
+            </button>
           </div>
 
           {innerTab === 'diagnostics' && (
             <DiagnosticsPanel
               diagnostics={filteredDiagnostics}
               rows={filteredRows}
-              funnel={loadedScan?.funnel || []}
+              funnel={[]}
               executionMode={effectiveExecutionMode}
             />
           )}
@@ -526,6 +559,10 @@ export default function SavedScans({ onSelectRow }) {
                 filterTypeForColumn={filterTypeFor}
               />
             </div>
+          )}
+
+          {innerTab === 'pipeline' && (
+            <PipelinePanel funnel={loadedScan?.funnel || []} />
           )}
         </div>
       )}
@@ -670,6 +707,122 @@ function mean(arr) {
 }
 function round2(v) { return Number.isFinite(v) ? Math.round(v * 100) / 100 : null }
 function round3(v) { return Number.isFinite(v) ? Math.round(v * 1000) / 1000 : null }
+
+
+// ──────────────────────────────────────────────────────────────────────
+// Pipeline Panel — Displays the funnel stages
+// ──────────────────────────────────────────────────────────────────────
+
+function FunnelStage({ stage, index }) {
+  const { label, kind, bypassed, candidates_in, kept, dropped, drop_reasons } = stage;
+  const pct = candidates_in > 0 ? (kept / candidates_in) * 100 : 0;
+
+  const kindColor = kind === 'construction' ? '#3b82f6' : kind === 'filter' ? '#10b981' : '#64748b';
+  const barColor = bypassed ? '#475569' : kindColor;
+
+  return (
+    <div style={{
+      background: '#0f172a',
+      border: '1px solid #1e293b',
+      borderRadius: '10px',
+      padding: '12px 14px',
+      marginBottom: '8px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{
+            fontSize: '11px',
+            fontWeight: '700',
+            color: '#64748b',
+            minWidth: '20px',
+          }}>
+            {index + 1}.
+          </span>
+          <span style={{
+            fontSize: '13px',
+            fontWeight: '600',
+            color: bypassed ? '#64748b' : '#e2e8f0',
+            opacity: bypassed ? 0.6 : 1,
+          }}>
+            {label}
+          </span>
+          {bypassed && (
+            <span style={{
+              fontSize: '9px',
+              fontWeight: '700',
+              color: '#64748b',
+              background: '#1e293b',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              letterSpacing: '0.05em',
+            }}>
+              BYPASSED
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: '12px', color: '#94a3b8', fontWeight: '500' }}>
+          {kept} / {candidates_in}
+          {dropped > 0 && !bypassed && (
+            <span style={{ color: '#f87171', marginLeft: '8px' }}>
+              (−{dropped})
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div style={{
+        height: '6px',
+        background: '#1e293b',
+        borderRadius: '3px',
+        overflow: 'hidden',
+      }}>
+        <div style={{
+          height: '100%',
+          width: `${pct}%`,
+          background: barColor,
+          transition: 'width 0.3s ease',
+        }} />
+      </div>
+
+      {!bypassed && dropped > 0 && drop_reasons && Object.keys(drop_reasons).length > 0 && (
+        <div style={{ marginTop: '8px', fontSize: '11px', color: '#64748b' }}>
+          {Object.entries(drop_reasons).map(([reason, count]) => (
+            <div key={reason} style={{ marginTop: '2px' }}>
+              • {reason.replace(/_/g, ' ')}: {count}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PipelinePanel({ funnel }) {
+  if (!funnel || funnel.length === 0) {
+    return (
+      <div className="diag-card" style={{ flex: 1 }}>
+        <div className="results-header">
+          <h2>Pipeline Funnel</h2>
+          <p>No pipeline data available for this scan.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="diag-card" style={{ flex: 1, overflow: 'auto' }}>
+      <div className="results-header">
+        <h2>Pipeline Funnel</h2>
+        <p>Shows how candidates flow through each stage of the scan pipeline.</p>
+      </div>
+      <div style={{ marginTop: '16px' }}>
+        {funnel.map((stage, idx) => (
+          <FunnelStage key={stage.key} stage={stage} index={idx} />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 
 // ──────────────────────────────────────────────────────────────────────

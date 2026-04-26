@@ -201,19 +201,6 @@ export default function DiagnosticsPanel({ diagnostics, rows = [], funnel = [], 
           ivSummary={diagnostics.iv_at_entry_summary}
         />
       )}
-
-      <div className="diag-stat-grid diag-stat-grid-compact">
-        <StatCell label="Days total" value={diagnostics.days_total ?? '—'} />
-        <StatCell label="Valid instances" value={diagnostics.valid_instances ?? '—'} />
-        {isStudy
-          ? <StatCell label="Study target hits" value={diagnostics.entries_found ?? diagnostics.valid_instances ?? '—'} />
-          : <StatCell label="Up short setups" value={diagnostics.up_short_setups_found ?? '—'} />}
-        <StatCell label="Actual trades" value={isStudy ? '—' : (diagnostics.actual_trades_found ?? '—')} />
-        <StatCell label="Winning trades" value={isStudy ? '—' : (diagnostics.winning_trades ?? '—')} />
-        <StatCell label="Total P/L (pts)" value={isStudy ? '—' : fmt(perf.totalPnLPts)} />
-        <StatCell label="EV (pts/trade)" value={isStudy ? '—' : fmt(perf.evPtsPerTrade)} />
-        <StatCell label="Max drawdown (pts)" value={isStudy ? '—' : fmt(perf.maxDrawdownPts)} />
-      </div>
     </div>
   );
 }
