@@ -1,4 +1,6 @@
 import React, { useMemo, useState, forwardRef, useImperativeHandle } from 'react';
+import ColumnFilterPopover from './ColumnFilterPopover';
+import { isFilterActive } from './columnFilters';
 
 function fmt(value, digits = 2) {
   if (value === null || value === undefined || value === '') return '—';
@@ -50,7 +52,7 @@ function tradeLabel(row) {
   return row.trade_entry_found ? 'Trade entered' : 'No trade';
 }
 
-const COLUMN_DATA_MAP = {
+export const COLUMN_DATA_MAP = {
   date: 'trade_date',
   direction: 'direction',
   source_zone: 'source_zone_low',
@@ -151,8 +153,23 @@ const COLUMN_DATA_MAP = {
   condor_long_call:  (row) => row.hypothetical_condor_120m?.long_call_strike,
 };
 
-const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns }, ref) => {
+const ResultsTable = forwardRef(({
+  rows,
+  selectedRowKey,
+  onSelectRow,
+  columns,
+  // Optional column-filter integration. When provided, render filter icons
+  // in column headers and open a popover on click.
+  columnFilters = null,        // { [columnId]: filterObject }
+  onColumnFilterChange = null, // (columnId, filterObject | null) => void
+  filterTypeForColumn = null,  // (columnId) => 'numeric'|'date'|'categorical'|null
+}, ref) => {
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
+  // Filter popover state (which column is open, and the anchor rect for positioning)
+  const [openFilterColumnId, setOpenFilterColumnId] = useState(null);
+  const [openFilterAnchorRect, setOpenFilterAnchorRect] = useState(null);
+
+  const filtersEnabled = Boolean(columnFilters && onColumnFilterChange && filterTypeForColumn);
 
   const handleSort = (colId) => {
     let direction = 'asc';
@@ -609,19 +626,72 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
             {visibleColumns.map(col => {
               const isSortable = col.id !== 'select';
               const isSorted = sortConfig.key === col.id;
-              
+              const colFilterType = filtersEnabled ? filterTypeForColumn(col.id) : null;
+              const colFilter = filtersEnabled ? columnFilters[col.id] : null;
+              const colFilterActive = filtersEnabled && isFilterActive(colFilter);
+
               return (
-                <th 
+                <th
                   key={col.id}
                   className={isSortable ? 'sortable-header' : ''}
                   onClick={() => isSortable && handleSort(col.id)}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    {col.label}
+                    <span style={{ flex: 1 }}>{col.label}</span>
                     {isSorted && (
                       <span className="sort-indicator">
                         {sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}
                       </span>
+                    )}
+                    {colFilterType && (
+                      <button
+                        type="button"
+                        className="filter-icon-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          if (openFilterColumnId === col.id) {
+                            setOpenFilterColumnId(null);
+                            setOpenFilterAnchorRect(null);
+                          } else {
+                            setOpenFilterColumnId(col.id);
+                            setOpenFilterAnchorRect(rect);
+                          }
+                        }}
+                        title={colFilterActive ? 'Edit filter' : 'Add filter'}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: 2,
+                          cursor: 'pointer',
+                          color: colFilterActive ? '#3b82f6' : '#475569',
+                          fontSize: 12,
+                          lineHeight: 1,
+                          position: 'relative',
+                        }}
+                      >
+                        {/* Funnel SVG */}
+                        <svg
+                          width="11" height="11"
+                          viewBox="0 0 24 24"
+                          fill={colFilterActive ? 'currentColor' : 'none'}
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+                        </svg>
+                        {colFilterActive && (
+                          <span style={{
+                            position: 'absolute',
+                            top: 0, right: 0,
+                            width: 6, height: 6,
+                            borderRadius: '50%',
+                            background: '#3b82f6',
+                          }} />
+                        )}
+                      </button>
                     )}
                   </div>
                 </th>
@@ -644,6 +714,26 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
           })}
         </tbody>
       </table>
+      {filtersEnabled && openFilterColumnId && (() => {
+        const colDef = visibleColumns.find(c => c.id === openFilterColumnId);
+        if (!colDef) return null;
+        const t = filterTypeForColumn(openFilterColumnId);
+        if (!t) return null;
+        return (
+          <ColumnFilterPopover
+            filterType={t}
+            filter={columnFilters[openFilterColumnId]}
+            anchorRect={openFilterAnchorRect}
+            columnLabel={colDef.label}
+            columnId={openFilterColumnId}
+            rows={rows}
+            dataMap={COLUMN_DATA_MAP}
+            onChange={(next) => onColumnFilterChange(openFilterColumnId, next)}
+            onClear={() => onColumnFilterChange(openFilterColumnId, null)}
+            onClose={() => { setOpenFilterColumnId(null); setOpenFilterAnchorRect(null); }}
+          />
+        );
+      })()}
     </div>
   );
 });

@@ -2,6 +2,103 @@
 // Used by both the live "Instances" tab in App.jsx and the
 // "Saved Scans" tab.
 
+// ──────────────────────────────────────────────────────────────────────
+// Column filter types
+// ──────────────────────────────────────────────────────────────────────
+// Each filterable column declares one of: 'numeric', 'date', 'categorical'.
+// Columns omitted from this map are not filterable (e.g. composite cells
+// like 'select' or 'source_zone' that mix multiple values).
+//
+// Exposed as a const map rather than per-column property so adding a new
+// column to DEFAULT_COLUMNS doesn't require touching this file unless the
+// column should be filterable.
+
+export const COLUMN_FILTER_TYPES = {
+  // Date
+  date: 'date',
+
+  // Categorical (text/enum)
+  direction: 'categorical',
+  zone_levels: 'categorical',
+  setup: 'categorical',
+  trade: 'categorical',
+  exit_reason: 'categorical',
+  outcome: 'categorical',
+  reason: 'categorical',
+  skew_passed: 'categorical',
+  target_gamma_regime: 'categorical',
+  target_gamma_regime_all_exp: 'categorical',
+  source_zone_gamma_regime: 'categorical',
+  source_zone_gamma_regime_all_exp: 'categorical',
+  rvi_inside_1s_120m: 'categorical',
+
+  // Numeric — measurements
+  start_open: 'numeric',
+  pivot_px: 'numeric',
+  target_open: 'numeric',
+  target_level: 'numeric',
+  target_level_gex: 'numeric',
+  target_level_gex_all_exp: 'numeric',
+  source_zone_signed_gex: 'numeric',
+  source_zone_signed_gex_all_exp: 'numeric',
+  clean_space: 'numeric',
+  move_pts: 'numeric',
+  bars: 'numeric',
+  consol_mins: 'numeric',
+  signal_px: 'numeric',
+  put_skew: 'numeric',
+  call_skew: 'numeric',
+  range_high: 'numeric',
+  range_low: 'numeric',
+  entry_band: 'numeric',
+  entry_px: 'numeric',
+  init_stop: 'numeric',
+  take_profit: 'numeric',
+  trailing_stop: 'numeric',
+  exit_px: 'numeric',
+  realized_pts: 'numeric',
+  mfe: 'numeric',
+  mae: 'numeric',
+  prior_down_pts: 'numeric',
+  prior_down_ratio: 'numeric',
+  start_pct_range: 'numeric',
+  target_price: 'numeric',
+  iv_atm_0dte: 'numeric',
+  target_spx_price: 'numeric',
+  minutes_to_close: 'numeric',
+  skew_delta_put: 'numeric',
+  skew_delta_call: 'numeric',
+  rvi_ratio_120m: 'numeric',
+  condor_short_put: 'numeric',
+  condor_long_put: 'numeric',
+  condor_short_call: 'numeric',
+  condor_long_call: 'numeric',
+  // Forward outcomes (all numeric)
+  fwd_30m_mfe: 'numeric', fwd_30m_mae: 'numeric', fwd_30m_close: 'numeric',
+  fwd_60m_mfe: 'numeric', fwd_60m_mae: 'numeric', fwd_60m_close: 'numeric',
+  fwd_90m_mfe: 'numeric', fwd_90m_mae: 'numeric', fwd_90m_close: 'numeric',
+  fwd_120m_mfe: 'numeric', fwd_120m_mae: 'numeric', fwd_120m_close: 'numeric',
+  fwd_180m_mfe: 'numeric', fwd_180m_mae: 'numeric', fwd_180m_close: 'numeric',
+  fwd_eod_mfe: 'numeric', fwd_eod_mae: 'numeric', fwd_eod_close: 'numeric',
+}
+
+// Columns intentionally NOT filterable (composite cells, etc.)
+// Listed here so it's visible at a glance.
+export const COLUMNS_NOT_FILTERABLE = new Set([
+  'select',         // checkbox cell
+  'source_zone',    // composite "low - high"
+  'start_time',     // includes context suffix
+  'target_time',    // includes target_zone_range
+  'signal_time',    // direction-dependent
+  'entry_time',     // managed-mode timestamp
+  'exit_time',      // managed-mode timestamp
+])
+
+export function filterTypeFor(columnId) {
+  if (COLUMNS_NOT_FILTERABLE.has(columnId)) return null
+  return COLUMN_FILTER_TYPES[columnId] || null
+}
+
 export const DEFAULT_COLUMNS = [
   { id: 'select', label: 'Select', visible: true, alwaysVisible: true },
   { id: 'date', label: 'Date', visible: true },

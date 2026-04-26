@@ -1,12 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DiagnosticsPanel from './DiagnosticsPanel';
-import ResultsTable from './ResultsTable';
+import ResultsTable, { COLUMN_DATA_MAP } from './ResultsTable';
 import ColumnSettingsModal from './ColumnSettingsModal';
+import ActiveFiltersBar from './ActiveFiltersBar';
 import {
   DEFAULT_COLUMNS,
   computeEffectiveColumns,
   mergeColumnsWithDefaults,
+  filterTypeFor,
 } from './columnsConfig';
+import {
+  applyColumnFilters,
+  isFilterActive,
+  activeFilterCount,
+} from './columnFilters';
 
 // ──────────────────────────────────────────────────────────────────────
 // Saved Scans tab
@@ -60,15 +67,10 @@ const DEFAULT_NEW_SCAN = {
   params: { ...FALLBACK_SCAN_DEFAULTS },
 };
 
-const DEFAULT_FILTERS = {
-  gammaRegime: 'all',
-  skewPassed: 'all',
-  ivMin: '',
-  ivMax: '',
-  minMinutesRemaining: '',
-  startDate: '',
-  endDate: '',
-};
+// Column filters are stored as a map of columnId → filter object.
+// See columnFilters.js for filter shape.
+// Persists across scan loads (per user request).
+const DEFAULT_COLUMN_FILTERS = {};
 
 // Separate localStorage key — saved-scan column prefs don't sync with live.
 const COLUMNS_STORAGE_KEY = 'bt2-savedscans-table-columns';
@@ -93,7 +95,7 @@ export default function SavedScans({ onSelectRow }) {
   const [serverDefaults, setServerDefaults] = useState(FALLBACK_SCAN_DEFAULTS)
 
   const [innerTab, setInnerTab] = useState('diagnostics')
-  const [filters, setFilters] = useState(DEFAULT_FILTERS)
+  const [columnFilters, setColumnFilters] = useState(DEFAULT_COLUMN_FILTERS)
 
   // Selected row key for visual highlighting in the table
   const [selectedRowKey, setSelectedRowKey] = useState(null)
@@ -183,7 +185,7 @@ export default function SavedScans({ onSelectRow }) {
       setLoadedScan(data)
       setSelectedScanId(scanId)
       setInnerTab('diagnostics')
-      setFilters(DEFAULT_FILTERS)
+      // Column filters PERSIST across scan loads — user explicitly chose this
       setSelectedRowKey(null)
     } catch (err) {
       setError(String(err.message || err))
@@ -335,14 +337,19 @@ export default function SavedScans({ onSelectRow }) {
   // ── Filtered rows ──
   const allRows = loadedScan?.rows || []
   const filteredRows = useMemo(
-    () => applyFilters(allRows, filters),
-    [allRows, filters]
+    () => applyColumnFilters(allRows, columnFilters, COLUMN_DATA_MAP),
+    [allRows, columnFilters]
+  )
+
+  const filtersAreActive = useMemo(
+    () => activeFilterCount(columnFilters) > 0,
+    [columnFilters]
   )
 
   const filteredDiagnostics = useMemo(() => {
     if (!loadedScan) return null
-    return computeFilteredDiagnostics(loadedScan, filteredRows, filters)
-  }, [loadedScan, filteredRows, filters])
+    return computeFilteredDiagnostics(loadedScan, filteredRows, filtersAreActive)
+  }, [loadedScan, filteredRows, filtersAreActive])
 
   const effectiveExecutionMode =
     loadedScan?.params?.executionMode || 'study_target_hits'
@@ -353,10 +360,29 @@ export default function SavedScans({ onSelectRow }) {
     [columns, effectiveExecutionMode]
   )
 
-  const filtersAreActive = useMemo(
-    () => filtersAreNonDefault(filters),
-    [filters]
-  )
+  // Column-filter handlers
+  const handleColumnFilterChange = useCallback((columnId, filterObject) => {
+    setColumnFilters(prev => {
+      const next = { ...prev }
+      if (filterObject == null) {
+        delete next[columnId]
+      } else {
+        next[columnId] = filterObject
+      }
+      return next
+    })
+  }, [])
+
+  const clearAllFilters = useCallback(() => {
+    setColumnFilters({})
+  }, [])
+
+  // Map of columnId → label for the active-filters chip bar
+  const columnLabelMap = useMemo(() => {
+    const out = {}
+    for (const c of DEFAULT_COLUMNS) out[c.id] = c.label
+    return out
+  }, [])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1, minHeight: 0 }}>
@@ -428,12 +454,13 @@ export default function SavedScans({ onSelectRow }) {
             filtersActive={filtersAreActive}
           />
 
-          <FiltersPanel
-            filters={filters}
-            setFilters={setFilters}
-            scan={loadedScan}
+          <ActiveFiltersBar
+            filters={columnFilters}
+            columnLabels={columnLabelMap}
             filteredCount={filteredRows.length}
-            allCount={allRows.length}
+            totalCount={allRows.length}
+            onClearOne={(colId) => handleColumnFilterChange(colId, null)}
+            onClearAll={clearAllFilters}
           />
 
           {/* Inner tab bar */}
@@ -494,6 +521,9 @@ export default function SavedScans({ onSelectRow }) {
                 selectedRowKey={selectedRowKey}
                 onSelectRow={handleSelectRowLocal}
                 columns={effectiveColumns}
+                columnFilters={columnFilters}
+                onColumnFilterChange={handleColumnFilterChange}
+                filterTypeForColumn={filterTypeFor}
               />
             </div>
           )}
@@ -522,79 +552,16 @@ export default function SavedScans({ onSelectRow }) {
 }
 
 
-// ──────────────────────────────────────────────────────────────────────
-// Filtering logic
-// ──────────────────────────────────────────────────────────────────────
-
-function applyFilters(rows, f) {
-  if (!Array.isArray(rows) || rows.length === 0) return []
-
-  const ivMin  = f.ivMin === '' ? null : Number(f.ivMin)
-  const ivMax  = f.ivMax === '' ? null : Number(f.ivMax)
-  const minMtc = f.minMinutesRemaining === '' ? null : Number(f.minMinutesRemaining)
-  const dateStart = (f.startDate || '').trim()
-  const dateEnd   = (f.endDate || '').trim()
-
-  return rows.filter(row => {
-    if (f.gammaRegime !== 'all') {
-      // Filter operates on the ALL-EXPIRATION regime (broader structural
-      // positioning), not 0DTE. The 0DTE regime is still in row data and
-      // visible in the table — it's just not the filter target.
-      const r = row.target_gamma_regime_all_exp || 'unknown'
-      if (f.gammaRegime === 'non_neutral') {
-        if (r !== 'positive' && r !== 'negative') return false
-      } else if (r !== f.gammaRegime) {
-        return false
-      }
-    }
-
-    if (f.skewPassed !== 'all') {
-      const passed = row.skew_threshold_passed === true
-      if (f.skewPassed === 'yes' && !passed) return false
-      if (f.skewPassed === 'no' && passed) return false
-    }
-
-    const iv = row.iv?.atm_0dte_pct
-    if (ivMin != null && Number.isFinite(ivMin)) {
-      if (iv == null || iv < ivMin) return false
-    }
-    if (ivMax != null && Number.isFinite(ivMax)) {
-      if (iv == null || iv > ivMax) return false
-    }
-
-    if (minMtc != null && Number.isFinite(minMtc)) {
-      const mtc = row.minutes_to_close
-      if (mtc == null || mtc < minMtc) return false
-    }
-
-    if (dateStart && row.trade_date && String(row.trade_date) < dateStart) return false
-    if (dateEnd && row.trade_date && String(row.trade_date) > dateEnd) return false
-
-    return true
-  })
-}
-
-function filtersAreNonDefault(f) {
-  return (
-    f.gammaRegime !== 'all' ||
-    f.skewPassed !== 'all' ||
-    f.ivMin !== '' ||
-    f.ivMax !== '' ||
-    f.minMinutesRemaining !== '' ||
-    f.startDate !== '' ||
-    f.endDate !== ''
-  )
-}
 
 
 // ──────────────────────────────────────────────────────────────────────
 // Diagnostics recomputation from filtered rows
 // ──────────────────────────────────────────────────────────────────────
 
-function computeFilteredDiagnostics(loadedScan, filteredRows, filters) {
+function computeFilteredDiagnostics(loadedScan, filteredRows, filtersAreActive) {
   const base = { ...(loadedScan?.diagnostics || {}) }
 
-  if (!filtersAreNonDefault(filters)) {
+  if (!filtersAreActive) {
     return base
   }
 
@@ -708,158 +675,6 @@ function round3(v) { return Number.isFinite(v) ? Math.round(v * 1000) / 1000 : n
 // ──────────────────────────────────────────────────────────────────────
 // UI components
 // ──────────────────────────────────────────────────────────────────────
-
-function FiltersPanel({ filters, setFilters, scan, filteredCount, allCount }) {
-  const update = (key, value) => setFilters(prev => ({ ...prev, [key]: value }))
-  const reset = () => setFilters(DEFAULT_FILTERS)
-  const active = filtersAreNonDefault(filters)
-
-  const regimeCounts = useMemo(() => {
-    const counts = { positive: 0, negative: 0, neutral: 0, unknown: 0 }
-    for (const r of scan?.rows || []) {
-      // Counts reflect the ALL-EXPIRATION regime (matches what the filter does)
-      const k = r?.target_gamma_regime_all_exp || 'unknown'
-      counts[k] = (counts[k] || 0) + 1
-    }
-    return counts
-  }, [scan])
-
-  const cardStyle = {
-    background: '#0f172a',
-    border: active ? '1px solid #2563eb' : '1px solid #1f2937',
-    borderRadius: 14,
-    padding: 12,
-    transition: 'border-color 0.15s',
-  }
-
-  const labelStyle = {
-    fontSize: 11,
-    color: '#94a3b8',
-    fontWeight: 600,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
-    marginBottom: 4,
-    display: 'block',
-  }
-
-  const inputStyle = {
-    background: '#020617',
-    border: '1px solid #334155',
-    color: '#e5e7eb',
-    borderRadius: 8,
-    padding: '6px 10px',
-    fontSize: 12,
-    width: '100%',
-  }
-
-  return (
-    <div style={cardStyle}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: active ? '#93c5fd' : '#cbd5e1' }}>
-            Filters
-          </span>
-          {active ? (
-            <span style={{ fontSize: 11, color: '#fcd34d' }}>
-              {filteredCount} of {allCount} rows match
-            </span>
-          ) : (
-            <span style={{ fontSize: 11, color: '#64748b' }}>
-              All {allCount} rows
-            </span>
-          )}
-        </div>
-        {active && (
-          <button
-            className="ghost-button"
-            style={{ padding: '4px 12px', fontSize: 11 }}
-            onClick={reset}
-          >
-            Reset filters
-          </button>
-        )}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10 }}>
-        <div>
-          <span style={labelStyle}>Gamma regime (All Exp)</span>
-          <select style={inputStyle} value={filters.gammaRegime} onChange={(e) => update('gammaRegime', e.target.value)}>
-            <option value="all">All ({allCount})</option>
-            <option value="positive">Positive ({regimeCounts.positive})</option>
-            <option value="negative">Negative ({regimeCounts.negative})</option>
-            <option value="neutral">Neutral ({regimeCounts.neutral})</option>
-            <option value="non_neutral">Non-neutral ({regimeCounts.positive + regimeCounts.negative})</option>
-          </select>
-        </div>
-
-        <div>
-          <span style={labelStyle}>Skew passed</span>
-          <select style={inputStyle} value={filters.skewPassed} onChange={(e) => update('skewPassed', e.target.value)}>
-            <option value="all">All</option>
-            <option value="yes">Yes</option>
-            <option value="no">No</option>
-          </select>
-        </div>
-
-        <div>
-          <span style={labelStyle}>IV min %</span>
-          <input
-            type="number" step="0.5" min="0" max="100"
-            style={inputStyle}
-            value={filters.ivMin}
-            onChange={(e) => update('ivMin', e.target.value)}
-            placeholder="—"
-          />
-        </div>
-
-        <div>
-          <span style={labelStyle}>IV max %</span>
-          <input
-            type="number" step="0.5" min="0" max="100"
-            style={inputStyle}
-            value={filters.ivMax}
-            onChange={(e) => update('ivMax', e.target.value)}
-            placeholder="—"
-          />
-        </div>
-
-        <div>
-          <span style={labelStyle}>Min remaining (min)</span>
-          <input
-            type="number" step="5" min="0"
-            style={inputStyle}
-            value={filters.minMinutesRemaining}
-            onChange={(e) => update('minMinutesRemaining', e.target.value)}
-            placeholder="—"
-          />
-        </div>
-
-        <div>
-          <span style={labelStyle}>Date start</span>
-          <input
-            type="date" style={inputStyle}
-            value={filters.startDate}
-            onChange={(e) => update('startDate', e.target.value)}
-            min={scan?.start_date}
-            max={scan?.end_date}
-          />
-        </div>
-
-        <div>
-          <span style={labelStyle}>Date end</span>
-          <input
-            type="date" style={inputStyle}
-            value={filters.endDate}
-            onChange={(e) => update('endDate', e.target.value)}
-            min={scan?.start_date}
-            max={scan?.end_date}
-          />
-        </div>
-      </div>
-    </div>
-  )
-}
-
 
 function SavedScansList({ scans, loading, selectedScanId, onSelect, onDelete, onEdit, onDuplicate }) {
   if (loading && scans.length === 0) {
