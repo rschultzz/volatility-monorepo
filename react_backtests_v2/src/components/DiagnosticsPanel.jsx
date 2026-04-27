@@ -267,18 +267,35 @@ export default function DiagnosticsPanel({
         </div>
       )}
 
-      {isStudy && aggregate && horizonsInAgg.length > 0 && (
-        <>
-          <ForwardOutcomesAggregate
-            rows={rows}
-            horizons={horizonsInAgg}
-            viewDirection={viewDirection}
-            onViewDirectionChange={onViewDirectionChange}
-            originalTrade={originalTrade}
-          />
-          <ForwardOutcomesHistograms rows={rows} horizons={horizonsInAgg} />
-        </>
-      )}
+      {isStudy && aggregate && horizonsInAgg.length > 0 && (() => {
+        // Compute the effective flip flag at this level so the aggregate
+        // table AND the histograms can both apply the same transform.
+        // Mirrors the derivation inside ForwardOutcomesAggregate so the
+        // two panels stay in lockstep when "reversed from setup" is on.
+        const rowDir = rows?.[0]?.direction;
+        const derivedOriginalTrade = rowDir === 'up' ? 'short'
+                                    : rowDir === 'down' ? 'long'
+                                    : 'short';
+        const effectiveOriginalTrade = originalTrade || derivedOriginalTrade;
+        const effectiveView = viewDirection !== undefined ? viewDirection : effectiveOriginalTrade;
+        const flipped = effectiveView !== effectiveOriginalTrade;
+        return (
+          <>
+            <ForwardOutcomesAggregate
+              rows={rows}
+              horizons={horizonsInAgg}
+              viewDirection={viewDirection}
+              onViewDirectionChange={onViewDirectionChange}
+              originalTrade={originalTrade}
+            />
+            <ForwardOutcomesHistograms
+              rows={rows}
+              horizons={horizonsInAgg}
+              flipped={flipped}
+            />
+          </>
+        );
+      })()}
 
       {isStudy && diagnostics.realized_vs_implied_aggregate && (
         <RealizedVsImpliedAggregate
@@ -439,7 +456,7 @@ function ForwardOutcomesAggregate({
 //  Forward outcomes histograms (study mode)
 // ─────────────────────────────────────────────────────────────────────
 
-function ForwardOutcomesHistograms({ rows, horizons }) {
+function ForwardOutcomesHistograms({ rows, horizons, flipped = false }) {
   return (
     <div style={{ marginBottom: '24px' }}>
       <h3 style={{
@@ -451,6 +468,17 @@ function ForwardOutcomesHistograms({ rows, horizons }) {
         textTransform: 'uppercase',
       }}>
         Close P&amp;L Distribution
+        {flipped && (
+          <span style={{
+            marginLeft: '8px',
+            color: '#fcd34d',
+            fontSize: '11px',
+            fontWeight: 600,
+            letterSpacing: '0.04em',
+          }}>
+            · reversed from setup
+          </span>
+        )}
       </h3>
       <div style={{
         display: 'grid',
@@ -461,8 +489,17 @@ function ForwardOutcomesHistograms({ rows, horizons }) {
           <Histogram
             key={h}
             title={h}
+            // Flip transform: close_pts → -close_pts when viewing the
+            // reversed direction. Matches what the aggregate table is
+            // doing one row up — keeps both panels in sync so a "win
+            // rate" of 85% in the table doesn't sit next to a sea of
+            // red bars below.
             values={rows
-              .map(r => r.forward_outcomes?.[h]?.close_pts)
+              .map(r => {
+                const v = r.forward_outcomes?.[h]?.close_pts;
+                if (v === null || v === undefined) return v;
+                return flipped ? -Number(v) : Number(v);
+              })
               .filter(v => v !== null && v !== undefined && Number.isFinite(v))}
           />
         ))}
