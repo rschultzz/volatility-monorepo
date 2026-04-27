@@ -407,7 +407,7 @@ SAVED_SCAN_DEFAULTS: Dict[str, Any] = {
 
     # ── Move detection ──
     "minLevelGexBn":          50,
-    "levelFamily":            "primary",     # "primary" | "primary+strong"
+    "levelFamily":            "primary",     # "primary" | "strong" | "both"
     "zoneMergeDistancePts":   10,
     "minCleanMovePoints":     20,
     "targetProximityPts":     5,

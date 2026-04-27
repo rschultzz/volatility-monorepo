@@ -1560,7 +1560,7 @@ function ScanParamsForm({ params, onChange, disabled = false }) {
             disabled={disabled}
           >
             <option value="primary">Primary only</option>
-            <option value="primary+strong">Primary + Strong</option>
+            <option value="both">Primary + Strong</option>
           </select>
         </label>
         <label className="field">
