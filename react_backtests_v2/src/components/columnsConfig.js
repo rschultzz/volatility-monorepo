@@ -219,12 +219,14 @@ export const STUDY_ONLY_COLUMNS = new Set([
 ]);
 
 // Compute which columns should be visible given the executionMode.
-// In study mode: study-only columns force-visible, managed-only force-hidden.
-// In managed mode: study-only force-hidden, others use user preference.
+// We force-HIDE columns that have no data in the current mode (managed-only
+// columns in study mode, study-only columns in managed mode), but we do NOT
+// force-show anything — the user's visibility preference always wins for
+// columns that DO have data. This way unchecking a column in the modal
+// actually removes it from the table.
 export function computeEffectiveColumns(columns, executionMode) {
   const isStudy = executionMode === 'study_target_hits';
   return columns.map(col => {
-    if (isStudy && STUDY_ONLY_COLUMNS.has(col.id))    return { ...col, visible: true };
     if (isStudy && MANAGED_ONLY_COLUMNS.has(col.id))  return { ...col, visible: false };
     if (!isStudy && STUDY_ONLY_COLUMNS.has(col.id))   return { ...col, visible: false };
     return col;

@@ -1,4 +1,68 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
+
+// ─────────────────────────────────────────────────────────────────────
+//  aggregateForwardOutcomes
+//  Re-aggregates per-row forward_outcomes into per-horizon stats.
+//  When `flipped` is true, swaps MFE↔MAE and negates close, so the
+//  numbers reflect what the same set of moves would have produced if
+//  every trade had been taken in the opposite direction.
+//  Mirrors the backend's rounding (2dp for points, 3dp for win rate)
+//  so flipped/unflipped views are numerically consistent.
+// ─────────────────────────────────────────────────────────────────────
+function aggregateForwardOutcomes(rows, horizons, flipped) {
+  const round2 = (v) => Math.round(v * 100) / 100;
+  const round3 = (v) => Math.round(v * 1000) / 1000;
+  const median = (xs) => {
+    if (!xs.length) return 0;
+    const s = [...xs].sort((a, b) => a - b);
+    const n = s.length;
+    return n % 2 ? s[(n - 1) / 2] : 0.5 * (s[n / 2 - 1] + s[n / 2]);
+  };
+
+  const out = {};
+  for (const h of horizons) {
+    const mfes = [];
+    const maes = [];
+    const closes = [];
+    for (const r of rows || []) {
+      const fo = r.forward_outcomes?.[h];
+      if (!fo) continue;
+      const origMfe = fo.mfe_pts;
+      const origMae = fo.mae_pts;
+      const origCls = fo.close_pts;
+
+      // Flip transform:
+      //   mfe (favorable magnitude) ↔ mae (adverse magnitude)
+      //   close (signed pnl) → −close
+      if (origMfe !== null && origMfe !== undefined) {
+        mfes.push(flipped ? Number(origMae) : Number(origMfe));
+      }
+      if (origMae !== null && origMae !== undefined) {
+        maes.push(flipped ? Number(origMfe) : Number(origMae));
+      }
+      if (origCls !== null && origCls !== undefined) {
+        closes.push(flipped ? -Number(origCls) : Number(origCls));
+      }
+    }
+
+    if (!closes.length) {
+      out[h] = { count: 0 };
+      continue;
+    }
+    const sum = (xs) => xs.reduce((a, b) => a + b, 0);
+    out[h] = {
+      count: closes.length,
+      mfe_mean:          mfes.length   ? round2(sum(mfes)   / mfes.length)   : 0,
+      mfe_median:        round2(median(mfes)),
+      mae_mean:          maes.length   ? round2(sum(maes)   / maes.length)   : 0,
+      mae_median:        round2(median(maes)),
+      close_mean:        round2(sum(closes) / closes.length),
+      close_median:      round2(median(closes)),
+      win_rate_at_close: round3(closes.filter((c) => c > 0).length / closes.length),
+    };
+  }
+  return out;
+}
 
 function fmt(value, digits = 2) {
   if (value === null || value === undefined || value === '') return '—';
@@ -145,7 +209,20 @@ function FunnelStage({ stage, index }) {
   );
 }
 
-export default function DiagnosticsPanel({ diagnostics, rows = [], funnel = [], executionMode = 'managed' }) {
+export default function DiagnosticsPanel({
+  diagnostics,
+  rows = [],
+  funnel = [],
+  executionMode = 'managed',
+  // Optional controlled toggle for the Long/Short direction view on the
+  // "Forward Outcomes by Horizon" card. When provided, the aggregate card
+  // mirrors this state and the parent can use it to drive other surfaces
+  // (e.g. flipping fwd_* columns in a sibling instances table). When not
+  // provided, the card falls back to managing its own state.
+  viewDirection,                // 'long' | 'short' | undefined
+  onViewDirectionChange,        // (newView) => void
+  originalTrade,                // 'long' | 'short' | undefined — explicit override
+}) {
   if (!diagnostics) return null;
 
   const isStudy = executionMode === 'study_target_hits';
@@ -192,7 +269,13 @@ export default function DiagnosticsPanel({ diagnostics, rows = [], funnel = [], 
 
       {isStudy && aggregate && horizonsInAgg.length > 0 && (
         <>
-          <ForwardOutcomesAggregate aggregate={aggregate} horizons={horizonsInAgg} />
+          <ForwardOutcomesAggregate
+            rows={rows}
+            horizons={horizonsInAgg}
+            viewDirection={viewDirection}
+            onViewDirectionChange={onViewDirectionChange}
+            originalTrade={originalTrade}
+          />
           <ForwardOutcomesHistograms rows={rows} horizons={horizonsInAgg} />
         </>
       )}
@@ -213,7 +296,41 @@ export default function DiagnosticsPanel({ diagnostics, rows = [], funnel = [], 
 //  Forward outcomes aggregate table (study mode)
 // ─────────────────────────────────────────────────────────────────────
 
-function ForwardOutcomesAggregate({ aggregate, horizons }) {
+function ForwardOutcomesAggregate({
+  rows,
+  horizons,
+  viewDirection,           // controlled value (optional)
+  onViewDirectionChange,   // controlled setter (optional)
+  originalTrade: originalTradeProp,
+}) {
+  // Each saved scan is homogeneous (all "up" or all "down"), so the
+  // first row's direction tells us the scan's original trade setup:
+  //   direction "up"   → up move faded with a SHORT
+  //   direction "down" → down move faded with a LONG
+  const rowDir = rows?.[0]?.direction;
+  const derivedOriginalTrade = rowDir === 'up' ? 'short'
+                              : rowDir === 'down' ? 'long'
+                              : 'short'; // safe fallback if direction is missing
+  const originalTrade = originalTradeProp || derivedOriginalTrade;
+
+  // Controlled vs. uncontrolled: if a parent passes viewDirection,
+  // mirror that; otherwise fall back to local state so the panel still
+  // works standalone. The toggle UI itself lives in the SavedScans
+  // header now — this component only renders the (possibly flipped)
+  // numbers.
+  const [internalView, setInternalView] = useState(originalTrade);
+  React.useEffect(() => {
+    if (viewDirection === undefined) setInternalView(originalTrade);
+  }, [originalTrade, viewDirection]);
+
+  const view = viewDirection !== undefined ? viewDirection : internalView;
+  const flipped = view !== originalTrade;
+
+  const aggregate = useMemo(
+    () => aggregateForwardOutcomes(rows, horizons, flipped),
+    [rows, horizons, flipped]
+  );
+
   const cellStyle = {
     padding: '8px 12px',
     fontSize: '12px',
@@ -246,16 +363,31 @@ function ForwardOutcomesAggregate({ aggregate, horizons }) {
 
   return (
     <div style={{ marginBottom: '24px' }}>
-      <h3 style={{
-        fontSize: '13px',
-        fontWeight: '700',
-        color: '#93c5fd',
+      <div style={{
         marginBottom: '12px',
-        letterSpacing: '0.05em',
-        textTransform: 'uppercase',
       }}>
-        Forward Outcomes by Horizon
-      </h3>
+        <h3 style={{
+          fontSize: '13px',
+          fontWeight: '700',
+          color: '#93c5fd',
+          margin: 0,
+          letterSpacing: '0.05em',
+          textTransform: 'uppercase',
+        }}>
+          Forward Outcomes by Horizon
+          {flipped && (
+            <span style={{
+              marginLeft: '8px',
+              color: '#fcd34d',
+              fontSize: '11px',
+              fontWeight: 600,
+              letterSpacing: '0.04em',
+            }}>
+              · reversed from setup
+            </span>
+          )}
+        </h3>
+      </div>
       <div style={{
         background: '#0f172a',
         border: '1px solid #1e293b',
@@ -531,26 +663,26 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
       for (const row of rows) {
         const rvi = row.realized_vs_implied?.[h];
         if (!rvi) continue;
-        
+
         const closeOverSigma = rvi.close_over_1sigma;
         if (closeOverSigma === null || closeOverSigma === undefined) continue;
 
         contributors.push(row);
-        
+
         if (row.iv?.atm_0dte_pct !== null && row.iv?.atm_0dte_pct !== undefined) {
           ivValues.push(row.iv.atm_0dte_pct);
         }
-        
+
         if (rvi.implied_1sigma !== null && rvi.implied_1sigma !== undefined) {
           impliedValues.push(rvi.implied_1sigma);
         }
-        
+
         if (rvi.range_over_1sigma !== null && rvi.range_over_1sigma !== undefined) {
           rangeRatios.push(rvi.range_over_1sigma);
         }
-        
+
         closeRatios.push(closeOverSigma);
-        
+
         if (closeOverSigma < sigma1) insideSigma1++;
         if (closeOverSigma < sigma2) insideSigma2++;
       }
@@ -597,17 +729,17 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
       if (impl <= 0) continue;
 
       const closeRatio = Math.abs(closePts) / impl;
-      
+
       eodContributors.push(row);
       eodIvValues.push(ivAtm);
       eodImpliedValues.push(impl);
       eodCloseRatios.push(closeRatio);
-      
+
       if (mfe !== null && mfe !== undefined && mae !== null && mae !== undefined) {
         const rangeRatio = (mfe + mae) / impl;
         eodRangeRatios.push(rangeRatio);
       }
-      
+
       if (closeRatio < sigma1) eodInsideSigma1++;
       if (closeRatio < sigma2) eodInsideSigma2++;
     }
@@ -657,7 +789,7 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
     if (v < 1.60) return '#fcd34d';   // slightly below
     return '#fca5a5';                 // at or above random walk
   };
-  
+
   // Hit rate vs normality baseline - now uses dynamic sigma threshold
   const hitRateColor = (observed, sigmaThreshold) => {
     if (observed === null || observed === undefined) return '#64748b';

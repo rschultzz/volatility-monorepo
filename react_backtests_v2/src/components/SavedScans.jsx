@@ -104,7 +104,11 @@ export default function SavedScans({ onSelectRow }) {
   const [selectedRowKey, setSelectedRowKey] = useState(null)
   const tableRef = useRef(null)
 
-  // ── Column state with localStorage persistence ──
+  // ── Column state ──
+  // Initial value comes from a global localStorage key — used as the
+  // default for any scan that has never been customized. Once a scan
+  // gets its own column_prefs (via the autosave effect below), that
+  // per-scan version takes precedence on load.
   const [columns, setColumns] = useState(() => {
     try {
       const saved = localStorage.getItem(COLUMNS_STORAGE_KEY)
@@ -115,6 +119,8 @@ export default function SavedScans({ onSelectRow }) {
     return DEFAULT_COLUMNS
   })
 
+  // Keep the global localStorage in sync with the most-recent column
+  // shape, so brand-new scans (no per-scan prefs yet) feel familiar.
   useEffect(() => {
     try {
       localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(columns))
@@ -122,6 +128,12 @@ export default function SavedScans({ onSelectRow }) {
       // localStorage might be full or disabled; fail silently
     }
   }, [columns])
+
+  // Tracks the (scan_id, columns) shape we last wrote to the server, so
+  // the autosave effect can skip no-op writes — including the very first
+  // setColumns that fires when a scan loads (we don't want to immediately
+  // POST the scan's own column_prefs back to itself).
+  const lastSavedColumnsKeyRef = useRef(null)
 
   const [isColumnsOpen, setIsColumnsOpen] = useState(false)
 
@@ -357,6 +369,71 @@ export default function SavedScans({ onSelectRow }) {
   const effectiveExecutionMode =
     loadedScan?.params?.executionMode || 'study_target_hits'
 
+  // ── Forward-outcomes direction toggle ──
+  // Lives at the SavedScans level so a single toggle (rendered inside the
+  // Diagnostics panel's "Forward Outcomes by Horizon" card) drives both
+  // that card AND the fwd_* columns in the Instances tab. Defaults to the
+  // scan's original setup; resets when a different scan loads.
+  const originalTradeDirection =
+    loadedScan?.direction === 'up' ? 'short'
+    : loadedScan?.direction === 'down' ? 'long'
+    : 'short'
+  const [forwardOutcomesView, setForwardOutcomesView] = useState(originalTradeDirection)
+  useEffect(() => {
+    setForwardOutcomesView(originalTradeDirection)
+  }, [originalTradeDirection, loadedScan?.scan_id])
+  const forwardOutcomesFlipped = forwardOutcomesView !== originalTradeDirection
+
+  // ── Per-scan column prefs: hydrate on load, autosave on change ──
+  // When a scan loads with its own column_prefs, snap `columns` to that
+  // version and remember the snapshot so the autosave effect knows to
+  // skip the freshly-loaded state. When a scan loads WITHOUT prefs, we
+  // keep whatever columns are currently in memory (the global default
+  // from localStorage) and let the user's first edit save them per-scan.
+  useEffect(() => {
+    if (!loadedScan?.scan_id) return
+    const incoming = Array.isArray(loadedScan.column_prefs) && loadedScan.column_prefs.length > 0
+      ? mergeColumnsWithDefaults(loadedScan.column_prefs)
+      : null
+    if (incoming) {
+      setColumns(incoming)
+      lastSavedColumnsKeyRef.current = `${loadedScan.scan_id}:${JSON.stringify(incoming.map(c => ({ id: c.id, visible: c.visible })))}`
+    } else {
+      // No saved prefs yet for this scan. Mark current columns as the
+      // "baseline" so we don't immediately POST them — the first real
+      // user edit will be what gets saved.
+      lastSavedColumnsKeyRef.current = `${loadedScan.scan_id}:${JSON.stringify(columns.map(c => ({ id: c.id, visible: c.visible })))}`
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedScan?.scan_id])
+
+  // Autosave column changes back to the scan, debounced. Skips writes
+  // that match the last-saved snapshot (including the post-hydration
+  // baseline above) so we don't echo the load back as a save.
+  useEffect(() => {
+    if (!loadedScan?.scan_id) return
+    const minimal = columns.map(c => ({ id: c.id, visible: c.visible }))
+    const key = `${loadedScan.scan_id}:${JSON.stringify(minimal)}`
+    if (lastSavedColumnsKeyRef.current === key) return
+
+    const t = setTimeout(() => {
+      fetch(`/api/backtests-v2/saved-scans/${loadedScan.scan_id}/column-prefs`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ column_prefs: minimal }),
+      })
+        .then(r => r.json())
+        .then(data => {
+          if (data?.ok) lastSavedColumnsKeyRef.current = key
+        })
+        .catch(() => {
+          // Network failure shouldn't disrupt the UI; the user will
+          // see their column changes locally. Next change will retry.
+        })
+    }, 500)
+    return () => clearTimeout(t)
+  }, [columns, loadedScan?.scan_id])
+
   // Apply study/managed visibility rules on top of user's column prefs
   const effectiveColumns = useMemo(
     () => computeEffectiveColumns(columns, effectiveExecutionMode),
@@ -479,6 +556,9 @@ export default function SavedScans({ onSelectRow }) {
             allCount={allRows.length}
             filteredCount={filteredRows.length}
             filtersActive={filtersAreActive}
+            view={forwardOutcomesView}
+            onViewChange={setForwardOutcomesView}
+            originalTrade={originalTradeDirection}
           />
 
           <ActiveFiltersBar
@@ -519,6 +599,9 @@ export default function SavedScans({ onSelectRow }) {
               rows={filteredRows}
               funnel={[]}
               executionMode={effectiveExecutionMode}
+              viewDirection={forwardOutcomesView}
+              onViewDirectionChange={setForwardOutcomesView}
+              originalTrade={originalTradeDirection}
             />
           )}
 
@@ -557,6 +640,7 @@ export default function SavedScans({ onSelectRow }) {
                 columnFilters={columnFilters}
                 onColumnFilterChange={handleColumnFilterChange}
                 filterTypeForColumn={filterTypeFor}
+                flippedForwardOutcomes={forwardOutcomesFlipped}
               />
             </div>
           )}
@@ -997,8 +1081,40 @@ function RunScanDialog({ newScan, setNewScan, onSubmit, onCancel, running }) {
 }
 
 
-function LoadedScanHeader({ scan, allCount, filteredCount, filtersActive }) {
+function LoadedScanHeader({
+  scan,
+  allCount,
+  filteredCount,
+  filtersActive,
+  view,                  // 'long' | 'short'
+  onViewChange,          // (next) => void
+  originalTrade,         // 'long' | 'short' — the scan's natural setup
+}) {
   if (!scan) return null
+
+  // Segmented pill button styles for the Long/Short toggle.
+  const segBtn = (side) => {
+    const active = view === side
+    return {
+      background: active
+        ? (side === 'long' ? 'rgba(34, 197, 94, 0.18)' : 'rgba(239, 68, 68, 0.18)')
+        : 'transparent',
+      border: `1px solid ${active
+        ? (side === 'long' ? '#22c55e' : '#ef4444')
+        : '#334155'}`,
+      color: active
+        ? (side === 'long' ? '#86efac' : '#fca5a5')
+        : '#94a3b8',
+      padding: '4px 14px',
+      cursor: active ? 'default' : 'pointer',
+      fontSize: '11px',
+      fontWeight: 700,
+      letterSpacing: '0.05em',
+      textTransform: 'uppercase',
+    }
+  }
+  const flipped = view && originalTrade && view !== originalTrade
+
   return (
     <div className="diag-card" style={{ flex: '0 0 auto', padding: 12 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
@@ -1024,6 +1140,59 @@ function LoadedScanHeader({ scan, allCount, filteredCount, filtersActive }) {
             </div>
           )}
         </div>
+
+        {/* Long/Short view toggle — drives both Diagnostics aggregate and Instances fwd_* columns. */}
+        {view && onViewChange && originalTrade && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+            <span style={{
+              fontSize: 10,
+              color: flipped ? '#fcd34d' : '#64748b',
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+            }}>
+              Forward Outcomes View{flipped ? ' · Reversed' : ''}
+            </span>
+            <div
+              role="group"
+              aria-label="Forward outcomes direction view"
+              title={`Original setup: ${originalTrade.toUpperCase()}. Click the other side to view forward outcomes (Diagnostics aggregate + fwd_* columns) as if every trade were taken in the opposite direction.`}
+              style={{
+                display: 'inline-flex',
+                border: '1px solid #1e293b',
+                borderRadius: '8px',
+                overflow: 'hidden',
+                background: '#0b1220',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => onViewChange('long')}
+                disabled={view === 'long'}
+                style={{
+                  ...segBtn('long'),
+                  borderTopLeftRadius: 7,
+                  borderBottomLeftRadius: 7,
+                  borderRight: 'none',
+                }}
+              >
+                Long{originalTrade === 'long' ? ' ●' : ''}
+              </button>
+              <button
+                type="button"
+                onClick={() => onViewChange('short')}
+                disabled={view === 'short'}
+                style={{
+                  ...segBtn('short'),
+                  borderTopRightRadius: 7,
+                  borderBottomRightRadius: 7,
+                }}
+              >
+                Short{originalTrade === 'short' ? ' ●' : ''}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

@@ -1022,6 +1022,12 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
               notes          TEXT
             )
         """))
+        # Forward-compatible columns: added via ALTER so existing tables
+        # pick them up without manual migration. Idempotent.
+        conn.execute(text("""
+            ALTER TABLE public.bt2_scan_cache
+            ADD COLUMN IF NOT EXISTS column_prefs JSONB
+        """))
         conn.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_bt2_scan_cache_created
               ON public.bt2_scan_cache (created_at DESC)
@@ -1190,7 +1196,8 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 _ensure_scan_cache_table_exists(conn)
                 result = conn.execute(text("""
                     SELECT scan_id, created_at, label, direction, start_date, end_date,
-                           params, funnel, diagnostics, rows, row_count, notes
+                           params, funnel, diagnostics, rows, row_count, notes,
+                           column_prefs
                     FROM public.bt2_scan_cache
                     WHERE scan_id = :scan_id
                 """), {"scan_id": sid})
@@ -1214,6 +1221,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             "rows": row[9] or [],
             "row_count": int(row[10]) if row[10] is not None else 0,
             "notes": row[11],
+            "column_prefs": row[12],   # null if scan has not been customized yet
         })
 
     def saved_scans_delete_api(scan_id):
@@ -1234,6 +1242,46 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 """), {"scan_id": sid})
                 row = result.fetchone()
                 if row is None:
+                    return jsonify({"ok": False, "error": "scan not found"}), 404
+            return jsonify({"ok": True, "scan_id": sid})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    def saved_scans_column_prefs_api(scan_id):
+        """
+        PATCH /api/backtests-v2/saved-scans/<scan_id>/column-prefs
+
+        Body: { "column_prefs": [...] }
+
+        Replaces the column_prefs JSONB blob for this scan. Cheap — does
+        not re-run the scan or touch any other field. Designed to be
+        called from the frontend on a debounce as the user toggles or
+        reorders table columns.
+        """
+        try:
+            sid = int(scan_id)
+        except Exception:
+            return jsonify({"ok": False, "error": "scan_id must be integer"}), 400
+
+        payload = request.get_json(silent=True) or {}
+        column_prefs = payload.get("column_prefs")
+        if not isinstance(column_prefs, list):
+            return jsonify({"ok": False, "error": "column_prefs must be a list"}), 400
+
+        try:
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                result = conn.execute(text("""
+                    UPDATE public.bt2_scan_cache
+                    SET column_prefs = CAST(:cp AS JSONB)
+                    WHERE scan_id = :scan_id
+                    RETURNING scan_id
+                """), {
+                    "scan_id": sid,
+                    "cp": json.dumps(column_prefs),
+                })
+                if result.fetchone() is None:
                     return jsonify({"ok": False, "error": "scan not found"}), 404
             return jsonify({"ok": True, "scan_id": sid})
         except Exception as exc:
@@ -1553,4 +1601,12 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             endpoint="backtests_v2_saved_scans_update",
             view_func=saved_scans_update_api,
             methods=["POST"],
+        )
+
+    if "backtests_v2_saved_scans_column_prefs" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/<scan_id>/column-prefs",
+            endpoint="backtests_v2_saved_scans_column_prefs",
+            view_func=saved_scans_column_prefs_api,
+            methods=["PATCH"],
         )

@@ -48,6 +48,34 @@ function setupLabel(row) {
   return 'N/A';
 }
 
+// ─────────────────────────────────────────────────────────────────────
+//  Forward outcome flip helper
+//  Returns the value for a fwd_* column, optionally applying the
+//  direction-flip transform (MFE↔MAE, close → −close). Returns
+//  undefined for non-fwd_* columns so callers can fall through.
+// ─────────────────────────────────────────────────────────────────────
+function readForwardOutcomeValue(colId, row, flipped) {
+  if (!colId || !colId.startsWith('fwd_')) return undefined;
+  const fo = row.forward_outcomes;
+  if (!fo) return undefined;
+
+  const horizonKey = colId === 'fwd_eod_mfe' || colId === 'fwd_eod_mae' || colId === 'fwd_eod_close'
+    ? 'eod'
+    : (colId.match(/^fwd_(\d+m)_/) || [])[1];
+  if (!horizonKey) return undefined;
+  const h = fo[horizonKey];
+  if (!h) return undefined;
+
+  if (colId.endsWith('_mfe'))   return flipped ? h.mae_pts : h.mfe_pts;
+  if (colId.endsWith('_mae'))   return flipped ? h.mfe_pts : h.mae_pts;
+  if (colId.endsWith('_close')) {
+    const v = h.close_pts;
+    if (v === null || v === undefined) return v;
+    return flipped ? -v : v;
+  }
+  return undefined;
+}
+
 function tradeLabel(row) {
   return row.trade_entry_found ? 'Trade entered' : 'No trade';
 }
@@ -163,6 +191,10 @@ const ResultsTable = forwardRef(({
   columnFilters = null,        // { [columnId]: filterObject }
   onColumnFilterChange = null, // (columnId, filterObject | null) => void
   filterTypeForColumn = null,  // (columnId) => 'numeric'|'date'|'categorical'|null
+  // When true, fwd_* columns (mfe/mae/close per horizon) are shown as if
+  // every trade had been taken in the opposite direction. Pure render-time
+  // transform — does not mutate row data.
+  flippedForwardOutcomes = false,
 }, ref) => {
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
   // Filter popover state (which column is open, and the anchor rect for positioning)
@@ -188,10 +220,14 @@ const ResultsTable = forwardRef(({
 
     if (sortConfig.key) {
       const dataKey = COLUMN_DATA_MAP[sortConfig.key];
-      if (dataKey) {
+      const fwdKey = sortConfig.key.startsWith('fwd_');
+      if (dataKey || fwdKey) {
         result.sort((a, b) => {
           let aVal, bVal;
-          if (typeof dataKey === 'function') {
+          if (fwdKey) {
+            aVal = readForwardOutcomeValue(sortConfig.key, a, flippedForwardOutcomes);
+            bVal = readForwardOutcomeValue(sortConfig.key, b, flippedForwardOutcomes);
+          } else if (typeof dataKey === 'function') {
             aVal = dataKey(a);
             bVal = dataKey(b);
           } else {
@@ -210,7 +246,7 @@ const ResultsTable = forwardRef(({
     }
 
     return result;
-  }, [rows, sortConfig]);
+  }, [rows, sortConfig, flippedForwardOutcomes]);
 
   useImperativeHandle(ref, () => ({
     downloadCSV: () => {
@@ -296,7 +332,11 @@ const ResultsTable = forwardRef(({
                 val = row.start_pct_of_session_range != null ? (row.start_pct_of_session_range * 100).toFixed(1) + '%' : '';
                 break;
               default:
-                val = typeof dataKey === 'function' ? dataKey(row) : row[dataKey];
+                if (col.id.startsWith('fwd_')) {
+                  val = readForwardOutcomeValue(col.id, row, flippedForwardOutcomes);
+                } else {
+                  val = typeof dataKey === 'function' ? dataKey(row) : row[dataKey];
+                }
             }
 
             if (val === null || val === undefined) return '';
@@ -479,43 +519,40 @@ const ResultsTable = forwardRef(({
       }
       case 'target_price': return fmt(row.target_price);
 
-      // Close columns: color green if > 0, red if < 0
+      // Close columns: signed pnl, color green if > 0, red if < 0
       case 'fwd_30m_close':
       case 'fwd_60m_close':
       case 'fwd_90m_close':
       case 'fwd_120m_close':
       case 'fwd_180m_close':
       case 'fwd_eod_close': {
-        const horizonKey = col.id === 'fwd_eod_close' ? 'eod' : col.id.replace('fwd_', '').replace('_close', '');
-        const v = row.forward_outcomes?.[horizonKey]?.close_pts;
+        const v = readForwardOutcomeValue(col.id, row, flippedForwardOutcomes);
         if (v === null || v === undefined) return '—';
         const color = v > 0 ? '#86efac' : v < 0 ? '#fca5a5' : '#e5e7eb';
         return <span style={{ color, fontWeight: 600 }}>{fmt(v)}</span>;
       }
 
-      // MFE columns: always positive favorable, show in green if > 0
+      // MFE columns: favorable magnitude (positive), green
       case 'fwd_30m_mfe':
       case 'fwd_60m_mfe':
       case 'fwd_90m_mfe':
       case 'fwd_120m_mfe':
       case 'fwd_180m_mfe':
       case 'fwd_eod_mfe': {
-        const horizonKey = col.id === 'fwd_eod_mfe' ? 'eod' : col.id.replace('fwd_', '').replace('_mfe', '');
-        const v = row.forward_outcomes?.[horizonKey]?.mfe_pts;
+        const v = readForwardOutcomeValue(col.id, row, flippedForwardOutcomes);
         if (v === null || v === undefined) return '—';
         const color = v > 0 ? '#86efac' : '#94a3b8';
         return <span style={{ color }}>{fmt(v)}</span>;
       }
 
-      // MAE columns: adverse magnitude (positive number), show in amber/red proportional
+      // MAE columns: adverse magnitude (positive), red/amber
       case 'fwd_30m_mae':
       case 'fwd_60m_mae':
       case 'fwd_90m_mae':
       case 'fwd_120m_mae':
       case 'fwd_180m_mae':
       case 'fwd_eod_mae': {
-        const horizonKey = col.id === 'fwd_eod_mae' ? 'eod' : col.id.replace('fwd_', '').replace('_mae', '');
-        const v = row.forward_outcomes?.[horizonKey]?.mae_pts;
+        const v = readForwardOutcomeValue(col.id, row, flippedForwardOutcomes);
         if (v === null || v === undefined) return '—';
         const color = v > 0 ? '#fca5a5' : '#94a3b8';
         return <span style={{ color }}>{fmt(v)}</span>;
