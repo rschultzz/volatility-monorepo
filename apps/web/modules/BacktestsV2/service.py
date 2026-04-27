@@ -1669,7 +1669,7 @@ def _observe_consolidation_range(
         max_zone_breach_pts: float,
         pivot_price: float,
         move_points: float,
-        max_move_loss_pct: float,
+        max_move_loss_pct: Optional[float],
 ) -> Dict[str, Any]:
     """
     Observe bars from start_idx for up to consolidation_window_minutes, building
@@ -1681,6 +1681,8 @@ def _observe_consolidation_range(
                  advance to next GEX wall and restart with a fresh clock.
       - INVALIDATE: close < pivot_price + move_points * (1 - max_move_loss_pct)
                     75%+ of the move has been given back — setup is dead.
+                    Skipped entirely when max_move_loss_pct is None (study mode
+                    uses this to keep promotion logic but disable the loss filter).
       - CONTINUE: neither trigger — keep building range.
 
     After consolidation_window_minutes bars with no trigger, range is confirmed.
@@ -1696,7 +1698,10 @@ def _observe_consolidation_range(
     max_bars = max(1, int(consolidation_window_minutes))
     end_idx = min(len(day_rows) - 1, start_idx + max_bars - 1)
 
-    invalidation_floor = float(pivot_price) + float(move_points) * (1.0 - float(max_move_loss_pct))
+    invalidation_floor: Optional[float] = (
+        float(pivot_price) + float(move_points) * (1.0 - float(max_move_loss_pct))
+        if max_move_loss_pct is not None else None
+    )
     breach_ceiling = float(wall_high) + float(max_zone_breach_pts)
 
     observed: List[Dict[str, Any]] = []
@@ -1728,7 +1733,7 @@ def _observe_consolidation_range(
                     "bars_observed": len(observed),
                     "promote_idx": i,
                 }
-            if c < invalidation_floor:
+            if invalidation_floor is not None and c < invalidation_floor:
                 return {
                     "status": "invalidated",
                     "rows": observed,
@@ -1768,7 +1773,7 @@ def _observe_consolidation_range_down(
         max_zone_breach_pts: float,
         pivot_price: float,
         move_points: float,
-        max_move_loss_pct: float,
+        max_move_loss_pct: Optional[float],
 ) -> Dict[str, Any]:
     """
     Mirror of _observe_consolidation_range for DOWN moves → LONG trades.
@@ -1777,13 +1782,18 @@ def _observe_consolidation_range_down(
                 Price pushed through the top of the target zone — discard,
                 advance to next zone down.
     INVALIDATE: close > pivot_price - move_points * (1 - max_move_loss_pct)
-                75%+ of the down move given back — setup dead.
+                75%+ of the down move given back — setup dead. Skipped when
+                max_move_loss_pct is None (study mode keeps promotion logic
+                but disables the loss filter).
     CONFIRM:    window elapsed without either trigger.
     """
     max_bars = max(1, int(consolidation_window_minutes))
     end_idx = min(len(day_rows) - 1, start_idx + max_bars - 1)
 
-    invalidation_ceiling = float(pivot_price) - float(move_points) * (1.0 - float(max_move_loss_pct))
+    invalidation_ceiling: Optional[float] = (
+        float(pivot_price) - float(move_points) * (1.0 - float(max_move_loss_pct))
+        if max_move_loss_pct is not None else None
+    )
     breach_floor = float(wall_high) - float(max_zone_breach_pts)
 
     observed: List[Dict[str, Any]] = []
@@ -1810,7 +1820,7 @@ def _observe_consolidation_range_down(
         observed.append(row)
 
         # INVALIDATE: close gave back too much of the down move
-        if close_v is not None:
+        if close_v is not None and invalidation_ceiling is not None:
             c = float(close_v)
             if c > invalidation_ceiling:
                 return {"status": "invalidated", "rows": observed, "range_high": range_high, "range_low": range_low, "bars_observed": len(observed), "promote_idx": None}
@@ -2013,10 +2023,12 @@ def _compute_prior_move_context(
         pivot_idx: int,
         pivot_price: float,
         up_move_pts: float,
+        target_hit_idx: int = 0,
+        target_level: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Look back from the start of the up move (pivot_idx) across the session so far
-    and compute three context features that characterise prior trend:
+    and compute context features that characterise the setup:
 
     prior_session_down_pts
         The largest peak-to-trough down move that completed *before* pivot_idx.
@@ -2029,10 +2041,15 @@ def _compute_prior_move_context(
         to fade — the "bounce off the lows" warning signal.
 
     start_pct_of_session_range
-        Where pivot_price sits within the session high/low range observed up to
-        pivot_idx.  0.0 = at the session low, 1.0 = at the session high.
-        A low value (e.g. < 0.25) means we are still near the bottom of the day's
-        range — another bounce indicator.
+        Where the TARGET LEVEL sits within the session high/low range observed
+        through the target-hit bar. 0.0 = at session low, 1.0 = at session high.
+        For an up→short fade we want this close to 1.0 (target is genuinely
+        near the day's high). A low value means we'd be fading inside chop —
+        a target sitting in the lower half of the range we've seen so far.
+
+        The down-direction analog stores the same metric so a single
+        direction-agnostic column ("Target % of Range") works for both setups:
+        up→short wants high values, down→long wants low values, same field.
     """
     empty: Dict[str, Any] = {
         "prior_session_down_pts": None,
@@ -2045,20 +2062,22 @@ def _compute_prior_move_context(
 
     prior_rows = day_rows[: pivot_idx + 1]
 
-    # Session range up to pivot
+    # Use rows up through the target hit for the session range — gives a
+    # fuller picture of where the target level sits within the session.
+    range_rows = day_rows[: max(pivot_idx + 1, target_hit_idx + 1)]
+
     try:
-        session_high = max(float(r["high"]) for r in prior_rows if r.get("high") is not None)
-        session_low = min(float(r["low"]) for r in prior_rows if r.get("low") is not None)
+        session_high = max(float(r["high"]) for r in range_rows if r.get("high") is not None)
+        session_low = min(float(r["low"]) for r in range_rows if r.get("low") is not None)
     except (ValueError, TypeError):
         return empty
 
     session_range = session_high - session_low
-    if session_range <= 0:
-        start_pct = None
-    else:
-        start_pct = round((pivot_price - session_low) / session_range, 3)
+    # Target's % of range: 0.0 = at session low, 1.0 = at session high.
+    target_pct = round((target_level - session_low) / session_range, 3) if session_range > 0 else None
 
-    # Largest prior down move: rolling peak → trough
+    # Largest prior down move: rolling peak → trough. Still computed (cheap)
+    # so the data remains on the row even if no column currently displays it.
     max_down = 0.0
     running_peak = float(prior_rows[0]["high"]) if prior_rows[0].get("high") is not None else None
 
@@ -2083,7 +2102,7 @@ def _compute_prior_move_context(
     return {
         "prior_session_down_pts": prior_down_pts,
         "prior_down_vs_up_ratio": ratio,
-        "start_pct_of_session_range": start_pct,
+        "start_pct_of_session_range": target_pct,
     }
 
 
@@ -3011,6 +3030,14 @@ def _day_zone_results(
                     # Observe the consolidation window from the moment of target hit.
                     # If price promotes (pushes above the wall), advance to the next
                     # GEX zone and restart with a fresh clock from promote_idx.
+                    #
+                    # In study mode, the max_move_loss_pct invalidation check is
+                    # disabled (passed as None) — we want to see every target hit
+                    # that wasn't promoted-through, regardless of how price behaved
+                    # afterward. Promotion logic still applies so that touches
+                    # which blow through to a higher GEX wall correctly advance
+                    # to the next candidate zone instead of being recorded as fades.
+                    _study = execution_mode == "study_target_hits"
                     obs = _observe_consolidation_range(
                         day_rows=day_rows,
                         start_idx=hit_idx,
@@ -3019,7 +3046,7 @@ def _day_zone_results(
                         max_zone_breach_pts=float(max_zone_breach_pts),
                         pivot_price=float(pivot_price),
                         move_points=float(move_points),
-                        max_move_loss_pct=float(max_move_loss_pct),
+                        max_move_loss_pct=None if _study else float(max_move_loss_pct),
                     )
 
                     if obs["status"] == "promoted":
@@ -3082,6 +3109,19 @@ def _day_zone_results(
                                 # Do not break — fall through to next pivot search.
                                 break
 
+                            # Prior-move context. NOT used as a gate in study mode —
+                            # threshold params only apply in managed mode. Computed
+                            # here so the "Target % of Range" column populates,
+                            # letting users threshold via the column filter UI.
+                            prior_ctx = _compute_prior_move_context(
+                                day_rows,
+                                pivot_idx=pivot_idx,
+                                pivot_price=pivot_price,
+                                up_move_pts=float(move_points),
+                                target_hit_idx=hit_idx,
+                                target_level=float(target_zone_up["low"]),
+                            )
+
                             study_row = _build_study_row(
                                 trade_date=trade_date,
                                 day_rows=day_rows,
@@ -3101,6 +3141,7 @@ def _day_zone_results(
                                 condor_wing_width_pts=float(condor_wing_width_pts),
                                 target_spx_price=skew_metrics.get("target_spx_price"),
                             )
+                            study_row.update(prior_ctx)
                             results.append(study_row)
                             diagnostics["valid_instances"] += 1
                             if len(results) >= int(max_results):
@@ -3159,6 +3200,8 @@ def _day_zone_results(
                         pivot_idx=pivot_idx,
                         pivot_price=pivot_price,
                         up_move_pts=float(move_points),
+                        target_hit_idx=hit_idx,
+                        target_level=float(target_zone_up["low"]),
                     )
 
                     setup_eval = _evaluate_up_short_setup(
@@ -3375,6 +3418,10 @@ def _day_zone_results(
 
                     # Observe consolidation from target hit. If price promotes
                     # (pushes below wall low), advance to next zone down.
+                    # Study mode disables the max_move_loss_pct invalidation
+                    # check (see up-direction comment for rationale) — promotion
+                    # logic still applies.
+                    _study = execution_mode == "study_target_hits"
                     obs = _observe_consolidation_range_down(
                         day_rows=day_rows,
                         start_idx=hit_idx,
@@ -3384,7 +3431,7 @@ def _day_zone_results(
                         max_zone_breach_pts=float(max_zone_breach_pts),
                         pivot_price=float(pivot_price),
                         move_points=float(move_points),
-                        max_move_loss_pct=float(max_move_loss_pct),
+                        max_move_loss_pct=None if _study else float(max_move_loss_pct),
                     )
 
                     if obs["status"] == "promoted":
@@ -3435,6 +3482,18 @@ def _day_zone_results(
                             if _mtc_check is not None and _mtc_check < 15:
                                 break
 
+                            # Prior-move context. Same rationale as the up-direction
+                            # study branch — populated for column display, not used
+                            # as a gate. Filter via column UI in study mode.
+                            prior_ctx = _compute_prior_move_context_down(
+                                day_rows,
+                                pivot_idx=pivot_idx,
+                                pivot_price=pivot_price,
+                                down_move_pts=float(move_points),
+                                target_hit_idx=hit_idx,
+                                target_level=float(target_zone_down["high"]),
+                            )
+
                             study_row = _build_study_row(
                                 trade_date=trade_date,
                                 day_rows=day_rows,
@@ -3454,6 +3513,7 @@ def _day_zone_results(
                                 condor_wing_width_pts=float(condor_wing_width_pts),
                                 target_spx_price=skew_metrics.get("target_spx_price"),
                             )
+                            study_row.update(prior_ctx)
                             results.append(study_row)
                             diagnostics["valid_instances"] += 1
                             if len(results) >= int(max_results):

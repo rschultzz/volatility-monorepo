@@ -1480,34 +1480,6 @@ function ScanParamsForm({ params, onChange, disabled = false }) {
                 disabled={disabled} />
             </label>
             <label className="field">
-              <span>Max minutes before close</span>
-              <input type="number" step="5" min="0"
-                value={params.maxMinutesBeforeClose ?? ''}
-                onChange={(e) => update('maxMinutesBeforeClose', Number(e.target.value))}
-                disabled={disabled} />
-            </label>
-            <label className="field">
-              <span>Max prior down/up ratio</span>
-              <input type="number" step="0.1" min="0"
-                value={params.maxPriorDownUpRatio ?? ''}
-                onChange={(e) => update('maxPriorDownUpRatio', Number(e.target.value))}
-                disabled={disabled} />
-            </label>
-            <label className="field">
-              <span>Max start % of range</span>
-              <input type="number" step="0.05" min="0" max="1"
-                value={params.maxStartPctOfRange ?? ''}
-                onChange={(e) => update('maxStartPctOfRange', Number(e.target.value))}
-                disabled={disabled} />
-            </label>
-            <label className="field">
-              <span>Max move loss %</span>
-              <input type="number" step="0.05" min="0" max="1"
-                value={params.maxMoveLossPct ?? ''}
-                onChange={(e) => update('maxMoveLossPct', Number(e.target.value))}
-                disabled={disabled} />
-            </label>
-            <label className="field">
               <span>Max results</span>
               <input type="number" step="100" min="100"
                 value={params.maxResults ?? ''}
