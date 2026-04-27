@@ -33,6 +33,19 @@ function coerceGexMinAbsB(value, fallback = 10) {
   return Math.max(0, Math.min(200, Math.round(num)))
 }
 
+// Shared formatters for GEX popup & panel
+function fmtGammaB(v) {
+  if (!Number.isFinite(v)) return '—'
+  const b = v / 1e9
+  const sign = b > 0 ? '+' : (b < 0 ? '' : '')
+  return `${sign}${b.toFixed(2)}B`
+}
+
+function fmtGexExpDate(iso) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  return m ? `${m[2]}/${m[3]}` : String(iso || '—')
+}
+
 function partsForZone(epochSec, timeZone = 'America/Los_Angeles') {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,
@@ -618,6 +631,8 @@ export default function PriceChart({
   const seriesRef = useRef(null)
   const liveTradeSeriesRef = useRef(null)
   const gexSeriesRefs = useRef([])
+  // Map<LineSeries, segment> — lets the click handler look up which segment was hit
+  const gexSegmentBySeriesRef = useRef(new Map())
   const expectedMoveSeriesRefs = useRef([])
   const bandsSeriesRefs = useRef([])
   const intervalRef = useRef(interval)
@@ -643,6 +658,80 @@ export default function PriceChart({
 
   const [sessionBands, setSessionBands] = useState([])
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // GEX click-popup state: which segment is being shown, and where (in chart-relative pixels)
+  const [clickedGexSegment, setClickedGexSegment] = useState(null)
+  const [gexPopupPos, setGexPopupPos] = useState({ left: 0, top: 0 })
+
+  // GEX legend panel state: open/closed (persisted), hovered row (highlights line on chart),
+  // expanded row (shows the per-expiration breakdown inline)
+  const [gexPanelOpen, setGexPanelOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem('ib-react-gex-panel-open') === '1'
+    } catch (e) {
+      return false
+    }
+  })
+  const [hoveredPanelLevel, setHoveredPanelLevel] = useState(null)
+  const [expandedPanelLevel, setExpandedPanelLevel] = useState(null)
+
+  // Dismiss the GEX popup or panel on Escape (popup first if both are open)
+  useEffect(() => {
+    if (!clickedGexSegment && !gexPanelOpen) return undefined
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return
+      if (clickedGexSegment) {
+        setClickedGexSegment(null)
+      } else if (gexPanelOpen) {
+        setGexPanelOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [clickedGexSegment, gexPanelOpen])
+
+  // Persist panel open/closed across sessions
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('ib-react-gex-panel-open', gexPanelOpen ? '1' : '0')
+    } catch (e) {
+      // ignore quota / disabled storage
+    }
+  }, [gexPanelOpen])
+
+  // Highlight the chart line when a panel row is hovered. The cleanup function
+  // restores the original line width so rapid hover changes don't leave a stuck
+  // highlight, and so unmount/segment-rebuild can't leave dangling state.
+  useEffect(() => {
+    if (hoveredPanelLevel == null) return undefined
+    const targetLevel = Number(hoveredPanelLevel)
+    if (!Number.isFinite(targetLevel)) return undefined
+
+    const map = gexSegmentBySeriesRef.current
+    let targetSeries = null
+    let originalWidth = null
+    for (const [series, seg] of map.entries()) {
+      if (Number(seg?.level) === targetLevel) {
+        targetSeries = series
+        originalWidth = safeLineWidth(seg?.line_width)
+        break
+      }
+    }
+    if (!targetSeries) return undefined
+
+    try {
+      targetSeries.applyOptions({ lineWidth: Math.min(5, originalWidth + 2) })
+    } catch (e) {
+      // ignore stale series
+    }
+
+    return () => {
+      try {
+        targetSeries.applyOptions({ lineWidth: originalWidth })
+      } catch (e) {
+        // ignore stale series
+      }
+    }
+  }, [hoveredPanelLevel])
   const [draftGexMinAbsB, setDraftGexMinAbsB] = useState(() => coerceGexMinAbsB(gexMinAbsB, 10))
   const [draftInterval, setDraftInterval] = useState(() => normalizeIntervalValue(interval, '1min'))
   const [settingsError, setSettingsError] = useState('')
@@ -777,6 +866,14 @@ export default function PriceChart({
     () => normalizeGexSegments(gexSegments),
     [gexSegments]
   )
+
+  // Same segments, sorted by |net_gamma| descending — used by the GEX legend panel
+  const sortedGexSegmentsForPanel = useMemo(() => {
+    if (!Array.isArray(normalizedGexSegments)) return []
+    return [...normalizedGexSegments].sort(
+      (a, b) => Math.abs(Number(b?.net_gamma) || 0) - Math.abs(Number(a?.net_gamma) || 0)
+    )
+  }, [normalizedGexSegments])
 
   const normalizedExpectedMoveLevels = useMemo(
     () => normalizeExpectedMoveLevels(expectedMoveLevels),
@@ -1122,6 +1219,41 @@ export default function PriceChart({
     }
 
     const handleClick = (param) => {
+      // GEX line hit-test first: if the click landed near a GEX horizontal line,
+      // show the per-expiration popup and short-circuit before toggling a timeslice.
+      if (param?.point && gexSeriesRefs.current.length > 0) {
+        const HIT_TOLERANCE_PX = 8
+        let bestSeries = null
+        let bestDist = Infinity
+        const clickY = Number(param.point.y)
+        if (Number.isFinite(clickY)) {
+          for (const series of gexSeriesRefs.current) {
+            const seg = gexSegmentBySeriesRef.current.get(series)
+            if (!seg) continue
+            const lineY = series.priceToCoordinate(seg.level)
+            if (lineY == null) continue
+            const dist = Math.abs(lineY - clickY)
+            if (dist < bestDist) {
+              bestDist = dist
+              bestSeries = series
+            }
+          }
+        }
+        if (bestSeries && bestDist <= HIT_TOLERANCE_PX) {
+          const seg = gexSegmentBySeriesRef.current.get(bestSeries)
+          setClickedGexSegment(seg)
+          setGexPopupPos({
+            left: Number(param.point.x) || 0,
+            top: Number(param.point.y) || 0,
+          })
+          return
+        }
+      }
+
+      // Click landed away from any GEX line — close any open popup before
+      // running the existing timeslice-toggle behavior.
+      setClickedGexSegment(null)
+
       if (!param?.time) return
       const hhmm = toPtHHMM(param.time, intervalRef.current)
 
@@ -1278,6 +1410,7 @@ export default function PriceChart({
       seriesRef.current = null
       liveTradeSeriesRef.current = null
       gexSeriesRefs.current = []
+      gexSegmentBySeriesRef.current = new Map()
       expectedMoveSeriesRefs.current = []
       dragRef.current.active = false
       reportLinkedCrosshair(null)
@@ -1554,12 +1687,14 @@ export default function PriceChart({
       }
     }
     gexSeriesRefs.current = []
+    gexSegmentBySeriesRef.current = new Map()
 
     if (!gexEnabled || !Array.isArray(normalizedGexSegments) || !normalizedGexSegments.length) {
       return
     }
 
     const nextRefs = []
+    const nextMap = new Map()
 
     for (const seg of normalizedGexSegments) {
       const level = Number(seg?.level)
@@ -1590,12 +1725,14 @@ export default function PriceChart({
         ])
 
         nextRefs.push(lineSeries)
+        nextMap.set(lineSeries, seg)
       } catch (err) {
         // ignore bad segment
       }
     }
 
     gexSeriesRefs.current = nextRefs
+    gexSegmentBySeriesRef.current = nextMap
   }, [normalizedGexSegments, gexEnabled])
 
   useEffect(() => {
@@ -2309,6 +2446,469 @@ export default function PriceChart({
               --
             </div>
           </div>
+
+          {clickedGexSegment && (() => {
+            // Layout constants for the GEX popup
+            const POPUP_WIDTH = 280
+            const POPUP_MAX_HEIGHT = 360
+            const OFFSET = 14
+            const PAD = 8
+            const stageRect = stageRef.current?.getBoundingClientRect()
+            const stageW = stageRect?.width || 0
+            const stageH = stageRect?.height || 0
+
+            // Anchor near the click, flipping/clamping so the popup stays inside the chart
+            let left = gexPopupPos.left + OFFSET
+            let top = gexPopupPos.top + OFFSET
+            if (left + POPUP_WIDTH > stageW - PAD) {
+              left = gexPopupPos.left - POPUP_WIDTH - OFFSET
+            }
+            if (top + POPUP_MAX_HEIGHT > stageH - PAD) {
+              top = Math.max(PAD, stageH - POPUP_MAX_HEIGHT - PAD)
+            }
+            if (left < PAD) left = PAD
+            if (top < PAD) top = PAD
+
+            // Format helpers are hoisted to module scope: fmtGammaB, fmtGexExpDate
+
+            // Hide expired (dte < 0) per Ryan's preference
+            const allExpirations = Array.isArray(clickedGexSegment.expirations)
+              ? clickedGexSegment.expirations
+              : []
+            const visibleExpirations = allExpirations.filter(
+              (e) => !Number.isFinite(Number(e?.dte)) || Number(e.dte) >= 0
+            )
+            const hiddenCount = allExpirations.length - visibleExpirations.length
+
+            const netVal = Number(clickedGexSegment.net_gamma)
+            const callVal = Number(clickedGexSegment.call_gamma)
+            const putVal = Number(clickedGexSegment.put_gamma)
+            const netColor = netVal > 0 ? '#86efac' : (netVal < 0 ? '#fca5a5' : '#e5e7eb')
+
+            return (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${left}px`,
+                  top: `${top}px`,
+                  width: `${POPUP_WIDTH}px`,
+                  maxHeight: `${POPUP_MAX_HEIGHT}px`,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  zIndex: 6,
+                  borderRadius: '10px',
+                  background: 'rgba(15, 23, 42, 0.96)',
+                  border: '1px solid rgba(148, 163, 184, 0.32)',
+                  boxShadow: '0 12px 32px rgba(0, 0, 0, 0.42)',
+                  color: '#e5e7eb',
+                  fontSize: '12px',
+                  lineHeight: 1.35,
+                  pointerEvents: 'auto',
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '10px 12px 8px',
+                    borderBottom: '1px solid rgba(148,163,184,0.18)',
+                  }}
+                >
+                  <div>
+                    <div style={{ color: '#94a3b8', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      GEX Level
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: '15px', fontVariantNumeric: 'tabular-nums' }}>
+                      {Number(clickedGexSegment.level).toFixed(0)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setClickedGexSegment(null)}
+                    aria-label="Close"
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#94a3b8',
+                      fontSize: '18px',
+                      lineHeight: 1,
+                      cursor: 'pointer',
+                      padding: '2px 6px',
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {/* Totals */}
+                <div style={{ padding: '8px 12px', borderBottom: '1px solid rgba(148,163,184,0.18)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ color: '#94a3b8' }}>Net</span>
+                    <span style={{ fontWeight: 700, color: netColor, fontVariantNumeric: 'tabular-nums' }}>
+                      {fmtGammaB(netVal)}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
+                    <span style={{ color: '#94a3b8' }}>Calls</span>
+                    <span style={{ color: '#86efac', fontVariantNumeric: 'tabular-nums' }}>{fmtGammaB(callVal)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: '#94a3b8' }}>Puts</span>
+                    <span style={{ color: '#fca5a5', fontVariantNumeric: 'tabular-nums' }}>{fmtGammaB(putVal)}</span>
+                  </div>
+                </div>
+
+                {/* Expirations table */}
+                <div
+                  style={{
+                    flex: 1,
+                    overflowY: 'auto',
+                    padding: '6px 12px 10px',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 36px 1fr',
+                      columnGap: '8px',
+                      color: '#94a3b8',
+                      fontSize: '10.5px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                      paddingBottom: '4px',
+                      borderBottom: '1px dashed rgba(148,163,184,0.18)',
+                      marginBottom: '4px',
+                    }}
+                  >
+                    <span>Exp</span>
+                    <span style={{ textAlign: 'right' }}>DTE</span>
+                    <span style={{ textAlign: 'right' }}>Net</span>
+                  </div>
+
+                  {visibleExpirations.length === 0 ? (
+                    <div style={{ color: '#94a3b8', padding: '8px 0' }}>
+                      No expirations to show.
+                    </div>
+                  ) : (
+                    visibleExpirations.map((row, idx) => {
+                      const rowNet = Number(row?.net_gamma)
+                      const rowColor = rowNet > 0 ? '#86efac' : (rowNet < 0 ? '#fca5a5' : '#e5e7eb')
+                      return (
+                        <div
+                          key={`${row?.expir_date || idx}-${idx}`}
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: '1fr 36px 1fr',
+                            columnGap: '8px',
+                            padding: '3px 0',
+                            fontVariantNumeric: 'tabular-nums',
+                          }}
+                        >
+                          <span>{fmtGexExpDate(row?.expir_date)}</span>
+                          <span style={{ textAlign: 'right', color: '#cbd5e1' }}>
+                            {Number.isFinite(Number(row?.dte)) ? Number(row.dte) : '—'}
+                          </span>
+                          <span style={{ textAlign: 'right', color: rowColor, fontWeight: 600 }}>
+                            {fmtGammaB(rowNet)}
+                          </span>
+                        </div>
+                      )
+                    })
+                  )}
+
+                  {hiddenCount > 0 && (
+                    <div
+                      style={{
+                        marginTop: '6px',
+                        paddingTop: '4px',
+                        borderTop: '1px dashed rgba(148,163,184,0.18)',
+                        color: '#64748b',
+                        fontSize: '10.5px',
+                        fontStyle: 'italic',
+                      }}
+                    >
+                      {hiddenCount} expired row{hiddenCount === 1 ? '' : 's'} hidden
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* GEX legend panel toggle (only shown when panel is closed and there are levels to list) */}
+          {!gexPanelOpen && Array.isArray(normalizedGexSegments) && normalizedGexSegments.length > 0 && gexEnabled && (
+            <button
+              type="button"
+              onClick={() => setGexPanelOpen(true)}
+              style={{
+                position: 'absolute',
+                top: '8px',
+                right: `${PRICE_AXIS_HIT_WIDTH + 8}px`,
+                zIndex: 5,
+                padding: '6px 10px',
+                borderRadius: '6px',
+                background: 'rgba(15, 23, 42, 0.90)',
+                border: '1px solid rgba(148, 163, 184, 0.32)',
+                color: '#cbd5e1',
+                fontSize: '11px',
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                cursor: 'pointer',
+                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.32)',
+              }}
+              title="Show GEX legend"
+            >
+              GEX ({normalizedGexSegments.length}) ▸
+            </button>
+          )}
+
+          {/* GEX legend panel — docked right, scrollable list of all levels with hover-highlight + click-to-expand */}
+          {gexPanelOpen && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute',
+                top: '8px',
+                right: `${PRICE_AXIS_HIT_WIDTH + 8}px`,
+                bottom: `${TIME_AXIS_HEIGHT + 8}px`,
+                width: '320px',
+                maxHeight: 'calc(100% - 48px)',
+                zIndex: 5,
+                display: 'flex',
+                flexDirection: 'column',
+                borderRadius: '10px',
+                background: 'rgba(15, 23, 42, 0.96)',
+                border: '1px solid rgba(148, 163, 184, 0.32)',
+                boxShadow: '0 12px 32px rgba(0, 0, 0, 0.42)',
+                color: '#e5e7eb',
+                fontSize: '12px',
+                pointerEvents: 'auto',
+              }}
+            >
+              {/* Header */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 12px 8px',
+                  borderBottom: '1px solid rgba(148,163,184,0.18)',
+                  flexShrink: 0,
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      color: '#94a3b8',
+                      fontSize: '10px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.06em',
+                      fontWeight: 700,
+                    }}
+                  >
+                    GEX Legend
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#cbd5e1' }}>
+                    {sortedGexSegmentsForPanel.length} level{sortedGexSegmentsForPanel.length === 1 ? '' : 's'}
+                    <span style={{ color: '#64748b' }}> · sorted by |γ|</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setGexPanelOpen(false)}
+                  aria-label="Close"
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#94a3b8',
+                    fontSize: '18px',
+                    lineHeight: 1,
+                    cursor: 'pointer',
+                    padding: '2px 6px',
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              {/* Rows */}
+              <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+                {sortedGexSegmentsForPanel.length === 0 ? (
+                  <div style={{ padding: '14px 12px', color: '#94a3b8' }}>
+                    No GEX levels in view.
+                  </div>
+                ) : (
+                  sortedGexSegmentsForPanel.map((seg, idx) => {
+                    const lvl = Number(seg?.level)
+                    if (!Number.isFinite(lvl)) return null
+
+                    const netVal = Number(seg?.net_gamma)
+                    const isExpanded = expandedPanelLevel === lvl
+                    const netColor = netVal > 0 ? '#86efac' : (netVal < 0 ? '#fca5a5' : '#e5e7eb')
+
+                    const allExp = Array.isArray(seg?.expirations) ? seg.expirations : []
+                    const visibleExp = allExp.filter(
+                      (e) => !Number.isFinite(Number(e?.dte)) || Number(e.dte) >= 0
+                    )
+                    const hidden = allExp.length - visibleExp.length
+
+                    return (
+                      <div
+                        key={`gex-row-${lvl}-${idx}`}
+                        onMouseEnter={() => setHoveredPanelLevel(lvl)}
+                        onMouseLeave={() => setHoveredPanelLevel((cur) => (cur === lvl ? null : cur))}
+                        style={{
+                          borderBottom: '1px solid rgba(148, 163, 184, 0.10)',
+                        }}
+                      >
+                        {/* Row summary (clickable to expand) */}
+                        <div
+                          onClick={() => setExpandedPanelLevel(isExpanded ? null : lvl)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            padding: '8px 12px',
+                            cursor: 'pointer',
+                            background: isExpanded ? 'rgba(148,163,184,0.08)' : 'transparent',
+                            transition: 'background 0.12s ease',
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: '8px',
+                              height: '14px',
+                              background: seg?.color || '#94a3b8',
+                              borderRadius: '2px',
+                              flexShrink: 0,
+                            }}
+                          />
+                          <div
+                            style={{
+                              fontWeight: 700,
+                              fontSize: '13px',
+                              fontVariantNumeric: 'tabular-nums',
+                              minWidth: '52px',
+                            }}
+                          >
+                            {lvl.toFixed(0)}
+                          </div>
+                          <div
+                            style={{
+                              flex: 1,
+                              textAlign: 'right',
+                              color: netColor,
+                              fontVariantNumeric: 'tabular-nums',
+                              fontWeight: 600,
+                            }}
+                          >
+                            {fmtGammaB(netVal)}
+                          </div>
+                          <div
+                            style={{
+                              color: '#64748b',
+                              fontSize: '11px',
+                              marginLeft: '4px',
+                              width: '12px',
+                              textAlign: 'center',
+                            }}
+                          >
+                            {isExpanded ? '▾' : '▸'}
+                          </div>
+                        </div>
+
+                        {/* Expanded expirations breakdown */}
+                        {isExpanded && (
+                          <div
+                            style={{
+                              padding: '6px 12px 10px',
+                              background: 'rgba(2, 6, 23, 0.40)',
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: 'grid',
+                                gridTemplateColumns: '1fr 36px 1fr',
+                                columnGap: '8px',
+                                color: '#94a3b8',
+                                fontSize: '10.5px',
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.04em',
+                                paddingBottom: '4px',
+                                borderBottom: '1px dashed rgba(148,163,184,0.18)',
+                                marginBottom: '4px',
+                              }}
+                            >
+                              <span>Exp</span>
+                              <span style={{ textAlign: 'right' }}>DTE</span>
+                              <span style={{ textAlign: 'right' }}>Net</span>
+                            </div>
+
+                            {visibleExp.length === 0 ? (
+                              <div style={{ color: '#94a3b8', padding: '6px 0' }}>
+                                No expirations to show.
+                              </div>
+                            ) : (
+                              visibleExp.map((row, i) => {
+                                const rowNet = Number(row?.net_gamma)
+                                const rowColor =
+                                  rowNet > 0 ? '#86efac' : (rowNet < 0 ? '#fca5a5' : '#e5e7eb')
+                                return (
+                                  <div
+                                    key={`gex-exp-${lvl}-${row?.expir_date || i}-${i}`}
+                                    style={{
+                                      display: 'grid',
+                                      gridTemplateColumns: '1fr 36px 1fr',
+                                      columnGap: '8px',
+                                      padding: '3px 0',
+                                      fontVariantNumeric: 'tabular-nums',
+                                    }}
+                                  >
+                                    <span>{fmtGexExpDate(row?.expir_date)}</span>
+                                    <span style={{ textAlign: 'right', color: '#cbd5e1' }}>
+                                      {Number.isFinite(Number(row?.dte)) ? Number(row.dte) : '—'}
+                                    </span>
+                                    <span
+                                      style={{
+                                        textAlign: 'right',
+                                        color: rowColor,
+                                        fontWeight: 600,
+                                      }}
+                                    >
+                                      {fmtGammaB(rowNet)}
+                                    </span>
+                                  </div>
+                                )
+                              })
+                            )}
+
+                            {hidden > 0 && (
+                              <div
+                                style={{
+                                  marginTop: '6px',
+                                  paddingTop: '4px',
+                                  borderTop: '1px dashed rgba(148,163,184,0.18)',
+                                  color: '#64748b',
+                                  fontSize: '10.5px',
+                                  fontStyle: 'italic',
+                                }}
+                              >
+                                {hidden} expired row{hidden === 1 ? '' : 's'} hidden
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            </div>
+          )}
 
           <div ref={hostRef} className="chart-host" style={{ width: '100%', height: '100%' }} />
         </div>
