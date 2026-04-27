@@ -1029,6 +1029,14 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             ADD COLUMN IF NOT EXISTS column_prefs JSONB
         """))
         conn.execute(text("""
+            ALTER TABLE public.bt2_scan_cache
+            ADD COLUMN IF NOT EXISTS filter_presets JSONB
+        """))
+        conn.execute(text("""
+            ALTER TABLE public.bt2_scan_cache
+            ADD COLUMN IF NOT EXISTS filter_presets JSONB
+        """))
+        conn.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_bt2_scan_cache_created
               ON public.bt2_scan_cache (created_at DESC)
         """))
@@ -1197,7 +1205,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 result = conn.execute(text("""
                     SELECT scan_id, created_at, label, direction, start_date, end_date,
                            params, funnel, diagnostics, rows, row_count, notes,
-                           column_prefs
+                           column_prefs, filter_presets
                     FROM public.bt2_scan_cache
                     WHERE scan_id = :scan_id
                 """), {"scan_id": sid})
@@ -1222,6 +1230,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             "row_count": int(row[10]) if row[10] is not None else 0,
             "notes": row[11],
             "column_prefs": row[12],   # null if scan has not been customized yet
+            "filter_presets": row[13] or [],
         })
 
     def saved_scans_delete_api(scan_id):
@@ -1280,6 +1289,46 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 """), {
                     "scan_id": sid,
                     "cp": json.dumps(column_prefs),
+                })
+                if result.fetchone() is None:
+                    return jsonify({"ok": False, "error": "scan not found"}), 404
+            return jsonify({"ok": True, "scan_id": sid})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    def saved_scans_filter_presets_api(scan_id):
+        """
+        PATCH /api/backtests-v2/saved-scans/<scan_id>/filter-presets
+
+        Body: { "filter_presets": [...] }
+
+        Replaces the filter_presets JSONB blob for this scan. Each preset
+        is { id, name, notes, filters, view_direction, created_at,
+        updated_at } — but the backend doesn't validate the inner shape;
+        the frontend manages add/edit/delete and PATCHes the full array.
+        """
+        try:
+            sid = int(scan_id)
+        except Exception:
+            return jsonify({"ok": False, "error": "scan_id must be integer"}), 400
+
+        payload = request.get_json(silent=True) or {}
+        presets = payload.get("filter_presets")
+        if not isinstance(presets, list):
+            return jsonify({"ok": False, "error": "filter_presets must be a list"}), 400
+
+        try:
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                result = conn.execute(text("""
+                    UPDATE public.bt2_scan_cache
+                    SET filter_presets = CAST(:fp AS JSONB)
+                    WHERE scan_id = :scan_id
+                    RETURNING scan_id
+                """), {
+                    "scan_id": sid,
+                    "fp": json.dumps(presets),
                 })
                 if result.fetchone() is None:
                     return jsonify({"ok": False, "error": "scan not found"}), 404
@@ -1608,5 +1657,13 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             "/api/backtests-v2/saved-scans/<scan_id>/column-prefs",
             endpoint="backtests_v2_saved_scans_column_prefs",
             view_func=saved_scans_column_prefs_api,
+            methods=["PATCH"],
+        )
+
+    if "backtests_v2_saved_scans_filter_presets" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/<scan_id>/filter-presets",
+            endpoint="backtests_v2_saved_scans_filter_presets",
+            view_func=saved_scans_filter_presets_api,
             methods=["PATCH"],
         )

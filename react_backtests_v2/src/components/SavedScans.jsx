@@ -3,6 +3,7 @@ import DiagnosticsPanel from './DiagnosticsPanel';
 import ResultsTable, { COLUMN_DATA_MAP } from './ResultsTable';
 import ColumnSettingsModal from './ColumnSettingsModal';
 import ActiveFiltersBar from './ActiveFiltersBar';
+import FilterPresetsBar from './FilterPresetsBar';
 import {
   DEFAULT_COLUMNS,
   computeEffectiveColumns,
@@ -96,6 +97,18 @@ export default function SavedScans({ onSelectRow }) {
 
   const [innerTab, setInnerTab] = useState('diagnostics')
   const [columnFilters, setColumnFilters] = useState(DEFAULT_COLUMN_FILTERS)
+
+  // Saved filter presets — list of { id, name, notes, filters,
+  // view_direction, created_at, updated_at } per scan. Hydrated from
+  // loadedScan.filter_presets on load; autosaved to backend on change.
+  const [filterPresets, setFilterPresets] = useState([])
+  // The id of the preset most recently loaded or saved. Used to drive
+  // Save vs. Save-as semantics: when set, the bar shows an Update button
+  // that writes current filters back into this preset; when null, only
+  // a Save-as-new button shows. Cleared on Clear-All, on delete of the
+  // active preset, and on scan change.
+  const [activePresetId, setActivePresetId] = useState(null)
+  const lastSavedPresetsKeyRef = useRef(null)
 
   // Collapsible state for saved scans browser
   const [scansCollapsed, setScansCollapsed] = useState(false)
@@ -434,6 +447,100 @@ export default function SavedScans({ onSelectRow }) {
     return () => clearTimeout(t)
   }, [columns, loadedScan?.scan_id])
 
+  // ── Per-scan filter presets: hydrate on load, autosave on change ──
+  // Same pattern as column_prefs above. Presets are stored as a list
+  // on the scan; mutations replace the whole list via PATCH.
+  useEffect(() => {
+    if (!loadedScan?.scan_id) {
+      setFilterPresets([])
+      setActivePresetId(null)
+      lastSavedPresetsKeyRef.current = null
+      return
+    }
+    const incoming = Array.isArray(loadedScan.filter_presets)
+      ? loadedScan.filter_presets
+      : []
+    setFilterPresets(incoming)
+    setActivePresetId(null)
+    lastSavedPresetsKeyRef.current = `${loadedScan.scan_id}:${JSON.stringify(incoming)}`
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedScan?.scan_id])
+
+  useEffect(() => {
+    if (!loadedScan?.scan_id) return
+    const key = `${loadedScan.scan_id}:${JSON.stringify(filterPresets)}`
+    if (lastSavedPresetsKeyRef.current === key) return
+
+    const t = setTimeout(() => {
+      fetch(`/api/backtests-v2/saved-scans/${loadedScan.scan_id}/filter-presets`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filter_presets: filterPresets }),
+      })
+        .then(r => r.json())
+        .then(data => {
+          if (data?.ok) lastSavedPresetsKeyRef.current = key
+        })
+        .catch(() => {
+          // Same defensive posture as column autosave.
+        })
+    }, 400)
+    return () => clearTimeout(t)
+  }, [filterPresets, loadedScan?.scan_id])
+
+  // Filter-preset action handlers
+  const handleCreatePreset = useCallback(({ name, notes, filters, view_direction }) => {
+    const now = new Date().toISOString()
+    const id = `preset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    setFilterPresets(prev => [
+      ...prev,
+      { id, name, notes: notes || '', filters: filters || {}, view_direction: view_direction || null, created_at: now, updated_at: now },
+    ])
+    // Newly-created preset becomes the active one — subsequent edits
+    // will Update it (rather than create yet another).
+    setActivePresetId(id)
+  }, [])
+
+  const handleUpdatePreset = useCallback((id, { name, notes }) => {
+    const now = new Date().toISOString()
+    setFilterPresets(prev => prev.map(p =>
+      p.id === id ? { ...p, name, notes: notes || '', updated_at: now } : p
+    ))
+  }, [])
+
+  // Update an existing preset's stored filters + direction with whatever
+  // the user has currently active. The "Save" half of Save vs Save-As.
+  const handleUpdatePresetFilters = useCallback((id) => {
+    if (!id) return
+    const now = new Date().toISOString()
+    setFilterPresets(prev => prev.map(p =>
+      p.id === id
+        ? {
+            ...p,
+            filters: { ...columnFilters },
+            view_direction: forwardOutcomesView,
+            updated_at: now,
+          }
+        : p
+    ))
+  }, [columnFilters, forwardOutcomesView])
+
+  const handleDeletePreset = useCallback((id) => {
+    setFilterPresets(prev => prev.filter(p => p.id !== id))
+    // If the user just deleted what was active, drop the active marker.
+    setActivePresetId(prev => (prev === id ? null : prev))
+  }, [])
+
+  const handleApplyPreset = useCallback((preset) => {
+    if (!preset) return
+    // Replace current filters wholesale with the preset's snapshot.
+    setColumnFilters(preset.filters || {})
+    if (preset.view_direction === 'long' || preset.view_direction === 'short') {
+      setForwardOutcomesView(preset.view_direction)
+    }
+    setActivePresetId(preset.id)
+  }, [])
+
   // Apply study/managed visibility rules on top of user's column prefs
   const effectiveColumns = useMemo(
     () => computeEffectiveColumns(columns, effectiveExecutionMode),
@@ -455,6 +562,8 @@ export default function SavedScans({ onSelectRow }) {
 
   const clearAllFilters = useCallback(() => {
     setColumnFilters({})
+    // Clearing filters means "fresh start" — no preset is active anymore.
+    setActivePresetId(null)
   }, [])
 
   // Map of columnId → label for the active-filters chip bar
@@ -561,14 +670,62 @@ export default function SavedScans({ onSelectRow }) {
             originalTrade={originalTradeDirection}
           />
 
-          <ActiveFiltersBar
-            filters={columnFilters}
-            columnLabels={columnLabelMap}
-            filteredCount={filteredRows.length}
-            totalCount={allRows.length}
-            onClearOne={(colId) => handleColumnFilterChange(colId, null)}
-            onClearAll={clearAllFilters}
+          <FilterPresetsBar
+            presets={filterPresets}
+            activeFilters={columnFilters}
+            activeView={forwardOutcomesView}
+            originalTrade={originalTradeDirection}
+            activePresetId={activePresetId}
+            onApplyPreset={handleApplyPreset}
+            onCreatePreset={handleCreatePreset}
+            onUpdatePreset={handleUpdatePreset}
+            onUpdatePresetFilters={handleUpdatePresetFilters}
+            onDeletePreset={handleDeletePreset}
           />
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+            <button
+              className="ghost-button"
+              onClick={() => setIsPresetsModalOpen(true)}
+              title="Save and recall named filter combinations for this scan"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '0 14px',
+                fontSize: 12,
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+                borderRadius: 14,
+                background: filterPresets.length > 0 ? 'rgba(37, 99, 235, 0.10)' : 'transparent',
+                borderColor: filterPresets.length > 0 ? 'rgba(37, 99, 235, 0.40)' : undefined,
+              }}
+            >
+              📋 Presets
+              {filterPresets.length > 0 && (
+                <span style={{
+                  fontSize: 11,
+                  color: '#bfdbfe',
+                  background: 'rgba(37, 99, 235, 0.25)',
+                  padding: '1px 7px',
+                  borderRadius: 999,
+                  fontWeight: 700,
+                }}>
+                  {filterPresets.length}
+                </span>
+              )}
+            </button>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <ActiveFiltersBar
+                filters={columnFilters}
+                columnLabels={columnLabelMap}
+                filteredCount={filteredRows.length}
+                totalCount={allRows.length}
+                onClearOne={(colId) => handleColumnFilterChange(colId, null)}
+                onClearAll={clearAllFilters}
+              />
+            </div>
+          </div>
 
           {/* Inner tab bar */}
           <div className="tab-bar">
