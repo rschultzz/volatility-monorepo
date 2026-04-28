@@ -272,12 +272,9 @@ export default function SignalPanel({
     } catch (e) {}
     return { width: 310, height: 420 }
   })
-  const [collapsed, setCollapsed] = useState(() => {
-    try {
-      return window.localStorage.getItem('ib-signal-panel-collapsed') === 'true'
-    } catch (e) {}
-    return false
-  })
+  // Signals panel always starts collapsed on reload — position/size still persist
+  // under different keys, just not the open/closed state.
+  const [collapsed, setCollapsed] = useState(true)
 
   const dragRef = useRef(null)
   const resizeRef = useRef(null)
@@ -359,7 +356,8 @@ export default function SignalPanel({
     e.stopPropagation()
     setCollapsed(prev => {
       const next = !prev
-      try { window.localStorage.setItem('ib-signal-panel-collapsed', String(next)) } catch (e) {}
+      // Open/closed state is intentionally not persisted — always starts closed on reload
+      try { window.localStorage.removeItem('ib-signal-panel-collapsed') } catch (e) {}
       return next
     })
   }

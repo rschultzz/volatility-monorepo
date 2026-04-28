@@ -662,15 +662,10 @@ export default function PriceChart({
   const [clickedGexSegment, setClickedGexSegment] = useState(null)
   const [gexPopupPos, setGexPopupPos] = useState({ left: 0, top: 0 })
 
-  // GEX legend panel state: open/closed (persisted), hovered row (highlights line on chart),
+  // GEX legend panel state: open/closed (always starts closed on reload — only the
+  // drag position is persisted), hovered row (highlights line on chart),
   // expanded row (shows the per-expiration breakdown inline)
-  const [gexPanelOpen, setGexPanelOpen] = useState(() => {
-    try {
-      return window.localStorage.getItem('ib-react-gex-panel-open') === '1'
-    } catch (e) {
-      return false
-    }
-  })
+  const [gexPanelOpen, setGexPanelOpen] = useState(false)
   const [hoveredPanelLevel, setHoveredPanelLevel] = useState(null)
   const [expandedPanelLevel, setExpandedPanelLevel] = useState(null)
   // Max DTE filter for the panel. null = show all (no upper bound).
@@ -719,14 +714,15 @@ export default function PriceChart({
     return () => window.removeEventListener('keydown', onKey)
   }, [clickedGexSegment, gexPanelOpen])
 
-  // Persist panel open/closed across sessions
+  // Clean up any stale "GEX panel open" persistence from older builds — we no
+  // longer persist this state. Position is still persisted under a different key.
   useEffect(() => {
     try {
-      window.localStorage.setItem('ib-react-gex-panel-open', gexPanelOpen ? '1' : '0')
+      window.localStorage.removeItem('ib-react-gex-panel-open')
     } catch (e) {
-      // ignore quota / disabled storage
+      // ignore
     }
-  }, [gexPanelOpen])
+  }, [])
 
   // Persist panel DTE filter across sessions ('' = show all)
   useEffect(() => {
@@ -807,13 +803,9 @@ export default function PriceChart({
     } catch (e) {}
     return { width: 0, height: 0 } // 0 means calculate from stage
   })
-  const [smileCollapsed, setSmileCollapsed] = useState(() => {
-    try {
-      const saved = window.localStorage.getItem('ib-react-smile-collapsed')
-      if (saved) return saved === 'true'
-    } catch (e) {}
-    return false
-  })
+  // SMILE panel always starts collapsed on reload — position/size still persist
+  // under different keys, just not the open/closed state.
+  const [smileCollapsed, setSmileCollapsed] = useState(true)
   const smileResizeRef = useRef(null)
 
   // ── Trade annotation mode ─────────────────────────────────────
@@ -2130,7 +2122,10 @@ export default function PriceChart({
     e.stopPropagation()
     setSmileCollapsed(prev => {
       const next = !prev
-      window.localStorage.setItem('ib-react-smile-collapsed', String(next))
+      // Open/closed state is intentionally not persisted — always starts closed on reload
+      try {
+        window.localStorage.removeItem('ib-react-smile-collapsed')
+      } catch (e) {}
       return next
     })
   }
