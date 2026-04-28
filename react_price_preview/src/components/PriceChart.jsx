@@ -673,6 +673,18 @@ export default function PriceChart({
   })
   const [hoveredPanelLevel, setHoveredPanelLevel] = useState(null)
   const [expandedPanelLevel, setExpandedPanelLevel] = useState(null)
+  // Max DTE filter for the panel. null = show all (no upper bound).
+  // Persisted as a string: '' for "show all", or a non-negative integer.
+  const [gexPanelMaxDte, setGexPanelMaxDte] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem('ib-react-gex-panel-max-dte')
+      if (raw == null || raw === '') return null
+      const n = parseInt(raw, 10)
+      return Number.isFinite(n) && n >= 0 ? n : null
+    } catch (e) {
+      return null
+    }
+  })
 
   // Dismiss the GEX popup or panel on Escape (popup first if both are open)
   useEffect(() => {
@@ -697,6 +709,18 @@ export default function PriceChart({
       // ignore quota / disabled storage
     }
   }, [gexPanelOpen])
+
+  // Persist panel DTE filter across sessions ('' = show all)
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        'ib-react-gex-panel-max-dte',
+        gexPanelMaxDte == null ? '' : String(gexPanelMaxDte),
+      )
+    } catch (e) {
+      // ignore quota / disabled storage
+    }
+  }, [gexPanelMaxDte])
 
   // Highlight the chart line when a panel row is hovered. The cleanup function
   // restores the original line width so rapid hover changes don't leave a stuck
@@ -867,13 +891,78 @@ export default function PriceChart({
     [gexSegments]
   )
 
-  // Same segments, sorted by |net_gamma| descending — used by the GEX legend panel
+  // Highest DTE seen in the data, used to set the slider's upper bound.
+  // Negatives (already-expired rows per the API's dte field) are excluded —
+  // slider runs 0..maxDteAvailable.
+  const maxDteAvailable = useMemo(() => {
+    if (!Array.isArray(normalizedGexSegments) || normalizedGexSegments.length === 0) return 0
+    let max = 0
+    for (const seg of normalizedGexSegments) {
+      const exps = Array.isArray(seg?.expirations) ? seg.expirations : []
+      for (const e of exps) {
+        const d = Number(e?.dte)
+        if (Number.isFinite(d) && d > max) max = d
+      }
+    }
+    return max
+  }, [normalizedGexSegments])
+
+  // Filtered & sorted segments for the panel.
+  // - Always drops expired (dte < 0) rows.
+  // - When maxDte is set: drops expirations with dte > maxDte, then recomputes
+  //   net/call/put gamma per level, then drops levels whose |net| < gexMinAbsB
+  //   (matching the existing visibility threshold from the URL params).
+  // - When maxDte is null (show all): uses original totals untouched.
+  // - Sorted by |net_gamma| descending in both cases.
   const sortedGexSegmentsForPanel = useMemo(() => {
     if (!Array.isArray(normalizedGexSegments)) return []
-    return [...normalizedGexSegments].sort(
-      (a, b) => Math.abs(Number(b?.net_gamma) || 0) - Math.abs(Number(a?.net_gamma) || 0)
+    const showAll = gexPanelMaxDte == null
+    const minAbs = Math.max(0, Number(gexMinAbsB) || 0) * 1e9 // threshold in raw $
+
+    const out = []
+    for (const seg of normalizedGexSegments) {
+      const allExp = Array.isArray(seg?.expirations) ? seg.expirations : []
+      // Always strip expired rows; honor slider when active. Trust the API's
+      // dte field — it's already correct relative to the trade_date being viewed.
+      const visibleExp = allExp.filter((e) => {
+        const d = Number(e?.dte)
+        if (!Number.isFinite(d) || d < 0) return false
+        if (!showAll && d > gexPanelMaxDte) return false
+        return true
+      })
+
+      if (showAll) {
+        // No recomputation — original headline numbers and visibleExp ride along
+        out.push({ ...seg, expirations: visibleExp })
+        continue
+      }
+
+      // Slider active: recompute headline numbers from the surviving expirations
+      let net = 0
+      let call = 0
+      let put = 0
+      for (const e of visibleExp) {
+        net += Number(e?.net_gamma) || 0
+        call += Number(e?.call_gamma) || 0
+        put += Number(e?.put_gamma) || 0
+      }
+      // Drop levels that fall below the visibility threshold under this filter
+      if (Math.abs(net) < minAbs) continue
+
+      out.push({
+        ...seg,
+        expirations: visibleExp,
+        net_gamma: net,
+        call_gamma: call,
+        put_gamma: put,
+      })
+    }
+
+    out.sort(
+      (a, b) => Math.abs(Number(b?.net_gamma) || 0) - Math.abs(Number(a?.net_gamma) || 0),
     )
-  }, [normalizedGexSegments])
+    return out
+  }, [normalizedGexSegments, gexPanelMaxDte, gexMinAbsB])
 
   const normalizedExpectedMoveLevels = useMemo(
     () => normalizeExpectedMoveLevels(expectedMoveLevels),
@@ -2471,13 +2560,15 @@ export default function PriceChart({
 
             // Format helpers are hoisted to module scope: fmtGammaB, fmtGexExpDate
 
-            // Hide expired (dte < 0) per Ryan's preference
+            // Hide expired rows. We trust the API's dte field — it's computed
+            // correctly relative to the trade_date being viewed.
             const allExpirations = Array.isArray(clickedGexSegment.expirations)
               ? clickedGexSegment.expirations
               : []
-            const visibleExpirations = allExpirations.filter(
-              (e) => !Number.isFinite(Number(e?.dte)) || Number(e.dte) >= 0
-            )
+            const visibleExpirations = allExpirations.filter((e) => {
+              const d = Number(e?.dte)
+              return Number.isFinite(d) && d >= 0
+            })
             const hiddenCount = allExpirations.length - visibleExpirations.length
 
             const netVal = Number(clickedGexSegment.net_gamma)
@@ -2609,7 +2700,7 @@ export default function PriceChart({
                         >
                           <span>{fmtGexExpDate(row?.expir_date)}</span>
                           <span style={{ textAlign: 'right', color: '#cbd5e1' }}>
-                            {Number.isFinite(Number(row?.dte)) ? Number(row.dte) : '—'}
+                            {Number.isFinite(Number(row?.dte)) ? Number(row.dte) : "—"}
                           </span>
                           <span style={{ textAlign: 'right', color: rowColor, fontWeight: 600 }}>
                             {fmtGammaB(rowNet)}
@@ -2693,46 +2784,126 @@ export default function PriceChart({
               <div
                 style={{
                   display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '10px 12px 8px',
+                  flexDirection: 'column',
+                  padding: '10px 12px 10px',
                   borderBottom: '1px solid rgba(148,163,184,0.18)',
                   flexShrink: 0,
+                  gap: '10px',
                 }}
               >
-                <div>
-                  <div
-                    style={{
-                      color: '#94a3b8',
-                      fontSize: '10px',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.06em',
-                      fontWeight: 700,
-                    }}
-                  >
-                    GEX Legend
-                  </div>
-                  <div style={{ fontSize: '12px', color: '#cbd5e1' }}>
-                    {sortedGexSegmentsForPanel.length} level{sortedGexSegmentsForPanel.length === 1 ? '' : 's'}
-                    <span style={{ color: '#64748b' }}> · sorted by |γ|</span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setGexPanelOpen(false)}
-                  aria-label="Close"
+                <div
                   style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: '#94a3b8',
-                    fontSize: '18px',
-                    lineHeight: 1,
-                    cursor: 'pointer',
-                    padding: '2px 6px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
                   }}
                 >
-                  ×
-                </button>
+                  <div>
+                    <div
+                      style={{
+                        color: '#94a3b8',
+                        fontSize: '10px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.06em',
+                        fontWeight: 700,
+                      }}
+                    >
+                      GEX Legend
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#cbd5e1' }}>
+                      {sortedGexSegmentsForPanel.length} level{sortedGexSegmentsForPanel.length === 1 ? '' : 's'}
+                      <span style={{ color: '#64748b' }}> · sorted by |γ|</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setGexPanelOpen(false)}
+                    aria-label="Close"
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#94a3b8',
+                      fontSize: '18px',
+                      lineHeight: 1,
+                      cursor: 'pointer',
+                      padding: '2px 6px',
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {/* Max DTE slider */}
+                {maxDteAvailable > 0 && (
+                  <div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'baseline',
+                        marginBottom: '4px',
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: '#94a3b8',
+                          fontSize: '10px',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.06em',
+                          fontWeight: 700,
+                        }}
+                      >
+                        Max DTE
+                      </span>
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          color: '#cbd5e1',
+                          fontVariantNumeric: 'tabular-nums',
+                        }}
+                      >
+                        {gexPanelMaxDte == null
+                          ? 'all'
+                          : (gexPanelMaxDte === 0 ? '0DTE only' : `≤ ${gexPanelMaxDte}d`)}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={maxDteAvailable}
+                      step={1}
+                      // Slider sits at maxDteAvailable when "all" is selected
+                      value={gexPanelMaxDte == null ? maxDteAvailable : gexPanelMaxDte}
+                      onChange={(e) => {
+                        const n = parseInt(e.target.value, 10)
+                        // Treat the rightmost position as "show all"
+                        if (n >= maxDteAvailable) {
+                          setGexPanelMaxDte(null)
+                        } else {
+                          setGexPanelMaxDte(Math.max(0, n))
+                        }
+                      }}
+                      style={{
+                        width: '100%',
+                        accentColor: '#60a5fa',
+                        cursor: 'pointer',
+                      }}
+                    />
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        color: '#64748b',
+                        fontSize: '10px',
+                        marginTop: '2px',
+                        fontVariantNumeric: 'tabular-nums',
+                      }}
+                    >
+                      <span>0</span>
+                      <span>{maxDteAvailable}d (all)</span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Rows */}
@@ -2870,7 +3041,7 @@ export default function PriceChart({
                                   >
                                     <span>{fmtGexExpDate(row?.expir_date)}</span>
                                     <span style={{ textAlign: 'right', color: '#cbd5e1' }}>
-                                      {Number.isFinite(Number(row?.dte)) ? Number(row.dte) : '—'}
+                                      {Number.isFinite(Number(row?.dte)) ? Number(row.dte) : "—"}
                                     </span>
                                     <span
                                       style={{

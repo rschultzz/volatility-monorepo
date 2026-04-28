@@ -1963,7 +1963,7 @@ def _fetch_gex_grouped_by_level_and_expir(trade_date: dt.date) -> pd.DataFrame:
     else:
         level_expr = f"CAST(ROUND(discounted_level / {bucket}) * {bucket} AS INTEGER)"
 
-    where = ["trade_date = :d", "discounted_level IS NOT NULL"]
+    where = ["trade_date = :d", "discounted_level IS NOT NULL", "expir_date >= :d"]
     params: dict[str, object] = {"d": trade_date.isoformat()}
     if TICKER:
         where.append("ticker = :tkr")
