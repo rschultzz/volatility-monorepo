@@ -2846,8 +2846,12 @@ export default function PriceChart({
               {/* Header (also serves as drag handle — grab anywhere except the close button) */}
               <div
                 onMouseDown={(e) => {
-                  // Skip the close button so clicking × doesn't initiate a drag
+                  // Skip drag when the mousedown is on an interactive control —
+                  // close button, slider, stepper buttons. Without this, dragging
+                  // the slider thumb or clicking the +/− buttons would move the
+                  // whole panel instead of using the control.
                   if (e.target.closest('.gex-panel-close')) return
+                  if (e.target.closest('input, button')) return
                   e.preventDefault()
                   const stageRect = stageRef.current?.getBoundingClientRect()
                   if (!stageRect) return
