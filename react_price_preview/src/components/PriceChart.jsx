@@ -686,6 +686,24 @@ export default function PriceChart({
     }
   })
 
+  // GEX panel drag-position state (chart-relative pixels). null = use default top-right anchor.
+  const [gexPanelPos, setGexPanelPos] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem('ib-react-gex-panel-pos')
+      if (!raw) return null
+      const parsed = JSON.parse(raw)
+      const left = Number(parsed?.left)
+      const top = Number(parsed?.top)
+      if (Number.isFinite(left) && Number.isFinite(top)) return { left, top }
+    } catch (e) {
+      // ignore parse errors
+    }
+    return null
+  })
+  // Drag-handle bookkeeping — captures starting cursor and panel position on mousedown,
+  // computes new offsets in mousemove, persists final position on mouseup.
+  const gexPanelDragRef = useRef(null)
+
   // Dismiss the GEX popup or panel on Escape (popup first if both are open)
   useEffect(() => {
     if (!clickedGexSegment && !gexPanelOpen) return undefined
@@ -721,6 +739,19 @@ export default function PriceChart({
       // ignore quota / disabled storage
     }
   }, [gexPanelMaxDte])
+
+  // Persist panel drag position (null = no persisted position, fall back to default anchor)
+  useEffect(() => {
+    try {
+      if (gexPanelPos) {
+        window.localStorage.setItem('ib-react-gex-panel-pos', JSON.stringify(gexPanelPos))
+      } else {
+        window.localStorage.removeItem('ib-react-gex-panel-pos')
+      }
+    } catch (e) {
+      // ignore quota / disabled storage
+    }
+  }, [gexPanelPos])
 
   // Highlight the chart line when a panel row is hovered. The cleanup function
   // restores the original line width so rapid hover changes don't leave a stuck
@@ -908,6 +939,10 @@ export default function PriceChart({
   }, [normalizedGexSegments])
 
   // Filtered & sorted segments for the panel.
+  // - Restricted to segments whose session_date matches the current trade_date,
+  //   so the panel acts as a legend for "the date you've selected" (clicking a
+  //   line from another session still works — the popup uses that segment's own
+  //   data directly and ignores this filter).
   // - Always drops expired (dte < 0) rows.
   // - When maxDte is set: drops expirations with dte > maxDte, then recomputes
   //   net/call/put gamma per level, then drops levels whose |net| < gexMinAbsB
@@ -918,9 +953,16 @@ export default function PriceChart({
     if (!Array.isArray(normalizedGexSegments)) return []
     const showAll = gexPanelMaxDte == null
     const minAbs = Math.max(0, Number(gexMinAbsB) || 0) * 1e9 // threshold in raw $
+    const tradeDateStr = String(tradeDate || '').trim()
 
     const out = []
     for (const seg of normalizedGexSegments) {
+      // Restrict the legend to the currently selected trade_date's segments.
+      // If a segment doesn't carry a session_date, we keep it (defensive — better
+      // to show too much than nothing if the field is ever missing).
+      const segSession = String(seg?.session_date || '').trim()
+      if (tradeDateStr && segSession && segSession !== tradeDateStr) continue
+
       const allExp = Array.isArray(seg?.expirations) ? seg.expirations : []
       // Always strip expired rows; honor slider when active. Trust the API's
       // dte field — it's already correct relative to the trade_date being viewed.
@@ -962,7 +1004,7 @@ export default function PriceChart({
       (a, b) => Math.abs(Number(b?.net_gamma) || 0) - Math.abs(Number(a?.net_gamma) || 0),
     )
     return out
-  }, [normalizedGexSegments, gexPanelMaxDte, gexMinAbsB])
+  }, [normalizedGexSegments, gexPanelMaxDte, gexMinAbsB, tradeDate])
 
   const normalizedExpectedMoveLevels = useMemo(
     () => normalizeExpectedMoveLevels(expectedMoveLevels),
@@ -2729,46 +2771,72 @@ export default function PriceChart({
             )
           })()}
 
-          {/* GEX legend panel toggle (only shown when panel is closed and there are levels to list) */}
+          {/* GEX legend panel toggle (only shown when panel is closed and there are levels to list).
+              Matches the SMILE / SIGNALS pill structure exactly: outer container with auto height,
+              inner wrapper with fixed 32px height that defines the pill's vertical dimension. */}
           {!gexPanelOpen && Array.isArray(normalizedGexSegments) && normalizedGexSegments.length > 0 && gexEnabled && (
-            <button
-              type="button"
+            <div
               onClick={() => setGexPanelOpen(true)}
               style={{
                 position: 'absolute',
-                top: '8px',
-                right: `${PRICE_AXIS_HIT_WIDTH + 8}px`,
-                zIndex: 5,
-                padding: '6px 10px',
-                borderRadius: '6px',
-                background: 'rgba(15, 23, 42, 0.90)',
-                border: '1px solid rgba(148, 163, 184, 0.32)',
-                color: '#cbd5e1',
-                fontSize: '11px',
-                fontWeight: 700,
-                letterSpacing: '0.06em',
-                textTransform: 'uppercase',
+                top: 8,
+                left: 240,
+                zIndex: 10,
                 cursor: 'pointer',
-                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.32)',
+                background: 'rgba(15, 23, 42, 0.92)',
+                border: '1px solid #1f2937',
+                borderRadius: '10px',
+                padding: '6px 14px',
+                boxShadow: '0 10px 25px rgba(0,0,0,0.4)',
+                color: '#e2e8f0',
+                fontSize: '13px',
+                pointerEvents: 'auto',
+                userSelect: 'none',
+                transition: 'all 0.2s ease',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
               }}
               title="Show GEX legend"
             >
-              GEX ({normalizedGexSegments.length}) ▸
-            </button>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: 0,
+                  height: '32px',
+                }}
+              >
+                <div
+                  style={{
+                    fontWeight: 800,
+                    color: '#60a5fa',
+                    fontSize: '13px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                  }}
+                >
+                  GEX
+                </div>
+              </div>
+            </div>
           )}
 
-          {/* GEX legend panel — docked right, scrollable list of all levels with hover-highlight + click-to-expand */}
+          {/* GEX legend panel — defaults to right-edge dock, but draggable anywhere via the header.
+              Position persists across reloads. */}
           {gexPanelOpen && (
             <div
               onClick={(e) => e.stopPropagation()}
               style={{
                 position: 'absolute',
-                top: '8px',
-                right: `${PRICE_AXIS_HIT_WIDTH + 8}px`,
-                bottom: `${TIME_AXIS_HEIGHT + 8}px`,
+                // When user has dragged, use their saved position; otherwise default top-right dock
+                ...(gexPanelPos
+                  ? { left: `${gexPanelPos.left}px`, top: `${gexPanelPos.top}px` }
+                  : { top: '8px', right: `${PRICE_AXIS_HIT_WIDTH + 8}px`, bottom: `${TIME_AXIS_HEIGHT + 8}px` }),
                 width: '320px',
-                maxHeight: 'calc(100% - 48px)',
-                zIndex: 5,
+                maxHeight: gexPanelPos ? '70vh' : 'calc(100% - 48px)',
+                zIndex: 10,
                 display: 'flex',
                 flexDirection: 'column',
                 borderRadius: '10px',
@@ -2780,8 +2848,52 @@ export default function PriceChart({
                 pointerEvents: 'auto',
               }}
             >
-              {/* Header */}
+              {/* Header (also serves as drag handle — grab anywhere except the close button) */}
               <div
+                onMouseDown={(e) => {
+                  // Skip the close button so clicking × doesn't initiate a drag
+                  if (e.target.closest('.gex-panel-close')) return
+                  e.preventDefault()
+                  const stageRect = stageRef.current?.getBoundingClientRect()
+                  if (!stageRect) return
+                  // Compute current panel-left in chart-relative coordinates so default-anchored
+                  // panels (no gexPanelPos yet) get a sensible starting offset to drag from.
+                  const panelEl = e.currentTarget.parentElement
+                  const panelRect = panelEl?.getBoundingClientRect()
+                  const startLeft = panelRect ? panelRect.left - stageRect.left : 0
+                  const startTop = panelRect ? panelRect.top - stageRect.top : 0
+                  gexPanelDragRef.current = {
+                    startCursorX: e.clientX,
+                    startCursorY: e.clientY,
+                    startLeft,
+                    startTop,
+                    panelW: panelRect?.width || 320,
+                    panelH: panelRect?.height || 0,
+                    stageW: stageRect.width,
+                    stageH: stageRect.height,
+                  }
+                  const onMove = (ev) => {
+                    const d = gexPanelDragRef.current
+                    if (!d) return
+                    const dx = ev.clientX - d.startCursorX
+                    const dy = ev.clientY - d.startCursorY
+                    // Clamp to keep at least 40px of header on screen so the user can always grab it back
+                    const minLeft = 40 - d.panelW
+                    const maxLeft = d.stageW - 40
+                    const minTop = 0
+                    const maxTop = d.stageH - 40
+                    const left = Math.max(minLeft, Math.min(maxLeft, d.startLeft + dx))
+                    const top = Math.max(minTop, Math.min(maxTop, d.startTop + dy))
+                    setGexPanelPos({ left, top })
+                  }
+                  const onUp = () => {
+                    gexPanelDragRef.current = null
+                    window.removeEventListener('mousemove', onMove)
+                    window.removeEventListener('mouseup', onUp)
+                  }
+                  window.addEventListener('mousemove', onMove)
+                  window.addEventListener('mouseup', onUp)
+                }}
                 style={{
                   display: 'flex',
                   flexDirection: 'column',
@@ -2789,6 +2901,8 @@ export default function PriceChart({
                   borderBottom: '1px solid rgba(148,163,184,0.18)',
                   flexShrink: 0,
                   gap: '10px',
+                  cursor: 'grab',
+                  userSelect: 'none',
                 }}
               >
                 <div
@@ -2817,6 +2931,7 @@ export default function PriceChart({
                   </div>
                   <button
                     type="button"
+                    className="gex-panel-close"
                     onClick={() => setGexPanelOpen(false)}
                     aria-label="Close"
                     style={{
@@ -2867,28 +2982,106 @@ export default function PriceChart({
                           : (gexPanelMaxDte === 0 ? '0DTE only' : `≤ ${gexPanelMaxDte}d`)}
                       </span>
                     </div>
-                    <input
-                      type="range"
-                      min={0}
-                      max={maxDteAvailable}
-                      step={1}
-                      // Slider sits at maxDteAvailable when "all" is selected
-                      value={gexPanelMaxDte == null ? maxDteAvailable : gexPanelMaxDte}
-                      onChange={(e) => {
-                        const n = parseInt(e.target.value, 10)
-                        // Treat the rightmost position as "show all"
-                        if (n >= maxDteAvailable) {
-                          setGexPanelMaxDte(null)
-                        } else {
-                          setGexPanelMaxDte(Math.max(0, n))
-                        }
-                      }}
+                    <div
                       style={{
-                        width: '100%',
-                        accentColor: '#60a5fa',
-                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
                       }}
-                    />
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Decrement by 1, clamped to 0. If we were at "all", drop to maxDte - 1.
+                          const current = gexPanelMaxDte == null ? maxDteAvailable : gexPanelMaxDte
+                          const next = Math.max(0, current - 1)
+                          setGexPanelMaxDte(next)
+                        }}
+                        disabled={(gexPanelMaxDte != null && gexPanelMaxDte <= 0)}
+                        aria-label="Decrease max DTE by 1"
+                        style={{
+                          width: '24px',
+                          height: '24px',
+                          flexShrink: 0,
+                          background: 'rgba(148, 163, 184, 0.12)',
+                          border: '1px solid rgba(148, 163, 184, 0.24)',
+                          borderRadius: '6px',
+                          color: '#cbd5e1',
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          lineHeight: 1,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                          opacity: (gexPanelMaxDte != null && gexPanelMaxDte <= 0) ? 0.4 : 1,
+                        }}
+                        title="Decrease by 1 day"
+                      >
+                        −
+                      </button>
+                      <input
+                        type="range"
+                        min={0}
+                        max={maxDteAvailable}
+                        step={1}
+                        // Slider sits at maxDteAvailable when "all" is selected
+                        value={gexPanelMaxDte == null ? maxDteAvailable : gexPanelMaxDte}
+                        onChange={(e) => {
+                          const n = parseInt(e.target.value, 10)
+                          // Treat the rightmost position as "show all"
+                          if (n >= maxDteAvailable) {
+                            setGexPanelMaxDte(null)
+                          } else {
+                            setGexPanelMaxDte(Math.max(0, n))
+                          }
+                        }}
+                        style={{
+                          flex: 1,
+                          accentColor: '#60a5fa',
+                          cursor: 'pointer',
+                          minWidth: 0,
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Increment by 1. If we were at "all", stay there. If incrementing
+                          // hits the max, snap to "all" so the slider visually reaches the end.
+                          if (gexPanelMaxDte == null) return
+                          const next = gexPanelMaxDte + 1
+                          if (next >= maxDteAvailable) {
+                            setGexPanelMaxDte(null)
+                          } else {
+                            setGexPanelMaxDte(next)
+                          }
+                        }}
+                        disabled={gexPanelMaxDte == null}
+                        aria-label="Increase max DTE by 1"
+                        style={{
+                          width: '24px',
+                          height: '24px',
+                          flexShrink: 0,
+                          background: 'rgba(148, 163, 184, 0.12)',
+                          border: '1px solid rgba(148, 163, 184, 0.24)',
+                          borderRadius: '6px',
+                          color: '#cbd5e1',
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          lineHeight: 1,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                          opacity: gexPanelMaxDte == null ? 0.4 : 1,
+                        }}
+                        title="Increase by 1 day"
+                      >
+                        +
+                      </button>
+                    </div>
                     <div
                       style={{
                         display: 'flex',

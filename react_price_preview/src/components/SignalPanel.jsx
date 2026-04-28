@@ -438,7 +438,7 @@ export default function SignalPanel({
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
-        ...(collapsed ? { top: 8, left: 64 + 200 } : pos),
+        ...(collapsed ? { top: 8, left: 144 } : pos),
       }}
     >
       {/* Header */}
@@ -547,10 +547,10 @@ export default function SignalPanel({
                     </div>
                   )}
                   {activeSignals.map(s => (
-                    <SignalCard 
-                      key={s.signal_id} 
-                      signal={s} 
-                      onLabel={handleLabel} 
+                    <SignalCard
+                      key={s.signal_id}
+                      signal={s}
+                      onLabel={handleLabel}
                       isToday={isToday}
                       isSelected={selectedSignalId === s.signal_id}
                       onSelect={handleSelectSignal}
@@ -566,10 +566,10 @@ export default function SignalPanel({
                     Completed
                   </div>
                   {completedSignals.map(s => (
-                    <SignalCard 
-                      key={s.signal_id} 
-                      signal={s} 
-                      onLabel={handleLabel} 
+                    <SignalCard
+                      key={s.signal_id}
+                      signal={s}
+                      onLabel={handleLabel}
                       isToday={isToday}
                       isSelected={selectedSignalId === s.signal_id}
                       onSelect={handleSelectSignal}
