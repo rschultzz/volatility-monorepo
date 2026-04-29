@@ -65,7 +65,12 @@ def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
         else "CAST(ROUND(discounted_level) AS INTEGER)"
     )
 
-    where = ["trade_date = :d", "discounted_level IS NOT NULL"]
+    # Exclude already-expired contracts (expir_date < trade_date). The
+    # orats_oi_gamma table can carry rows where expir_date < trade_date because
+    # OI snapshots include contracts that expired the prior session — including
+    # them inflates levels with gamma that's no longer live. Matches the same
+    # filter used by the Ironbeam price-chart GEX queries.
+    where = ["trade_date = :d", "discounted_level IS NOT NULL", "expir_date >= :d"]
     params: dict[str, object] = {"d": trade_date.isoformat()}
     if TICKER:
         where.append("ticker = :tkr")

@@ -44,7 +44,6 @@ from modules.Smile.callbacks import (
     COLORWAY, LIVE_COLOR, MARKET_OPEN, MARKET_CLOSE
 )
 
-
 def _indicator_state_token(state: object) -> str:
     """Stable token for guarding against stale-figure overwrites when indicator state changes."""
     if not isinstance(state, dict):
@@ -114,7 +113,6 @@ MULTI_LOAD_DAYS_PER_TICK = int(os.getenv("IRONBEAM_MULTI_LOAD_DAYS_PER_TICK", "1
 def _react_days_either_side_for_interval(interval: str) -> int:
     iv = str(interval or "1min").strip().lower()
     return max(0, REACT_DAYS_EITHER_SIDE_5MIN if iv == "5min" else REACT_DAYS_EITHER_SIDE_1MIN)
-
 
 # --- Smoothness toggles (render-only; safe defaults) ---
 USE_HOVERGRID = os.getenv("IRONBEAM_USE_HOVERGRID", "1").strip().lower() in ("1", "true", "yes", "y")
@@ -221,17 +219,16 @@ def _hex_to_rgba(color: str, alpha: float) -> str:
 
 def _fetch_flow_utc(start_utc: dt.datetime, end_utc: dt.datetime, symbol: str) -> pd.DataFrame:
     """
-    Fetch flow data. If 'symbol' returns no rows, discovery logic finds the
+    Fetch flow data. If 'symbol' returns no rows, discovery logic finds the 
     dominant symbol in the time range to support historical contracts.
     """
-
     def _do_query(s: str | None) -> pd.DataFrame:
         params = {"start_utc": start_utc, "end_utc": end_utc}
         where_sym = ""
         if s:
             where_sym = "AND symbol = :sym"
             params["sym"] = s
-
+            
         q = text(
             f"""
             SELECT ts_utc, symbol, buy_vol, sell_vol, unknown_vol
@@ -249,12 +246,12 @@ def _fetch_flow_utc(start_utc: dt.datetime, end_utc: dt.datetime, symbol: str) -
     df = _do_query(symbol)
     if not df.empty:
         return df
-
+        
     # 2. If empty, discovery: find whatever symbol is there
     df_all = _do_query(None)
     if df_all.empty:
         return df_all
-
+        
     # 3. Pick the dominant symbol to avoid roll overlap issues
     top_sym = df_all['symbol'].value_counts().idxmax()
     return df_all[df_all['symbol'] == top_sym].copy()
@@ -929,10 +926,10 @@ def _build_gex_segments_for_session(
                 dte_val = er.get("dte")
                 rows.append({
                     "expir_date": exp_str,
-                    "dte": int(dte_val) if pd.notna(dte_val) else None,
+                    "dte":        int(dte_val) if pd.notna(dte_val) else None,
                     "call_gamma": float(er["call_gamma"]),
-                    "put_gamma": float(er["put_gamma"]),
-                    "net_gamma": float(er["net_gamma"]),
+                    "put_gamma":  float(er["put_gamma"]),
+                    "net_gamma":  float(er["net_gamma"]),
                 })
             # Sort chronologically so the popup/panel reads earliest-first
             rows.sort(key=lambda x: x["expir_date"])
@@ -1709,21 +1706,21 @@ def _build_react_skew_data_payload(
 
 
 def _build_react_smile_payload(
-        trade_date: str | None,
-        expiration_date: str | None,
-        times: list[str] | None,
-        expected: bool = True,
-        live_data_json: str | None = None,
+    trade_date: str | None,
+    expiration_date: str | None,
+    times: list[str] | None,
+    expected: bool = True,
+    live_data_json: str | None = None,
 ) -> tuple[dict, int]:
     if not trade_date or not expiration_date:
         return {"error": "Missing trade_date or expiration_date"}, 400
 
     expected_on = expected
     times_sorted = sorted(times or [])
-
+    
     traces = []
     snapshots = []  # NEW: per-snapshot metadata for downstream features (sigma bands, condor strikes)
-
+    
     prev_row = None
     prev_stock = None
     prev_T = None
@@ -1744,11 +1741,10 @@ def _build_react_smile_payload(
                 buckets_now = [n for n in buckets_now if n not in (95, 5)]
                 if not buckets_now or 50 not in buckets_now: continue
                 order_now, labels_now = _bucket_labels_order(buckets_now)
-
+                
                 try:
                     y_now = [float(row_now[f"vol{n}"]) * 100.0 for n in order_now]
-                except KeyError:
-                    continue
+                except KeyError: continue
 
                 traces.append({
                     "x": labels_now,
@@ -1812,16 +1808,14 @@ def _build_react_smile_payload(
                             "name": "ATM exp (SS)",
                             "showlegend": False
                         })
-                    except Exception:
-                        pass
+                    except Exception: pass
 
                 prev_row, prev_stock, prev_T = row_now, stock_now, T_now
                 try:
                     k_now_ref, _ = _k_grid_for_row(row_now, T_now)
                     if k_now_ref.size >= 2 and stock_now is not None:
                         ref_row, ref_stock, ref_T = row_now, stock_now, T_now
-                except Exception:
-                    pass
+                except Exception: pass
 
     # Live - Strictly only during RTH and for "Today"
     now_et = dt.datetime.now(MARKET_TIMEZONE)
@@ -1898,10 +1892,8 @@ def _build_react_smile_payload(
                                 "name": "ATM exp (SS)",
                                 "showlegend": False
                             })
-                        except Exception:
-                            pass
-        except Exception:
-            pass
+                        except Exception: pass
+        except Exception: pass
 
     return {"traces": traces, "snapshots": snapshots}, 200
 
@@ -1915,7 +1907,14 @@ def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
     else:
         level_expr = f"CAST(ROUND(discounted_level / {bucket}) * {bucket} AS INTEGER)"
 
-    where = ["trade_date = :d", "discounted_level IS NOT NULL"]
+    # Exclude already-expired contracts. The orats_oi_gamma table can carry rows
+    # where expir_date < trade_date (options that already expired but still have
+    # OI snapshotted from the prior session). Including them inflates levels with
+    # gamma that isn't actually live anymore — e.g. on a Tuesday chart, options
+    # that expired Monday should not draw a level. The per-expiration breakdown
+    # query (_fetch_gex_grouped_by_level_and_expir) uses the same filter so the
+    # popup's expirations sum to the line's headline number.
+    where = ["trade_date = :d", "discounted_level IS NOT NULL", "expir_date >= :d"]
     params: dict[str, object] = {"d": trade_date.isoformat()}
     if TICKER:
         where.append("ticker = :tkr")
@@ -1963,6 +1962,9 @@ def _fetch_gex_grouped_by_level_and_expir(trade_date: dt.date) -> pd.DataFrame:
     else:
         level_expr = f"CAST(ROUND(discounted_level / {bucket}) * {bucket} AS INTEGER)"
 
+    # Match the aggregate query (_fetch_gex_grouped_by_level): exclude rows where
+    # expir_date < trade_date so expired-but-still-snapshotted contracts don't
+    # contribute. This keeps the popup's expiration breakdown summing to the line.
     where = ["trade_date = :d", "discounted_level IS NOT NULL", "expir_date >= :d"]
     params: dict[str, object] = {"d": trade_date.isoformat()}
     if TICKER:
@@ -1991,9 +1993,9 @@ def _fetch_gex_grouped_by_level_and_expir(trade_date: dt.date) -> pd.DataFrame:
         )
 
     df["call_gamma"] = df["call_gamma_raw"].astype(float)
-    df["put_gamma"] = -df["put_gamma_raw"].abs().astype(float)
-    df["net_gamma"] = df["call_gamma"] + df["put_gamma"]
-    df["level"] = df["level"].astype(float)
+    df["put_gamma"]  = -df["put_gamma_raw"].abs().astype(float)
+    df["net_gamma"]  = df["call_gamma"] + df["put_gamma"]
+    df["level"]      = df["level"].astype(float)
     return df[["level", "expir_date", "dte", "call_gamma", "put_gamma", "net_gamma"]]
 
 
@@ -2006,7 +2008,7 @@ def _color_for_net_gex(net_val: float, cmin: float, cmax: float) -> str:
 
 
 def _compute_color_span(net_g: np.ndarray) -> tuple[float, float]:
-    if GEX_HEATMAP_COLORSCALE:  # dummy check
+    if GEX_HEATMAP_COLORSCALE: # dummy check
         pass
     if GEX_COLOR_ABS_MAX > 0:
         span = float(GEX_COLOR_ABS_MAX)
@@ -2810,7 +2812,7 @@ def register_ironbeam_callbacks(app):
                     trade_date, expiration_date, times,
                     expected=expected, live_data_json=live_data_json
                 )
-
+                
                 resp = jsonify(payload)
                 origin = request.headers.get("Origin")
                 allowed = {"http://localhost:5173", "http://127.0.0.1:5173", "http://0.0.0.0:5173"}
@@ -2819,7 +2821,6 @@ def register_ironbeam_callbacks(app):
                     resp.headers["Access-Control-Allow-Credentials"] = "true"
                     resp.headers["Vary"] = "Origin"
                 return resp, status
-
             app.server._ironbeam_react_smile_data_route_registered = True
 
     # ---- Clientside Sync: Crosshair & Zoom ----
@@ -3476,7 +3477,7 @@ def register_ironbeam_callbacks(app):
         except Exception:
             cooldown_active = False
 
-        HOVER_COOLDOWN_MS = 150  # missing constant
+        HOVER_COOLDOWN_MS = 150 # missing constant
         hover_cooldown_active = False
         try:
             if isinstance(shared_xrange, dict):
@@ -4248,7 +4249,7 @@ def register_ironbeam_callbacks(app):
         Output("ib-react-preview-frame", "src"),
         Input("trade-date", "date"),
         Input("expiration-date-pick", "date"),
-        Input("smile-time-input", "value"),  # Now an Input to catch latest value
+        Input("smile-time-input", "value"), # Now an Input to catch latest value
         Input("ironbeam-bar-interval", "value"),
         Input("ib-chart-mode-toggle", "value"),
         Input("ib-indicator-state", "data"),
@@ -4266,7 +4267,7 @@ def register_ironbeam_callbacks(app):
             current_src,
     ):
         triggered = [t["prop_id"] for t in ctx.triggered]
-
+        
         # If ONLY the timeslices changed (manual user click), avoid a full iframe reload.
         # We rely on the postMessage bridge for manual additions/removals.
         # However, if trade_date or interval changed (e.g. from Backtests), we MUST reload.
@@ -4388,7 +4389,7 @@ def register_ironbeam_callbacks(app):
                 if (typeof parentValue === "string") {
                     try { payload = JSON.parse(parentValue); } catch (e) { payload = { times: [] }; }
                 }
-
+                
                 // Keep latest value in a global for the request hook
                 window.__ibLastParentTimeslices = payload;
 
@@ -4486,6 +4487,7 @@ def register_ironbeam_callbacks(app):
             },
             {"display": "none", "width": "100%", "minWidth": 0, "minHeight": 0},
         )
+
 
     @app.callback(
         Output("ib-chart-mode-toggle", "value", allow_duplicate=True),

@@ -90,6 +90,16 @@ export default function SavedScans({ onSelectRow }) {
   const [newScan, setNewScan] = useState(DEFAULT_NEW_SCAN)
   const [running, setRunning] = useState(false)
 
+  // Active background scan jobs. Each entry: { job_id, kind ('run'|'update'),
+  // label, status, scan_id?, error?, started_at }. Populated when the user
+  // submits the run or update dialog (which now return a job_id immediately
+  // instead of blocking) and cleared when the job reaches a terminal state.
+  // The jobs poll loop below keeps these in sync with the backend.
+  const [activeJobs, setActiveJobs] = useState([])
+  // Recently-completed jobs (last 60s) — surfaced as toasts so the user
+  // sees outcomes when they're not on this tab. Auto-cleared after display.
+  const [completedJobs, setCompletedJobs] = useState([])
+
   // Backend's authoritative defaults for the scan params. Fetched on mount.
   // Used to seed RunScanDialog so it pre-populates with whatever the backend
   // currently considers default. Falls back to FALLBACK_SCAN_DEFAULTS.
@@ -172,6 +182,88 @@ export default function SavedScans({ onSelectRow }) {
 
   useEffect(() => { refreshScans() }, [refreshScans])
 
+  // ── Background scan-job polling ──
+  // While there are queued/running scan jobs, poll their status every
+  // 2 seconds. On completion, refresh the scan list and (for a 'run'
+  // job) load the new scan; (for an 'update' job) reload the affected
+  // scan if it's currently selected. The job is then moved to the
+  // completedJobs list for a brief toast, then dropped.
+  useEffect(() => {
+    if (activeJobs.length === 0) return
+
+    let cancelled = false
+    const tick = async () => {
+      // Pull current state once per tick so we batch updates cleanly.
+      const jobsToCheck = activeJobs.filter(j => j.status === 'queued' || j.status === 'running')
+      if (jobsToCheck.length === 0) return
+
+      const updates = await Promise.all(jobsToCheck.map(async (j) => {
+        try {
+          const res = await fetch(`/api/backtests-v2/saved-scans/jobs/${j.job_id}`)
+          const data = await res.json()
+          if (!data.ok) return { ...j, status: 'failed', error: data.error || 'Job lookup failed' }
+          return { ...j, ...data }
+        } catch (err) {
+          // Network blip — keep the job alive, try again next tick.
+          return j
+        }
+      }))
+
+      if (cancelled) return
+
+      const stillActive = []
+      const justCompleted = []
+      for (const j of updates) {
+        if (j.status === 'complete' || j.status === 'failed') {
+          justCompleted.push(j)
+        } else {
+          stillActive.push(j)
+        }
+      }
+
+      // Merge in any jobs that arrived between the snapshot and now.
+      setActiveJobs(prev => {
+        const updatedIds = new Set(updates.map(u => u.job_id))
+        const newcomers = prev.filter(p => !updatedIds.has(p.job_id))
+        return [...newcomers, ...stillActive]
+      })
+
+      if (justCompleted.length) {
+        // Show as toasts for ~5s, then drop.
+        setCompletedJobs(prev => [...prev, ...justCompleted])
+        setTimeout(() => {
+          if (cancelled) return
+          setCompletedJobs(prev => prev.filter(c => !justCompleted.find(j => j.job_id === c.job_id)))
+        }, 5000)
+
+        // Side effects for completed jobs: reload data so the UI catches
+        // up. Errors are surfaced via the toast and don't trigger reloads.
+        const anySuccess = justCompleted.some(j => j.status === 'complete')
+        if (anySuccess) {
+          await refreshScans()
+          for (const j of justCompleted) {
+            if (j.status !== 'complete') continue
+            if (j.kind === 'run' && j.scan_id) {
+              // Load the newly-created scan so the user sees results.
+              await loadScan(j.scan_id)
+            } else if (j.kind === 'update' && j.scan_id && selectedScanId === j.scan_id) {
+              // Re-load if the user is still looking at the updated scan.
+              await loadScan(j.scan_id)
+            }
+          }
+        }
+      }
+    }
+
+    const interval = setInterval(tick, 2000)
+    // Run once immediately so quick scans don't sit at "queued" for 2s.
+    tick()
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [activeJobs, refreshScans, loadScan, selectedScanId])
+
   // Fetch the backend's saved-scan defaults so the run dialog pre-populates
   // with current values rather than stale frontend constants.
   useEffect(() => {
@@ -236,21 +328,35 @@ export default function SavedScans({ onSelectRow }) {
           label: newScan.label || null,
           notes: newScan.notes || null,
           params: newScan.params || {},
+          // Optional: present only via the duplicate flow, which seeds
+          // them from the source scan so the copy is a true clone.
+          filter_presets: newScan.filterPresets || undefined,
+          column_prefs:   newScan.columnPrefs   || undefined,
         }),
       })
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || 'Scan failed')
+      // Backend now returns immediately with a job_id; the actual scan
+      // runs on a background thread. Push onto activeJobs and let the
+      // poll effect surface progress + load the result on completion.
+      if (data.job_id) {
+        setActiveJobs(prev => [...prev, {
+          job_id: data.job_id,
+          kind: 'run',
+          label: newScan.label || `${newScan.direction.toUpperCase()} ${newScan.startDate} to ${newScan.endDate}`,
+          status: 'queued',
+          started_at: Date.now() / 1000,
+        }])
+      }
       setShowRunDialog(false)
       // Reset to defaults but seed with serverDefaults so next-run is sane
       setNewScan({ ...DEFAULT_NEW_SCAN, params: { ...serverDefaults } })
-      await refreshScans()
-      if (data.scan_id) await loadScan(data.scan_id)
     } catch (err) {
       setError(String(err.message || err))
     } finally {
       setRunning(false)
     }
-  }, [newScan, refreshScans, loadScan, serverDefaults])
+  }, [newScan, serverDefaults])
 
   const deleteScan = useCallback(async (scanId) => {
     if (!scanId) return
@@ -302,11 +408,28 @@ export default function SavedScans({ onSelectRow }) {
       )
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || 'Update failed')
-      setEditingScan(null)
-      await refreshScans()
-      if (selectedScanId === editingScan.scan_id) {
-        await loadScan(editingScan.scan_id)
+
+      if (data.rescanned && data.job_id) {
+        // Re-scan runs in the background. Track the job so the user
+        // can navigate away while it works; the poll effect will reload
+        // the active scan when it completes.
+        setActiveJobs(prev => [...prev, {
+          job_id: data.job_id,
+          kind: 'update',
+          label: form.label || `Scan #${editingScan.scan_id}`,
+          scan_id: editingScan.scan_id,
+          status: 'queued',
+          started_at: Date.now() / 1000,
+        }])
+      } else {
+        // Metadata-only update completed synchronously — refresh now.
+        await refreshScans()
+        if (selectedScanId === editingScan.scan_id) {
+          await loadScan(editingScan.scan_id)
+        }
       }
+
+      setEditingScan(null)
     } catch (err) {
       setError(String(err.message || err))
     } finally {
@@ -315,12 +438,16 @@ export default function SavedScans({ onSelectRow }) {
   }, [editingScan, refreshScans, selectedScanId, loadScan])
 
   // Duplicate a saved scan: pre-populate the run dialog with this scan's
-  // params (and label/dates as a starting point) and open it.
+  // params (and label/dates as a starting point) and open it. Filter
+  // presets and column prefs are carried along so the duplicate is a
+  // true clone — when it runs, the new scan ID will land with the same
+  // saved presets and column layout as the source.
   const duplicateScan = useCallback(async (scan) => {
     if (!scan?.scan_id) return
     setError(null)
     try {
-      // Need full row to access params (the list endpoint omits params for size)
+      // Need full row to access params + presets + column prefs
+      // (the list endpoint omits all of these for size).
       const res = await fetch(`/api/backtests-v2/saved-scans/${scan.scan_id}`)
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || 'Failed to load scan for duplication')
@@ -330,6 +457,15 @@ export default function SavedScans({ onSelectRow }) {
       for (const k of Object.keys(FALLBACK_SCAN_DEFAULTS)) {
         if (sourceParams[k] !== undefined) formParams[k] = sourceParams[k]
       }
+      // Re-stamp preset IDs so the duplicate has its own identifiers
+      // even though the content is identical to the source's presets.
+      const sourcePresets = Array.isArray(data.filter_presets) ? data.filter_presets : []
+      const duplicatedPresets = sourcePresets.map(p => ({
+        ...p,
+        id: `preset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        // Preserve original timestamps so notes about "saved on X" stay
+        // semantically meaningful — the duplicate inherits its history.
+      }))
       setNewScan({
         direction: data.direction || 'down',
         startDate: data.start_date || isoDateOffset(-90),
@@ -337,6 +473,8 @@ export default function SavedScans({ onSelectRow }) {
         label:    `${data.label || `Scan #${scan.scan_id}`} (copy)`,
         notes:    data.notes || '',
         params:   formParams,
+        filterPresets: duplicatedPresets,
+        columnPrefs:   Array.isArray(data.column_prefs) ? data.column_prefs : null,
       })
       setShowRunDialog(true)
     } catch (err) {
@@ -575,6 +713,12 @@ export default function SavedScans({ onSelectRow }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1, minHeight: 0 }}>
+      {/* Background-job indicator. Visible regardless of card collapsed
+          state so the user knows scans are running even with the
+          saved-scan list closed. Also visible on other tabs because
+          this component is always mounted. */}
+      <BackgroundJobsBar activeJobs={activeJobs} completedJobs={completedJobs} />
+
       {/* Saved scans browser */}
       <div className="diag-card" style={{ flex: '0 0 auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: scansCollapsed ? 0 : 12 }}>
@@ -1069,6 +1213,120 @@ function PipelinePanel({ funnel }) {
 // ──────────────────────────────────────────────────────────────────────
 // UI components
 // ──────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────
+// BackgroundJobsBar
+//   Compact strip showing in-progress scan jobs and recently-completed
+//   ones. Renders nothing when there's no activity, so it's invisible
+//   in the steady state. Active jobs show an animated "running"
+//   indicator + elapsed seconds; completed jobs show a brief toast
+//   announcing success or failure.
+// ─────────────────────────────────────────────────────────────────────
+function BackgroundJobsBar({ activeJobs, completedJobs }) {
+  if (!activeJobs.length && !completedJobs.length) return null
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {activeJobs.map(job => (
+        <ActiveJobRow key={job.job_id} job={job} />
+      ))}
+      {completedJobs.map(job => (
+        <CompletedJobToast key={job.job_id} job={job} />
+      ))}
+    </div>
+  )
+}
+
+function ActiveJobRow({ job }) {
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setElapsed(Math.max(0, Math.floor(Date.now() / 1000 - (job.started_at || 0))))
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [job.started_at])
+
+  const statusLabel = job.status === 'queued' ? 'Queued' : 'Running'
+  const verb = job.kind === 'update' ? 'Re-scanning' : 'Scanning'
+
+  return (
+    <div style={{
+      background: '#0b1220',
+      border: '1px solid rgba(96, 165, 250, 0.40)',
+      borderRadius: 10,
+      padding: '8px 12px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      fontSize: 12,
+      color: '#bfdbfe',
+    }}>
+      <span style={{
+        display: 'inline-block',
+        width: 8,
+        height: 8,
+        borderRadius: '50%',
+        background: job.status === 'queued' ? '#fcd34d' : '#60a5fa',
+        animation: 'pulse 1.4s ease-in-out infinite',
+        boxShadow: '0 0 8px currentColor',
+      }} />
+      <span style={{
+        fontSize: 11,
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: '0.05em',
+        color: job.status === 'queued' ? '#fcd34d' : '#60a5fa',
+      }}>
+        {statusLabel}
+      </span>
+      <span style={{ flex: 1 }}>
+        {verb} <strong style={{ color: '#e2e8f0' }}>{job.label}</strong>
+        <span style={{ color: '#64748b', marginLeft: 8 }}>· {elapsed}s elapsed</span>
+      </span>
+      <span style={{ fontSize: 11, color: '#64748b' }}>
+        Continues in background — feel free to navigate
+      </span>
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.35; }
+        }
+      `}</style>
+    </div>
+  )
+}
+
+function CompletedJobToast({ job }) {
+  const isSuccess = job.status === 'complete'
+  return (
+    <div style={{
+      background: isSuccess ? 'rgba(34, 197, 94, 0.10)' : 'rgba(239, 68, 68, 0.10)',
+      border: `1px solid ${isSuccess ? '#22c55e' : '#ef4444'}`,
+      borderRadius: 10,
+      padding: '8px 12px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      fontSize: 12,
+      color: isSuccess ? '#86efac' : '#fca5a5',
+    }}>
+      <span style={{ fontSize: 14 }}>{isSuccess ? '✓' : '⚠'}</span>
+      <span style={{ flex: 1 }}>
+        {isSuccess ? (
+          <>
+            <strong>{job.label}</strong>
+            {' '}— finished with {typeof job.row_count === 'number' ? job.row_count : '?'} rows
+          </>
+        ) : (
+          <>
+            <strong>{job.label}</strong>
+            {' '}— failed: {job.error || 'unknown error'}
+          </>
+        )}
+      </span>
+    </div>
+  )
+}
 
 function SavedScansList({ scans, loading, selectedScanId, onSelect, onDelete, onEdit, onDuplicate }) {
   if (loading && scans.length === 0) {

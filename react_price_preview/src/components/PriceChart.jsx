@@ -2597,16 +2597,26 @@ export default function PriceChart({
 
             // Format helpers are hoisted to module scope: fmtGammaB, fmtGexExpDate
 
-            // Hide expired rows. We trust the API's dte field — it's computed
-            // correctly relative to the trade_date being viewed.
+            // Show all expirations from the API. Rows whose expir_date is before
+            // the segment's session_date (or before today as a fallback) are still
+            // shown but visually marked as expired so you can see what made up the
+            // headline numbers without anything being silently filtered out.
             const allExpirations = Array.isArray(clickedGexSegment.expirations)
               ? clickedGexSegment.expirations
               : []
-            const visibleExpirations = allExpirations.filter((e) => {
-              const d = Number(e?.dte)
-              return Number.isFinite(d) && d >= 0
+            // Sort chronologically (earliest first) for predictable reading
+            const visibleExpirations = [...allExpirations].sort((a, b) => {
+              const ad = String(a?.expir_date || '')
+              const bd = String(b?.expir_date || '')
+              return ad < bd ? -1 : (ad > bd ? 1 : 0)
             })
-            const hiddenCount = allExpirations.length - visibleExpirations.length
+            // Use the segment's own session_date as the "as-of" for expired marking,
+            // falling back to today if it's missing. This way clicking a Friday line
+            // shows its 04/25 row as not-expired (which is correct for that session).
+            const segSession = String(clickedGexSegment.session_date || '').trim()
+            const todayIso = new Date().toISOString().slice(0, 10)
+            const asOfDate = segSession || todayIso
+            const hiddenCount = 0  // No longer hiding anything
 
             const netVal = Number(clickedGexSegment.net_gamma)
             const callVal = Number(clickedGexSegment.call_gamma)
@@ -2724,6 +2734,11 @@ export default function PriceChart({
                     visibleExpirations.map((row, idx) => {
                       const rowNet = Number(row?.net_gamma)
                       const rowColor = rowNet > 0 ? '#86efac' : (rowNet < 0 ? '#fca5a5' : '#e5e7eb')
+                      // A row is "expired" when its expir_date is strictly before the
+                      // session/today as-of date. We use string compare on ISO dates,
+                      // which is chronologically correct for YYYY-MM-DD.
+                      const expIso = String(row?.expir_date || '')
+                      const isExpired = expIso && asOfDate && expIso < asOfDate
                       return (
                         <div
                           key={`${row?.expir_date || idx}-${idx}`}
@@ -2733,9 +2748,19 @@ export default function PriceChart({
                             columnGap: '8px',
                             padding: '3px 0',
                             fontVariantNumeric: 'tabular-nums',
+                            opacity: isExpired ? 0.45 : 1,
+                            textDecoration: isExpired ? 'line-through' : 'none',
                           }}
+                          title={isExpired ? 'Expired before this session\'s as-of date' : undefined}
                         >
-                          <span>{fmtGexExpDate(row?.expir_date)}</span>
+                          <span>
+                            {fmtGexExpDate(row?.expir_date)}
+                            {isExpired && (
+                              <span style={{ marginLeft: '6px', fontSize: '10px', color: '#94a3b8', fontStyle: 'italic', textDecoration: 'none' }}>
+                                exp
+                              </span>
+                            )}
+                          </span>
                           <span style={{ textAlign: 'right', color: '#cbd5e1' }}>
                             {Number.isFinite(Number(row?.dte)) ? Number(row.dte) : "—"}
                           </span>

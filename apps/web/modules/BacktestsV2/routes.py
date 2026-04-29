@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import time
+import traceback
+import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -492,6 +496,276 @@ def _build_saved_scan_params(
     out["startDate"] = start_date
     out["endDate"]   = end_date
     return out
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Background scan-job system
+# ─────────────────────────────────────────────────────────────────────
+# Single-process, in-memory job tracking. Scans can take minutes; running
+# them on the request thread blocks the Flask worker and the user's UI.
+# Instead, /run kicks off a thread, returns a job_id immediately, and
+# the frontend polls /jobs/<job_id> for status.
+#
+# Trade-offs (acceptable for a single-user dev app):
+#   - Jobs vanish on process restart (no persistence)
+#   - Job dict grows over time; we GC entries older than 1h on every read
+#   - Concurrent scans capped at 2 to avoid pounding the DB
+#
+# Jobs go through one of these terminal states:
+#   queued   → waiting on the semaphore
+#   running  → thread is executing the scan
+#   complete → scan persisted, scan_id available
+#   failed   → exception raised; error message available
+
+_SCAN_JOBS: Dict[str, Dict[str, Any]] = {}
+_SCAN_JOBS_LOCK = threading.Lock()
+_SCAN_JOB_SEMAPHORE = threading.BoundedSemaphore(value=2)
+_SCAN_JOB_TTL_SECONDS = 60 * 60  # 1 hour
+
+
+def _scan_job_set(job_id: str, **fields: Any) -> None:
+    """Atomically merge ``fields`` into the job's record."""
+    with _SCAN_JOBS_LOCK:
+        job = _SCAN_JOBS.setdefault(job_id, {})
+        job.update(fields)
+        job["updated_at"] = time.time()
+
+
+def _scan_job_get(job_id: str) -> Optional[Dict[str, Any]]:
+    with _SCAN_JOBS_LOCK:
+        job = _SCAN_JOBS.get(job_id)
+        return dict(job) if job is not None else None
+
+
+def _scan_jobs_gc() -> None:
+    """Drop terminal jobs older than the TTL. Cheap; called from /jobs."""
+    cutoff = time.time() - _SCAN_JOB_TTL_SECONDS
+    with _SCAN_JOBS_LOCK:
+        stale = [
+            jid for jid, j in _SCAN_JOBS.items()
+            if j.get("status") in ("complete", "failed")
+            and (j.get("updated_at") or 0) < cutoff
+        ]
+        for jid in stale:
+            _SCAN_JOBS.pop(jid, None)
+
+
+def _start_scan_job(
+    *,
+    direction: str,
+    label: str,
+    notes: Optional[str],
+    start_date: str,
+    end_date: str,
+    params: Dict[str, Any],
+    filter_presets: Optional[List[Dict[str, Any]]] = None,
+    column_prefs: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """
+    Register a job, spawn its worker thread, return the job_id.
+    Worker waits on the semaphore before doing real work, so callers
+    don't need to worry about concurrency limits — the kick-off is
+    cheap and always returns immediately.
+    """
+    job_id = uuid.uuid4().hex
+    _scan_job_set(
+        job_id,
+        status="queued",
+        kind="run",
+        direction=direction,
+        label=label,
+        start_date=start_date,
+        end_date=end_date,
+        scan_id=None,
+        error=None,
+        created_at=time.time(),
+    )
+    thread = threading.Thread(
+        target=_scan_job_worker,
+        args=(job_id, direction, label, notes, start_date, end_date, params, filter_presets, column_prefs),
+        daemon=True,
+        name=f"bt2-scan-{job_id[:8]}",
+    )
+    thread.start()
+    return job_id
+
+
+def _scan_job_worker(
+    job_id: str,
+    direction: str,
+    label: str,
+    notes: Optional[str],
+    start_date: str,
+    end_date: str,
+    params: Dict[str, Any],
+    filter_presets: Optional[List[Dict[str, Any]]],
+    column_prefs: Optional[List[Dict[str, Any]]],
+) -> None:
+    """Background thread body. Runs the scan and persists the result."""
+    with _SCAN_JOB_SEMAPHORE:
+        _scan_job_set(job_id, status="running", started_at=time.time())
+        try:
+            data = _execute_saved_scan(direction, params)
+            base_key = "up_move_short" if direction == "up" else "down_move_scan"
+            raw_rows = data.get("rows") or []
+            rows = _filtered_rows(raw_rows, base_key)
+            diagnostics = _rebuild_diagnostics(rows, base_key, data.get("diagnostics"))
+            funnel = _filter_funnel_for_direction(data.get("funnel", []), direction)
+
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                result = conn.execute(text("""
+                    INSERT INTO public.bt2_scan_cache
+                      (label, direction, start_date, end_date, params, funnel, diagnostics,
+                       rows, row_count, notes, filter_presets, column_prefs)
+                    VALUES
+                      (:label, :direction, :start_date, :end_date,
+                       CAST(:params AS JSONB),
+                       CAST(:funnel AS JSONB),
+                       CAST(:diagnostics AS JSONB),
+                       CAST(:rows AS JSONB),
+                       :row_count,
+                       :notes,
+                       CAST(:filter_presets AS JSONB),
+                       CAST(:column_prefs AS JSONB))
+                    RETURNING scan_id, created_at
+                """), {
+                    "label": label,
+                    "direction": direction,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "params": json.dumps(params),
+                    "funnel": json.dumps(funnel),
+                    "diagnostics": json.dumps(diagnostics),
+                    "rows": json.dumps(rows),
+                    "row_count": len(rows),
+                    "notes": notes or None,
+                    "filter_presets": json.dumps(filter_presets) if filter_presets else None,
+                    "column_prefs": json.dumps(column_prefs) if column_prefs else None,
+                })
+                row = result.fetchone()
+                scan_id = int(row[0])
+                created_at = row[1].isoformat() if row[1] is not None else None
+
+            _scan_job_set(
+                job_id,
+                status="complete",
+                scan_id=scan_id,
+                created_at_persisted=created_at,
+                row_count=len(rows),
+                completed_at=time.time(),
+            )
+        except Exception as exc:
+            _scan_job_set(
+                job_id,
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}",
+                traceback=traceback.format_exc()[-2000:],  # cap for memory
+                completed_at=time.time(),
+            )
+
+
+def _start_scan_update_job(
+    *,
+    scan_id: int,
+    direction: str,
+    label: Optional[str],
+    notes: Optional[str],
+    start_date: str,
+    end_date: str,
+    params: Dict[str, Any],
+) -> str:
+    """
+    Like _start_scan_job, but UPDATEs an existing row instead of INSERTing
+    a new one. Used by saved_scans_update_api when a re-scan is needed.
+    """
+    job_id = uuid.uuid4().hex
+    _scan_job_set(
+        job_id,
+        status="queued",
+        kind="update",
+        scan_id=scan_id,
+        direction=direction,
+        label=label,
+        start_date=start_date,
+        end_date=end_date,
+        error=None,
+        created_at=time.time(),
+    )
+    thread = threading.Thread(
+        target=_scan_update_job_worker,
+        args=(job_id, scan_id, direction, label, notes, start_date, end_date, params),
+        daemon=True,
+        name=f"bt2-update-{job_id[:8]}",
+    )
+    thread.start()
+    return job_id
+
+
+def _scan_update_job_worker(
+    job_id: str,
+    scan_id: int,
+    direction: str,
+    label: Optional[str],
+    notes: Optional[str],
+    start_date: str,
+    end_date: str,
+    params: Dict[str, Any],
+) -> None:
+    """Background worker for in-place re-scan."""
+    with _SCAN_JOB_SEMAPHORE:
+        _scan_job_set(job_id, status="running", started_at=time.time())
+        try:
+            data = _execute_saved_scan(direction, params)
+            base_key = "up_move_short" if direction == "up" else "down_move_scan"
+            raw_rows = data.get("rows") or []
+            rows = _filtered_rows(raw_rows, base_key)
+            diagnostics = _rebuild_diagnostics(rows, base_key, data.get("diagnostics"))
+            funnel = _filter_funnel_for_direction(data.get("funnel", []), direction)
+
+            engine = _engine()
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    UPDATE public.bt2_scan_cache
+                    SET label = :label,
+                        notes = :notes,
+                        start_date = :start_date,
+                        end_date   = :end_date,
+                        params     = CAST(:params AS JSONB),
+                        funnel     = CAST(:funnel AS JSONB),
+                        diagnostics = CAST(:diagnostics AS JSONB),
+                        rows       = CAST(:rows AS JSONB),
+                        row_count  = :row_count,
+                        created_at = now()
+                    WHERE scan_id = :scan_id
+                """), {
+                    "scan_id":    scan_id,
+                    "label":      label,
+                    "notes":      notes,
+                    "start_date": start_date,
+                    "end_date":   end_date,
+                    "params":     json.dumps(params),
+                    "funnel":     json.dumps(funnel),
+                    "diagnostics": json.dumps(diagnostics),
+                    "rows":       json.dumps(rows),
+                    "row_count":  len(rows),
+                })
+
+            _scan_job_set(
+                job_id,
+                status="complete",
+                row_count=len(rows),
+                completed_at=time.time(),
+            )
+        except Exception as exc:
+            _scan_job_set(
+                job_id,
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}",
+                traceback=traceback.format_exc()[-2000:],
+                completed_at=time.time(),
+            )
 
 
 def _execute_saved_scan(direction: str, params: Dict[str, Any]):
@@ -1047,13 +1321,19 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
 
     def saved_scans_run_api():
         """
-        Run a scan and persist the full result.
+        Kick off a scan job and return immediately.
+
         Body: {
           direction: 'up' | 'down',
           startDate, endDate,
           label?, notes?,
           params?: {...overrides for the scan...}
+          filter_presets?: [...]   # optional, used by Duplicate flow
+          column_prefs?: [...]     # optional, used by Duplicate flow
         }
+
+        Returns: { ok: True, job_id: str, status: 'queued' }
+        Poll /api/backtests-v2/saved-scans/jobs/<job_id> for completion.
 
         Defaults come EXCLUSIVELY from SAVED_SCAN_DEFAULTS in this module.
         The legacy strategy_registry is used only to resolve the runner
@@ -1073,67 +1353,49 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
         notes = _normalize_notes(raw_payload.get("notes"))
 
         # Build the full param set from saved-scan defaults + user overrides.
-        # User can override any key in SAVED_SCAN_USER_OVERRIDABLE_KEYS;
-        # all other keys retain their defaults.
         user_overrides = raw_payload.get("params") or {}
         permissive = _build_saved_scan_params(user_overrides, start_date, end_date)
-        base_key = "up_move_short" if direction == "up" else "down_move_scan"
+
+        # Optional carryover from a Duplicate operation. Frontend passes the
+        # source scan's filter presets and column prefs so the duplicate is
+        # truly a copy, not just a fresh scan.
+        filter_presets = raw_payload.get("filter_presets") if isinstance(raw_payload.get("filter_presets"), list) else None
+        column_prefs   = raw_payload.get("column_prefs")   if isinstance(raw_payload.get("column_prefs"),   list) else None
 
         try:
-            data = _execute_saved_scan(direction, permissive)
+            job_id = _start_scan_job(
+                direction=direction,
+                label=label,
+                notes=notes,
+                start_date=start_date,
+                end_date=end_date,
+                params=permissive,
+                filter_presets=filter_presets,
+                column_prefs=column_prefs,
+            )
         except Exception as exc:
-            return jsonify({"ok": False, "error": f"scan failed: {exc}"}), 400
+            return jsonify({"ok": False, "error": f"failed to start scan: {exc}"}), 500
 
-        raw_rows = data.get("rows") or []
-        rows = _filtered_rows(raw_rows, base_key)
-        diagnostics = _rebuild_diagnostics(rows, base_key, data.get("diagnostics"))
-        funnel = _filter_funnel_for_direction(data.get("funnel", []), direction)
+        return jsonify({"ok": True, "job_id": job_id, "status": "queued"})
 
-        # Persist
-        try:
-            engine = _engine()
-            with engine.begin() as conn:
-                _ensure_scan_cache_table_exists(conn)
-                result = conn.execute(text("""
-                    INSERT INTO public.bt2_scan_cache
-                      (label, direction, start_date, end_date, params, funnel, diagnostics, rows, row_count, notes)
-                    VALUES
-                      (:label, :direction, :start_date, :end_date,
-                       CAST(:params AS JSONB),
-                       CAST(:funnel AS JSONB),
-                       CAST(:diagnostics AS JSONB),
-                       CAST(:rows AS JSONB),
-                       :row_count,
-                       :notes)
-                    RETURNING scan_id, created_at
-                """), {
-                    "label": label,
-                    "direction": direction,
-                    "start_date": start_date,
-                    "end_date": end_date,
-                    "params": json.dumps(permissive),
-                    "funnel": json.dumps(funnel),
-                    "diagnostics": json.dumps(diagnostics),
-                    "rows": json.dumps(rows),
-                    "row_count": len(rows),
-                    "notes": notes or None,
-                })
-                row = result.fetchone()
-                scan_id = int(row[0])
-                created_at = row[1].isoformat() if row[1] is not None else None
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"persist failed: {exc}"}), 500
+    def saved_scans_jobs_api(job_id):
+        """
+        GET /api/backtests-v2/saved-scans/jobs/<job_id>
+        Returns the current status of a scan job. The frontend polls this
+        endpoint after submitting a /run request.
 
-        return jsonify({
-            "ok": True,
-            "scan_id": scan_id,
-            "created_at": created_at,
-            "label": label,
-            "direction": direction,
-            "start_date": start_date,
-            "end_date": end_date,
-            "row_count": len(rows),
-        })
+        Response:
+          { ok: True, status, scan_id?, error?, label, direction,
+            start_date, end_date, row_count?, queued_at, started_at?,
+            completed_at? }
+
+        status ∈ { 'queued', 'running', 'complete', 'failed' }
+        """
+        _scan_jobs_gc()
+        job = _scan_job_get(job_id)
+        if job is None:
+            return jsonify({"ok": False, "error": "job not found or expired"}), 404
+        return jsonify({"ok": True, **job})
 
     def saved_scans_list_api():
         """
@@ -1460,13 +1722,11 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             except Exception as exc:
                 return jsonify({"ok": False, "error": str(exc)}), 500
 
-        # ── Path B: re-scan and replace in place ──
+        # ── Path B: re-scan and replace in place — runs in background ──
         # Build params: start from existing scan's saved params (which were
         # built from SAVED_SCAN_DEFAULTS at original-run time), then layer
         # any new user overrides on top, then pin the new date range.
         # Filter to whitelist so legacy keys can't sneak through.
-        base_key = "up_move_short" if existing_direction == "up" else "down_move_scan"
-
         merged_user_params: Dict[str, Any] = {}
         if isinstance(existing_params, dict):
             for k, v in existing_params.items():
@@ -1482,60 +1742,24 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
         )
 
         try:
-            data = _execute_saved_scan(existing_direction, permissive)
+            job_id = _start_scan_update_job(
+                scan_id=sid,
+                direction=existing_direction,
+                label=new_label,
+                notes=new_notes,
+                start_date=new_start_date,
+                end_date=new_end_date,
+                params=permissive,
+            )
         except Exception as exc:
-            return jsonify({"ok": False, "error": f"scan failed: {exc}"}), 400
-
-        raw_rows = data.get("rows") or []
-        rows = _filtered_rows(raw_rows, base_key)
-        diagnostics = _rebuild_diagnostics(rows, base_key, data.get("diagnostics"))
-        funnel = _filter_funnel_for_direction(data.get("funnel", []), existing_direction)
-
-        # Replace the row in place. Update created_at since the data is fresh.
-        try:
-            with engine.begin() as conn:
-                result = conn.execute(text("""
-                    UPDATE public.bt2_scan_cache
-                    SET label = :label,
-                        notes = :notes,
-                        start_date = :start_date,
-                        end_date   = :end_date,
-                        params     = CAST(:params AS JSONB),
-                        funnel     = CAST(:funnel AS JSONB),
-                        diagnostics = CAST(:diagnostics AS JSONB),
-                        rows       = CAST(:rows AS JSONB),
-                        row_count  = :row_count,
-                        created_at = now()
-                    WHERE scan_id = :scan_id
-                    RETURNING scan_id, created_at
-                """), {
-                    "scan_id":    sid,
-                    "label":      new_label,
-                    "notes":      new_notes,
-                    "start_date": new_start_date,
-                    "end_date":   new_end_date,
-                    "params":     json.dumps(permissive),
-                    "funnel":     json.dumps(funnel),
-                    "diagnostics": json.dumps(diagnostics),
-                    "rows":       json.dumps(rows),
-                    "row_count":  len(rows),
-                })
-                row = result.fetchone()
-                created_at = row[1].isoformat() if row[1] is not None else None
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"persist failed: {exc}"}), 500
+            return jsonify({"ok": False, "error": f"failed to start re-scan: {exc}"}), 500
 
         return jsonify({
             "ok": True,
             "scan_id": sid,
-            "created_at": created_at,
-            "label": new_label,
-            "notes": new_notes,
-            "direction": existing_direction,
-            "start_date": new_start_date,
-            "end_date": new_end_date,
-            "row_count": len(rows),
             "rescanned": True,
+            "job_id": job_id,
+            "status": "queued",
         })
 
     if "backtests_v2_preview_index" not in server.view_functions:
@@ -1610,6 +1834,14 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             endpoint="backtests_v2_saved_scans_run",
             view_func=saved_scans_run_api,
             methods=["POST"],
+        )
+
+    if "backtests_v2_saved_scans_jobs" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/jobs/<job_id>",
+            endpoint="backtests_v2_saved_scans_jobs",
+            view_func=saved_scans_jobs_api,
+            methods=["GET"],
         )
 
     if "backtests_v2_saved_scans_list" not in server.view_functions:
