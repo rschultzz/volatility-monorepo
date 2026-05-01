@@ -183,18 +183,26 @@ export default function SavedScans({ onSelectRow }) {
   useEffect(() => { refreshScans() }, [refreshScans])
 
   // ── Background scan-job polling ──
-  // While there are queued/running scan jobs, poll their status every
-  // 2 seconds. On completion, refresh the scan list and (for a 'run'
-  // job) load the new scan; (for an 'update' job) reload the affected
-  // scan if it's currently selected. The job is then moved to the
-  // completedJobs list for a brief toast, then dropped.
+  // Whenever there are active jobs, a single 2-second timer keeps their
+  // statuses fresh. Implementation note: we deliberately keep the
+  // dependency array narrow and read the latest activeJobs via a ref,
+  // so the timer doesn't tear down and re-spin on every state change
+  // (which was causing missed polls in earlier revisions).
+  const activeJobsRef = useRef([])
+  useEffect(() => { activeJobsRef.current = activeJobs }, [activeJobs])
+
+  // Drive the timer purely off of "are there any active jobs at all".
+  // Only flips when the list goes empty ↔ non-empty, so the timer is
+  // stable across status updates.
+  const hasActiveJobs = activeJobs.length > 0
   useEffect(() => {
-    if (activeJobs.length === 0) return
+    if (!hasActiveJobs) return
 
     let cancelled = false
+
     const tick = async () => {
-      // Pull current state once per tick so we batch updates cleanly.
-      const jobsToCheck = activeJobs.filter(j => j.status === 'queued' || j.status === 'running')
+      const snapshot = activeJobsRef.current
+      const jobsToCheck = snapshot.filter(j => j.status === 'queued' || j.status === 'running')
       if (jobsToCheck.length === 0) return
 
       const updates = await Promise.all(jobsToCheck.map(async (j) => {
@@ -204,7 +212,6 @@ export default function SavedScans({ onSelectRow }) {
           if (!data.ok) return { ...j, status: 'failed', error: data.error || 'Job lookup failed' }
           return { ...j, ...data }
         } catch (err) {
-          // Network blip — keep the job alive, try again next tick.
           return j
         }
       }))
@@ -214,14 +221,10 @@ export default function SavedScans({ onSelectRow }) {
       const stillActive = []
       const justCompleted = []
       for (const j of updates) {
-        if (j.status === 'complete' || j.status === 'failed') {
-          justCompleted.push(j)
-        } else {
-          stillActive.push(j)
-        }
+        if (j.status === 'complete' || j.status === 'failed') justCompleted.push(j)
+        else stillActive.push(j)
       }
 
-      // Merge in any jobs that arrived between the snapshot and now.
       setActiveJobs(prev => {
         const updatedIds = new Set(updates.map(u => u.job_id))
         const newcomers = prev.filter(p => !updatedIds.has(p.job_id))
@@ -229,25 +232,20 @@ export default function SavedScans({ onSelectRow }) {
       })
 
       if (justCompleted.length) {
-        // Show as toasts for ~5s, then drop.
         setCompletedJobs(prev => [...prev, ...justCompleted])
         setTimeout(() => {
           if (cancelled) return
           setCompletedJobs(prev => prev.filter(c => !justCompleted.find(j => j.job_id === c.job_id)))
         }, 5000)
 
-        // Side effects for completed jobs: reload data so the UI catches
-        // up. Errors are surfaced via the toast and don't trigger reloads.
         const anySuccess = justCompleted.some(j => j.status === 'complete')
         if (anySuccess) {
           await refreshScans()
           for (const j of justCompleted) {
             if (j.status !== 'complete') continue
             if (j.kind === 'run' && j.scan_id) {
-              // Load the newly-created scan so the user sees results.
               await loadScan(j.scan_id)
             } else if (j.kind === 'update' && j.scan_id && selectedScanId === j.scan_id) {
-              // Re-load if the user is still looking at the updated scan.
               await loadScan(j.scan_id)
             }
           }
@@ -256,13 +254,13 @@ export default function SavedScans({ onSelectRow }) {
     }
 
     const interval = setInterval(tick, 2000)
-    // Run once immediately so quick scans don't sit at "queued" for 2s.
-    tick()
+    tick() // Immediate poll so we don't sit at 'queued' for 2s.
     return () => {
       cancelled = true
       clearInterval(interval)
     }
-  }, [activeJobs, refreshScans, loadScan, selectedScanId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasActiveJobs])
 
   // Fetch the backend's saved-scan defaults so the run dialog pre-populates
   // with current values rather than stale frontend constants.

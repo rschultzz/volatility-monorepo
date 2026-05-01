@@ -499,6 +499,52 @@ def _build_saved_scan_params(
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Schema bootstrap
+# ─────────────────────────────────────────────────────────────────────
+# Idempotent table + column creation for the saved-scan cache. Module-
+# scoped (rather than nested in the route factory) so background-thread
+# workers can call it directly. Cheap to call on every request that
+# touches the table; the IF NOT EXISTS guards make it a no-op once the
+# schema is in place.
+
+def _ensure_scan_cache_table_exists(conn) -> None:
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS public.bt2_scan_cache (
+          scan_id        BIGSERIAL PRIMARY KEY,
+          created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+          label          VARCHAR(200),
+          direction      VARCHAR(8) NOT NULL,
+          start_date     DATE NOT NULL,
+          end_date       DATE NOT NULL,
+          params         JSONB NOT NULL,
+          funnel         JSONB,
+          diagnostics    JSONB,
+          rows           JSONB NOT NULL,
+          row_count      INT NOT NULL,
+          notes          TEXT
+        )
+    """))
+    # Forward-compatible columns: added via ALTER so existing tables
+    # pick up new fields without manual migration.
+    conn.execute(text("""
+        ALTER TABLE public.bt2_scan_cache
+        ADD COLUMN IF NOT EXISTS column_prefs JSONB
+    """))
+    conn.execute(text("""
+        ALTER TABLE public.bt2_scan_cache
+        ADD COLUMN IF NOT EXISTS filter_presets JSONB
+    """))
+    conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_bt2_scan_cache_created
+          ON public.bt2_scan_cache (created_at DESC)
+    """))
+    conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_bt2_scan_cache_dir_dates
+          ON public.bt2_scan_cache (direction, start_date, end_date)
+    """))
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Background scan-job system
 # ─────────────────────────────────────────────────────────────────────
 # Single-process, in-memory job tracking. Scans can take minutes; running
@@ -1277,47 +1323,6 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
     #   3. GET  /api/backtests-v2/saved-scans/<scan_id>  — load a saved scan
     #      (rows + diagnostics + funnel)
     #   4. DELETE /api/backtests-v2/saved-scans/<scan_id> — remove a saved scan
-
-    def _ensure_scan_cache_table_exists(conn):
-        """Idempotent table creation. Cheap to call on every request."""
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS public.bt2_scan_cache (
-              scan_id        BIGSERIAL PRIMARY KEY,
-              created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-              label          VARCHAR(200),
-              direction      VARCHAR(8) NOT NULL,
-              start_date     DATE NOT NULL,
-              end_date       DATE NOT NULL,
-              params         JSONB NOT NULL,
-              funnel         JSONB,
-              diagnostics    JSONB,
-              rows           JSONB NOT NULL,
-              row_count      INT NOT NULL,
-              notes          TEXT
-            )
-        """))
-        # Forward-compatible columns: added via ALTER so existing tables
-        # pick them up without manual migration. Idempotent.
-        conn.execute(text("""
-            ALTER TABLE public.bt2_scan_cache
-            ADD COLUMN IF NOT EXISTS column_prefs JSONB
-        """))
-        conn.execute(text("""
-            ALTER TABLE public.bt2_scan_cache
-            ADD COLUMN IF NOT EXISTS filter_presets JSONB
-        """))
-        conn.execute(text("""
-            ALTER TABLE public.bt2_scan_cache
-            ADD COLUMN IF NOT EXISTS filter_presets JSONB
-        """))
-        conn.execute(text("""
-            CREATE INDEX IF NOT EXISTS idx_bt2_scan_cache_created
-              ON public.bt2_scan_cache (created_at DESC)
-        """))
-        conn.execute(text("""
-            CREATE INDEX IF NOT EXISTS idx_bt2_scan_cache_dir_dates
-              ON public.bt2_scan_cache (direction, start_date, end_date)
-        """))
 
     def saved_scans_run_api():
         """
