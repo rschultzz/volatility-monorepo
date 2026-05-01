@@ -1144,6 +1144,289 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
           </tbody>
         </table>
       </div>
+
+      {/* ────────────────────────────────────────────────────────────────
+          P&L Distribution at Close
+          Bins trades by |close|/σ at the entry-to-close horizon to show
+          the actual breakdown of "max profit", "partial loss", and "max
+          loss" outcomes for a ±1σ iron condor run to expiration.
+          Falls back to computing locally from forward_outcomes.eod if
+          realized_vs_implied.to_close isn't present (older backtests).
+          ──────────────────────────────────────────────────────────────── */}
+      <PnLDistributionPanel
+        rows={rows}
+        sigmaScale={sigmaScale}
+        useTradingTime={useTradingTime}
+      />
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// PnLDistributionPanel
+//   Shows the |close|/σ distribution at entry-to-close, binned to make
+//   the partial-vs-max-loss tradeoff visible. Designed for the strategy
+//   question: "if I run all of these to close, what's the actual mix?"
+//
+//   Bin zones (using ±1σ short strikes, ~10pt wings as default assumption):
+//     • Max Profit (< 1.0σ): close inside short strikes
+//     • Partial Loss (1.0–1.5σ approx): close between short and long
+//     • Max Loss (> 1.5σ approx): close beyond long strike
+//
+//   Wing-to-σ ratio varies by trade because σ varies by IV/horizon. The
+//   1.5σ boundary is an approximation — for the to-close horizon with
+//   ~$25 sigma and 10-pt wings, true max-loss boundary is ~1.4σ. User
+//   can mentally adjust based on their actual wing width.
+// ────────────────────────────────────────────────────────────────────────
+
+function PnLDistributionPanel({ rows = [], sigmaScale = 1.0, useTradingTime = false }) {
+  const distribution = React.useMemo(() => {
+    const bins = [
+      { label: '0.00 – 0.25σ',  min: 0,    max: 0.25, zone: 'profit' },
+      { label: '0.25 – 0.50σ',  min: 0.25, max: 0.5,  zone: 'profit' },
+      { label: '0.50 – 0.75σ',  min: 0.5,  max: 0.75, zone: 'profit' },
+      { label: '0.75 – 1.00σ',  min: 0.75, max: 1.0,  zone: 'profit' },
+      { label: '1.00 – 1.25σ',  min: 1.0,  max: 1.25, zone: 'partial' },
+      { label: '1.25 – 1.50σ',  min: 1.25, max: 1.5,  zone: 'partial' },
+      { label: '1.50σ +',       min: 1.5,  max: Infinity, zone: 'max_loss' },
+    ];
+    const counts = bins.map(() => 0);
+    let total = 0;
+
+    for (const row of rows) {
+      // Prefer the new to_close data if present; fall back to computing
+      // from forward_outcomes.eod + minutes_to_close so this panel works
+      // before service.py changes are deployed.
+      let absRatio = null;
+      const rviTC = row.realized_vs_implied?.to_close?.close_over_1sigma;
+      if (rviTC !== null && rviTC !== undefined && Number.isFinite(rviTC)) {
+        absRatio = Math.abs(rviTC);
+      } else {
+        const ivAtm = row.iv?.atm_0dte_pct;
+        const spx = row.target_spx_price;
+        const mtc = row.minutes_to_close;
+        const closePts = row.forward_outcomes?.eod?.close_pts;
+        if (
+          ivAtm !== null && ivAtm !== undefined &&
+          spx !== null && spx !== undefined &&
+          mtc !== null && mtc !== undefined && mtc > 0 &&
+          closePts !== null && closePts !== undefined
+        ) {
+          const impl = spx * (ivAtm / 100) * Math.sqrt(mtc / (60 * 24 * 365));
+          if (impl > 0) absRatio = Math.abs(closePts) / impl;
+        }
+      }
+
+      if (absRatio === null) continue;
+      // Apply time-convention scaling: trading-time σ is bigger, so the
+      // ratio (|close|/σ) shrinks and trades migrate to lower-σ bins.
+      const scaledRatio = absRatio / sigmaScale;
+      for (let i = 0; i < bins.length; i++) {
+        if (scaledRatio >= bins[i].min && scaledRatio < bins[i].max) {
+          counts[i]++;
+          break;
+        }
+      }
+      total++;
+    }
+
+    // Aggregate zone counts
+    const profitCount   = bins.reduce((sum, b, i) => sum + (b.zone === 'profit'   ? counts[i] : 0), 0);
+    const partialCount  = bins.reduce((sum, b, i) => sum + (b.zone === 'partial'  ? counts[i] : 0), 0);
+    const maxLossCount  = bins.reduce((sum, b, i) => sum + (b.zone === 'max_loss' ? counts[i] : 0), 0);
+
+    return { bins, counts, total, profitCount, partialCount, maxLossCount };
+  }, [rows, sigmaScale]);
+
+  const { bins, counts, total, profitCount, partialCount, maxLossCount } = distribution;
+  const maxCount = Math.max(...counts, 1);
+
+  const zoneColor = (zone) => {
+    if (zone === 'profit')   return '#86efac';
+    if (zone === 'partial')  return '#fcd34d';
+    if (zone === 'max_loss') return '#fca5a5';
+    return '#94a3b8';
+  };
+
+  const cellStyle = {
+    padding: '6px 12px',
+    fontSize: '12px',
+    color: '#e2e8f0',
+    borderBottom: '1px solid #1e293b',
+  };
+
+  return (
+    <div style={{ marginTop: '20px' }}>
+      <h3 style={{
+        fontSize: '13px',
+        fontWeight: '700',
+        color: '#93c5fd',
+        marginBottom: '8px',
+        letterSpacing: '0.05em',
+        textTransform: 'uppercase',
+      }}>
+        P&L Distribution at Close (n = {total})
+      </h3>
+
+      <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '12px' }}>
+        Distribution of |close|/σ at the entry-to-close horizon. For a ±1σ iron condor with
+        ~10pt wings: green bins = max profit, yellow ≈ partial loss zone, red ≈ max loss zone.
+        Wing-to-σ ratio varies by trade, so the 1.0/1.5σ boundaries are approximate. Currently
+        showing <strong>{useTradingTime ? 'trading-time' : 'calendar-time'}</strong> σ.
+      </div>
+
+      {/* Zone summary chips */}
+      <div style={{
+        display: 'flex',
+        gap: '12px',
+        marginBottom: '12px',
+        flexWrap: 'wrap',
+      }}>
+        <ZoneChip label="Max Profit" color="#86efac" count={profitCount} total={total} hint="< 1σ" />
+        <ZoneChip label="Partial Loss" color="#fcd34d" count={partialCount} total={total} hint="1σ – 1.5σ" />
+        <ZoneChip label="Max Loss" color="#fca5a5" count={maxLossCount} total={total} hint="> 1.5σ" />
+      </div>
+
+      {/* Detailed bin distribution with bars */}
+      <div style={{
+        background: '#0f172a',
+        border: '1px solid #1e293b',
+        borderRadius: '10px',
+        overflow: 'hidden',
+      }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={{
+                padding: '8px 12px',
+                fontSize: '10px',
+                fontWeight: '700',
+                color: '#94a3b8',
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+                textAlign: 'left',
+                borderBottom: '1px solid #1e293b',
+              }}>|Close| / σ</th>
+              <th style={{
+                padding: '8px 12px',
+                fontSize: '10px',
+                fontWeight: '700',
+                color: '#94a3b8',
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+                textAlign: 'right',
+                borderBottom: '1px solid #1e293b',
+                width: '60px',
+              }}>Count</th>
+              <th style={{
+                padding: '8px 12px',
+                fontSize: '10px',
+                fontWeight: '700',
+                color: '#94a3b8',
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+                textAlign: 'right',
+                borderBottom: '1px solid #1e293b',
+                width: '60px',
+              }}>%</th>
+              <th style={{
+                padding: '8px 12px',
+                fontSize: '10px',
+                fontWeight: '700',
+                color: '#94a3b8',
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+                textAlign: 'left',
+                borderBottom: '1px solid #1e293b',
+              }}>Distribution</th>
+            </tr>
+          </thead>
+          <tbody>
+            {bins.map((bin, i) => {
+              const count = counts[i];
+              const pct = total > 0 ? (count / total) * 100 : 0;
+              const barWidth = `${(count / maxCount) * 100}%`;
+              const color = zoneColor(bin.zone);
+              const isZoneBoundary = i > 0 && bins[i - 1].zone !== bin.zone;
+              return (
+                <tr key={i} style={{
+                  borderTop: isZoneBoundary ? '2px solid #334155' : 'none',
+                }}>
+                  <td style={{ ...cellStyle, fontFamily: 'monospace' }}>{bin.label}</td>
+                  <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 600 }}>{count}</td>
+                  <td style={{ ...cellStyle, textAlign: 'right', color, fontWeight: 700 }}>
+                    {pct.toFixed(0)}%
+                  </td>
+                  <td style={cellStyle}>
+                    <div style={{
+                      width: barWidth,
+                      height: '14px',
+                      background: color,
+                      borderRadius: '2px',
+                      minWidth: count > 0 ? '2px' : '0',
+                      transition: 'width 0.2s',
+                    }} />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Strategy hint */}
+      {total > 0 && (
+        <div style={{
+          marginTop: '10px',
+          fontSize: '10px',
+          color: '#64748b',
+          fontStyle: 'italic',
+        }}>
+          Strategy read: of {total} trades run to close,{' '}
+          <strong style={{ color: '#86efac' }}>{profitCount} ({((profitCount / total) * 100).toFixed(0)}%)</strong>{' '}
+          finish max profit,{' '}
+          <strong style={{ color: '#fcd34d' }}>{partialCount} ({((partialCount / total) * 100).toFixed(0)}%)</strong>{' '}
+          land in the partial-loss zone (between short and long strikes), and{' '}
+          <strong style={{ color: '#fca5a5' }}>{maxLossCount} ({((maxLossCount / total) * 100).toFixed(0)}%)</strong>{' '}
+          finish at max loss. Multiply each by your assumed credit / max loss per spread to estimate EV.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ZoneChip({ label, color, count, total, hint }) {
+  const pct = total > 0 ? ((count / total) * 100).toFixed(0) : '0';
+  return (
+    <div style={{
+      flex: 1,
+      minWidth: '140px',
+      background: '#0f172a',
+      border: `1px solid ${color}`,
+      borderRadius: '8px',
+      padding: '8px 12px',
+    }}>
+      <div style={{
+        fontSize: '10px',
+        color: '#94a3b8',
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: '0.04em',
+        marginBottom: '2px',
+      }}>
+        {label} <span style={{ color: '#64748b' }}>({hint})</span>
+      </div>
+      <div style={{
+        fontSize: '20px',
+        fontWeight: 700,
+        color: color,
+        lineHeight: 1.1,
+      }}>
+        {pct}%
+      </div>
+      <div style={{ fontSize: '10px', color: '#94a3b8' }}>
+        {count} of {total} trades
+      </div>
     </div>
   );
 }
