@@ -669,6 +669,14 @@ const normalProbInside = (x) => {
 function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
   const [sigma1, setSigma1] = React.useState(1.0);
   const [sigma2, setSigma2] = React.useState(2.0);
+  // Time-convention toggle. Calendar = 60×24×365 min/year (matches service.py's
+  // implied-sigma math). Trading = 252×390 min/year (intraday convention used
+  // by most desks for 0DTE). Trading-time σ is √(525600/98280) ≈ 2.31× larger
+  // than calendar-time σ for the same horizon. We don't recompute per-row; we
+  // just rescale the existing calendar-time ratios on the way out.
+  const [useTradingTime, setUseTradingTime] = React.useState(false);
+  const TT_SCALE = Math.sqrt((60 * 24 * 365) / (252 * 390)); // ≈ 2.31
+  const sigmaScale = useTradingTime ? TT_SCALE : 1.0;
 
   const fixedHorizons = ['30m', '60m', '90m', '120m', '180m'];
   const horizonsToShow = [
@@ -694,8 +702,11 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
       const impliedValues = [];
       const rangeRatios = [];
       const closeRatios = [];
+      const maxExcursionRatios = [];   // max(mfe, mae) / impl_σ — for "Range inside" stat
       let insideSigma1 = 0;
       let insideSigma2 = 0;
+      let rangeInsideSigma1 = 0;       // count of trades where max-excursion < sigma1
+      let rangeInsideSigma2 = 0;       // count of trades where max-excursion < sigma2
 
       for (const row of rows) {
         const rvi = row.realized_vs_implied?.[h];
@@ -710,8 +721,8 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
           ivValues.push(row.iv.atm_0dte_pct);
         }
 
-        if (rvi.implied_1sigma !== null && rvi.implied_1sigma !== undefined) {
-          impliedValues.push(rvi.implied_1sigma);
+        if (rvi.implied_1sigma_pts !== null && rvi.implied_1sigma_pts !== undefined) {
+          impliedValues.push(rvi.implied_1sigma_pts);
         }
 
         if (rvi.range_over_1sigma !== null && rvi.range_over_1sigma !== undefined) {
@@ -720,19 +731,55 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
 
         closeRatios.push(closeOverSigma);
 
-        if (closeOverSigma < sigma1) insideSigma1++;
-        if (closeOverSigma < sigma2) insideSigma2++;
+        // Max-excursion ratio: did EITHER side breach the implied band?
+        // For an iron condor sized at ±1σ, this is the "did the short strike
+        // get tested" question — much more relevant than terminal close.
+        // Pulls mfe/mae from forward_outcomes since realized_vs_implied only
+        // stores the sum (range), not the individual sides.
+        const fo = row.forward_outcomes?.[h];
+        const impl = rvi.implied_1sigma_pts;
+        if (
+          fo && impl !== null && impl !== undefined && impl > 0 &&
+          fo.mfe_pts !== null && fo.mfe_pts !== undefined &&
+          fo.mae_pts !== null && fo.mae_pts !== undefined
+        ) {
+          const maxExc = Math.max(Math.abs(fo.mfe_pts), Math.abs(fo.mae_pts));
+          const maxExcRatio = maxExc / impl;
+          maxExcursionRatios.push(maxExcRatio);
+          // Threshold check uses time-convention-aware threshold.
+          // Trading-time σ is bigger, so threshold is sigma1 * TT_SCALE.
+          const effectiveThreshold1 = sigma1 * sigmaScale;
+          const effectiveThreshold2 = sigma2 * sigmaScale;
+          if (maxExcRatio < effectiveThreshold1) rangeInsideSigma1++;
+          if (maxExcRatio < effectiveThreshold2) rangeInsideSigma2++;
+        }
+
+        // Inside-σ check uses the SAME time-convention scaling
+        const effectiveThreshold1 = sigma1 * sigmaScale;
+        const effectiveThreshold2 = sigma2 * sigmaScale;
+        if (closeOverSigma < effectiveThreshold1) insideSigma1++;
+        if (closeOverSigma < effectiveThreshold2) insideSigma2++;
       }
 
       if (contributors.length > 0) {
+        // Apply time-convention scaling to displayed medians.
+        // - Implied σ scales UP under trading-time (×TT_SCALE)
+        // - Ratios (range/σ, close/σ) scale DOWN under trading-time (÷TT_SCALE)
+        const rawImpl     = median(impliedValues);
+        const rawRangeRat = median(rangeRatios);
+        const rawCloseRat = median(closeRatios);
+        const rawMaxRat   = median(maxExcursionRatios);
         stats[h] = {
           count: contributors.length,
           iv_median: median(ivValues),
-          implied_1sigma_median: median(impliedValues),
-          range_over_1sigma_median: median(rangeRatios),
-          close_over_1sigma_median: median(closeRatios),
+          implied_1sigma_median: rawImpl !== null ? rawImpl * sigmaScale : null,
+          range_over_1sigma_median: rawRangeRat !== null ? rawRangeRat / sigmaScale : null,
+          close_over_1sigma_median: rawCloseRat !== null ? rawCloseRat / sigmaScale : null,
+          max_excursion_over_1sigma_median: rawMaxRat !== null ? rawMaxRat / sigmaScale : null,
           pct_inside_sigma1: insideSigma1 / contributors.length,
           pct_inside_sigma2: insideSigma2 / contributors.length,
+          pct_range_inside_sigma1: maxExcursionRatios.length > 0 ? rangeInsideSigma1 / maxExcursionRatios.length : null,
+          pct_range_inside_sigma2: maxExcursionRatios.length > 0 ? rangeInsideSigma2 / maxExcursionRatios.length : null,
         };
       }
     }
@@ -743,8 +790,11 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
     const eodImpliedValues = [];
     const eodRangeRatios = [];
     const eodCloseRatios = [];
+    const eodMaxExcursionRatios = [];
     let eodInsideSigma1 = 0;
     let eodInsideSigma2 = 0;
+    let eodRangeInsideSigma1 = 0;
+    let eodRangeInsideSigma2 = 0;
 
     for (const row of rows) {
       const ivAtm = row.iv?.atm_0dte_pct;
@@ -775,26 +825,43 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
       if (mfe !== null && mfe !== undefined && mae !== null && mae !== undefined) {
         const rangeRatio = (mfe + mae) / impl;
         eodRangeRatios.push(rangeRatio);
+        // Max-excursion: did either side touch ±1σ during the session?
+        const maxExc = Math.max(Math.abs(mfe), Math.abs(mae));
+        const maxExcRatio = maxExc / impl;
+        eodMaxExcursionRatios.push(maxExcRatio);
+        const eodEffThreshold1 = sigma1 * sigmaScale;
+        const eodEffThreshold2 = sigma2 * sigmaScale;
+        if (maxExcRatio < eodEffThreshold1) eodRangeInsideSigma1++;
+        if (maxExcRatio < eodEffThreshold2) eodRangeInsideSigma2++;
       }
 
-      if (closeRatio < sigma1) eodInsideSigma1++;
-      if (closeRatio < sigma2) eodInsideSigma2++;
+      const eodEffThreshold1 = sigma1 * sigmaScale;
+      const eodEffThreshold2 = sigma2 * sigmaScale;
+      if (closeRatio < eodEffThreshold1) eodInsideSigma1++;
+      if (closeRatio < eodEffThreshold2) eodInsideSigma2++;
     }
 
     if (eodContributors.length > 0) {
+      const rawImpl     = median(eodImpliedValues);
+      const rawRangeRat = median(eodRangeRatios);
+      const rawCloseRat = median(eodCloseRatios);
+      const rawMaxRat   = median(eodMaxExcursionRatios);
       stats.eod = {
         count: eodContributors.length,
         iv_median: median(eodIvValues),
-        implied_1sigma_median: median(eodImpliedValues),
-        range_over_1sigma_median: median(eodRangeRatios),
-        close_over_1sigma_median: median(eodCloseRatios),
+        implied_1sigma_median: rawImpl !== null ? rawImpl * sigmaScale : null,
+        range_over_1sigma_median: rawRangeRat !== null ? rawRangeRat / sigmaScale : null,
+        close_over_1sigma_median: rawCloseRat !== null ? rawCloseRat / sigmaScale : null,
+        max_excursion_over_1sigma_median: rawMaxRat !== null ? rawMaxRat / sigmaScale : null,
         pct_inside_sigma1: eodInsideSigma1 / eodContributors.length,
         pct_inside_sigma2: eodInsideSigma2 / eodContributors.length,
+        pct_range_inside_sigma1: eodMaxExcursionRatios.length > 0 ? eodRangeInsideSigma1 / eodMaxExcursionRatios.length : null,
+        pct_range_inside_sigma2: eodMaxExcursionRatios.length > 0 ? eodRangeInsideSigma2 / eodMaxExcursionRatios.length : null,
       };
     }
 
     return stats;
-  }, [rows, sigma1, sigma2]);
+  }, [rows, sigma1, sigma2, sigmaScale]);
 
   const cellStyle = {
     padding: '8px 12px',
@@ -844,16 +911,74 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
 
   return (
     <div style={{ marginBottom: '24px' }}>
-      <h3 style={{
-        fontSize: '13px',
-        fontWeight: '700',
-        color: '#93c5fd',
-        marginBottom: '8px',
-        letterSpacing: '0.05em',
-        textTransform: 'uppercase',
-      }}>
-        Realized vs Implied Movement
-      </h3>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+        <h3 style={{
+          fontSize: '13px',
+          fontWeight: '700',
+          color: '#93c5fd',
+          margin: 0,
+          letterSpacing: '0.05em',
+          textTransform: 'uppercase',
+        }}>
+          Realized vs Implied Movement
+        </h3>
+
+        {/* Time-convention toggle (segmented control).
+            Calendar = 365 cal-days; Trading = 252 days × 6.5 hrs.
+            Trading-time σ ≈ 2.31× larger for the same horizon — so
+            "Inside ±σ" rates jump dramatically and condor strikes
+            (anchor ± σ) move further out. Default = calendar to match service.py. */}
+        <div style={{
+          display: 'inline-flex',
+          background: '#0f172a',
+          border: '1px solid #334155',
+          borderRadius: 6,
+          overflow: 'hidden',
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+        }}>
+          <button
+            type="button"
+            onClick={() => setUseTradingTime(false)}
+            style={{
+              background: !useTradingTime ? '#2563eb' : 'transparent',
+              color: !useTradingTime ? '#fff' : '#94a3b8',
+              border: 'none',
+              padding: '4px 10px',
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              fontSize: 'inherit',
+              fontWeight: 'inherit',
+              letterSpacing: 'inherit',
+              textTransform: 'inherit',
+            }}
+            title="Annualize using calendar minutes (60 × 24 × 365). Matches service.py."
+          >
+            Calendar σ
+          </button>
+          <button
+            type="button"
+            onClick={() => setUseTradingTime(true)}
+            style={{
+              background: useTradingTime ? '#2563eb' : 'transparent',
+              color: useTradingTime ? '#fff' : '#94a3b8',
+              border: 'none',
+              padding: '4px 10px',
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              fontSize: 'inherit',
+              fontWeight: 'inherit',
+              letterSpacing: 'inherit',
+              textTransform: 'inherit',
+            }}
+            title={`Annualize using trading minutes (252 × 390). σ scales by ${TT_SCALE.toFixed(2)}×.`}
+          >
+            Trading σ ({TT_SCALE.toFixed(2)}×)
+          </button>
+        </div>
+      </div>
 
       {ivSummary && (
         <div style={{
@@ -959,14 +1084,21 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
               <th style={headerStyle}>IV median</th>
               <th style={headerStyle}>Impl 1σ</th>
               <th style={headerStyle}>Range / 1σ</th>
+              <th style={headerStyle}>Max / 1σ</th>
               <th style={headerStyle}>|Close| / 1σ</th>
               <th style={headerStyle}>
-                Inside ±{sigma1.toFixed(1)}σ{' '}
+                Close Inside ±{sigma1.toFixed(1)}σ{' '}
                 <span style={{ color: '#94a3b8', fontWeight: 500 }}>({prob1Pct}%)</span>
               </th>
               <th style={headerStyle}>
-                Inside ±{sigma2.toFixed(1)}σ{' '}
+                Close Inside ±{sigma2.toFixed(1)}σ{' '}
                 <span style={{ color: '#94a3b8', fontWeight: 500 }}>({prob2Pct}%)</span>
+              </th>
+              <th style={headerStyle}>
+                Range Inside ±{sigma1.toFixed(1)}σ
+              </th>
+              <th style={headerStyle}>
+                Range Inside ±{sigma2.toFixed(1)}σ
               </th>
             </tr>
           </thead>
@@ -985,6 +1117,11 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
                       : '—'}
                   </td>
                   <td style={cellStyle}>
+                    {a.max_excursion_over_1sigma_median !== null && a.max_excursion_over_1sigma_median !== undefined
+                      ? a.max_excursion_over_1sigma_median.toFixed(2)
+                      : '—'}
+                  </td>
+                  <td style={cellStyle}>
                     {a.close_over_1sigma_median !== null && a.close_over_1sigma_median !== undefined
                       ? a.close_over_1sigma_median.toFixed(2)
                       : '—'}
@@ -994,6 +1131,12 @@ function RealizedVsImpliedAggregate({ aggregate, ivSummary, rows = [] }) {
                   </td>
                   <td style={{ ...cellStyle, color: hitRateColor(a.pct_inside_sigma2, sigma2), fontWeight: 700 }}>
                     {pct(a.pct_inside_sigma2)}
+                  </td>
+                  <td style={{ ...cellStyle, color: hitRateColor(a.pct_range_inside_sigma1, sigma1), fontWeight: 700 }}>
+                    {pct(a.pct_range_inside_sigma1)}
+                  </td>
+                  <td style={{ ...cellStyle, color: hitRateColor(a.pct_range_inside_sigma2, sigma2), fontWeight: 700 }}>
+                    {pct(a.pct_range_inside_sigma2)}
                   </td>
                 </tr>
               );

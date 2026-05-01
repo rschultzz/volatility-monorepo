@@ -1044,7 +1044,7 @@ function computeForwardOutcomesAggregate(rows) {
 }
 
 function computeRvIAggregate(rows) {
-  const horizons = ['30m', '60m', '90m', '120m', '180m']
+  const horizons = ['30m', '60m', '90m', '120m', '180m', 'to_close']
   const out = {}
   for (const h of horizons) {
     const ivs = [], implPts = [], rangeRatios = [], closeRatios = []

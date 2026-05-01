@@ -146,11 +146,21 @@ export const COLUMN_DATA_MAP = {
   rvi_ratio_120m: (row) => row.realized_vs_implied?.['120m']?.close_over_1sigma,
   rvi_inside_1s_120m: (row) => row.realized_vs_implied?.['120m']?.inside_1sigma,
 
+  // Realized vs implied at entry-to-close (uses each trade's actual minutes_to_close)
+  rvi_ratio_to_close:     (row) => row.realized_vs_implied?.['to_close']?.close_over_1sigma,
+  rvi_inside_1s_to_close: (row) => row.realized_vs_implied?.['to_close']?.inside_1sigma,
+
   // Hypothetical 120m iron condor strikes
   condor_short_put:  (row) => row.hypothetical_condor_120m?.short_put_strike,
   condor_long_put:   (row) => row.hypothetical_condor_120m?.long_put_strike,
   condor_short_call: (row) => row.hypothetical_condor_120m?.short_call_strike,
   condor_long_call:  (row) => row.hypothetical_condor_120m?.long_call_strike,
+
+  // Hypothetical entry-to-close iron condor strikes
+  condor_to_close_short_put:  (row) => row.hypothetical_condor_to_close?.short_put_strike,
+  condor_to_close_long_put:   (row) => row.hypothetical_condor_to_close?.long_put_strike,
+  condor_to_close_short_call: (row) => row.hypothetical_condor_to_close?.short_call_strike,
+  condor_to_close_long_call:  (row) => row.hypothetical_condor_to_close?.long_call_strike,
 };
 
 const ResultsTable = forwardRef(({
@@ -594,6 +604,23 @@ const ResultsTable = forwardRef(({
           : <span style={{ color: '#fca5a5', fontWeight: 700 }}>✗</span>;
       }
 
+      // Realized vs implied at entry-to-close: |close|/1σ over the actual trade window
+      case 'rvi_ratio_to_close': {
+        const v = row.realized_vs_implied?.['to_close']?.close_over_1sigma;
+        if (v === null || v === undefined) return '—';
+        const color = v < 1.0 ? '#86efac' : v < 2.0 ? '#fcd34d' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{fmt(v, 2)}</span>;
+      }
+
+      // Inside ±1σ at entry-to-close: ✓ if close at session end was within the implied band
+      case 'rvi_inside_1s_to_close': {
+        const v = row.realized_vs_implied?.['to_close']?.inside_1sigma;
+        if (v === null || v === undefined) return '—';
+        return v
+          ? <span style={{ color: '#86efac', fontWeight: 700 }}>✓</span>
+          : <span style={{ color: '#fca5a5', fontWeight: 700 }}>✗</span>;
+      }
+
       // Hypothetical 120m iron condor strikes.
       // Short strikes colored (amber) — they're the ones the trade "stays below/above"
       // Long strikes faded — they're the defensive wings.
@@ -614,6 +641,29 @@ const ResultsTable = forwardRef(({
       }
       case 'condor_long_call': {
         const v = row.hypothetical_condor_120m?.long_call_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#94a3b8' }}>{fmt(v, 0)}</span>;
+      }
+
+      // Hypothetical entry-to-close iron condor strikes (sized to actual minutes_to_close).
+      // Same color treatment as the 120m version — short strikes amber, longs faded.
+      case 'condor_to_close_short_put': {
+        const v = row.hypothetical_condor_to_close?.short_put_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#fcd34d', fontWeight: 600 }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_to_close_short_call': {
+        const v = row.hypothetical_condor_to_close?.short_call_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#fcd34d', fontWeight: 600 }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_to_close_long_put': {
+        const v = row.hypothetical_condor_to_close?.long_put_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#94a3b8' }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_to_close_long_call': {
+        const v = row.hypothetical_condor_to_close?.long_call_strike;
         if (v === null || v === undefined) return '—';
         return <span style={{ color: '#94a3b8' }}>{fmt(v, 0)}</span>;
       }

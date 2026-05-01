@@ -31,6 +31,7 @@ export const COLUMN_FILTER_TYPES = {
   source_zone_gamma_regime: 'categorical',
   source_zone_gamma_regime_all_exp: 'categorical',
   rvi_inside_1s_120m: 'categorical',
+  rvi_inside_1s_to_close: 'categorical',
 
   // Numeric — measurements
   start_open: 'numeric',
@@ -67,10 +68,15 @@ export const COLUMN_FILTER_TYPES = {
   skew_delta_put: 'numeric',
   skew_delta_call: 'numeric',
   rvi_ratio_120m: 'numeric',
+  rvi_ratio_to_close: 'numeric',
   condor_short_put: 'numeric',
   condor_long_put: 'numeric',
   condor_short_call: 'numeric',
   condor_long_call: 'numeric',
+  condor_to_close_short_put: 'numeric',
+  condor_to_close_long_put: 'numeric',
+  condor_to_close_short_call: 'numeric',
+  condor_to_close_long_call: 'numeric',
   // Forward outcomes (all numeric)
   fwd_30m_mfe: 'numeric', fwd_30m_mae: 'numeric', fwd_30m_close: 'numeric',
   fwd_60m_mfe: 'numeric', fwd_60m_mae: 'numeric', fwd_60m_close: 'numeric',
@@ -181,11 +187,17 @@ export const DEFAULT_COLUMNS = [
 
   { id: 'rvi_ratio_120m',     label: '|Close|/1σ 120m', visible: false, className: 'study-col' },
   { id: 'rvi_inside_1s_120m', label: 'Inside ±1σ 120m', visible: false, className: 'study-col' },
+  { id: 'rvi_ratio_to_close',     label: '|Close|/1σ to Close', visible: false, className: 'study-col' },
+  { id: 'rvi_inside_1s_to_close', label: 'Inside ±1σ to Close', visible: false, className: 'study-col' },
 
   { id: 'condor_short_put',  label: 'Short Put',  visible: false, className: 'study-col' },
   { id: 'condor_long_put',   label: 'Long Put',   visible: false, className: 'study-col' },
   { id: 'condor_short_call', label: 'Short Call', visible: false, className: 'study-col' },
   { id: 'condor_long_call',  label: 'Long Call',  visible: false, className: 'study-col' },
+  { id: 'condor_to_close_short_put',  label: 'Short Put (to Close)',  visible: false, className: 'study-col' },
+  { id: 'condor_to_close_long_put',   label: 'Long Put (to Close)',   visible: false, className: 'study-col' },
+  { id: 'condor_to_close_short_call', label: 'Short Call (to Close)', visible: false, className: 'study-col' },
+  { id: 'condor_to_close_long_call',  label: 'Long Call (to Close)',  visible: false, className: 'study-col' },
 ];
 
 export const MANAGED_ONLY_COLUMNS = new Set([
@@ -211,7 +223,10 @@ export const STUDY_ONLY_COLUMNS = new Set([
   'minutes_to_close',
   'skew_delta_put', 'skew_delta_call',
   'rvi_ratio_120m', 'rvi_inside_1s_120m',
+  'rvi_ratio_to_close', 'rvi_inside_1s_to_close',
   'condor_short_put', 'condor_long_put', 'condor_short_call', 'condor_long_call',
+  'condor_to_close_short_put', 'condor_to_close_long_put',
+  'condor_to_close_short_call', 'condor_to_close_long_call',
 ]);
 
 // Compute which columns should be visible given the executionMode.

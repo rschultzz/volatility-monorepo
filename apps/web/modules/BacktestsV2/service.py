@@ -1240,6 +1240,39 @@ def _build_study_row(
         hypothetical_condor["anchor_price"] = round(float(condor_anchor), 2)
         hypothetical_condor["effective_horizon_minutes"] = int(condor_horizon)
 
+    # Second hypothetical iron condor: sized to ENTRY-TO-CLOSE horizon (no
+    # 120m cap). Same anchor and IV as the 120m version, but uses the full
+    # minutes_to_close for sigma sizing. For trades with >120 min remaining,
+    # this produces wider strikes (more time → more implied move). Lets us
+    # A/B compare the two sizing approaches on the same trades. No floor on
+    # very late entries — late trades simply get small implied 1σ values,
+    # which is mathematically honest (filter via minutes_to_close downstream
+    # if you want a minimum tradeable window).
+    blank_condor = {
+        "short_put_strike":   None,
+        "long_put_strike":    None,
+        "short_call_strike":  None,
+        "long_call_strike":   None,
+        "implied_1sigma_pts": None,
+        "short_strike_width": None,
+        "wing_width_pts":     float(condor_wing_width_pts),
+    }
+    if minutes_to_close is not None and minutes_to_close > 0:
+        to_close_horizon = int(minutes_to_close)
+        hypothetical_condor_to_close = _compute_hypothetical_condor(
+            anchor_price=float(condor_anchor),
+            iv_atm_0dte_pct=iv_atm,
+            horizon_minutes=to_close_horizon,
+            wing_width_pts=float(condor_wing_width_pts),
+            strike_increment=5.0,
+        )
+        if hypothetical_condor_to_close.get("short_put_strike") is not None:
+            hypothetical_condor_to_close["anchor_source"] = "SPX" if target_spx_price is not None else "ES_fallback"
+            hypothetical_condor_to_close["anchor_price"] = round(float(condor_anchor), 2)
+            hypothetical_condor_to_close["effective_horizon_minutes"] = int(to_close_horizon)
+    else:
+        hypothetical_condor_to_close = dict(blank_condor)
+
     # ── Signed GEX lookup (target zone + source zone) ──
     # Looks up gex_call - gex_put at the closest SPX strike (by discounted_level)
     # in the orats_oi_gamma table. Replaces the magnitude-only target_level_gex_bn
@@ -1330,6 +1363,12 @@ def _build_study_row(
         # Contains: short_put_strike, long_put_strike, short_call_strike,
         # long_call_strike, implied_1sigma_pts, short_strike_width, wing_width_pts
         "hypothetical_condor_120m": hypothetical_condor,
+
+        # Hypothetical entry-to-close iron condor at ±1σ. Same shape as the
+        # 120m version but sized using minutes_to_close (no 120m cap). For
+        # morning entries this produces wider strikes; for late entries
+        # it converges with the 120m version since both fall under the cap.
+        "hypothetical_condor_to_close": hypothetical_condor_to_close,
 
         # Forward outcomes dict
         "forward_outcomes": forward,
@@ -1447,9 +1486,13 @@ def _compute_realized_vs_implied(
       - inside_1sigma: True if |close_pts| < implied_1sigma
       - inside_2sigma: True if |close_pts| < 2 * implied_1sigma
 
-    EOD is skipped — implied-sigma math requires a known minute count, and the
-    EOD horizon is variable-duration per day. Users who want an EOD read can
-    look at 180m as a proxy (close enough for most intraday setups).
+    A "to_close" horizon is also added when minutes_to_close is provided. It
+    uses the "eod" forward outcomes (which already measure to 13:00 PT RTH
+    close) and minutes_to_close as the sigma window — this is a known minute
+    count per trade, so the implied-sigma math is well-defined. Useful for
+    comparing realized terminal P&L vs the implied move over the actual
+    tradable window (matches what an iron condor sized to entry-to-close
+    would experience).
 
     Any entries where IV is missing return a blank dict for that horizon.
     """
@@ -1509,6 +1552,40 @@ def _compute_realized_vs_implied(
             "inside_1sigma":      None if close_abs is None else bool(close_abs < impl),
             "inside_2sigma":      None if close_abs is None else bool(close_abs < 2 * impl),
         }
+
+    # ── to_close horizon ──
+    # Entry-to-RTH-close window. Uses the "eod" forward outcomes (already
+    # measured to 13:00 PT) and minutes_to_close as the implied-sigma window.
+    # Distinct from the standard horizons because the duration is variable
+    # per trade — a 07:32 entry has 328 min, a 12:30 entry has 30 min.
+    eod_data = forward_outcomes.get("eod") if forward_outcomes else None
+    if (
+        minutes_to_close is not None
+        and minutes_to_close > 0
+        and eod_data is not None
+    ):
+        impl_tc = _implied_sigma_move(iv_atm_0dte_pct, anchor_price, int(minutes_to_close))
+        if impl_tc is not None and impl_tc > 0:
+            close_pts_tc = eod_data.get("close_pts")
+            mfe_tc = eod_data.get("mfe_pts")
+            mae_tc = eod_data.get("mae_pts")
+            close_abs_tc = abs(float(close_pts_tc)) if close_pts_tc is not None else None
+            rng_tc = (float(mfe_tc) + float(mae_tc)) if (mfe_tc is not None and mae_tc is not None) else None
+
+            out["to_close"] = {
+                "implied_1sigma_pts": round(impl_tc, 2),
+                "effective_minutes":  int(minutes_to_close),
+                "close_abs_pts":      None if close_abs_tc is None else round(close_abs_tc, 2),
+                "close_over_1sigma":  None if close_abs_tc is None else round(close_abs_tc / impl_tc, 3),
+                "range_pts":          None if rng_tc is None else round(rng_tc, 2),
+                "range_over_1sigma":  None if rng_tc is None else round(rng_tc / impl_tc, 3),
+                "inside_1sigma":      None if close_abs_tc is None else bool(close_abs_tc < impl_tc),
+                "inside_2sigma":      None if close_abs_tc is None else bool(close_abs_tc < 2 * impl_tc),
+            }
+        else:
+            out["to_close"] = dict(blank_horizon)
+    else:
+        out["to_close"] = dict(blank_horizon)
 
     return out
 
