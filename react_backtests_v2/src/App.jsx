@@ -4,7 +4,7 @@ import ResultsTable from './components/ResultsTable';
 import DiagnosticsPanel from './components/DiagnosticsPanel';
 import ColumnSettingsModal from './components/ColumnSettingsModal';
 import TradeLog from './components/TradeLog';   // ← NEW
-import SavedScans from './components/SavedScans'; // ← NEW
+import SavedScans from './components/SavedScans.jsx'; // ← NEW
 import {
   DEFAULT_COLUMNS,
   MANAGED_ONLY_COLUMNS,
