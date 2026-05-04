@@ -108,6 +108,57 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fetch_for_scan(args: argparse.Namespace) -> int:
+    """
+    Read scan results from a JSON file (one row per object, or a top-level
+    list/dict containing a 'rows' key), apply optional filters, and run
+    the orchestrator to fetch pricing for matching rows.
+
+    This is a manual-testing convenience for Phase 4a. The real UI flow
+    (Phase 4c) will POST scan rows to a backend route.
+    """
+    import json
+    from .orchestrator import fetch_for_rows
+
+    with open(args.rows_json, "r") as f:
+        data = json.load(f)
+    if isinstance(data, dict):
+        rows = data.get("rows", [])
+    elif isinstance(data, list):
+        rows = data
+    else:
+        raise SystemExit("rows_json must be a list or {rows: [...]} dict")
+
+    if args.limit:
+        rows = rows[: args.limit]
+
+    print(f"Loaded {len(rows)} row(s) from {args.rows_json}")
+
+    chain_filter = _build_filter(args)
+    result = fetch_for_rows(
+        rows,
+        strategy=args.strategy,
+        chain_filter=chain_filter,
+    )
+
+    print(f"\n✓ done")
+    print(f"  Rows attempted:        {result.rows_attempted}")
+    print(f"  Rows with legs:        {result.rows_with_legs}")
+    print(f"  Unique windows fetched: {result.unique_windows_fetched}")
+    print(f"  Total API calls:        {result.total_api_calls}")
+    print(f"  Total bars inserted:    {result.total_bars_inserted:,}")
+
+    failed = [r for r in result.rows if r.error]
+    if failed:
+        print(f"\n⚠ {len(failed)} row(s) had errors:")
+        for r in failed[:10]:
+            print(f"    {r.row_key}: {r.error}")
+        if len(failed) > 10:
+            print(f"    ... and {len(failed) - 10} more")
+
+    return 0
+
+
 def _cmd_inspect(args: argparse.Namespace) -> int:
     """Show what's cached for a contract without making any API calls."""
     existing = repo.get_windows_for_contract(args.opra)
@@ -202,6 +253,28 @@ def main(argv: list[str] | None = None) -> int:
                          help="end time, naive PT")
     _add_filter_args(p_fetch)
     p_fetch.set_defaults(func=_cmd_fetch)
+
+    # fetch-for-scan
+    p_scan = sub.add_parser(
+        "fetch-for-scan", parents=[common],
+        help="orchestrate pricing fetches for rows from a saved scan "
+             "(reads scan rows from a JSON file)",
+    )
+    p_scan.add_argument(
+        "--rows-json", required=True,
+        help="path to JSON file containing scan rows (a list or "
+             "an object with 'rows' key)",
+    )
+    p_scan.add_argument(
+        "--strategy", default="condor",
+        help="strategy name (default: condor)",
+    )
+    p_scan.add_argument(
+        "--limit", type=int, default=None,
+        help="optional: only process the first N rows",
+    )
+    _add_filter_args(p_scan)
+    p_scan.set_defaults(func=_cmd_fetch_for_scan)
 
     # inspect
     p_inspect = sub.add_parser(

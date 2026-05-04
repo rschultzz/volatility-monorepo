@@ -56,6 +56,12 @@ Typical usage:
         datetime(2024, 2, 2, 9, 30),
     )
 """
+from .condor import (
+    Leg,
+    condor_legs_for_row,
+    condor_pricing_window_for_row,
+    map_spx_strike_to_spy,
+)
 from .fetcher import fetch_chain, fetch_contract, fetch_contracts
 from .http_client import OratsError, OratsPermanentError, OratsTransientError
 from .models import (
@@ -72,6 +78,13 @@ from .models import (
     TimeRange,
 )
 from .opra import OpraSymbol, format_opra, parse_opra
+from .orchestrator import (
+    OrchestratorResult,
+    RowResult,
+    Strategy,
+    fetch_for_rows,
+    get_strategy,
+)
 
 __all__ = [
     # models
@@ -94,6 +107,17 @@ __all__ = [
     "fetch_chain",
     "fetch_contract",
     "fetch_contracts",
+    # condor / strategies
+    "Leg",
+    "condor_legs_for_row",
+    "condor_pricing_window_for_row",
+    "map_spx_strike_to_spy",
+    # orchestrator
+    "fetch_for_rows",
+    "get_strategy",
+    "OrchestratorResult",
+    "RowResult",
+    "Strategy",
     # errors
     "OratsError",
     "OratsTransientError",
