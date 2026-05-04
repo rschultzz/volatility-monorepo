@@ -908,6 +908,33 @@ def _build_gex_segments_for_session(
     if df_day is None or df_day.empty:
         return []
 
+    # Per-expiration breakdown — attached to each segment for the React chart's
+    # popup/legend. Falls back to empty lists on any error so the levels still
+    # render exactly as before.
+    try:
+        df_by_expir = _fetch_gex_grouped_by_level_and_expir(session_date)
+    except Exception:
+        df_by_expir = None
+
+    expirs_by_level: dict[float, list[dict]] = {}
+    if df_by_expir is not None and not df_by_expir.empty:
+        for lvl_val, group in df_by_expir.groupby("level"):
+            rows = []
+            for _, er in group.iterrows():
+                exp_raw = er["expir_date"]
+                exp_str = exp_raw.isoformat() if hasattr(exp_raw, "isoformat") else str(exp_raw)
+                dte_val = er.get("dte")
+                rows.append({
+                    "expir_date": exp_str,
+                    "dte":        int(dte_val) if pd.notna(dte_val) else None,
+                    "call_gamma": float(er["call_gamma"]),
+                    "put_gamma":  float(er["put_gamma"]),
+                    "net_gamma":  float(er["net_gamma"]),
+                })
+            # Sort chronologically so the popup/panel reads earliest-first
+            rows.sort(key=lambda x: x["expir_date"])
+            expirs_by_level[float(lvl_val)] = rows
+
     net_g = df_day["net_gamma"].to_numpy(dtype=float)
     cmin, cmax = _compute_color_span(net_g)
     denom = float(max(abs(cmin), abs(cmax), 1.0))
@@ -943,6 +970,7 @@ def _build_gex_segments_for_session(
             "color": _hex_to_rgba(color, line_opacity),
             "line_width": line_width,
             "opacity": line_opacity,
+            "expirations": expirs_by_level.get(lvl, []),
         })
 
     return out
@@ -1691,6 +1719,7 @@ def _build_react_smile_payload(
     times_sorted = sorted(times or [])
     
     traces = []
+    snapshots = []  # NEW: per-snapshot metadata for downstream features (sigma bands, condor strikes)
     
     prev_row = None
     prev_stock = None
@@ -1729,6 +1758,35 @@ def _build_react_smile_payload(
                 stock_now = float(stock_val) if stock_val is not None and not pd.isna(stock_val) else None
                 ts_et = pt_minute_to_et(trade_date, hhmm_pt)
                 T_now = _years_to_exp(ts_et, expiration_date)
+
+                # ── NEW: surface snapshot metadata for sigma-band drawing ──
+                # Sanity-filter IV at the same threshold we use elsewhere (>100% = bad data)
+                atm_iv_pct_filtered = None
+                try:
+                    vol50 = row_now.get("vol50")
+                    if vol50 is not None and not pd.isna(vol50):
+                        candidate = float(vol50) * 100.0
+                        if 0 < candidate <= 100:
+                            atm_iv_pct_filtered = round(candidate, 4)
+                except Exception:
+                    pass
+
+                # Compute remaining minutes to 0DTE expiration for time-scaled sigma
+                mins_to_expiry = None
+                if trade_date == expiration_date:
+                    try:
+                        mins_to_expiry = _minutes_to_exp_0dte(ts_et)
+                    except Exception:
+                        pass
+
+                snapshots.append({
+                    "time": hhmm_pt,
+                    "label": f"{hhmm_pt} PT",
+                    "stock_price": round(stock_now, 4) if stock_now is not None else None,
+                    "atm_iv_pct": atm_iv_pct_filtered,
+                    "minutes_to_expiry": int(mins_to_expiry) if mins_to_expiry is not None else None,
+                    "is_live": False,
+                })
 
                 if expected_on and prev_row is not None and prev_stock is not None and prev_T is not None and stock_now is not None:
                     try:
@@ -1784,6 +1842,36 @@ def _build_react_smile_payload(
                     stock_live = float(live_row.get("stock_price")) if not pd.isna(live_row.get("stock_price")) else None
                     live_T = _years_to_exp(now_et, expiration_date)
 
+                    # ── NEW: surface live snapshot metadata ──
+                    live_iv_filtered = None
+                    try:
+                        vol50_live = live_row.get("vol50")
+                        if vol50_live is not None and not pd.isna(vol50_live):
+                            candidate = float(vol50_live) * 100.0
+                            if 0 < candidate <= 100:
+                                live_iv_filtered = round(candidate, 4)
+                    except Exception:
+                        pass
+
+                    live_mins = None
+                    try:
+                        live_mins = _minutes_to_exp_0dte(now_et)
+                    except Exception:
+                        pass
+
+                    # Use a "Live" time label aligned with the now-pt timestamp so the
+                    # frontend can match it to the most recent ES bar.
+                    now_pt = now_et.astimezone(ZoneInfo("America/Los_Angeles"))
+                    live_hhmm = now_pt.strftime("%H:%M")
+                    snapshots.append({
+                        "time": live_hhmm,
+                        "label": "Live",
+                        "stock_price": round(stock_live, 4) if stock_live is not None else None,
+                        "atm_iv_pct": live_iv_filtered,
+                        "minutes_to_expiry": int(live_mins) if live_mins is not None else None,
+                        "is_live": True,
+                    })
+
                     if expected_on and ref_row is not None and ref_stock is not None and ref_T is not None and stock_live is not None:
                         try:
                             labels_exp_live, y_exp_live, atm_exp_pct_live = _expected_curve_shifted(
@@ -1807,7 +1895,7 @@ def _build_react_smile_payload(
                         except Exception: pass
         except Exception: pass
 
-    return {"traces": traces}, 200
+    return {"traces": traces, "snapshots": snapshots}, 200
 
 
 def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
@@ -1819,7 +1907,14 @@ def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
     else:
         level_expr = f"CAST(ROUND(discounted_level / {bucket}) * {bucket} AS INTEGER)"
 
-    where = ["trade_date = :d", "discounted_level IS NOT NULL"]
+    # Exclude already-expired contracts. The orats_oi_gamma table can carry rows
+    # where expir_date < trade_date (options that already expired but still have
+    # OI snapshotted from the prior session). Including them inflates levels with
+    # gamma that isn't actually live anymore — e.g. on a Tuesday chart, options
+    # that expired Monday should not draw a level. The per-expiration breakdown
+    # query (_fetch_gex_grouped_by_level_and_expir) uses the same filter so the
+    # popup's expirations sum to the line's headline number.
+    where = ["trade_date = :d", "discounted_level IS NOT NULL", "expir_date >= :d"]
     params: dict[str, object] = {"d": trade_date.isoformat()}
     if TICKER:
         where.append("ticker = :tkr")
@@ -1849,6 +1944,59 @@ def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
     df["net_gamma"] = df["call_gamma"] + df["put_gamma"]
     df["level"] = df["level"].astype(float)
     return df[["level", "call_gamma", "put_gamma", "net_gamma"]]
+
+
+def _fetch_gex_grouped_by_level_and_expir(trade_date: dt.date) -> pd.DataFrame:
+    """
+    Same level bucketing as _fetch_gex_grouped_by_level, but also broken down
+    by expir_date. Used to attach per-expiration detail to each GEX segment
+    so the React price chart can show what makes up each level.
+
+    Returns columns: level, expir_date, dte, call_gamma, put_gamma, net_gamma
+    """
+    dialect = engine.dialect.name
+    bucket = max(float(GEX_LEVEL_BUCKET), 1.0)
+
+    if dialect == "postgresql":
+        level_expr = f"(ROUND(discounted_level / {bucket}) * {bucket})::INT"
+    else:
+        level_expr = f"CAST(ROUND(discounted_level / {bucket}) * {bucket} AS INTEGER)"
+
+    # Match the aggregate query (_fetch_gex_grouped_by_level): exclude rows where
+    # expir_date < trade_date so expired-but-still-snapshotted contracts don't
+    # contribute. This keeps the popup's expiration breakdown summing to the line.
+    where = ["trade_date = :d", "discounted_level IS NOT NULL", "expir_date >= :d"]
+    params: dict[str, object] = {"d": trade_date.isoformat()}
+    if TICKER:
+        where.append("ticker = :tkr")
+        params["tkr"] = TICKER
+
+    sql = f"""
+        SELECT
+            {level_expr}                AS level,
+            expir_date                  AS expir_date,
+            MAX(dte)                    AS dte,
+            COALESCE(SUM(gex_call), 0)  AS call_gamma_raw,
+            COALESCE(SUM(gex_put),  0)  AS put_gamma_raw
+        FROM orats_oi_gamma
+        WHERE {" AND ".join(where)}
+        GROUP BY {level_expr}, expir_date
+        ORDER BY {level_expr}, expir_date
+    """
+
+    with engine.connect() as con:
+        df = pd.read_sql(text(sql), con, params=params)
+
+    if df.empty:
+        return pd.DataFrame(
+            columns=["level", "expir_date", "dte", "call_gamma", "put_gamma", "net_gamma"]
+        )
+
+    df["call_gamma"] = df["call_gamma_raw"].astype(float)
+    df["put_gamma"]  = -df["put_gamma_raw"].abs().astype(float)
+    df["net_gamma"]  = df["call_gamma"] + df["put_gamma"]
+    df["level"]      = df["level"].astype(float)
+    return df[["level", "expir_date", "dte", "call_gamma", "put_gamma", "net_gamma"]]
 
 
 def _color_for_net_gex(net_val: float, cmin: float, cmax: float) -> str:

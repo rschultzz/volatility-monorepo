@@ -142,6 +142,69 @@ h2 {
   max-width: 100%;
 }
 
+/* Tab bar inside the workspace card (Diagnostics / Instances) */
+.tab-bar {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  border-bottom: 1px solid #1f2937;
+  padding-bottom: 10px;
+  margin-bottom: 2px;
+}
+
+.tab-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 10px 10px 0 0;
+  border: 1px solid #1f2937;
+  border-bottom: none;
+  background: #0f172a;
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  position: relative;
+  top: 1px;
+}
+
+.tab-button:hover {
+  background: #111827;
+  color: #cbd5e1;
+  border-color: #334155;
+}
+
+.tab-button.active {
+  background: rgba(37, 99, 235, 0.14);
+  color: #e5e7eb;
+  border-color: #2563eb;
+  border-bottom: 2px solid #2563eb;
+}
+
+.tab-button.active:hover {
+  background: rgba(37, 99, 235, 0.20);
+}
+
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #1e293b;
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tab-button.active .tab-badge {
+  background: #2563eb;
+  color: white;
+}
+
 .error-banner {
   border: 1px solid #7f1d1d;
   background: rgba(127, 29, 29, 0.28);
@@ -190,13 +253,12 @@ h2 {
   gap: 14px;
 }
 
-/* Critical layout fix:
-   Diagnostics should size to content and never shrink underneath Instances.
-   Instances should be the pane that grows/shrinks. */
+/* Diagnostics and Instances each live in their own tab now, so both
+   should expand to fill available vertical space rather than competing. */
 .diag-card {
-  flex: 0 0 auto;
-  min-height: fit-content;
-  overflow: visible;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .results-card {

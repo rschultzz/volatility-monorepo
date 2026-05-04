@@ -1,10 +1,41 @@
 import React, { useMemo, useState, forwardRef, useImperativeHandle } from 'react';
+import ColumnFilterPopover from './ColumnFilterPopover';
+import { isFilterActive } from './columnFilters';
 
 function fmt(value, digits = 2) {
   if (value === null || value === undefined || value === '') return '—';
   const num = Number(value);
   if (Number.isNaN(num)) return String(value);
   return num.toFixed(digits);
+}
+
+// Render the gamma regime as a small color-coded chip.
+// positive (call-heavy / dealer-long-gamma) — green
+// negative (put-heavy  / dealer-short-gamma) — red
+// neutral / unknown — muted gray
+function regimeChip(regime) {
+  if (!regime || regime === 'unknown') return <span style={{ color: '#64748b' }}>—</span>;
+  const palette = {
+    positive: { bg: 'rgba(34, 197, 94, 0.18)', border: 'rgba(34, 197, 94, 0.35)', fg: '#bbf7d0' },
+    negative: { bg: 'rgba(239, 68, 68, 0.18)', border: 'rgba(239, 68, 68, 0.35)', fg: '#fecaca' },
+    neutral:  { bg: 'rgba(148, 163, 184, 0.16)', border: 'rgba(148, 163, 184, 0.30)', fg: '#cbd5e1' },
+  };
+  const p = palette[regime] || palette.neutral;
+  return (
+    <span style={{
+      display: 'inline-block',
+      padding: '2px 8px',
+      borderRadius: '999px',
+      fontSize: '10px',
+      fontWeight: 700,
+      textTransform: 'uppercase',
+      background: p.bg,
+      border: `1px solid ${p.border}`,
+      color: p.fg,
+    }}>
+      {regime}
+    </span>
+  );
 }
 
 function rowKey(row, idx) {
@@ -21,7 +52,7 @@ function tradeLabel(row) {
   return row.trade_entry_found ? 'Trade entered' : 'No trade';
 }
 
-const COLUMN_DATA_MAP = {
+export const COLUMN_DATA_MAP = {
   date: 'trade_date',
   direction: 'direction',
   source_zone: 'source_zone_low',
@@ -32,6 +63,14 @@ const COLUMN_DATA_MAP = {
   target_time: 'target_ts_pt',
   target_open: 'target_open',
   target_level: 'target_level',
+  target_level_gex: (row) => row.target_level_gex_bn,
+  target_gamma_regime: (row) => row.target_gamma_regime,
+  target_level_gex_all_exp: (row) => row.target_level_gex_bn_all_exp,
+  target_gamma_regime_all_exp: (row) => row.target_gamma_regime_all_exp,
+  source_zone_signed_gex: (row) => row.source_zone_signed_gex_bn,
+  source_zone_gamma_regime: (row) => row.source_zone_gamma_regime,
+  source_zone_signed_gex_all_exp: (row) => row.source_zone_signed_gex_bn_all,
+  source_zone_gamma_regime_all_exp: (row) => row.source_zone_gamma_regime_all,
   clean_space: 'clean_space_points',
   move_pts: 'move_points',
   bars: 'elapsed_bars',
@@ -61,10 +100,86 @@ const COLUMN_DATA_MAP = {
   prior_down_pts: 'prior_session_down_pts',
   prior_down_ratio: 'prior_down_vs_up_ratio',
   start_pct_range: 'start_pct_of_session_range',
+
+  // ── Study mode columns ──
+  skew_passed: 'skew_threshold_passed',
+  target_price: 'target_price',
+
+  fwd_30m_mfe:   (row) => row.forward_outcomes?.['30m']?.mfe_pts,
+  fwd_30m_mae:   (row) => row.forward_outcomes?.['30m']?.mae_pts,
+  fwd_30m_close: (row) => row.forward_outcomes?.['30m']?.close_pts,
+
+  fwd_60m_mfe:   (row) => row.forward_outcomes?.['60m']?.mfe_pts,
+  fwd_60m_mae:   (row) => row.forward_outcomes?.['60m']?.mae_pts,
+  fwd_60m_close: (row) => row.forward_outcomes?.['60m']?.close_pts,
+
+  fwd_90m_mfe:   (row) => row.forward_outcomes?.['90m']?.mfe_pts,
+  fwd_90m_mae:   (row) => row.forward_outcomes?.['90m']?.mae_pts,
+  fwd_90m_close: (row) => row.forward_outcomes?.['90m']?.close_pts,
+
+  fwd_120m_mfe:   (row) => row.forward_outcomes?.['120m']?.mfe_pts,
+  fwd_120m_mae:   (row) => row.forward_outcomes?.['120m']?.mae_pts,
+  fwd_120m_close: (row) => row.forward_outcomes?.['120m']?.close_pts,
+
+  fwd_180m_mfe:   (row) => row.forward_outcomes?.['180m']?.mfe_pts,
+  fwd_180m_mae:   (row) => row.forward_outcomes?.['180m']?.mae_pts,
+  fwd_180m_close: (row) => row.forward_outcomes?.['180m']?.close_pts,
+
+  fwd_eod_mfe:   (row) => row.forward_outcomes?.['eod']?.mfe_pts,
+  fwd_eod_mae:   (row) => row.forward_outcomes?.['eod']?.mae_pts,
+  fwd_eod_close: (row) => row.forward_outcomes?.['eod']?.close_pts,
+
+  // IV snapshot at entry (study mode)
+  iv_atm_0dte: (row) => row.iv?.atm_0dte_pct,
+
+  // SPX cash index level at target touch (used for condor strike sizing)
+  target_spx_price: (row) => row.target_spx_price,
+
+  // Minutes remaining in session at target touch
+  minutes_to_close: (row) => row.minutes_to_close,
+
+  // Skew deltas at target touch vs predicted (the signal that fired study-mode)
+  skew_delta_put:  (row) => row.skew_delta_put_pct,
+  skew_delta_call: (row) => row.skew_delta_call_pct,
+
+  // Realized vs implied at 120m (short-vol lens)
+  rvi_ratio_120m: (row) => row.realized_vs_implied?.['120m']?.close_over_1sigma,
+  rvi_inside_1s_120m: (row) => row.realized_vs_implied?.['120m']?.inside_1sigma,
+
+  // Realized vs implied at entry-to-close (uses each trade's actual minutes_to_close)
+  rvi_ratio_to_close:     (row) => row.realized_vs_implied?.['to_close']?.close_over_1sigma,
+  rvi_inside_1s_to_close: (row) => row.realized_vs_implied?.['to_close']?.inside_1sigma,
+
+  // Hypothetical 120m iron condor strikes
+  condor_short_put:  (row) => row.hypothetical_condor_120m?.short_put_strike,
+  condor_long_put:   (row) => row.hypothetical_condor_120m?.long_put_strike,
+  condor_short_call: (row) => row.hypothetical_condor_120m?.short_call_strike,
+  condor_long_call:  (row) => row.hypothetical_condor_120m?.long_call_strike,
+
+  // Hypothetical entry-to-close iron condor strikes
+  condor_to_close_short_put:  (row) => row.hypothetical_condor_to_close?.short_put_strike,
+  condor_to_close_long_put:   (row) => row.hypothetical_condor_to_close?.long_put_strike,
+  condor_to_close_short_call: (row) => row.hypothetical_condor_to_close?.short_call_strike,
+  condor_to_close_long_call:  (row) => row.hypothetical_condor_to_close?.long_call_strike,
 };
 
-const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns }, ref) => {
+const ResultsTable = forwardRef(({
+  rows,
+  selectedRowKey,
+  onSelectRow,
+  columns,
+  // Optional column-filter integration. When provided, render filter icons
+  // in column headers and open a popover on click.
+  columnFilters = null,        // { [columnId]: filterObject }
+  onColumnFilterChange = null, // (columnId, filterObject | null) => void
+  filterTypeForColumn = null,  // (columnId) => 'numeric'|'date'|'categorical'|null
+}, ref) => {
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
+  // Filter popover state (which column is open, and the anchor rect for positioning)
+  const [openFilterColumnId, setOpenFilterColumnId] = useState(null);
+  const [openFilterAnchorRect, setOpenFilterAnchorRect] = useState(null);
+
+  const filtersEnabled = Boolean(columnFilters && onColumnFilterChange && filterTypeForColumn);
 
   const handleSort = (colId) => {
     let direction = 'asc';
@@ -130,6 +245,38 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
                 break;
               case 'target_level':
                 val = `${fmt(row.target_level)}${row.target_zone_range ? ' (' + row.target_zone_range + ')' : ''}`;
+                break;
+              case 'target_level_gex': {
+                const v = row.target_level_gex_bn;
+                val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'target_level_gex_all_exp': {
+                const v = row.target_level_gex_bn_all_exp;
+                val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'target_gamma_regime':
+                val = row.target_gamma_regime || '';
+                break;
+              case 'target_gamma_regime_all_exp':
+                val = row.target_gamma_regime_all_exp || '';
+                break;
+              case 'source_zone_signed_gex': {
+                const v = row.source_zone_signed_gex_bn;
+                val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'source_zone_signed_gex_all_exp': {
+                const v = row.source_zone_signed_gex_bn_all;
+                val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'source_zone_gamma_regime':
+                val = row.source_zone_gamma_regime || '';
+                break;
+              case 'source_zone_gamma_regime_all_exp':
+                val = row.source_zone_gamma_regime_all || '';
                 break;
               case 'consol_mins':
                 val = `${row.consolidation_minutes_observed ?? ''}${row.consolidation_end_ts_pt ? ' ' + row.consolidation_end_ts_pt : ''}`;
@@ -234,6 +381,44 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
             <div className="subcell">{row.target_zone_range}</div>
           </>
         );
+      case 'target_level_gex': {
+        const v = row.target_level_gex_bn;
+        if (v === null || v === undefined) return '—';
+        const sign = v > 0 ? '+' : '';
+        // Green = positive GEX (dealers long gamma → resistance/pin expected)
+        // Red   = negative GEX (dealers short gamma → acceleration expected)
+        const color = v > 0 ? '#86efac' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
+      }
+      case 'target_level_gex_all_exp': {
+        const v = row.target_level_gex_bn_all_exp;
+        if (v === null || v === undefined) return '—';
+        const sign = v > 0 ? '+' : '';
+        const color = v > 0 ? '#86efac' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
+      }
+      case 'target_gamma_regime':
+        return regimeChip(row.target_gamma_regime);
+      case 'target_gamma_regime_all_exp':
+        return regimeChip(row.target_gamma_regime_all_exp);
+      case 'source_zone_signed_gex': {
+        const v = row.source_zone_signed_gex_bn;
+        if (v === null || v === undefined) return '—';
+        const sign = v > 0 ? '+' : '';
+        const color = v > 0 ? '#86efac' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
+      }
+      case 'source_zone_signed_gex_all_exp': {
+        const v = row.source_zone_signed_gex_bn_all;
+        if (v === null || v === undefined) return '—';
+        const sign = v > 0 ? '+' : '';
+        const color = v > 0 ? '#86efac' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
+      }
+      case 'source_zone_gamma_regime':
+        return regimeChip(row.source_zone_gamma_regime);
+      case 'source_zone_gamma_regime_all_exp':
+        return regimeChip(row.source_zone_gamma_regime_all);
       case 'clean_space': return fmt(row.clean_space_points);
       case 'move_pts': return fmt(row.move_points);
       case 'bars': return row.elapsed_bars;
@@ -291,9 +476,198 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
       case 'start_pct_range': {
         const pct = row.start_pct_of_session_range;
         if (pct === null || pct === undefined) return '—';
-        const color = pct < 0.25 ? '#fca5a5' : pct < 0.45 ? '#fcd34d' : '#86efac';
+        // Target's % of session range, asymmetric by direction:
+        //   up→short wants target high in range (≥ 0.70 = green, ≤ 0.50 = red)
+        //   down→long wants target low in range  (≤ 0.30 = green, ≥ 0.50 = red)
+        const isDown = row.direction === 'down';
+        const good = isDown ? pct <= 0.30 : pct >= 0.70;
+        const bad  = isDown ? pct >= 0.50 : pct <= 0.50;
+        const color = good ? '#86efac' : bad ? '#fca5a5' : '#fcd34d';
         return <span style={{ color }}>{(pct * 100).toFixed(1)}%</span>;
       }
+
+      // ── Study mode columns ──
+      case 'skew_passed': {
+        if (row.skew_threshold_passed === null || row.skew_threshold_passed === undefined) return '—';
+        return row.skew_threshold_passed
+          ? <span style={{ color: '#86efac', fontWeight: 700 }}>✓</span>
+          : <span style={{ color: '#fca5a5', fontWeight: 700 }}>✗</span>;
+      }
+      case 'target_price': return fmt(row.target_price);
+
+      // Close columns: color green if > 0, red if < 0
+      case 'fwd_30m_close':
+      case 'fwd_60m_close':
+      case 'fwd_90m_close':
+      case 'fwd_120m_close':
+      case 'fwd_180m_close':
+      case 'fwd_eod_close': {
+        const horizonKey = col.id === 'fwd_eod_close' ? 'eod' : col.id.replace('fwd_', '').replace('_close', '');
+        const v = row.forward_outcomes?.[horizonKey]?.close_pts;
+        if (v === null || v === undefined) return '—';
+        const color = v > 0 ? '#86efac' : v < 0 ? '#fca5a5' : '#e5e7eb';
+        return <span style={{ color, fontWeight: 600 }}>{fmt(v)}</span>;
+      }
+
+      // MFE columns: always positive favorable, show in green if > 0
+      case 'fwd_30m_mfe':
+      case 'fwd_60m_mfe':
+      case 'fwd_90m_mfe':
+      case 'fwd_120m_mfe':
+      case 'fwd_180m_mfe':
+      case 'fwd_eod_mfe': {
+        const horizonKey = col.id === 'fwd_eod_mfe' ? 'eod' : col.id.replace('fwd_', '').replace('_mfe', '');
+        const v = row.forward_outcomes?.[horizonKey]?.mfe_pts;
+        if (v === null || v === undefined) return '—';
+        const color = v > 0 ? '#86efac' : '#94a3b8';
+        return <span style={{ color }}>{fmt(v)}</span>;
+      }
+
+      // MAE columns: adverse magnitude (positive number), show in amber/red proportional
+      case 'fwd_30m_mae':
+      case 'fwd_60m_mae':
+      case 'fwd_90m_mae':
+      case 'fwd_120m_mae':
+      case 'fwd_180m_mae':
+      case 'fwd_eod_mae': {
+        const horizonKey = col.id === 'fwd_eod_mae' ? 'eod' : col.id.replace('fwd_', '').replace('_mae', '');
+        const v = row.forward_outcomes?.[horizonKey]?.mae_pts;
+        if (v === null || v === undefined) return '—';
+        const color = v > 0 ? '#fca5a5' : '#94a3b8';
+        return <span style={{ color }}>{fmt(v)}</span>;
+      }
+
+      // IV at entry (0DTE ATM) — plain numeric, no color prejudice
+      case 'iv_atm_0dte': {
+        const v = row.iv?.atm_0dte_pct;
+        if (v === null || v === undefined) return '—';
+        return <span>{fmt(v, 2)}</span>;
+      }
+
+      // SPX cash level at target touch (from ORATS monies)
+      case 'target_spx_price': {
+        const v = row.target_spx_price;
+        if (v === null || v === undefined) return '—';
+        return <span>{fmt(v, 2)}</span>;
+      }
+
+      // Minutes remaining in session. Color-coded for tradable window:
+      // red if < 30m (tight theta window, may not be worth it)
+      // amber if 30-60m (usable but compressed)
+      // green if 60m+ (ample time for a 0DTE condor to work)
+      case 'minutes_to_close': {
+        const v = row.minutes_to_close;
+        if (v === null || v === undefined) return '—';
+        const color = v < 30 ? '#fca5a5' : v < 60 ? '#fcd34d' : '#86efac';
+        return <span style={{ color, fontWeight: 600 }}>{v}</span>;
+      }
+
+      // Skew delta on puts (observed vs predicted, in %).
+      // For up-move shorts, higher positive = stronger "dealers bidding puts" signal.
+      // Color-coded by magnitude, sign-neutral (both directions informative).
+      case 'skew_delta_put': {
+        const v = row.skew_delta_put_pct;
+        if (v === null || v === undefined) return '—';
+        const mag = Math.abs(v);
+        const color = mag >= 100 ? '#86efac' : mag >= 50 ? '#fcd34d' : '#94a3b8';
+        const sign = v > 0 ? '+' : '';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}%</span>;
+      }
+
+      // Skew delta on calls (observed vs predicted, in %).
+      // For up-move shorts, threshold is the ceiling — large positive values
+      // mean call-side is also being bid (less clean signal).
+      case 'skew_delta_call': {
+        const v = row.skew_delta_call_pct;
+        if (v === null || v === undefined) return '—';
+        const mag = Math.abs(v);
+        const color = mag >= 100 ? '#fcd34d' : '#94a3b8';
+        const sign = v > 0 ? '+' : '';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}%</span>;
+      }
+
+      // Realized vs implied at 120m: |close| / implied_1sigma
+      // Color green if <1 (realized tighter than priced), red if >=1
+      case 'rvi_ratio_120m': {
+        const v = row.realized_vs_implied?.['120m']?.close_over_1sigma;
+        if (v === null || v === undefined) return '—';
+        const color = v < 1.0 ? '#86efac' : v < 2.0 ? '#fcd34d' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{fmt(v, 2)}</span>;
+      }
+
+      // Inside ±1σ at 120m: ✓ if price stayed within the implied band
+      case 'rvi_inside_1s_120m': {
+        const v = row.realized_vs_implied?.['120m']?.inside_1sigma;
+        if (v === null || v === undefined) return '—';
+        return v
+          ? <span style={{ color: '#86efac', fontWeight: 700 }}>✓</span>
+          : <span style={{ color: '#fca5a5', fontWeight: 700 }}>✗</span>;
+      }
+
+      // Realized vs implied at entry-to-close: |close|/1σ over the actual trade window
+      case 'rvi_ratio_to_close': {
+        const v = row.realized_vs_implied?.['to_close']?.close_over_1sigma;
+        if (v === null || v === undefined) return '—';
+        const color = v < 1.0 ? '#86efac' : v < 2.0 ? '#fcd34d' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{fmt(v, 2)}</span>;
+      }
+
+      // Inside ±1σ at entry-to-close: ✓ if close at session end was within the implied band
+      case 'rvi_inside_1s_to_close': {
+        const v = row.realized_vs_implied?.['to_close']?.inside_1sigma;
+        if (v === null || v === undefined) return '—';
+        return v
+          ? <span style={{ color: '#86efac', fontWeight: 700 }}>✓</span>
+          : <span style={{ color: '#fca5a5', fontWeight: 700 }}>✗</span>;
+      }
+
+      // Hypothetical 120m iron condor strikes.
+      // Short strikes colored (amber) — they're the ones the trade "stays below/above"
+      // Long strikes faded — they're the defensive wings.
+      case 'condor_short_put': {
+        const v = row.hypothetical_condor_120m?.short_put_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#fcd34d', fontWeight: 600 }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_short_call': {
+        const v = row.hypothetical_condor_120m?.short_call_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#fcd34d', fontWeight: 600 }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_long_put': {
+        const v = row.hypothetical_condor_120m?.long_put_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#94a3b8' }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_long_call': {
+        const v = row.hypothetical_condor_120m?.long_call_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#94a3b8' }}>{fmt(v, 0)}</span>;
+      }
+
+      // Hypothetical entry-to-close iron condor strikes (sized to actual minutes_to_close).
+      // Same color treatment as the 120m version — short strikes amber, longs faded.
+      case 'condor_to_close_short_put': {
+        const v = row.hypothetical_condor_to_close?.short_put_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#fcd34d', fontWeight: 600 }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_to_close_short_call': {
+        const v = row.hypothetical_condor_to_close?.short_call_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#fcd34d', fontWeight: 600 }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_to_close_long_put': {
+        const v = row.hypothetical_condor_to_close?.long_put_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#94a3b8' }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_to_close_long_call': {
+        const v = row.hypothetical_condor_to_close?.long_call_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#94a3b8' }}>{fmt(v, 0)}</span>;
+      }
+
       default: return null;
     }
   };
@@ -308,19 +682,72 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
             {visibleColumns.map(col => {
               const isSortable = col.id !== 'select';
               const isSorted = sortConfig.key === col.id;
-              
+              const colFilterType = filtersEnabled ? filterTypeForColumn(col.id) : null;
+              const colFilter = filtersEnabled ? columnFilters[col.id] : null;
+              const colFilterActive = filtersEnabled && isFilterActive(colFilter);
+
               return (
-                <th 
+                <th
                   key={col.id}
                   className={isSortable ? 'sortable-header' : ''}
                   onClick={() => isSortable && handleSort(col.id)}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    {col.label}
+                    <span style={{ flex: 1 }}>{col.label}</span>
                     {isSorted && (
                       <span className="sort-indicator">
                         {sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}
                       </span>
+                    )}
+                    {colFilterType && (
+                      <button
+                        type="button"
+                        className="filter-icon-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          if (openFilterColumnId === col.id) {
+                            setOpenFilterColumnId(null);
+                            setOpenFilterAnchorRect(null);
+                          } else {
+                            setOpenFilterColumnId(col.id);
+                            setOpenFilterAnchorRect(rect);
+                          }
+                        }}
+                        title={colFilterActive ? 'Edit filter' : 'Add filter'}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: 2,
+                          cursor: 'pointer',
+                          color: colFilterActive ? '#3b82f6' : '#475569',
+                          fontSize: 12,
+                          lineHeight: 1,
+                          position: 'relative',
+                        }}
+                      >
+                        {/* Funnel SVG */}
+                        <svg
+                          width="11" height="11"
+                          viewBox="0 0 24 24"
+                          fill={colFilterActive ? 'currentColor' : 'none'}
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+                        </svg>
+                        {colFilterActive && (
+                          <span style={{
+                            position: 'absolute',
+                            top: 0, right: 0,
+                            width: 6, height: 6,
+                            borderRadius: '50%',
+                            background: '#3b82f6',
+                          }} />
+                        )}
+                      </button>
                     )}
                   </div>
                 </th>
@@ -343,6 +770,26 @@ const ResultsTable = forwardRef(({ rows, selectedRowKey, onSelectRow, columns },
           })}
         </tbody>
       </table>
+      {filtersEnabled && openFilterColumnId && (() => {
+        const colDef = visibleColumns.find(c => c.id === openFilterColumnId);
+        if (!colDef) return null;
+        const t = filterTypeForColumn(openFilterColumnId);
+        if (!t) return null;
+        return (
+          <ColumnFilterPopover
+            filterType={t}
+            filter={columnFilters[openFilterColumnId]}
+            anchorRect={openFilterAnchorRect}
+            columnLabel={colDef.label}
+            columnId={openFilterColumnId}
+            rows={rows}
+            dataMap={COLUMN_DATA_MAP}
+            onChange={(next) => onColumnFilterChange(openFilterColumnId, next)}
+            onClear={() => onColumnFilterChange(openFilterColumnId, null)}
+            onClose={() => { setOpenFilterColumnId(null); setOpenFilterAnchorRect(null); }}
+          />
+        );
+      })()}
     </div>
   );
 });

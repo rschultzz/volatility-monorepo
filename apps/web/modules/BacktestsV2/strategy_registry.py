@@ -46,6 +46,10 @@ def _base_defaults() -> Dict[str, Any]:
         "longTrailActivateProfitPts": 20.0,
         "longTrailingStopPts": 10.0,
         "longTakeProfitPts": 35.0,
+        "bypassFilters": [],
+        "executionMode": "managed",
+        "forwardHorizonsMinutes": [30, 60, 90, 120, 180],
+        "condorWingWidthPts": 10.0,
     }
 
 

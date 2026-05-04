@@ -30,9 +30,10 @@ Requirements:
     pip install databento python-dotenv sqlalchemy psycopg pandas
 
 Usage:
-    python backfill_databento_es.py                # interactive, asks to confirm
+    python backfill_databento_es.py                # interactive, default 2025 range
     python backfill_databento_es.py --dry-run      # show plan, don't execute
     python backfill_databento_es.py --yes          # skip confirmation (careful!)
+    python backfill_databento_es.py --start-date 2024-01-01 --end-date 2025-01-01
 """
 
 import argparse
@@ -231,11 +232,27 @@ def populate_minutes(engine) -> int:
 
 # --- Main -----------------------------------------------------------------
 def main() -> None:
-    p = argparse.ArgumentParser(description="Backfill 1yr of ES 1-min OHLCV from Databento.")
+    global BACKFILL_START, BACKFILL_END
+
+    p = argparse.ArgumentParser(description="Backfill ES 1-min OHLCV from Databento.")
     p.add_argument("--env", default=".env", help="Path to .env file")
     p.add_argument("--dry-run", action="store_true", help="Show plan, don't execute")
     p.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
+    p.add_argument("--start-date", default=None,
+                   help=f"Override BACKFILL_START (YYYY-MM-DD, inclusive). "
+                        f"Default: {BACKFILL_START.date()}")
+    p.add_argument("--end-date", default=None,
+                   help=f"Override BACKFILL_END (YYYY-MM-DD, exclusive). "
+                        f"Default: {BACKFILL_END.date()}")
     args = p.parse_args()
+
+    # Apply CLI overrides for the backfill range
+    if args.start_date:
+        BACKFILL_START = datetime.strptime(args.start_date, "%Y-%m-%d")
+    if args.end_date:
+        BACKFILL_END = datetime.strptime(args.end_date, "%Y-%m-%d")
+    if BACKFILL_START >= BACKFILL_END:
+        sys.exit("ERROR: --start-date must be earlier than --end-date.")
 
     env_path = Path(args.env)
     if env_path.exists():
@@ -355,10 +372,11 @@ def main() -> None:
     print("SUMMARY")
     print("=" * 92)
     bars, minutes = preflight_counts(engine)
+    range_label = f"{BACKFILL_START.date()}..{BACKFILL_END.date()}"
     print(f"  {BARS_TABLE:30} total={bars[0]:>8,}  "
-          f"2025_backfill={bars[1]:>8,}  >=2026={bars[2]:>8,}")
+          f"in_range[{range_label}]={bars[1]:>8,}  after_range={bars[2]:>8,}")
     print(f"  {MINUTES_TABLE:30} total={minutes[0]:>8,}  "
-          f"2025_backfill={minutes[1]:>8,}  >=2026={minutes[2]:>8,}")
+          f"in_range[{range_label}]={minutes[1]:>8,}  after_range={minutes[2]:>8,}")
     print(f"\n  Databento rows inserted: {total_inserted:,}")
     print(f"  Backfill complete.\n")
 

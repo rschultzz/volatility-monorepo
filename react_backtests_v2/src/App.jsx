@@ -3,6 +3,15 @@ import SettingsModal from './components/SettingsModal';
 import ResultsTable from './components/ResultsTable';
 import DiagnosticsPanel from './components/DiagnosticsPanel';
 import ColumnSettingsModal from './components/ColumnSettingsModal';
+import TradeLog from './components/TradeLog';   // ← NEW
+import SavedScans from './components/SavedScans.jsx'; // ← NEW
+import {
+  DEFAULT_COLUMNS,
+  MANAGED_ONLY_COLUMNS,
+  STUDY_ONLY_COLUMNS,
+  computeEffectiveColumns,
+  mergeColumnsWithDefaults,
+} from './components/columnsConfig';
 
 function isoDateOffset(days) {
   const d = new Date();
@@ -42,50 +51,13 @@ const FALLBACK_DEFAULT_SETTINGS = {
   longTrailActivateProfitPts: 20.0,
   longTrailingStopPts: 10.0,
   longTakeProfitPts: 35.0,
+  bypassFilters: [],
+  executionMode: 'managed',
+  forwardHorizonsMinutes: [30, 60, 90, 120, 180],
+  condorWingWidthPts: 10.0,
 };
 
-const DEFAULT_COLUMNS = [
-  { id: 'select', label: 'Select', visible: true, alwaysVisible: true },
-  { id: 'date', label: 'Date', visible: true },
-  { id: 'direction', label: 'Dir', visible: true },
-  { id: 'source_zone', label: 'Source Zone', visible: true },
-  { id: 'zone_levels', label: 'Zone Levels', visible: true, className: 'wrap-cell' },
-  { id: 'start_time', label: 'Start Time (PT)', visible: true },
-  { id: 'start_open', label: 'Start Open', visible: true },
-  { id: 'pivot_px', label: 'Pivot Px', visible: true },
-  { id: 'target_time', label: 'Target Time (PT)', visible: true },
-  { id: 'target_open', label: 'Target Open', visible: true },
-  { id: 'target_level', label: 'Target Level', visible: true },
-  { id: 'clean_space', label: 'Clean Space', visible: true },
-  { id: 'move_pts', label: 'Move Pts', visible: true },
-  { id: 'bars', label: 'Bars', visible: true },
-  { id: 'consol_mins', label: 'Consol. Mins', visible: true },
-  { id: 'setup', label: 'Setup', visible: true },
-  { id: 'signal_time', label: 'Signal Time (PT)', visible: true },
-  { id: 'signal_px', label: 'Signal Px', visible: true },
-  { id: 'put_skew', label: 'Δ Put Skew %', visible: true },
-  { id: 'call_skew', label: 'Δ Call Skew %', visible: true },
-  { id: 'trade', label: 'Trade', visible: true },
-  { id: 'range_high', label: 'Range High', visible: true },
-  { id: 'range_low', label: 'Range Low', visible: true },
-  { id: 'entry_band', label: 'Entry Band Floor', visible: true },
-  { id: 'entry_time', label: 'Entry Time (PT)', visible: true },
-  { id: 'entry_px', label: 'Entry Px', visible: true },
-  { id: 'init_stop', label: 'Init Stop', visible: true },
-  { id: 'take_profit', label: 'Take Profit', visible: true },
-  { id: 'trailing_stop', label: 'Trailing Stop', visible: true },
-  { id: 'exit_time', label: 'Exit Time (PT)', visible: true },
-  { id: 'exit_px', label: 'Exit Px', visible: true },
-  { id: 'exit_reason', label: 'Exit Reason', visible: true },
-  { id: 'realized_pts', label: 'Realized Pts', visible: true },
-  { id: 'mfe', label: 'MFE', visible: true },
-  { id: 'mae', label: 'MAE', visible: true },
-  { id: 'outcome', label: 'Outcome', visible: true },
-  { id: 'reason', label: 'Reason', visible: true, className: 'wrap-cell' },
-  { id: 'prior_down_pts', label: 'Prior Down (pts)', visible: true },
-  { id: 'prior_down_ratio', label: 'Down/Up Ratio', visible: true },
-  { id: 'start_pct_range', label: 'Start % of Range', visible: true },
-];
+
 
 const COLUMNS_STORAGE_KEY = 'bt2-results-table-columns';
 
@@ -129,6 +101,14 @@ function normalizeNumericSettings(nextSettings) {
     longTrailActivateProfitPts: Number(nextSettings.longTrailActivateProfitPts),
     longTrailingStopPts: Number(nextSettings.longTrailingStopPts),
     longTakeProfitPts: Number(nextSettings.longTakeProfitPts),
+    bypassFilters: nextSettings.bypassFilters || [],
+    executionMode: nextSettings.executionMode || 'managed',
+    forwardHorizonsMinutes: Array.isArray(nextSettings.forwardHorizonsMinutes)
+      ? nextSettings.forwardHorizonsMinutes.map(Number).filter(n => Number.isFinite(n) && n > 0)
+      : [30, 60, 90, 120, 180],
+    condorWingWidthPts: Number.isFinite(Number(nextSettings.condorWingWidthPts)) && Number(nextSettings.condorWingWidthPts) > 0
+      ? Number(nextSettings.condorWingWidthPts)
+      : 10.0,
   };
 }
 
@@ -145,19 +125,13 @@ export default function App() {
   });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isColumnsOpen, setIsColumnsOpen] = useState(false);
-  
+  const [activeTab, setActiveTab] = useState('saved_scans');
+
   const [columns, setColumns] = useState(() => {
     const saved = localStorage.getItem(COLUMNS_STORAGE_KEY);
     if (saved) {
       try {
-        const parsed = JSON.parse(saved);
-        const merged = DEFAULT_COLUMNS.map(def => {
-          const found = parsed.find(p => p.id === def.id);
-          return found ? { ...def, ...found } : def;
-        });
-        const sorted = parsed.map(p => merged.find(m => m.id === p.id)).filter(Boolean);
-        const missing = merged.filter(m => !sorted.find(s => s.id === m.id));
-        return [...sorted, ...missing];
+        return mergeColumnsWithDefaults(JSON.parse(saved));
       } catch (e) {
         return DEFAULT_COLUMNS;
       }
@@ -168,6 +142,7 @@ export default function App() {
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState(null);
   const [diagnostics, setDiagnostics] = useState(null);
+  const [funnel, setFunnel] = useState([]);
   const [loading, setLoading] = useState(false);
   const [savingDefaults, setSavingDefaults] = useState(false);
   const [creatingStrategy, setCreatingStrategy] = useState(false);
@@ -178,6 +153,12 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(columns));
   }, [columns]);
+
+  const effectiveExecutionMode = settings?.executionMode || 'managed';
+  const effectiveColumns = useMemo(
+    () => computeEffectiveColumns(columns, effectiveExecutionMode),
+    [columns, effectiveExecutionMode]
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -214,16 +195,12 @@ export default function App() {
         if (!isMounted) return;
         setError(err.message || 'Could not load strategies');
       } finally {
-        if (isMounted) {
-          setBootstrapping(false);
-        }
+        if (isMounted) setBootstrapping(false);
       }
     }
 
     loadStrategies();
-    return () => {
-      isMounted = false;
-    };
+    return () => { isMounted = false; };
   }, []);
 
   function updateDraft(name, value) {
@@ -285,6 +262,7 @@ export default function App() {
       setRows(data.rows || []);
       setSummary(data.summary || null);
       setDiagnostics(data.diagnostics || null);
+      setFunnel(data.funnel || []);
       setSelectedRowKey(null);
       setIsSettingsOpen(false);
     } catch (err) {
@@ -388,81 +366,83 @@ export default function App() {
     }
   }
 
+  // Trade Log tab doesn't use the strategy toolbar, so hide it when active
+  const showStrategyToolbar = activeTab !== 'trade_log' && activeTab !== 'saved_scans';
+
   return (
     <div className="page">
       <div className="workspace-card">
         {error ? <div className="error-banner">{error}</div> : null}
 
-        <div className="results-header" style={{ alignItems: 'center', marginBottom: 0, padding: '4px 0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1 }}>
-            <select
-              value={selectedStrategyKey}
-              onChange={(e) => applyStrategyDefaults(e.target.value)}
-              disabled={bootstrapping || loading}
-              style={{
-                backgroundColor: '#111827',
-                border: '1px solid #374151',
-                color: 'white',
-                borderRadius: '6px',
-                padding: '6px 10px',
-                fontSize: '13px'
-              }}
-            >
-              {strategies.map((s) => (
-                <option key={s.key} value={s.key}>{s.displayName || s.label}</option>
-              ))}
-            </select>
-          </div>
-          
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => setIsColumnsOpen(true)}>
-              ⚙️ Columns
-            </button>
-            <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => setIsSettingsOpen(true)}>
-              Settings
-            </button>
-            <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={handleSaveDefaults} disabled={savingDefaults}>
-              {savingDefaults ? 'Saving…' : 'Save'}
-            </button>
-            <button className="primary-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => runScan(settings)} disabled={loading}>
-              {loading ? 'Running…' : 'Run Scan'}
-            </button>
-          </div>
-        </div>
-
-        <DiagnosticsPanel diagnostics={diagnostics} rows={rows} />
-
-        <div className="results-card" style={{ flex: 1 }}>
-          <div className="results-header">
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-              <h2 style={{ fontSize: 16 }}>Instances</h2>
-              <span style={{ color: '#64748b', fontSize: 12 }}>{rows.length} trades found</span>
-              <button 
-                className="ghost-button" 
-                style={{ 
-                  padding: '4px 10px', 
-                  fontSize: '12px', 
-                  marginLeft: '4px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px'
-                }} 
-                onClick={() => tableRef.current?.downloadCSV()}
-                disabled={!rows.length}
+        {/* Strategy selector + action buttons — hidden on Trade Log tab */}
+        {showStrategyToolbar && (
+          <div className="results-header" style={{ alignItems: 'center', marginBottom: 0, padding: '4px 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1 }}>
+              <select
+                value={selectedStrategyKey}
+                onChange={(e) => applyStrategyDefaults(e.target.value)}
+                disabled={bootstrapping || loading}
+                style={{
+                  backgroundColor: '#111827',
+                  border: '1px solid #374151',
+                  color: 'white',
+                  borderRadius: '6px',
+                  padding: '6px 10px',
+                  fontSize: '13px'
+                }}
               >
-                📥 CSV
+                {strategies.map((s) => (
+                  <option key={s.key} value={s.key}>{s.displayName || s.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => setIsColumnsOpen(true)}>
+                ⚙️ Columns
+              </button>
+              <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => setIsSettingsOpen(true)}>
+                Settings
+              </button>
+              <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={handleSaveDefaults} disabled={savingDefaults}>
+                {savingDefaults ? 'Saving…' : 'Save'}
+              </button>
+              <button className="primary-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => runScan(settings)} disabled={loading}>
+                {loading ? 'Running…' : 'Run Scan'}
               </button>
             </div>
           </div>
+        )}
 
-          <ResultsTable
-            ref={tableRef}
-            rows={rows}
-            selectedRowKey={selectedRowKey}
-            onSelectRow={handleSelectRow}
-            columns={columns}
-          />
+        {/* Tab bar */}
+        <div className="tab-bar">
+          <button
+            className={`tab-button ${activeTab === 'saved_scans' ? 'active' : ''}`}
+            onClick={() => setActiveTab('saved_scans')}
+          >
+            Saved Scans
+          </button>
+          <button
+            className={`tab-button ${activeTab === 'trade_log' ? 'active' : ''}`}
+            onClick={() => setActiveTab('trade_log')}
+          >
+            Trade Log
+          </button>
         </div>
+
+        {/* Saved Scans tab — uses the same row-selection handler so picking
+            a saved-scan row drives the price chart + smile snapshots the
+            same way the live Instances tab does. */}
+        {activeTab === 'saved_scans' && (
+          <SavedScans
+            onSelectRow={handleSelectRow}
+          />
+        )}
+
+        {/* Trade Log tab — TradeLog is fully self-contained */}
+        {activeTab === 'trade_log' && (
+          <TradeLog />
+        )}
       </div>
 
       <SettingsModal
@@ -475,6 +455,14 @@ export default function App() {
         onChange={updateDraft}
         onClose={() => setIsSettingsOpen(false)}
         onRun={() => runScan(settingsDraft)}
+        bypassFilters={settingsDraft.bypassFilters || []}
+        onToggleBypass={(stageKey) => {
+          const current = settingsDraft.bypassFilters || [];
+          const next = current.includes(stageKey)
+            ? current.filter(k => k !== stageKey)
+            : [...current, stageKey];
+          updateDraft('bypassFilters', next);
+        }}
       />
 
       <ColumnSettingsModal

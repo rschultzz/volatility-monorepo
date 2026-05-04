@@ -45,6 +45,7 @@ from modules.BacktestsV2.routes import (
     register_backtests_v2_routes,
     get_backtests_v2_selection_since,
 )
+from modules.TradeLog.routes import trade_log_bp
 
 # ===== IDs =====
 CLOCK_ID = "CLOCK"
@@ -185,6 +186,7 @@ def mirror_live_data(data):
 
 # Mount the React Backtests app + API routes
 register_backtests_v2_routes(server, REPO_ROOT)
+server.register_blueprint(trade_log_bp)
 
 # Mount the React Price Chart preview
 REACT_PREVIEW_DIST_DIR = (REPO_ROOT / "react_price_preview" / "dist").resolve()

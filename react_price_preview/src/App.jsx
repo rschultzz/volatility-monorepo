@@ -19,6 +19,45 @@ function cleanBaseUrl(value) {
   return s.replace(/\/+$/, '')
 }
 
+// PT timezone helpers (shared with PriceChart). Kept local to avoid cross-file imports.
+function partsForZoneLocal(epochSec, timeZone = 'America/Los_Angeles') {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(epochSec * 1000))
+  const out = {}
+  for (const p of parts) {
+    if (p.type !== 'literal') out[p.type] = p.value
+  }
+  return out
+}
+
+function utcEpochToPtHHMM(epochSec) {
+  if (!Number.isFinite(Number(epochSec))) return null
+  const p = partsForZoneLocal(Number(epochSec), 'America/Los_Angeles')
+  return `${p.hour}:${p.minute}`
+}
+
+function utcEpochShowingZoneTime(epochSec, timeZone = 'America/Los_Angeles') {
+  const p = partsForZoneLocal(epochSec, timeZone)
+  return Math.floor(
+    Date.UTC(
+      Number(p.year),
+      Number(p.month) - 1,
+      Number(p.day),
+      Number(p.hour),
+      Number(p.minute),
+      Number(p.second)
+    ) / 1000
+  )
+}
+
 function inferApiBase() {
   const params = new URLSearchParams(window.location.search)
 
@@ -413,7 +452,7 @@ export default function App() {
   const flowHistAlpha = parseFloatOrNull(params.get('flow_hist_alpha')) ?? 0.30
 
   const apiBase = useMemo(() => inferApiBase(), [])
-  
+
   const initialTimes = useMemo(() => parseSelectedTimes(params), [params])
   const [selectedTimes, setSelectedTimes] = useState(initialTimes)
 
@@ -572,6 +611,176 @@ export default function App() {
     () => [...centerExpectedMoveLevels, ...extraExpectedMoveLevels],
     [centerExpectedMoveLevels, extraExpectedMoveLevels]
   )
+
+  // ── Sigma bands anchor state ──────────────────────────────────────
+  // Active anchor (a snapshot from smile-data, or null when off).
+  // Snapshot shape from backend:
+  //   { time: "08:52", label, stock_price, atm_iv_pct, minutes_to_expiry, is_live }
+  const [bandsAnchor, setBandsAnchor] = useState(null)
+
+  // Surface the snapshots array from the smile payload (or empty).
+  const smileSnapshots = useMemo(() => {
+    if (!smileData || !Array.isArray(smileData.snapshots)) return []
+    return smileData.snapshots
+  }, [smileData])
+
+  // Clear active anchor if the time slice it referenced is no longer in
+  // smile data (e.g. user removed it from the smile chart selection).
+  useEffect(() => {
+    if (!bandsAnchor) return
+    const stillExists = smileSnapshots.some(
+      (s) => s && s.time === bandsAnchor.time
+    )
+    if (!stillExists) {
+      setBandsAnchor(null)
+    }
+  }, [bandsAnchor, smileSnapshots])
+
+  // Compute the band levels in ES coordinates from:
+  //  - the active SPX anchor (stock_price, atm_iv_pct, minutes_to_expiry)
+  //  - the corresponding ES bar at that PT minute (for basis correction)
+  // Also computes the four condor strikes (rounded to nearest 5pt SPX strike,
+  // then translated to ES coords by adding the basis at the anchor minute).
+  const bandsLevels = useMemo(() => {
+    if (!bandsAnchor) return null
+
+    const spx = Number(bandsAnchor.stock_price)
+    const ivPct = Number(bandsAnchor.atm_iv_pct)
+    const minsToExp = Number(bandsAnchor.minutes_to_expiry)
+    if (
+      !Number.isFinite(spx) ||
+      !Number.isFinite(ivPct) ||
+      !Number.isFinite(minsToExp) ||
+      minsToExp <= 0
+    ) {
+      console.log('[bands] anchor missing required fields', { spx, ivPct, minsToExp, anchor: bandsAnchor })
+      return null
+    }
+
+    // Find the ES bar at the anchor PT minute.
+    // Bars have UTC epoch seconds; we need to match against PT HH:MM.
+    // Critically: when mergedBars contains multiple sessions (today + historical),
+    // we must constrain the match to the same session as the smile data,
+    // otherwise we'd match a "10:42" bar from the wrong day.
+    // The smile data is fetched using the App's `tradeDate` URL param, so we
+    // require the bar's session_date to match that.
+    const targetTime = String(bandsAnchor.time).trim() // "HH:MM" PT
+    const targetSession = String(tradeDate || '').trim()
+    let anchorBar = null
+    let candidateCount = 0
+    for (const bar of mergedBars) {
+      const epoch = Number(bar?.time)
+      if (!Number.isFinite(epoch)) continue
+      const barSession = String(bar?.session_date || '').trim()
+      if (targetSession && barSession && barSession !== targetSession) continue
+      const hhmm = utcEpochToPtHHMM(epoch)
+      if (hhmm === targetTime) {
+        anchorBar = bar
+        candidateCount += 1
+      }
+    }
+
+    if (!anchorBar) {
+      // Sample a few bar times for debugging, in case PT conversion is off
+      const sampleTimes = mergedBars.slice(-5).map(b => ({
+        epoch: Number(b?.time),
+        ptHhmm: utcEpochToPtHHMM(Number(b?.time)),
+      }))
+      console.log('[bands] no bar matched anchor time', {
+        targetTime,
+        mergedBarsLength: mergedBars.length,
+        sampleTailTimes: sampleTimes,
+        anchor: bandsAnchor,
+      })
+      return null
+    }
+
+    const anchorEs = Number(anchorBar?.close ?? anchorBar?.c)
+    if (!Number.isFinite(anchorEs)) {
+      console.log('[bands] anchor bar has no close', { anchorBar })
+      return null
+    }
+
+    // Time-scaled 1σ in price points (calendar-time convention, matches backend)
+    const sigmaPts = spx * (ivPct / 100) * Math.sqrt(minsToExp / (60 * 24 * 365))
+    if (!Number.isFinite(sigmaPts) || sigmaPts <= 0) {
+      console.log('[bands] invalid sigma', { sigmaPts, spx, ivPct, minsToExp })
+      return null
+    }
+
+    // SPX-coords condor strikes (matches backend _compute_hypothetical_condor logic)
+    const inc = 5
+    const wing = 10
+    const spxShortPut  = Math.floor((spx - sigmaPts) / inc) * inc
+    const spxShortCall = Math.ceil((spx + sigmaPts) / inc) * inc
+    const spxLongPut   = Math.round((spxShortPut - wing) / inc) * inc
+    const spxLongCall  = Math.round((spxShortCall + wing) / inc) * inc
+
+    // Basis correction: ES bar price minus SPX cash at the same minute.
+    const basis = anchorEs - spx
+
+    // Bands centered on ES (chart coords); strikes translated by basis.
+    const bandUpper = anchorEs + sigmaPts
+    const bandLower = anchorEs - sigmaPts
+
+    // Convert anchor's UTC epoch to shifted PT epoch (chart's internal coord).
+    const anchorEpochUtc = Number(anchorBar?.time)
+    const shiftedAnchor = utcEpochShowingZoneTime(anchorEpochUtc, 'America/Los_Angeles')
+
+    // shiftedEnd = either the last bar in mergedBars (clamped), or anchor + minsToExp.
+    // Lightweight-charts series only draw between provided data points, so an end
+    // beyond the last bar may not render. We clamp to the last bar epoch.
+    let shiftedEnd = shiftedAnchor + minsToExp * 60
+    if (mergedBars.length > 0) {
+      const lastBar = mergedBars[mergedBars.length - 1]
+      const lastBarEpoch = Number(lastBar?.time)
+      if (Number.isFinite(lastBarEpoch)) {
+        const shiftedLast = utcEpochShowingZoneTime(lastBarEpoch, 'America/Los_Angeles')
+        if (shiftedLast > shiftedAnchor) {
+          shiftedEnd = Math.min(shiftedEnd, shiftedLast)
+        }
+      }
+    }
+
+    const computed = {
+      shiftedStart: shiftedAnchor,
+      shiftedEnd,
+      sigmaUpper: bandUpper,
+      sigmaLower: bandLower,
+      shortPut:  spxShortPut + basis,
+      longPut:   spxLongPut + basis,
+      shortCall: spxShortCall + basis,
+      longCall:  spxLongCall + basis,
+      anchorEs,
+      sigmaPts,
+      basis,
+      anchorTime: bandsAnchor.time,
+      anchorLabel: bandsAnchor.label,
+      anchorSpx: spx,
+      anchorIv: ivPct,
+    }
+
+    // One-line console log so we can verify the math is reasonable
+    console.log('[bands] computed', {
+      anchorTime: bandsAnchor.time,
+      anchorEs: anchorEs.toFixed(2),
+      anchorSpx: spx.toFixed(2),
+      basis: basis.toFixed(2),
+      sigmaPts: sigmaPts.toFixed(2),
+      bandUpper: bandUpper.toFixed(2),
+      bandLower: bandLower.toFixed(2),
+      strikes: {
+        sp: (spxShortPut + basis).toFixed(2),
+        sc: (spxShortCall + basis).toFixed(2),
+      },
+      barsMatched: candidateCount,
+      shiftedStart: shiftedAnchor,
+      shiftedEnd,
+    })
+
+    return computed
+  }, [bandsAnchor, mergedBars, tradeDate])
+
 
   const loadedFlowDates = useMemo(
     () => normalizeDateList([...centerLoadedDates, ...extraLoadedDates]),
@@ -1337,6 +1546,10 @@ export default function App() {
                 onInteractionActiveChange={handleInteractionActiveChange}
                 skewData={skewData}
                 smileData={smileData}
+                smileSnapshots={smileSnapshots}
+                activeBandsAnchorTime={bandsAnchor?.time ?? null}
+                onBandsAnchorChange={setBandsAnchor}
+                bandsLevels={bandsLevels}
               />
             </div>
 

@@ -3,8 +3,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import time
+import traceback
+import uuid
+from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from flask import jsonify, request, send_from_directory
 from sqlalchemy import create_engine, text
@@ -65,7 +70,11 @@ def _sanitize_saved_params(params: Dict[str, Any], defaults: Dict[str, Any]) -> 
     for key, value in (params or {}).items():
         if key not in allowed_keys:
             continue
-        clean[key] = _json_safe_value(value)
+        # Preserve arrays (like bypassFilters) as-is
+        if isinstance(value, list):
+            clean[key] = value
+        else:
+            clean[key] = _json_safe_value(value)
 
     return clean
 
@@ -289,16 +298,67 @@ def _create_strategy_from_existing(base_strategy_key: str, new_name: Any, new_st
     }
 
 
+def _strategy_direction(base_strategy_key: str) -> Optional[str]:
+    """Canonical mapping from a base strategy key to its direction.
+    Uses the same prefix-based matching as _legacy_base_registry_key so
+    user-cloned strategy keys like 'up_move_short_v1_2' resolve correctly.
+    Returns 'up', 'down', or None (non-directional)."""
+    key = str(base_strategy_key or "").strip().lower()
+    if not key:
+        return None
+    if key.startswith("up_move_short"):
+        return "up"
+    if key.startswith("down_move"):
+        return "down"
+    return None
+
+
 def _row_matches_strategy(row: Dict[str, Any], base_strategy_key: str) -> bool:
     direction = str(row.get("direction") or "").strip().lower()
+    expected = _strategy_direction(base_strategy_key)
+    if expected is None:
+        return True   # non-directional strategy — accept all rows
+    return direction == expected
 
-    if base_strategy_key == "up_move_short":
-        return direction == "up"
 
-    if base_strategy_key == "down_move_scan":
-        return direction == "down"
+def _filter_funnel_for_direction(funnel: List[dict], direction: Optional[str]) -> List[dict]:
+    """Reshape each stage so the flat keys (candidates_in, kept, dropped, drop_reasons)
+    reflect the selected direction. Preserves existing frontend contract."""
+    if not funnel:
+        return []
 
-    return True
+    out = []
+    for stage in funnel:
+        scope = stage.get("scope", "shared")
+        if scope == "shared":
+            bucket = stage.get("shared", {}) or {}
+        elif direction in ("up", "down"):
+            bucket = stage.get(direction, {}) or {}
+        else:
+            # Unknown direction — sum up+down as a combined view
+            up = stage.get("up", {}) or {}
+            down = stage.get("down", {}) or {}
+            combined_reasons = Counter(up.get("drop_reasons", {}) or {})
+            combined_reasons.update(down.get("drop_reasons", {}) or {})
+            bucket = {
+                "candidates_in": (up.get("candidates_in", 0) or 0) + (down.get("candidates_in", 0) or 0),
+                "kept":          (up.get("kept", 0) or 0)          + (down.get("kept", 0) or 0),
+                "dropped":       (up.get("dropped", 0) or 0)       + (down.get("dropped", 0) or 0),
+                "drop_reasons":  dict(combined_reasons),
+            }
+
+        out.append({
+            "key":           stage.get("key"),
+            "label":         stage.get("label"),
+            "kind":          stage.get("kind"),
+            "scope":         scope,
+            "bypassed":      stage.get("bypassed", False),
+            "candidates_in": bucket.get("candidates_in", 0),
+            "kept":          bucket.get("kept", 0),
+            "dropped":       bucket.get("dropped", 0),
+            "drop_reasons":  bucket.get("drop_reasons", {}) or {},
+        })
+    return out
 
 
 def _filtered_rows(rows: List[Dict[str, Any]], base_strategy_key: str) -> List[Dict[str, Any]]:
@@ -335,6 +395,476 @@ def get_backtests_v2_selection_since(last_seq: int | None):
     if last_seq is not None and current_seq <= int(last_seq):
         return current_seq, None
     return current_seq, _SELECTION_STATE.get("payload")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Saved Scan defaults — owned entirely by the saved-scan module.
+# These are the ONLY values used at scan-run time when the user doesn't
+# specify them. Intentionally NOT pulled from strategy_registry — saved
+# scans are decoupled from the legacy strategy-defaults system so that
+# nothing outside this module can affect saved-scan outcomes.
+# ─────────────────────────────────────────────────────────────────────
+
+SAVED_SCAN_DEFAULTS: Dict[str, Any] = {
+    # ── Scan identity (set by user on each scan) ──
+    # direction, startDate, endDate, label, notes — provided in payload
+
+    # ── Move detection ──
+    "minLevelGexBn":          50,
+    "levelFamily":            "primary",     # "primary" | "strong" | "both"
+    "zoneMergeDistancePts":   10,
+    "minCleanMovePoints":     20,
+    "targetProximityPts":     5,
+    "maxZoneBreachPts":       5,
+    "pivotStrengthBars":      3,
+    "minMinutesAfterOpen":    15,
+    "maxMinutesBeforeClose":  45,
+    "maxPriorDownUpRatio":    2.0,
+    "maxStartPctOfRange":     0.20,
+    "maxMoveLossPct":         0.75,
+
+    # ── Range / consolidation (used to invalidate moves but skipped in study mode;
+    #    kept here so the runner contract is satisfied) ──
+    "consolidationWindowMinutes": 15,
+
+    # ── Saved scans always run in study mode with skew bypassed ──
+    "executionMode":          "study_target_hits",
+    "bypassFilters":          ["skew_signal_fired"],
+    "forwardHorizonsMinutes": [30, 60, 90, 120, 180],
+    "condorWingWidthPts":     10.0,
+    "maxResults":             10000,
+
+    # ── Skew thresholds: NOT actually used by saved scans (skew gate is
+    #    bypassed) but the runner signature requires them. Set to permissive
+    #    sentinel values so even if bypass is disabled the gate stays open.
+    "shortPutSkewIncreasePct":      0.0,
+    "shortCallSkewMaxPct":         1e9,
+    "longPutSkewMinDecreasePct":    0.0,
+    "longCallSkewMinIncreasePct":   0.0,
+
+    # ── Trade entry/management: NOT used in study mode but required by the
+    #    runner signature. Set to inert values.
+    "entryWithinTopPts":           2,
+    "entrySearchWindowMinutes":    30,
+    "initialStopPts":              6,
+    "trailActivateProfitPts":      10,
+    "trailingStopPts":             6,
+    "takeProfitPts":               20,
+    "longInitialStopPts":          10.0,
+    "longTrailActivateProfitPts":  20.0,
+    "longTrailingStopPts":         10.0,
+    "longTakeProfitPts":           35.0,
+}
+
+# Whitelist of keys the run/update endpoints accept from the user.
+# Anything outside this list is silently dropped (defense against accidentally
+# carrying through legacy strategy-registry params).
+SAVED_SCAN_USER_OVERRIDABLE_KEYS = frozenset({
+    "minLevelGexBn",
+    "levelFamily",
+    "zoneMergeDistancePts",
+    "minCleanMovePoints",
+    "targetProximityPts",
+    "maxZoneBreachPts",
+    "pivotStrengthBars",
+    "minMinutesAfterOpen",
+    "maxMinutesBeforeClose",
+    "maxPriorDownUpRatio",
+    "maxStartPctOfRange",
+    "maxMoveLossPct",
+    "forwardHorizonsMinutes",
+    "condorWingWidthPts",
+    "maxResults",
+})
+
+
+def _build_saved_scan_params(
+    user_params: Dict[str, Any] | None,
+    start_date: str,
+    end_date: str,
+) -> Dict[str, Any]:
+    """
+    Build the full parameter dict for a saved-scan run. Starts from
+    SAVED_SCAN_DEFAULTS, layers in user overrides (whitelist-filtered),
+    and pins the date range. Does NOT consult the strategy registry.
+    """
+    out: Dict[str, Any] = dict(SAVED_SCAN_DEFAULTS)
+    if isinstance(user_params, dict):
+        for k, v in user_params.items():
+            if k in SAVED_SCAN_USER_OVERRIDABLE_KEYS and v is not None:
+                out[k] = v
+    out["startDate"] = start_date
+    out["endDate"]   = end_date
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Schema bootstrap
+# ─────────────────────────────────────────────────────────────────────
+# Idempotent table + column creation for the saved-scan cache. Module-
+# scoped (rather than nested in the route factory) so background-thread
+# workers can call it directly. Cheap to call on every request that
+# touches the table; the IF NOT EXISTS guards make it a no-op once the
+# schema is in place.
+
+def _ensure_scan_cache_table_exists(conn) -> None:
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS public.bt2_scan_cache (
+          scan_id        BIGSERIAL PRIMARY KEY,
+          created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+          label          VARCHAR(200),
+          direction      VARCHAR(8) NOT NULL,
+          start_date     DATE NOT NULL,
+          end_date       DATE NOT NULL,
+          params         JSONB NOT NULL,
+          funnel         JSONB,
+          diagnostics    JSONB,
+          rows           JSONB NOT NULL,
+          row_count      INT NOT NULL,
+          notes          TEXT
+        )
+    """))
+    # Forward-compatible columns: added via ALTER so existing tables
+    # pick up new fields without manual migration.
+    conn.execute(text("""
+        ALTER TABLE public.bt2_scan_cache
+        ADD COLUMN IF NOT EXISTS column_prefs JSONB
+    """))
+    conn.execute(text("""
+        ALTER TABLE public.bt2_scan_cache
+        ADD COLUMN IF NOT EXISTS filter_presets JSONB
+    """))
+    conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_bt2_scan_cache_created
+          ON public.bt2_scan_cache (created_at DESC)
+    """))
+    conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_bt2_scan_cache_dir_dates
+          ON public.bt2_scan_cache (direction, start_date, end_date)
+    """))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Background scan-job system
+# ─────────────────────────────────────────────────────────────────────
+# Single-process, in-memory job tracking. Scans can take minutes; running
+# them on the request thread blocks the Flask worker and the user's UI.
+# Instead, /run kicks off a thread, returns a job_id immediately, and
+# the frontend polls /jobs/<job_id> for status.
+#
+# Trade-offs (acceptable for a single-user dev app):
+#   - Jobs vanish on process restart (no persistence)
+#   - Job dict grows over time; we GC entries older than 1h on every read
+#   - Concurrent scans capped at 2 to avoid pounding the DB
+#
+# Jobs go through one of these terminal states:
+#   queued   → waiting on the semaphore
+#   running  → thread is executing the scan
+#   complete → scan persisted, scan_id available
+#   failed   → exception raised; error message available
+
+_SCAN_JOBS: Dict[str, Dict[str, Any]] = {}
+_SCAN_JOBS_LOCK = threading.Lock()
+_SCAN_JOB_SEMAPHORE = threading.BoundedSemaphore(value=2)
+_SCAN_JOB_TTL_SECONDS = 60 * 60  # 1 hour
+
+
+def _scan_job_set(job_id: str, **fields: Any) -> None:
+    """Atomically merge ``fields`` into the job's record."""
+    with _SCAN_JOBS_LOCK:
+        job = _SCAN_JOBS.setdefault(job_id, {})
+        job.update(fields)
+        job["updated_at"] = time.time()
+
+
+def _scan_job_get(job_id: str) -> Optional[Dict[str, Any]]:
+    with _SCAN_JOBS_LOCK:
+        job = _SCAN_JOBS.get(job_id)
+        return dict(job) if job is not None else None
+
+
+def _scan_jobs_gc() -> None:
+    """Drop terminal jobs older than the TTL. Cheap; called from /jobs."""
+    cutoff = time.time() - _SCAN_JOB_TTL_SECONDS
+    with _SCAN_JOBS_LOCK:
+        stale = [
+            jid for jid, j in _SCAN_JOBS.items()
+            if j.get("status") in ("complete", "failed")
+            and (j.get("updated_at") or 0) < cutoff
+        ]
+        for jid in stale:
+            _SCAN_JOBS.pop(jid, None)
+
+
+def _start_scan_job(
+    *,
+    direction: str,
+    label: str,
+    notes: Optional[str],
+    start_date: str,
+    end_date: str,
+    params: Dict[str, Any],
+    filter_presets: Optional[List[Dict[str, Any]]] = None,
+    column_prefs: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """
+    Register a job, spawn its worker thread, return the job_id.
+    Worker waits on the semaphore before doing real work, so callers
+    don't need to worry about concurrency limits — the kick-off is
+    cheap and always returns immediately.
+    """
+    job_id = uuid.uuid4().hex
+    _scan_job_set(
+        job_id,
+        status="queued",
+        kind="run",
+        direction=direction,
+        label=label,
+        start_date=start_date,
+        end_date=end_date,
+        scan_id=None,
+        error=None,
+        created_at=time.time(),
+    )
+    thread = threading.Thread(
+        target=_scan_job_worker,
+        args=(job_id, direction, label, notes, start_date, end_date, params, filter_presets, column_prefs),
+        daemon=True,
+        name=f"bt2-scan-{job_id[:8]}",
+    )
+    thread.start()
+    return job_id
+
+
+def _scan_job_worker(
+    job_id: str,
+    direction: str,
+    label: str,
+    notes: Optional[str],
+    start_date: str,
+    end_date: str,
+    params: Dict[str, Any],
+    filter_presets: Optional[List[Dict[str, Any]]],
+    column_prefs: Optional[List[Dict[str, Any]]],
+) -> None:
+    """Background thread body. Runs the scan and persists the result."""
+    with _SCAN_JOB_SEMAPHORE:
+        _scan_job_set(job_id, status="running", started_at=time.time())
+        try:
+            data = _execute_saved_scan(direction, params)
+            base_key = "up_move_short" if direction == "up" else "down_move_scan"
+            raw_rows = data.get("rows") or []
+            rows = _filtered_rows(raw_rows, base_key)
+            diagnostics = _rebuild_diagnostics(rows, base_key, data.get("diagnostics"))
+            funnel = _filter_funnel_for_direction(data.get("funnel", []), direction)
+
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                result = conn.execute(text("""
+                    INSERT INTO public.bt2_scan_cache
+                      (label, direction, start_date, end_date, params, funnel, diagnostics,
+                       rows, row_count, notes, filter_presets, column_prefs)
+                    VALUES
+                      (:label, :direction, :start_date, :end_date,
+                       CAST(:params AS JSONB),
+                       CAST(:funnel AS JSONB),
+                       CAST(:diagnostics AS JSONB),
+                       CAST(:rows AS JSONB),
+                       :row_count,
+                       :notes,
+                       CAST(:filter_presets AS JSONB),
+                       CAST(:column_prefs AS JSONB))
+                    RETURNING scan_id, created_at
+                """), {
+                    "label": label,
+                    "direction": direction,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "params": json.dumps(params),
+                    "funnel": json.dumps(funnel),
+                    "diagnostics": json.dumps(diagnostics),
+                    "rows": json.dumps(rows),
+                    "row_count": len(rows),
+                    "notes": notes or None,
+                    "filter_presets": json.dumps(filter_presets) if filter_presets else None,
+                    "column_prefs": json.dumps(column_prefs) if column_prefs else None,
+                })
+                row = result.fetchone()
+                scan_id = int(row[0])
+                created_at = row[1].isoformat() if row[1] is not None else None
+
+            _scan_job_set(
+                job_id,
+                status="complete",
+                scan_id=scan_id,
+                created_at_persisted=created_at,
+                row_count=len(rows),
+                completed_at=time.time(),
+            )
+        except Exception as exc:
+            _scan_job_set(
+                job_id,
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}",
+                traceback=traceback.format_exc()[-2000:],  # cap for memory
+                completed_at=time.time(),
+            )
+
+
+def _start_scan_update_job(
+    *,
+    scan_id: int,
+    direction: str,
+    label: Optional[str],
+    notes: Optional[str],
+    start_date: str,
+    end_date: str,
+    params: Dict[str, Any],
+) -> str:
+    """
+    Like _start_scan_job, but UPDATEs an existing row instead of INSERTing
+    a new one. Used by saved_scans_update_api when a re-scan is needed.
+    """
+    job_id = uuid.uuid4().hex
+    _scan_job_set(
+        job_id,
+        status="queued",
+        kind="update",
+        scan_id=scan_id,
+        direction=direction,
+        label=label,
+        start_date=start_date,
+        end_date=end_date,
+        error=None,
+        created_at=time.time(),
+    )
+    thread = threading.Thread(
+        target=_scan_update_job_worker,
+        args=(job_id, scan_id, direction, label, notes, start_date, end_date, params),
+        daemon=True,
+        name=f"bt2-update-{job_id[:8]}",
+    )
+    thread.start()
+    return job_id
+
+
+def _scan_update_job_worker(
+    job_id: str,
+    scan_id: int,
+    direction: str,
+    label: Optional[str],
+    notes: Optional[str],
+    start_date: str,
+    end_date: str,
+    params: Dict[str, Any],
+) -> None:
+    """Background worker for in-place re-scan."""
+    with _SCAN_JOB_SEMAPHORE:
+        _scan_job_set(job_id, status="running", started_at=time.time())
+        try:
+            data = _execute_saved_scan(direction, params)
+            base_key = "up_move_short" if direction == "up" else "down_move_scan"
+            raw_rows = data.get("rows") or []
+            rows = _filtered_rows(raw_rows, base_key)
+            diagnostics = _rebuild_diagnostics(rows, base_key, data.get("diagnostics"))
+            funnel = _filter_funnel_for_direction(data.get("funnel", []), direction)
+
+            engine = _engine()
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    UPDATE public.bt2_scan_cache
+                    SET label = :label,
+                        notes = :notes,
+                        start_date = :start_date,
+                        end_date   = :end_date,
+                        params     = CAST(:params AS JSONB),
+                        funnel     = CAST(:funnel AS JSONB),
+                        diagnostics = CAST(:diagnostics AS JSONB),
+                        rows       = CAST(:rows AS JSONB),
+                        row_count  = :row_count,
+                        created_at = now()
+                    WHERE scan_id = :scan_id
+                """), {
+                    "scan_id":    scan_id,
+                    "label":      label,
+                    "notes":      notes,
+                    "start_date": start_date,
+                    "end_date":   end_date,
+                    "params":     json.dumps(params),
+                    "funnel":     json.dumps(funnel),
+                    "diagnostics": json.dumps(diagnostics),
+                    "rows":       json.dumps(rows),
+                    "row_count":  len(rows),
+                })
+
+            _scan_job_set(
+                job_id,
+                status="complete",
+                row_count=len(rows),
+                completed_at=time.time(),
+            )
+        except Exception as exc:
+            _scan_job_set(
+                job_id,
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}",
+                traceback=traceback.format_exc()[-2000:],
+                completed_at=time.time(),
+            )
+
+
+def _execute_saved_scan(direction: str, params: Dict[str, Any]):
+    """
+    Run scan_gex_level_moves with the given params. Direction picks the
+    base strategy purely for the row-direction filter; we do NOT pull
+    defaults from the strategy registry — params is the full source of
+    truth. Returns the raw scan output (dict with rows, diagnostics, funnel).
+    """
+    # We still need the runner callable + the direction filter key.
+    # Build a minimal registry just for that — its DEFAULTS are unused.
+    registry = build_strategy_registry(scan_gex_level_moves)
+    base_key = "up_move_short" if direction == "up" else "down_move_scan"
+    if base_key not in registry:
+        raise RuntimeError(f"No strategy registered for direction={direction}")
+    runner = registry[base_key].runner
+
+    return runner(
+        start_date=params["startDate"],
+        end_date=params["endDate"],
+        min_level_gex_bn=float(params["minLevelGexBn"]),
+        zone_merge_distance_pts=float(params["zoneMergeDistancePts"]),
+        min_clean_move_points=float(params["minCleanMovePoints"]),
+        target_proximity_pts=float(params["targetProximityPts"]),
+        max_zone_breach_pts=float(params["maxZoneBreachPts"]),
+        pivot_strength_bars=int(params["pivotStrengthBars"]),
+        level_family=str(params["levelFamily"]),
+        max_results=int(params["maxResults"]),
+        consolidation_window_minutes=int(params["consolidationWindowMinutes"]),
+        short_put_skew_increase_pct=float(params["shortPutSkewIncreasePct"]),
+        short_call_skew_max_pct=float(params["shortCallSkewMaxPct"]),
+        entry_within_top_pts=float(params["entryWithinTopPts"]),
+        entry_search_window_minutes=int(params["entrySearchWindowMinutes"]),
+        initial_stop_pts=float(params["initialStopPts"]),
+        trail_activate_profit_pts=float(params["trailActivateProfitPts"]),
+        trailing_stop_pts=float(params["trailingStopPts"]),
+        take_profit_pts=float(params["takeProfitPts"]),
+        max_prior_down_up_ratio=float(params["maxPriorDownUpRatio"]),
+        max_start_pct_of_range=float(params["maxStartPctOfRange"]),
+        max_move_loss_pct=float(params["maxMoveLossPct"]),
+        min_minutes_after_open=int(params["minMinutesAfterOpen"]),
+        long_put_skew_min_decrease_pct=float(params["longPutSkewMinDecreasePct"]),
+        long_call_skew_min_increase_pct=float(params["longCallSkewMinIncreasePct"]),
+        max_minutes_before_close=int(params["maxMinutesBeforeClose"]),
+        source_view=DEFAULT_SOURCE_VIEW,
+        bypass_filters=tuple(params.get("bypassFilters") or ()),
+        execution_mode=str(params.get("executionMode") or "study_target_hits"),
+        forward_horizons_minutes=tuple(
+            int(x) for x in (params.get("forwardHorizonsMinutes") or [30, 60, 90, 120, 180])
+            if str(x).strip().lstrip('-').isdigit() and int(x) > 0
+        ) or (30, 60, 90, 120, 180),
+        condor_wing_width_pts=float(params.get("condorWingWidthPts") or 10.0),
+    )
 
 
 def register_backtests_v2_routes(server, repo_root: Path) -> None:
@@ -470,6 +1000,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 long_call_skew_min_increase_pct=float(settings.get("longCallSkewMinIncreasePct", 30.0)),
                 max_minutes_before_close=int(settings.get("maxMinutesBeforeClose", 45)),
                 source_view=DEFAULT_SOURCE_VIEW,
+                bypass_filters=tuple(settings.get("bypassFilters") or ()),
             )
 
             base_strategy_key = strategy_meta.get("baseStrategyKey") or item["base_registry_key"]
@@ -477,6 +1008,11 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             rows = _filtered_rows(raw_rows, base_strategy_key)
             summary = _rebuild_summary(rows, strategy_key, data.get("summary"))
             diagnostics = _rebuild_diagnostics(rows, strategy_key, data.get("diagnostics"))
+
+            # Filter funnel by direction
+            funnel_raw = data.get("funnel", [])
+            direction = _strategy_direction(base_strategy_key)
+            funnel_filtered = _filter_funnel_for_direction(funnel_raw, direction)
 
             return jsonify(
                 {
@@ -487,6 +1023,8 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                     "rows": rows,
                     "summary": summary,
                     "diagnostics": diagnostics,
+                    "funnel": funnel_filtered,
+                    "funnelRaw": funnel_raw,
                 }
             )
         except Exception as exc:
@@ -607,6 +1145,7 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
                 long_trailing_stop_pts=float(settings.get("longTrailingStopPts", 10.0)),
                 long_take_profit_pts=float(settings.get("longTakeProfitPts", 35.0)),
                 source_view=DEFAULT_SOURCE_VIEW,
+                bypass_filters=tuple(settings.get("bypassFilters") or ()),
             )
 
             base_strategy_key = strategy_meta.get("baseStrategyKey") or item["base_registry_key"]
@@ -771,6 +1310,463 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Saved Scan Cache
+    # ─────────────────────────────────────────────────────────────────────
+    # Persists full scan results (rows + diagnostics + funnel + params) to
+    # bt2_scan_cache table for fast load/filter without rescanning.
+    #
+    # Workflow:
+    #   1. POST /api/backtests-v2/saved-scans/run       — runs a scan with
+    #      maximally-permissive filters and saves the result. Returns scan_id.
+    #   2. GET  /api/backtests-v2/saved-scans            — list all saved scans
+    #   3. GET  /api/backtests-v2/saved-scans/<scan_id>  — load a saved scan
+    #      (rows + diagnostics + funnel)
+    #   4. DELETE /api/backtests-v2/saved-scans/<scan_id> — remove a saved scan
+
+    def saved_scans_run_api():
+        """
+        Kick off a scan job and return immediately.
+
+        Body: {
+          direction: 'up' | 'down',
+          startDate, endDate,
+          label?, notes?,
+          params?: {...overrides for the scan...}
+          filter_presets?: [...]   # optional, used by Duplicate flow
+          column_prefs?: [...]     # optional, used by Duplicate flow
+        }
+
+        Returns: { ok: True, job_id: str, status: 'queued' }
+        Poll /api/backtests-v2/saved-scans/jobs/<job_id> for completion.
+
+        Defaults come EXCLUSIVELY from SAVED_SCAN_DEFAULTS in this module.
+        The legacy strategy_registry is used only to resolve the runner
+        callable for the given direction, never for parameter values.
+        """
+        raw_payload = _normalize_payload_aliases(request.get_json(silent=True) or {})
+        direction = str(raw_payload.get("direction") or "").strip().lower()
+        if direction not in ("up", "down"):
+            return jsonify({"ok": False, "error": "direction must be 'up' or 'down'"}), 400
+
+        start_date = str(raw_payload.get("startDate") or raw_payload.get("start_date") or "").strip()
+        end_date   = str(raw_payload.get("endDate")   or raw_payload.get("end_date")   or "").strip()
+        if not start_date or not end_date:
+            return jsonify({"ok": False, "error": "startDate and endDate are required"}), 400
+
+        label = _normalize_name(raw_payload.get("label"), f"{direction.upper()} {start_date} to {end_date}")
+        notes = _normalize_notes(raw_payload.get("notes"))
+
+        # Build the full param set from saved-scan defaults + user overrides.
+        user_overrides = raw_payload.get("params") or {}
+        permissive = _build_saved_scan_params(user_overrides, start_date, end_date)
+
+        # Optional carryover from a Duplicate operation. Frontend passes the
+        # source scan's filter presets and column prefs so the duplicate is
+        # truly a copy, not just a fresh scan.
+        filter_presets = raw_payload.get("filter_presets") if isinstance(raw_payload.get("filter_presets"), list) else None
+        column_prefs   = raw_payload.get("column_prefs")   if isinstance(raw_payload.get("column_prefs"),   list) else None
+
+        try:
+            job_id = _start_scan_job(
+                direction=direction,
+                label=label,
+                notes=notes,
+                start_date=start_date,
+                end_date=end_date,
+                params=permissive,
+                filter_presets=filter_presets,
+                column_prefs=column_prefs,
+            )
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"failed to start scan: {exc}"}), 500
+
+        return jsonify({"ok": True, "job_id": job_id, "status": "queued"})
+
+    def saved_scans_jobs_api(job_id):
+        """
+        GET /api/backtests-v2/saved-scans/jobs/<job_id>
+        Returns the current status of a scan job. The frontend polls this
+        endpoint after submitting a /run request.
+
+        Response:
+          { ok: True, status, scan_id?, error?, label, direction,
+            start_date, end_date, row_count?, queued_at, started_at?,
+            completed_at? }
+
+        status ∈ { 'queued', 'running', 'complete', 'failed' }
+        """
+        _scan_jobs_gc()
+        job = _scan_job_get(job_id)
+        if job is None:
+            return jsonify({"ok": False, "error": "job not found or expired"}), 404
+        return jsonify({"ok": True, **job})
+
+    def saved_scans_list_api():
+        """
+        List metadata for all saved scans (no rows).
+        Optional query params: direction=up|down
+        """
+        direction_filter = str(request.args.get("direction") or "").strip().lower()
+        try:
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                if direction_filter in ("up", "down"):
+                    result = conn.execute(text("""
+                        SELECT scan_id, created_at, label, direction, start_date, end_date,
+                               row_count, notes,
+                               (params->>'executionMode') AS execution_mode
+                        FROM public.bt2_scan_cache
+                        WHERE direction = :direction
+                        ORDER BY created_at DESC
+                    """), {"direction": direction_filter})
+                else:
+                    result = conn.execute(text("""
+                        SELECT scan_id, created_at, label, direction, start_date, end_date,
+                               row_count, notes,
+                               (params->>'executionMode') AS execution_mode
+                        FROM public.bt2_scan_cache
+                        ORDER BY created_at DESC
+                    """))
+                items = []
+                for r in result:
+                    items.append({
+                        "scan_id": int(r[0]),
+                        "created_at": r[1].isoformat() if r[1] is not None else None,
+                        "label": r[2],
+                        "direction": r[3],
+                        "start_date": r[4].isoformat() if r[4] is not None else None,
+                        "end_date": r[5].isoformat() if r[5] is not None else None,
+                        "row_count": int(r[6]) if r[6] is not None else 0,
+                        "notes": r[7],
+                        "execution_mode": r[8],
+                    })
+            return jsonify({"ok": True, "scans": items})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    def saved_scans_defaults_api():
+        """
+        Return the current saved-scan default parameters and the whitelist of
+        keys the user can override. Used by the frontend dialog to pre-populate
+        controls when running a new scan.
+        """
+        return jsonify({
+            "ok": True,
+            "defaults": dict(SAVED_SCAN_DEFAULTS),
+            "overridable_keys": sorted(SAVED_SCAN_USER_OVERRIDABLE_KEYS),
+        })
+
+    def saved_scans_load_api(scan_id):
+        """Return the full saved scan: rows + diagnostics + funnel."""
+        try:
+            sid = int(scan_id)
+        except Exception:
+            return jsonify({"ok": False, "error": "scan_id must be integer"}), 400
+
+        try:
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                result = conn.execute(text("""
+                    SELECT scan_id, created_at, label, direction, start_date, end_date,
+                           params, funnel, diagnostics, rows, row_count, notes,
+                           column_prefs, filter_presets
+                    FROM public.bt2_scan_cache
+                    WHERE scan_id = :scan_id
+                """), {"scan_id": sid})
+                row = result.fetchone()
+                if row is None:
+                    return jsonify({"ok": False, "error": "scan not found"}), 404
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+        return jsonify({
+            "ok": True,
+            "scan_id": int(row[0]),
+            "created_at": row[1].isoformat() if row[1] is not None else None,
+            "label": row[2],
+            "direction": row[3],
+            "start_date": row[4].isoformat() if row[4] is not None else None,
+            "end_date": row[5].isoformat() if row[5] is not None else None,
+            "params": row[6],          # already a dict via JSONB → SQLAlchemy
+            "funnel": row[7] or [],
+            "diagnostics": row[8] or {},
+            "rows": row[9] or [],
+            "row_count": int(row[10]) if row[10] is not None else 0,
+            "notes": row[11],
+            "column_prefs": row[12],   # null if scan has not been customized yet
+            "filter_presets": row[13] or [],
+        })
+
+    def saved_scans_delete_api(scan_id):
+        """Delete a saved scan."""
+        try:
+            sid = int(scan_id)
+        except Exception:
+            return jsonify({"ok": False, "error": "scan_id must be integer"}), 400
+
+        try:
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                result = conn.execute(text("""
+                    DELETE FROM public.bt2_scan_cache
+                    WHERE scan_id = :scan_id
+                    RETURNING scan_id
+                """), {"scan_id": sid})
+                row = result.fetchone()
+                if row is None:
+                    return jsonify({"ok": False, "error": "scan not found"}), 404
+            return jsonify({"ok": True, "scan_id": sid})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    def saved_scans_column_prefs_api(scan_id):
+        """
+        PATCH /api/backtests-v2/saved-scans/<scan_id>/column-prefs
+
+        Body: { "column_prefs": [...] }
+
+        Replaces the column_prefs JSONB blob for this scan. Cheap — does
+        not re-run the scan or touch any other field. Designed to be
+        called from the frontend on a debounce as the user toggles or
+        reorders table columns.
+        """
+        try:
+            sid = int(scan_id)
+        except Exception:
+            return jsonify({"ok": False, "error": "scan_id must be integer"}), 400
+
+        payload = request.get_json(silent=True) or {}
+        column_prefs = payload.get("column_prefs")
+        if not isinstance(column_prefs, list):
+            return jsonify({"ok": False, "error": "column_prefs must be a list"}), 400
+
+        try:
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                result = conn.execute(text("""
+                    UPDATE public.bt2_scan_cache
+                    SET column_prefs = CAST(:cp AS JSONB)
+                    WHERE scan_id = :scan_id
+                    RETURNING scan_id
+                """), {
+                    "scan_id": sid,
+                    "cp": json.dumps(column_prefs),
+                })
+                if result.fetchone() is None:
+                    return jsonify({"ok": False, "error": "scan not found"}), 404
+            return jsonify({"ok": True, "scan_id": sid})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    def saved_scans_filter_presets_api(scan_id):
+        """
+        PATCH /api/backtests-v2/saved-scans/<scan_id>/filter-presets
+
+        Body: { "filter_presets": [...] }
+
+        Replaces the filter_presets JSONB blob for this scan. Each preset
+        is { id, name, notes, filters, view_direction, created_at,
+        updated_at } — but the backend doesn't validate the inner shape;
+        the frontend manages add/edit/delete and PATCHes the full array.
+        """
+        try:
+            sid = int(scan_id)
+        except Exception:
+            return jsonify({"ok": False, "error": "scan_id must be integer"}), 400
+
+        payload = request.get_json(silent=True) or {}
+        presets = payload.get("filter_presets")
+        if not isinstance(presets, list):
+            return jsonify({"ok": False, "error": "filter_presets must be a list"}), 400
+
+        try:
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                result = conn.execute(text("""
+                    UPDATE public.bt2_scan_cache
+                    SET filter_presets = CAST(:fp AS JSONB)
+                    WHERE scan_id = :scan_id
+                    RETURNING scan_id
+                """), {
+                    "scan_id": sid,
+                    "fp": json.dumps(presets),
+                })
+                if result.fetchone() is None:
+                    return jsonify({"ok": False, "error": "scan not found"}), 404
+            return jsonify({"ok": True, "scan_id": sid})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    def saved_scans_update_api(scan_id):
+        """
+        Update a saved scan in place.
+
+        Body: {
+          label?, notes?,
+          startDate?, endDate?,
+          params?  (overrides for re-scan)
+        }
+
+        Behavior:
+          - If only label/notes changed: just updates metadata (instant).
+          - If date range changed (or params override provided): re-runs the
+            scan and replaces rows + diagnostics + funnel + params on the
+            same scan_id. Updates created_at to reflect the fresh run.
+
+        Direction CANNOT be changed via this endpoint — that would change
+        what the scan conceptually IS. To change direction, save a new scan.
+        """
+        try:
+            sid = int(scan_id)
+        except Exception:
+            return jsonify({"ok": False, "error": "scan_id must be integer"}), 400
+
+        payload = _normalize_payload_aliases(request.get_json(silent=True) or {})
+
+        # Load existing scan to get its current direction + params
+        try:
+            engine = _engine()
+            with engine.begin() as conn:
+                _ensure_scan_cache_table_exists(conn)
+                existing = conn.execute(text("""
+                    SELECT scan_id, label, notes, direction,
+                           start_date::text AS start_date_str,
+                           end_date::text   AS end_date_str,
+                           params
+                    FROM public.bt2_scan_cache
+                    WHERE scan_id = :scan_id
+                """), {"scan_id": sid}).fetchone()
+                if existing is None:
+                    return jsonify({"ok": False, "error": "scan not found"}), 404
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+        existing_direction  = existing[3]
+        existing_start_date = existing[4]
+        existing_end_date   = existing[5]
+        existing_params     = existing[6] or {}
+
+        # Reject direction changes outright (silently ignore if matches)
+        if "direction" in payload:
+            requested_dir = str(payload.get("direction") or "").strip().lower()
+            if requested_dir and requested_dir != existing_direction:
+                return jsonify({
+                    "ok": False,
+                    "error": "direction cannot be changed on an existing scan; create a new scan instead",
+                }), 400
+
+        # Resolve final values: payload wins, otherwise keep existing
+        new_label = payload.get("label", existing[1])
+        if new_label is not None:
+            new_label = str(new_label).strip()[:200] or None
+        new_notes = payload.get("notes", existing[2])
+        if new_notes is not None:
+            new_notes = str(new_notes) or None
+
+        new_start_date = (
+            str(payload.get("startDate") or payload.get("start_date") or "").strip()
+            or existing_start_date
+        )
+        new_end_date = (
+            str(payload.get("endDate") or payload.get("end_date") or "").strip()
+            or existing_end_date
+        )
+
+        # Detect whether scan params changed and a re-scan is needed.
+        # If date range moved, definitely re-scan. If a 'params' override was
+        # provided, also re-scan (caller can use this to tweak any setting).
+        date_range_changed = (
+            new_start_date != existing_start_date or
+            new_end_date   != existing_end_date
+        )
+        params_override = payload.get("params") or {}
+        params_overrides_provided = isinstance(params_override, dict) and len(params_override) > 0
+
+        needs_rescan = date_range_changed or params_overrides_provided
+
+        # ── Path A: metadata-only update (instant) ──
+        if not needs_rescan:
+            updates: Dict[str, Any] = {}
+            if new_label != existing[1]:
+                updates["label"] = new_label
+            if new_notes != existing[2]:
+                updates["notes"] = new_notes
+
+            if not updates:
+                return jsonify({
+                    "ok": True,
+                    "scan_id": sid,
+                    "rescanned": False,
+                    "no_change": True,
+                })
+
+            set_clauses = ", ".join(f"{k} = :{k}" for k in updates.keys())
+            sql = text(f"""
+                UPDATE public.bt2_scan_cache
+                SET {set_clauses}
+                WHERE scan_id = :scan_id
+                RETURNING scan_id, label, notes
+            """)
+            try:
+                with engine.begin() as conn:
+                    result = conn.execute(sql, {**updates, "scan_id": sid})
+                    row = result.fetchone()
+                return jsonify({
+                    "ok": True,
+                    "scan_id": int(row[0]),
+                    "label": row[1],
+                    "notes": row[2],
+                    "rescanned": False,
+                })
+            except Exception as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 500
+
+        # ── Path B: re-scan and replace in place — runs in background ──
+        # Build params: start from existing scan's saved params (which were
+        # built from SAVED_SCAN_DEFAULTS at original-run time), then layer
+        # any new user overrides on top, then pin the new date range.
+        # Filter to whitelist so legacy keys can't sneak through.
+        merged_user_params: Dict[str, Any] = {}
+        if isinstance(existing_params, dict):
+            for k, v in existing_params.items():
+                if k in SAVED_SCAN_USER_OVERRIDABLE_KEYS:
+                    merged_user_params[k] = v
+        if params_overrides_provided:
+            for k, v in params_override.items():
+                if k in SAVED_SCAN_USER_OVERRIDABLE_KEYS:
+                    merged_user_params[k] = v
+
+        permissive = _build_saved_scan_params(
+            merged_user_params, new_start_date, new_end_date
+        )
+
+        try:
+            job_id = _start_scan_update_job(
+                scan_id=sid,
+                direction=existing_direction,
+                label=new_label,
+                notes=new_notes,
+                start_date=new_start_date,
+                end_date=new_end_date,
+                params=permissive,
+            )
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"failed to start re-scan: {exc}"}), 500
+
+        return jsonify({
+            "ok": True,
+            "scan_id": sid,
+            "rescanned": True,
+            "job_id": job_id,
+            "status": "queued",
+        })
+
     if "backtests_v2_preview_index" not in server.view_functions:
         server.add_url_rule("/backtests-v2-preview", endpoint="backtests_v2_preview_index", view_func=index)
 
@@ -834,4 +1830,77 @@ def register_backtests_v2_routes(server, repo_root: Path) -> None:
             endpoint="backtests_v2_label_signal",
             view_func=label_signal_api,
             methods=["POST"],
+        )
+
+    # ── Saved Scan Cache ──
+    if "backtests_v2_saved_scans_run" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/run",
+            endpoint="backtests_v2_saved_scans_run",
+            view_func=saved_scans_run_api,
+            methods=["POST"],
+        )
+
+    if "backtests_v2_saved_scans_jobs" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/jobs/<job_id>",
+            endpoint="backtests_v2_saved_scans_jobs",
+            view_func=saved_scans_jobs_api,
+            methods=["GET"],
+        )
+
+    if "backtests_v2_saved_scans_list" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans",
+            endpoint="backtests_v2_saved_scans_list",
+            view_func=saved_scans_list_api,
+            methods=["GET"],
+        )
+
+    if "backtests_v2_saved_scans_defaults" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/defaults",
+            endpoint="backtests_v2_saved_scans_defaults",
+            view_func=saved_scans_defaults_api,
+            methods=["GET"],
+        )
+
+    if "backtests_v2_saved_scans_load" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/<scan_id>",
+            endpoint="backtests_v2_saved_scans_load",
+            view_func=saved_scans_load_api,
+            methods=["GET"],
+        )
+
+    if "backtests_v2_saved_scans_delete" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/<scan_id>",
+            endpoint="backtests_v2_saved_scans_delete",
+            view_func=saved_scans_delete_api,
+            methods=["DELETE"],
+        )
+
+    if "backtests_v2_saved_scans_update" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/<scan_id>/update",
+            endpoint="backtests_v2_saved_scans_update",
+            view_func=saved_scans_update_api,
+            methods=["POST"],
+        )
+
+    if "backtests_v2_saved_scans_column_prefs" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/<scan_id>/column-prefs",
+            endpoint="backtests_v2_saved_scans_column_prefs",
+            view_func=saved_scans_column_prefs_api,
+            methods=["PATCH"],
+        )
+
+    if "backtests_v2_saved_scans_filter_presets" not in server.view_functions:
+        server.add_url_rule(
+            "/api/backtests-v2/saved-scans/<scan_id>/filter-presets",
+            endpoint="backtests_v2_saved_scans_filter_presets",
+            view_func=saved_scans_filter_presets_api,
+            methods=["PATCH"],
         )

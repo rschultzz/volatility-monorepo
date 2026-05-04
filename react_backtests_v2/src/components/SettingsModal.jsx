@@ -34,6 +34,24 @@ const FIELD_HELP = {
   maxPriorDownUpRatio: 'If the largest prior down move of the session exceeds this multiple of the current up move, the setup is treated as a bounce off the lows and is invalidated.',
   maxStartPctOfRange: "For shorts: pivot must start above this percentile of the session range (0.20 = not in bottom 20%). For longs: target level must be in the bottom X% of the session range (0.50 = must be below the day's midpoint).",
   maxResults: 'Maximum number of result rows returned per scan. Increase for long date ranges.',
+  bypassToggle: 'When off, this filter is bypassed — all candidates pass this stage regardless of the parameter value.',
+};
+
+// Map field keys to their corresponding stage keys for bypass toggles
+const FIELD_TO_STAGE = {
+  minLevelGexBn: 'gex_level_qualifies',
+  minCleanMovePoints: 'clean_space_sufficient',
+  minMinutesAfterOpen: 'pivot_after_open',
+  maxMinutesBeforeClose: 'trade_window_open',
+  maxMoveLossPct: 'consolidation_not_invalidated',
+  maxPriorDownUpRatio: 'prior_context_valid',
+  maxStartPctOfRange: 'prior_context_valid',
+  shortPutSkewIncreasePct: 'skew_signal_fired',
+  shortCallSkewMaxPct: 'skew_signal_fired',
+  longPutSkewMinDecreasePct: 'skew_signal_fired',
+  longCallSkewMinIncreasePct: 'skew_signal_fired',
+  entryWithinTopPts: 'entry_band_hit',
+  entrySearchWindowMinutes: 'entry_band_hit',
 };
 
 const SECTION_CARD = {
@@ -144,6 +162,35 @@ function Field({ label, fieldKey, wide, children }) {
   );
 }
 
+function FilterField({ label, fieldKey, wide, children, bypassFilters, onToggleBypass }) {
+  const stageKey = FIELD_TO_STAGE[fieldKey];
+  const isBypassed = stageKey && bypassFilters.includes(stageKey);
+  
+  return (
+    <label className={`field${wide ? ' field-wide' : ''}`} style={wide ? { gridColumn: '1 / -1' } : {}}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {stageKey && (
+          <input
+            type="checkbox"
+            checked={!isBypassed}
+            onChange={() => onToggleBypass(stageKey)}
+            style={{ width: '14px', height: '14px', cursor: 'pointer' }}
+            title={isBypassed ? 'Filter bypassed' : 'Filter active'}
+          />
+        )}
+        <span style={{ display: 'flex', alignItems: 'center', opacity: isBypassed ? 0.4 : 1 }}>
+          {label}
+          {isBypassed && <span style={{ marginLeft: '6px', fontSize: '9px', color: '#64748b', fontWeight: '600' }}>BYPASSED</span>}
+          <InfoIcon fieldKey={fieldKey} />
+        </span>
+      </span>
+      <div style={{ opacity: isBypassed ? 0.4 : 1 }}>
+        {children}
+      </div>
+    </label>
+  );
+}
+
 export default function SettingsModal({
   isOpen,
   settingsDraft,
@@ -154,6 +201,8 @@ export default function SettingsModal({
   onChange,
   onClose,
   onRun,
+  bypassFilters = [],
+  onToggleBypass = () => {},
 }) {
   if (!isOpen) return null;
 
@@ -199,15 +248,15 @@ export default function SettingsModal({
 
           {/* ── Move detection ── */}
           <SectionCard title="Move detection">
-            <Field label="Minimum level GEX (BN)" fieldKey="minLevelGexBn">
+            <FilterField label="Minimum level GEX (BN)" fieldKey="minLevelGexBn" bypassFilters={bypassFilters} onToggleBypass={onToggleBypass}>
               <input type="number" step="1" value={settingsDraft.minLevelGexBn} onChange={(e) => onChange('minLevelGexBn', e.target.value)} />
-            </Field>
+            </FilterField>
             <Field label="Zone merge distance (pts)" fieldKey="zoneMergeDistancePts">
               <input type="number" step="1" value={settingsDraft.zoneMergeDistancePts} onChange={(e) => onChange('zoneMergeDistancePts', e.target.value)} />
             </Field>
-            <Field label="Minimum clean move (pts)" fieldKey="minCleanMovePoints">
+            <FilterField label="Minimum clean move (pts)" fieldKey="minCleanMovePoints" bypassFilters={bypassFilters} onToggleBypass={onToggleBypass}>
               <input type="number" step="1" value={settingsDraft.minCleanMovePoints} onChange={(e) => onChange('minCleanMovePoints', e.target.value)} />
-            </Field>
+            </FilterField>
             <Field label="Target proximity (pts)" fieldKey="targetProximityPts">
               <input type="number" step="0.5" value={settingsDraft.targetProximityPts} onChange={(e) => onChange('targetProximityPts', e.target.value)} />
             </Field>
@@ -221,18 +270,18 @@ export default function SettingsModal({
                 <option value="both">Primary + strong</option>
               </select>
             </Field>
-            <Field label="Min minutes after open" fieldKey="minMinutesAfterOpen">
+            <FilterField label="Min minutes after open" fieldKey="minMinutesAfterOpen" bypassFilters={bypassFilters} onToggleBypass={onToggleBypass}>
               <input type="number" step="1" min="0" value={settingsDraft.minMinutesAfterOpen} onChange={(e) => onChange('minMinutesAfterOpen', e.target.value)} />
-            </Field>
-            <Field label="Max minutes before close" fieldKey="maxMinutesBeforeClose">
+            </FilterField>
+            <FilterField label="Max minutes before close" fieldKey="maxMinutesBeforeClose" bypassFilters={bypassFilters} onToggleBypass={onToggleBypass}>
               <input type="number" step="5" min="0" value={settingsDraft.maxMinutesBeforeClose} onChange={(e) => onChange('maxMinutesBeforeClose', e.target.value)} />
-            </Field>
-            <Field label="Prior context: max down/up ratio" fieldKey="maxPriorDownUpRatio">
+            </FilterField>
+            <FilterField label="Prior context: max down/up ratio" fieldKey="maxPriorDownUpRatio" bypassFilters={bypassFilters} onToggleBypass={onToggleBypass}>
               <input type="number" step="0.1" min="0" value={settingsDraft.maxPriorDownUpRatio} onChange={(e) => onChange('maxPriorDownUpRatio', e.target.value)} />
-            </Field>
-            <Field label="Prior context: max start % of range" fieldKey="maxStartPctOfRange">
+            </FilterField>
+            <FilterField label="Prior context: max start % of range" fieldKey="maxStartPctOfRange" bypassFilters={bypassFilters} onToggleBypass={onToggleBypass}>
               <input type="number" step="0.01" min="0" max="1" value={settingsDraft.maxStartPctOfRange} onChange={(e) => onChange('maxStartPctOfRange', e.target.value)} />
-            </Field>
+            </FilterField>
           </SectionCard>
 
           {/* ── Range definition ── */}
@@ -243,46 +292,98 @@ export default function SettingsModal({
             <Field label="Max zone breach (pts)" fieldKey="maxZoneBreachPts">
               <input type="number" step="0.5" value={settingsDraft.maxZoneBreachPts} onChange={(e) => onChange('maxZoneBreachPts', e.target.value)} />
             </Field>
-            <Field label="Max move loss before invalidation" fieldKey="maxMoveLossPct">
+            <FilterField label="Max move loss before invalidation" fieldKey="maxMoveLossPct" bypassFilters={bypassFilters} onToggleBypass={onToggleBypass}>
               <input type="number" step="0.05" min="0" max="1" value={settingsDraft.maxMoveLossPct} onChange={(e) => onChange('maxMoveLossPct', e.target.value)} />
-            </Field>
+            </FilterField>
           </SectionCard>
 
           {/* ── Vol signal ── */}
           <SectionCard title="Vol signal">
             {isDownMove ? (
               <>
-                <Field label="Long trigger: min Δ Put Skew decrease %" fieldKey="longPutSkewMinDecreasePct">
+                <FilterField label="Long trigger: min Δ Put Skew decrease %" fieldKey="longPutSkewMinDecreasePct" bypassFilters={bypassFilters} onToggleBypass={onToggleBypass}>
                   <input type="number" step="1" min="0" value={settingsDraft.longPutSkewMinDecreasePct} onChange={(e) => onChange('longPutSkewMinDecreasePct', e.target.value)} />
-                </Field>
-                <Field label="Long trigger: min Δ Call Skew increase %" fieldKey="longCallSkewMinIncreasePct">
+                </FilterField>
+                <FilterField label="Long trigger: min Δ Call Skew increase %" fieldKey="longCallSkewMinIncreasePct" bypassFilters={bypassFilters} onToggleBypass={onToggleBypass}>
                   <input type="number" step="1" min="0" value={settingsDraft.longCallSkewMinIncreasePct} onChange={(e) => onChange('longCallSkewMinIncreasePct', e.target.value)} />
-                </Field>
+                </FilterField>
               </>
             ) : (
               <>
-                <Field label="Short trigger: min Δ Put Skew %" fieldKey="shortPutSkewIncreasePct">
+                <FilterField label="Short trigger: min Δ Put Skew %" fieldKey="shortPutSkewIncreasePct" bypassFilters={bypassFilters} onToggleBypass={onToggleBypass}>
                   <input type="number" step="1" value={settingsDraft.shortPutSkewIncreasePct} onChange={(e) => onChange('shortPutSkewIncreasePct', e.target.value)} />
-                </Field>
-                <Field label="Short trigger: max Δ Call Skew %" fieldKey="shortCallSkewMaxPct">
+                </FilterField>
+                <FilterField label="Short trigger: max Δ Call Skew %" fieldKey="shortCallSkewMaxPct" bypassFilters={bypassFilters} onToggleBypass={onToggleBypass}>
                   <input type="number" step="1" value={settingsDraft.shortCallSkewMaxPct} onChange={(e) => onChange('shortCallSkewMaxPct', e.target.value)} />
-                </Field>
+                </FilterField>
               </>
             )}
           </SectionCard>
 
           {/* ── Trade entry ── */}
           <SectionCard title="Trade entry">
-            <Field label="Entry within top of range (pts)" fieldKey="entryWithinTopPts">
+            <FilterField label="Entry within top of range (pts)" fieldKey="entryWithinTopPts" bypassFilters={bypassFilters} onToggleBypass={onToggleBypass}>
               <input type="number" step="0.5" min="0" value={settingsDraft.entryWithinTopPts} onChange={(e) => onChange('entryWithinTopPts', e.target.value)} />
-            </Field>
-            <Field label="Entry search window (min)" fieldKey="entrySearchWindowMinutes">
+            </FilterField>
+            <FilterField label="Entry search window (min)" fieldKey="entrySearchWindowMinutes" bypassFilters={bypassFilters} onToggleBypass={onToggleBypass}>
               <input type="number" step="1" min="1" value={settingsDraft.entrySearchWindowMinutes} onChange={(e) => onChange('entrySearchWindowMinutes', e.target.value)} />
+            </FilterField>
+          </SectionCard>
+
+          {/* ── Execution mode ── */}
+          <SectionCard title="Execution mode">
+            <Field label="Mode" fieldKey="executionMode" wide>
+              <select
+                value={settingsDraft.executionMode || 'managed'}
+                onChange={(e) => onChange('executionMode', e.target.value)}
+              >
+                <option value="managed">Managed — simulate with stops &amp; TP</option>
+                <option value="study_target_hits">Study target hits — measure forward outcomes from target-touch</option>
+              </select>
+            </Field>
+            <Field label="Forward horizons (minutes)" fieldKey="forwardHorizonsMinutes" wide>
+              <input
+                type="text"
+                value={(settingsDraft.forwardHorizonsMinutes || []).join(', ')}
+                onChange={(e) => {
+                  const parts = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+                  const nums = parts.map(p => parseInt(p, 10)).filter(n => Number.isFinite(n) && n > 0);
+                  onChange('forwardHorizonsMinutes', nums);
+                }}
+                placeholder="30, 60, 90, 120, 180"
+              />
+              <small style={{ display: 'block', color: '#64748b', marginTop: '4px' }}>
+                Comma-separated minutes. EOD is always appended automatically. Only applies in study mode.
+              </small>
+            </Field>
+            <Field label="Condor wing width (pts)" fieldKey="condorWingWidthPts">
+              <input
+                type="number"
+                step="5"
+                min="5"
+                value={settingsDraft.condorWingWidthPts ?? 10}
+                onChange={(e) => onChange('condorWingWidthPts', Number(e.target.value))}
+              />
+              <small style={{ display: 'block', color: '#64748b', marginTop: '4px' }}>
+                Distance from short strikes to long wings on hypothetical ±1σ iron condors. Study mode only.
+              </small>
             </Field>
           </SectionCard>
 
           {/* ── Trade management ── */}
           <SectionCard title="Trade management">
+            {settingsDraft.executionMode === 'study_target_hits' && (
+              <div style={{
+                gridColumn: '1 / -1',
+                fontSize: '12px',
+                color: '#94a3b8',
+                fontStyle: 'italic',
+                padding: '4px 0',
+                marginBottom: '4px',
+              }}>
+                Trade management is ignored in study mode. These values are preserved for when you switch back to managed mode.
+              </div>
+            )}
             {isDownMove ? (
               <>
                 <Field label="Long initial stop (pts)" fieldKey="longInitialStopPts">
