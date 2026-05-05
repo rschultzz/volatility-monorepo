@@ -20,7 +20,7 @@ def fetch_live_orats_data(ticker: str = "SPX") -> Optional[pd.DataFrame]:
     url = f"https://api.orats.io/datav2/live/one-minute/monies/implied?token={token}&ticker={ticker}"
 
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=3)
         response.raise_for_status()
 
         if not response.text.strip():
