@@ -624,6 +624,9 @@ export default function PriceChart({
   // Computed band levels to draw on chart (ES coords, basis-corrected)
   // Shape: { shiftedStart, shiftedEnd, sigmaUpper, sigmaLower, shortPut, longPut, shortCall, longCall, anchorEs }
   bandsLevels = null,
+  // Per-minute 0DTE ATM IV series for the line overlay.
+  // Shape: [{ time: "HH:MM", atm_iv_pct: number }, ...]
+  atmIvSeries = [],
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -635,6 +638,7 @@ export default function PriceChart({
   const gexSegmentBySeriesRef = useRef(new Map())
   const expectedMoveSeriesRefs = useRef([])
   const bandsSeriesRefs = useRef([])
+  const atmIvSeriesRef = useRef(null)
   const intervalRef = useRef(interval)
   const shiftedCandlesRef = useRef([])
   const dragRef = useRef({ active: false, lastY: 0 })
@@ -787,6 +791,18 @@ export default function PriceChart({
   const [draftInterval, setDraftInterval] = useState(() => normalizeIntervalValue(interval, '1min'))
   const [settingsError, setSettingsError] = useState('')
 
+  // ATM IV (0DTE) line overlay toggle — persisted in localStorage so the user's
+  // preference survives reloads. Draft state is only used while the settings
+  // modal is open; applySettings commits it to atmIvLineEnabled.
+  const [atmIvLineEnabled, setAtmIvLineEnabled] = useState(() => {
+    try {
+      return window.localStorage.getItem('ib-react-atm-iv-line') === '1'
+    } catch (e) {
+      return false
+    }
+  })
+  const [draftAtmIvLineEnabled, setDraftAtmIvLineEnabled] = useState(atmIvLineEnabled)
+
   const [floatingPos, setFloatingPos] = useState(() => {
     try {
       const saved = window.localStorage.getItem('ib-react-skew-window-pos')
@@ -880,9 +896,10 @@ export default function PriceChart({
     if (!settingsOpen) {
       setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
       setDraftInterval(normalizeIntervalValue(interval, '1min'))
+      setDraftAtmIvLineEnabled(atmIvLineEnabled)
       setSettingsError('')
     }
-  }, [gexMinAbsB, interval, settingsOpen])
+  }, [gexMinAbsB, interval, atmIvLineEnabled, settingsOpen])
 
   useEffect(() => {
     hideParentTopControls()
@@ -1715,6 +1732,7 @@ export default function PriceChart({
   function openSettings() {
     setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
     setDraftInterval(normalizeIntervalValue(interval, '1min'))
+    setDraftAtmIvLineEnabled(atmIvLineEnabled)
     setSettingsError('')
     setSettingsOpen(true)
   }
@@ -1724,6 +1742,7 @@ export default function PriceChart({
     setSettingsError('')
     setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
     setDraftInterval(normalizeIntervalValue(interval, '1min'))
+    setDraftAtmIvLineEnabled(atmIvLineEnabled)
   }
 
   function applySettings(event) {
@@ -1749,6 +1768,13 @@ export default function PriceChart({
       setSettingsError('Could not sync bar interval with the parent Dash controls.')
       hideParentTopControls()
       return
+    }
+
+    setAtmIvLineEnabled(draftAtmIvLineEnabled)
+    try {
+      window.localStorage.setItem('ib-react-atm-iv-line', draftAtmIvLineEnabled ? '1' : '0')
+    } catch (e) {
+      // ignore quota / privacy-mode errors
     }
 
     hideParentTopControls()
@@ -2015,6 +2041,91 @@ export default function PriceChart({
 
     bandsSeriesRefs.current = nextRefs
   }, [bandsLevels])
+
+  // ── ATM IV (0DTE) line overlay ────────────────────────────────────────
+  // Maps atmIvSeries entries (PT HH:MM → atm_iv_pct) onto the rendered
+  // candles' shifted-epoch times so the IV line aligns to the chart's bars.
+  // Because we walk shiftedCandles (already grouped by `interval`), the line
+  // automatically thins to one point per bar when the user switches to 5min.
+  // Drawn on a dedicated 'iv-overlay' price scale so its 0–100% range doesn't
+  // squash the price candles on the right scale.
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+
+    const tearDown = () => {
+      if (atmIvSeriesRef.current) {
+        try {
+          chart.removeSeries(atmIvSeriesRef.current)
+        } catch (err) {
+          // ignore stale reference
+        }
+        atmIvSeriesRef.current = null
+      }
+    }
+
+    if (!atmIvLineEnabled || !Array.isArray(atmIvSeries) || atmIvSeries.length === 0) {
+      tearDown()
+      return
+    }
+
+    // PT HH:MM → IV %
+    const ivByHHMM = new Map()
+    for (const item of atmIvSeries) {
+      const t = String(item?.time || '').trim()
+      const v = Number(item?.atm_iv_pct)
+      if (/^\d{2}:\d{2}$/.test(t) && Number.isFinite(v)) {
+        ivByHHMM.set(t, v)
+      }
+    }
+    if (ivByHHMM.size === 0) {
+      tearDown()
+      return
+    }
+
+    const points = []
+    for (const bar of shiftedCandles) {
+      const t = Number(bar?.time)
+      if (!Number.isFinite(t)) continue
+      const hhmm = toPtHHMM(t, interval)
+      const iv = ivByHHMM.get(hhmm)
+      if (Number.isFinite(iv)) {
+        points.push({ time: t, value: iv })
+      }
+    }
+
+    if (points.length === 0) {
+      tearDown()
+      return
+    }
+
+    if (!atmIvSeriesRef.current) {
+      try {
+        atmIvSeriesRef.current = chart.addSeries(LineSeries, {
+          color: '#06b6d4',
+          lineWidth: 2,
+          priceScaleId: 'iv-overlay',
+          priceLineVisible: false,
+          lastValueVisible: true,
+          crosshairMarkerVisible: true,
+          pointMarkersVisible: false,
+          priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+        })
+        chart.priceScale('iv-overlay').applyOptions({
+          scaleMargins: { top: 0.08, bottom: 0.08 },
+        })
+      } catch (err) {
+        console.error('[atm-iv] failed to create line series', err)
+        return
+      }
+    }
+
+    try {
+      atmIvSeriesRef.current.setData(points)
+    } catch (err) {
+      console.error('[atm-iv] failed to set data', err)
+    }
+  }, [atmIvLineEnabled, atmIvSeries, shiftedCandles, interval])
 
   const handleFloatingMouseDown = (e) => {
     // Only drag if not clicking on collapse button
@@ -2419,6 +2530,29 @@ export default function PriceChart({
                     )
                   })}
                 </div>
+
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    marginBottom: '14px',
+                    fontSize: '12px',
+                    color: '#cbd5e1',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={draftAtmIvLineEnabled}
+                    onChange={(event) => setDraftAtmIvLineEnabled(event.target.checked)}
+                    style={{ accentColor: '#06b6d4' }}
+                  />
+                  <span>
+                    Show 0DTE ATM IV line{' '}
+                    <span style={{ color: '#06b6d4', fontWeight: 700 }}>(cyan)</span>
+                  </span>
+                </label>
 
                 <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e1', marginBottom: '8px' }}>
                   Min |GEX| (B)

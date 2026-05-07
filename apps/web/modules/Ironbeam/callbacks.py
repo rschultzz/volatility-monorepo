@@ -25,7 +25,7 @@ from modules.Ironbeam.indicators.gex_overlay import build_gex_overlay_traces as 
 from sqlalchemy import create_engine, text
 from flask import jsonify, request
 
-from packages.shared.utils import fetch_skew_data, is_market_hours, fetch_live_orats_data, fetch_data_from_db
+from packages.shared.utils import fetch_atm_iv_minute_series, fetch_skew_data, is_market_hours, fetch_live_orats_data, fetch_data_from_db
 from packages.shared.surface_compare import k_for_abs_delta
 from packages.shared.options_orats import pt_minute_to_et
 
@@ -1561,6 +1561,37 @@ def _build_react_flow_payload(
     }, 200
 
 
+def _build_react_atm_iv_series_payload(
+        trade_date: str | None,
+        expiration_date: str | None,
+) -> tuple[dict, int]:
+    """
+    Per-minute ATM IV (vol50, in %) for plotting as a line on the React price
+    chart. Default expiration_date == trade_date for 0DTE.
+    """
+    if not trade_date:
+        return {"error": "Missing trade_date"}, 400
+    expir = expiration_date or trade_date
+    df = fetch_atm_iv_minute_series(trade_date, expir)
+
+    series: list[dict] = []
+    if df is not None and not df.empty:
+        snap = pd.to_datetime(df["snapshot_pt"])
+        for ts, vol50 in zip(snap, df["vol50"]):
+            if pd.isna(vol50):
+                continue
+            try:
+                pct = float(vol50) * 100.0
+            except (TypeError, ValueError):
+                continue
+            if not (0 < pct <= 100):
+                continue
+            hhmm = ts.strftime("%H:%M") if hasattr(ts, "strftime") else str(ts)
+            series.append({"time": hhmm, "atm_iv_pct": round(pct, 4)})
+
+    return {"series": series}, 200
+
+
 def _build_react_skew_data_payload(
         trade_date: str | None,
         expiration_date: str | None,
@@ -2822,6 +2853,23 @@ def register_ironbeam_callbacks(app):
                     resp.headers["Vary"] = "Origin"
                 return resp, status
             app.server._ironbeam_react_smile_data_route_registered = True
+
+        if not getattr(app.server, "_ironbeam_react_atm_iv_series_route_registered", False):
+            @app.server.route("/api/ironbeam/atm-iv-series", methods=["GET"])
+            def ironbeam_react_atm_iv_series_api():
+                trade_date = request.args.get("trade_date")
+                expiration_date = request.args.get("expiration_date") or trade_date
+                payload, status = _build_react_atm_iv_series_payload(trade_date, expiration_date)
+
+                resp = jsonify(payload)
+                origin = request.headers.get("Origin")
+                allowed = {"http://localhost:5173", "http://127.0.0.1:5173", "http://0.0.0.0:5173"}
+                if origin in allowed:
+                    resp.headers["Access-Control-Allow-Origin"] = origin
+                    resp.headers["Access-Control-Allow-Credentials"] = "true"
+                    resp.headers["Vary"] = "Origin"
+                return resp, status
+            app.server._ironbeam_react_atm_iv_series_route_registered = True
 
     # ---- Clientside Sync: Crosshair & Zoom ----
     app.clientside_callback(
