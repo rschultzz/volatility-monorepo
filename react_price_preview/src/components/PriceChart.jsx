@@ -2050,11 +2050,16 @@ export default function PriceChart({
   // candles' shifted-epoch times so the IV line aligns to the chart's bars.
   // Because we walk shiftedCandles (already grouped by `interval`), the line
   // automatically thins to one point per bar when the user switches to 5min.
-  // Drawn on a dedicated 'iv-overlay' price scale (made visible on the right
-  // so the user gets a real axis with native zoom/pan, separate from the
-  // candle price scale).
-  // Filtered to RTH only (06:30–13:00 PT = 09:30–16:00 ET) — outside RTH the
-  // ORATS smile data isn't meaningful for an ATM IV line.
+  //
+  // Scale: drawn on the built-in 'left' price scale. lightweight-charts only
+  // supports two visible price axes ('left' and 'right'); custom overlay
+  // scales cannot show an axis. Candles use 'right', so the IV axis goes on
+  // the LEFT side, with the same axisPressedMouseMove + mouseWheel zoom/pan
+  // behavior as the price axis.
+  //
+  // RTH gap handling: only 06:30–13:00 PT bars get a value; bars outside RTH
+  // get whitespace ({time} only), which breaks the line over the overnight
+  // session instead of drawing a flat segment across it.
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
@@ -2069,9 +2074,9 @@ export default function PriceChart({
         atmIvSeriesRef.current = null
       }
       try {
-        chart.priceScale('iv-overlay').applyOptions({ visible: false })
+        chart.priceScale('left').applyOptions({ visible: false })
       } catch (err) {
-        // ignore — scale may not exist if no series was ever added
+        // ignore
       }
     }
 
@@ -2089,24 +2094,27 @@ export default function PriceChart({
       if (t < '06:30' || t > '13:00') continue
       ivByHHMM.set(t, v)
     }
-    if (ivByHHMM.size === 0) {
-      tearDown()
-      return
-    }
 
+    let valueCount = 0
     const points = []
     for (const bar of shiftedCandles) {
       const t = Number(bar?.time)
       if (!Number.isFinite(t)) continue
       const hhmm = toPtHHMM(t, interval)
-      if (!hhmm || hhmm < '06:30' || hhmm > '13:00') continue
-      const iv = ivByHHMM.get(hhmm)
+      const inRth = hhmm && hhmm >= '06:30' && hhmm <= '13:00'
+      const iv = inRth ? ivByHHMM.get(hhmm) : undefined
       if (Number.isFinite(iv)) {
         points.push({ time: t, value: iv })
+        valueCount += 1
+      } else {
+        // Whitespace point — keeps the time scale aligned and breaks the
+        // line through overnight / pre-market / post-RTH bars instead of
+        // drawing a flat segment from one session's close to the next.
+        points.push({ time: t })
       }
     }
 
-    if (points.length === 0) {
+    if (valueCount === 0) {
       tearDown()
       return
     }
@@ -2116,7 +2124,7 @@ export default function PriceChart({
         atmIvSeriesRef.current = chart.addSeries(LineSeries, {
           color: '#06b6d4',
           lineWidth: 2,
-          priceScaleId: 'iv-overlay',
+          priceScaleId: 'left',
           priceLineVisible: false,
           lastValueVisible: true,
           crosshairMarkerVisible: true,
@@ -2129,12 +2137,8 @@ export default function PriceChart({
       }
     }
 
-    // Show the IV scale on the right side (overlay scale, distinct from the
-    // built-in candle 'right' scale). axisPressedMouseMove + mouseWheel are
-    // enabled at the chart level, so the user gets native pan/zoom on this
-    // axis identical to the price axis.
     try {
-      chart.priceScale('iv-overlay').applyOptions({
+      chart.priceScale('left').applyOptions({
         visible: true,
         borderVisible: true,
         borderColor: 'rgba(6, 182, 212, 0.45)',
