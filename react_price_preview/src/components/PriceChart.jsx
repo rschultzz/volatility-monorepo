@@ -177,6 +177,17 @@ function computeSessionBands(chart, shiftedCandles, viewportWidth) {
   const width = Math.max(0, Number(viewportWidth) || 0)
   if (!width) return []
 
+  // timeToCoordinate returns x relative to the chart's main pane, which
+  // starts AFTER the left price scale when one is visible. Our band divs
+  // are positioned absolutely from the stage's left edge, which includes
+  // the axis area — so we need to add the left scale's width back.
+  let leftAxisWidth = 0
+  try {
+    leftAxisWidth = Number(chart.priceScale('left').width()) || 0
+  } catch (err) {
+    leftAxisWidth = 0
+  }
+
   const groups = []
   let current = null
 
@@ -207,8 +218,8 @@ function computeSessionBands(chart, shiftedCandles, viewportWidth) {
 
     if (startX == null || endX == null) continue
 
-    const rawLeft = Math.min(startX, endX) - barSpacing * 0.5
-    const rawRight = Math.max(startX, endX) + barSpacing * 0.5
+    const rawLeft = Math.min(startX, endX) - barSpacing * 0.5 + leftAxisWidth
+    const rawRight = Math.max(startX, endX) + barSpacing * 0.5 + leftAxisWidth
 
     if (!Number.isFinite(rawLeft) || !Number.isFinite(rawRight)) continue
     if (rawRight <= 0 || rawLeft >= width) continue
@@ -638,7 +649,7 @@ export default function PriceChart({
   const gexSegmentBySeriesRef = useRef(new Map())
   const expectedMoveSeriesRefs = useRef([])
   const bandsSeriesRefs = useRef([])
-  const atmIvSeriesRef = useRef(null)
+  const atmIvSeriesRefs = useRef([])
   const intervalRef = useRef(interval)
   const shiftedCandlesRef = useRef([])
   const dragRef = useRef({ active: false, lastY: 0 })
@@ -2048,31 +2059,30 @@ export default function PriceChart({
   // ── ATM IV (0DTE) line overlay ────────────────────────────────────────
   // Maps atmIvSeries entries (PT HH:MM → atm_iv_pct) onto the rendered
   // candles' shifted-epoch times so the IV line aligns to the chart's bars.
-  // Because we walk shiftedCandles (already grouped by `interval`), the line
-  // automatically thins to one point per bar when the user switches to 5min.
+  // Switching 1min↔5min auto-thins because we iterate the chart's bars.
   //
   // Scale: drawn on the built-in 'left' price scale. lightweight-charts only
-  // supports two visible price axes ('left' and 'right'); custom overlay
-  // scales cannot show an axis. Candles use 'right', so the IV axis goes on
-  // the LEFT side, with the same axisPressedMouseMove + mouseWheel zoom/pan
-  // behavior as the price axis.
+  // supports two visible price axes ('left' and 'right'); 'right' is taken
+  // by candles, so the IV axis goes on the LEFT side, with the same
+  // axisPressedMouseMove + mouseWheel zoom/pan behavior as the price axis.
   //
-  // RTH gap handling: only 06:30–13:00 PT bars get a value; bars outside RTH
-  // get whitespace ({time} only), which breaks the line over the overnight
-  // session instead of drawing a flat segment across it.
+  // Session breaks: the candles backend filters out overnight bars, so we
+  // can't rely on whitespace-at-non-RTH to break the line. Instead we group
+  // the IV points by session date and create one LineSeries per session —
+  // independent series never connect across the gap.
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
 
     const tearDown = () => {
-      if (atmIvSeriesRef.current) {
+      for (const s of atmIvSeriesRefs.current) {
         try {
-          chart.removeSeries(atmIvSeriesRef.current)
+          chart.removeSeries(s)
         } catch (err) {
           // ignore stale reference
         }
-        atmIvSeriesRef.current = null
       }
+      atmIvSeriesRefs.current = []
       try {
         chart.priceScale('left').applyOptions({ visible: false })
       } catch (err) {
@@ -2095,46 +2105,63 @@ export default function PriceChart({
       ivByHHMM.set(t, v)
     }
 
-    let valueCount = 0
-    const points = []
+    // Group points by shifted-date (one bucket per session).
+    const sessions = new Map()
     for (const bar of shiftedCandles) {
       const t = Number(bar?.time)
       if (!Number.isFinite(t)) continue
       const hhmm = toPtHHMM(t, interval)
-      const inRth = hhmm && hhmm >= '06:30' && hhmm <= '13:00'
-      const iv = inRth ? ivByHHMM.get(hhmm) : undefined
-      if (Number.isFinite(iv)) {
-        points.push({ time: t, value: iv })
-        valueCount += 1
-      } else {
-        // Whitespace point — keeps the time scale aligned and breaks the
-        // line through overnight / pre-market / post-RTH bars instead of
-        // drawing a flat segment from one session's close to the next.
-        points.push({ time: t })
-      }
+      if (!hhmm || hhmm < '06:30' || hhmm > '13:00') continue
+      const iv = ivByHHMM.get(hhmm)
+      if (!Number.isFinite(iv)) continue
+      const key = shiftedDateKey(t)
+      if (!sessions.has(key)) sessions.set(key, [])
+      sessions.get(key).push({ time: t, value: iv })
     }
 
-    if (valueCount === 0) {
-      tearDown()
+    // Always tear down and rebuild — sessions can drop in/out of view as
+    // candles arrive, and lightweight-charts requires sorted unique times
+    // per series. Per-session rebuild is simplest and cheap.
+    tearDown.skipScale = true
+    for (const s of atmIvSeriesRefs.current) {
+      try { chart.removeSeries(s) } catch (err) { /* ignore */ }
+    }
+    atmIvSeriesRefs.current = []
+
+    if (sessions.size === 0) {
+      try {
+        chart.priceScale('left').applyOptions({ visible: false })
+      } catch (err) { /* ignore */ }
       return
     }
 
-    if (!atmIvSeriesRef.current) {
+    const seriesOpts = {
+      color: '#06b6d4',
+      lineWidth: 2,
+      priceScaleId: 'left',
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerVisible: true,
+      pointMarkersVisible: false,
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+    }
+
+    for (const [, points] of sessions) {
+      if (points.length === 0) continue
       try {
-        atmIvSeriesRef.current = chart.addSeries(LineSeries, {
-          color: '#06b6d4',
-          lineWidth: 2,
-          priceScaleId: 'left',
-          priceLineVisible: false,
-          lastValueVisible: true,
-          crosshairMarkerVisible: true,
-          pointMarkersVisible: false,
-          priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-        })
+        const series = chart.addSeries(LineSeries, seriesOpts)
+        series.setData(points)
+        atmIvSeriesRefs.current.push(series)
       } catch (err) {
-        console.error('[atm-iv] failed to create line series', err)
-        return
+        console.error('[atm-iv] failed to add session series', err)
       }
+    }
+
+    if (atmIvSeriesRefs.current.length === 0) {
+      try {
+        chart.priceScale('left').applyOptions({ visible: false })
+      } catch (err) { /* ignore */ }
+      return
     }
 
     try {
@@ -2149,11 +2176,21 @@ export default function PriceChart({
       console.error('[atm-iv] failed to configure price scale', err)
     }
 
-    try {
-      atmIvSeriesRef.current.setData(points)
-    } catch (err) {
-      console.error('[atm-iv] failed to set data', err)
-    }
+    // The left axis becoming visible/hidden shifts the chart's main pane
+    // horizontally, which moves where session-band divs should sit. Recompute
+    // them on the next frame so the band offsets pick up the new axis width.
+    requestAnimationFrame(() => {
+      try {
+        const next = computeSessionBands(
+          chart,
+          shiftedCandlesRef.current,
+          stageRef.current?.clientWidth || 0
+        )
+        setSessionBands(next)
+      } catch (err) {
+        // ignore
+      }
+    })
   }, [atmIvLineEnabled, atmIvSeries, shiftedCandles, interval])
 
   const handleFloatingMouseDown = (e) => {
