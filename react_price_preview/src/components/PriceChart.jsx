@@ -1242,20 +1242,45 @@ export default function PriceChart({
       priceScale.setVisibleRange(next)
     }
 
-    // Vertical-only zoom for the IV (left) scale. Independent of the candle
-    // scale and the time scale — wheeling on the IV axis must not pan the
-    // chart left/right. Anchors at the cursor's IV value when an IV series
-    // is mounted (so the line under the cursor stays fixed during zoom),
+    // Resolve the IV scale via the actual mounted series rather than via
+    // chart.priceScale('left'). If lightweight-charts has somehow rebound
+    // an IV series to a different scale, series.priceScale() will return
+    // that scale — and we'll be operating on the scale the line is really
+    // drawn on. Logs include identity comparison vs. the right scale so we
+    // can detect accidental rebinding.
+    const resolveIvScale = (label) => {
+      const series = atmIvSeriesRefs.current[0]
+      const candleScale = chart.priceScale('right')
+      if (!series) {
+        console.log('[iv-debug]', label, 'no IV series mounted')
+        return null
+      }
+      let viaSeries = null
+      try { viaSeries = series.priceScale() } catch (err) { /* ignore */ }
+      let viaId = null
+      try { viaId = chart.priceScale('left') } catch (err) { /* ignore */ }
+      const sameAsRight = viaSeries && candleScale && viaSeries === candleScale
+      const idMatchesSeries = viaSeries && viaId && viaSeries === viaId
+      console.log('[iv-debug]', label, {
+        seriesCount: atmIvSeriesRefs.current.length,
+        sameAsRight,
+        idMatchesSeries,
+      })
+      return viaSeries || viaId
+    }
+
+    // Vertical-only zoom for the IV scale. Independent of the candle scale
+    // and the time scale — wheeling on the IV axis must not pan the chart
+    // left/right. Anchors at the cursor's IV value when an IV series is
+    // mounted (so the line under the cursor stays fixed during zoom),
     // otherwise falls back to the visible range midpoint.
     const zoomIvAtY = (deltaY, yCoord) => {
-      const ivScale = chart.priceScale('left')
+      const ivScale = resolveIvScale('zoomIv')
+      if (!ivScale) return
       let vr = null
-      try {
-        vr = ivScale.getVisibleRange()
-      } catch (err) {
-        vr = null
-      }
+      try { vr = ivScale.getVisibleRange() } catch (err) { vr = null }
       if (!vr || !Number.isFinite(vr.from) || !Number.isFinite(vr.to) || vr.to <= vr.from) {
+        console.log('[iv-debug] zoomIv: no usable visible range', vr)
         return
       }
       const plotHeight = getPlotHeight(stage)
@@ -1278,20 +1303,20 @@ export default function PriceChart({
         ivScale.applyOptions({ autoScale: false })
         ivScale.setVisibleRange(next)
       } catch (err) {
-        // ignore — scale may have been hidden mid-event
+        // ignore
       }
     }
 
     const panIvByPixels = (deltaY) => {
       if (!Number.isFinite(deltaY) || deltaY === 0) return
-      const ivScale = chart.priceScale('left')
+      const ivScale = resolveIvScale('panIv')
+      if (!ivScale) return
       let vr = null
-      try {
-        vr = ivScale.getVisibleRange()
-      } catch (err) {
-        vr = null
+      try { vr = ivScale.getVisibleRange() } catch (err) { vr = null }
+      if (!vr || !Number.isFinite(vr.from) || !Number.isFinite(vr.to) || vr.to <= vr.from) {
+        console.log('[iv-debug] panIv: no usable visible range', vr)
+        return
       }
-      if (!vr || !Number.isFinite(vr.from) || !Number.isFinite(vr.to) || vr.to <= vr.from) return
       const plotHeight = getPlotHeight(stage)
       const deltaPrice = (deltaY / plotHeight) * (vr.to - vr.from)
       try {
@@ -1600,6 +1625,7 @@ export default function PriceChart({
       // Drag on the IV axis → pan IV scale only (mirrors the right-axis
       // native zoom behavior). Don't fall through to the candle-pan path.
       if (info.overLeftPriceAxis) {
+        console.log('[iv-debug] mousedown → scale=left (over IV axis)')
         dragRef.current = { active: true, lastY: evt.clientY, scale: 'left' }
         return
       }
@@ -1607,10 +1633,17 @@ export default function PriceChart({
       // of the candles. The candles and IV overlap the same plot area, so
       // we need an explicit modifier to disambiguate intent.
       if (evt.shiftKey && atmIvSeriesRefs.current.length > 0) {
+        console.log('[iv-debug] mousedown → scale=left (shift+drag)', {
+          seriesCount: atmIvSeriesRefs.current.length,
+        })
         evt.preventDefault()
         dragRef.current = { active: true, lastY: evt.clientY, scale: 'left' }
         return
       }
+      console.log('[iv-debug] mousedown → scale=right', {
+        shiftKey: evt.shiftKey,
+        seriesCount: atmIvSeriesRefs.current.length,
+      })
       dragRef.current = { active: true, lastY: evt.clientY, scale: 'right' }
     }
 
