@@ -712,6 +712,18 @@ export default function PriceChart({
     }
   })
 
+  // Min |GEX| (B) filter for the panel — independent of the chart's gexMinAbsB.
+  // The chart settings still control what's plotted; this controls only the panel list.
+  const [gexPanelMinAbsB, setGexPanelMinAbsB] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem('ib-react-gex-panel-min-abs-b')
+      if (raw == null || raw === '') return 10
+      return coerceGexMinAbsB(raw, 10)
+    } catch (e) {
+      return 10
+    }
+  })
+
   // GEX panel drag-position state (chart-relative pixels). null = use default top-right anchor.
   const [gexPanelPos, setGexPanelPos] = useState(() => {
     try {
@@ -766,6 +778,15 @@ export default function PriceChart({
       // ignore quota / disabled storage
     }
   }, [gexPanelMaxDte])
+
+  // Persist panel Min |GEX| (B) filter across sessions
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('ib-react-gex-panel-min-abs-b', String(gexPanelMinAbsB))
+    } catch (e) {
+      // ignore quota / disabled storage
+    }
+  }, [gexPanelMinAbsB])
 
   // Persist panel drag position (null = no persisted position, fall back to default anchor)
   useEffect(() => {
@@ -980,15 +1001,16 @@ export default function PriceChart({
   //   line from another session still works — the popup uses that segment's own
   //   data directly and ignores this filter).
   // - Always drops expired (dte < 0) rows.
-  // - When maxDte is set: drops expirations with dte > maxDte, then recomputes
-  //   net/call/put gamma per level, then drops levels whose |net| < gexMinAbsB
-  //   (matching the existing visibility threshold from the URL params).
-  // - When maxDte is null (show all): uses original totals untouched.
-  // - Sorted by |net_gamma| descending in both cases.
+  // - When maxDte is set: drops expirations with dte > maxDte and recomputes
+  //   net/call/put gamma per level from the surviving expirations.
+  // - Then drops levels whose |net| < gexPanelMinAbsB. This filter is panel-local
+  //   and intentionally decoupled from the chart's gexMinAbsB so the legend can
+  //   be filtered independently of what's plotted.
+  // - Sorted by |net_gamma| descending.
   const sortedGexSegmentsForPanel = useMemo(() => {
     if (!Array.isArray(normalizedGexSegments)) return []
     const showAll = gexPanelMaxDte == null
-    const minAbs = Math.max(0, Number(gexMinAbsB) || 0) * 1e9 // threshold in raw $
+    const minAbs = Math.max(0, Number(gexPanelMinAbsB) || 0) * 1e9 // threshold in raw $
     const tradeDateStr = String(tradeDate || '').trim()
 
     const out = []
@@ -1009,22 +1031,27 @@ export default function PriceChart({
         return true
       })
 
+      let net
+      let call
+      let put
       if (showAll) {
-        // No recomputation — original headline numbers and visibleExp ride along
-        out.push({ ...seg, expirations: visibleExp })
-        continue
+        // No DTE filter: use original headline numbers
+        net = Number(seg?.net_gamma) || 0
+        call = Number(seg?.call_gamma) || 0
+        put = Number(seg?.put_gamma) || 0
+      } else {
+        // DTE filter active: recompute from surviving expirations
+        net = 0
+        call = 0
+        put = 0
+        for (const e of visibleExp) {
+          net += Number(e?.net_gamma) || 0
+          call += Number(e?.call_gamma) || 0
+          put += Number(e?.put_gamma) || 0
+        }
       }
 
-      // Slider active: recompute headline numbers from the surviving expirations
-      let net = 0
-      let call = 0
-      let put = 0
-      for (const e of visibleExp) {
-        net += Number(e?.net_gamma) || 0
-        call += Number(e?.call_gamma) || 0
-        put += Number(e?.put_gamma) || 0
-      }
-      // Drop levels that fall below the visibility threshold under this filter
+      // Apply the panel-local Min |GEX| threshold to whatever net we ended up with
       if (Math.abs(net) < minAbs) continue
 
       out.push({
@@ -1040,7 +1067,24 @@ export default function PriceChart({
       (a, b) => Math.abs(Number(b?.net_gamma) || 0) - Math.abs(Number(a?.net_gamma) || 0),
     )
     return out
-  }, [normalizedGexSegments, gexPanelMaxDte, gexMinAbsB, tradeDate])
+  }, [normalizedGexSegments, gexPanelMaxDte, gexPanelMinAbsB, tradeDate])
+
+  // Totals across the panel's currently-visible levels.
+  //   Gross = Σ (call_gamma + |put_gamma|)
+  //   Net   = Σ (call_gamma - |put_gamma|)
+  // Reflects both the Max DTE slider and the panel-local Min |GEX| filter,
+  // since sortedGexSegmentsForPanel already has both applied.
+  const gexPanelTotals = useMemo(() => {
+    let gross = 0
+    let net = 0
+    for (const seg of sortedGexSegmentsForPanel) {
+      const c = Number(seg?.call_gamma) || 0
+      const p = Math.abs(Number(seg?.put_gamma) || 0)
+      gross += c + p
+      net += c - p
+    }
+    return { gross, net }
+  }, [sortedGexSegmentsForPanel])
 
   const normalizedExpectedMoveLevels = useMemo(
     () => normalizeExpectedMoveLevels(expectedMoveLevels),
@@ -3495,6 +3539,201 @@ export default function PriceChart({
                     </div>
                   </div>
                 )}
+
+                {/* Min |GEX| (B) — panel-local, independent of chart's gexMinAbsB */}
+                <div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'baseline',
+                      marginBottom: '4px',
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: '#94a3b8',
+                        fontSize: '10px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.06em',
+                        fontWeight: 700,
+                      }}
+                    >
+                      Min |GEX| (B)
+                    </span>
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        color: '#cbd5e1',
+                        fontVariantNumeric: 'tabular-nums',
+                      }}
+                    >
+                      ≥ {gexPanelMinAbsB}B
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGexPanelMinAbsB((v) => coerceGexMinAbsB(v - 1, 0))
+                      }}
+                      disabled={gexPanelMinAbsB <= 0}
+                      aria-label="Decrease Min |GEX| by 1"
+                      style={{
+                        width: '24px',
+                        height: '24px',
+                        flexShrink: 0,
+                        background: 'rgba(148, 163, 184, 0.12)',
+                        border: '1px solid rgba(148, 163, 184, 0.24)',
+                        borderRadius: '6px',
+                        color: '#cbd5e1',
+                        fontSize: '14px',
+                        fontWeight: 700,
+                        lineHeight: 1,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: 0,
+                        opacity: gexPanelMinAbsB <= 0 ? 0.4 : 1,
+                      }}
+                      title="Decrease by 1B"
+                    >
+                      −
+                    </button>
+                    <input
+                      type="range"
+                      min={0}
+                      max={200}
+                      step={1}
+                      value={gexPanelMinAbsB}
+                      onChange={(e) => {
+                        setGexPanelMinAbsB(coerceGexMinAbsB(e.target.value, 10))
+                      }}
+                      style={{
+                        flex: 1,
+                        accentColor: '#60a5fa',
+                        cursor: 'pointer',
+                        minWidth: 0,
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGexPanelMinAbsB((v) => coerceGexMinAbsB(v + 1, 0))
+                      }}
+                      disabled={gexPanelMinAbsB >= 200}
+                      aria-label="Increase Min |GEX| by 1"
+                      style={{
+                        width: '24px',
+                        height: '24px',
+                        flexShrink: 0,
+                        background: 'rgba(148, 163, 184, 0.12)',
+                        border: '1px solid rgba(148, 163, 184, 0.24)',
+                        borderRadius: '6px',
+                        color: '#cbd5e1',
+                        fontSize: '14px',
+                        fontWeight: 700,
+                        lineHeight: 1,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: 0,
+                        opacity: gexPanelMinAbsB >= 200 ? 0.4 : 1,
+                      }}
+                      title="Increase by 1B"
+                    >
+                      +
+                    </button>
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      color: '#64748b',
+                      fontSize: '10px',
+                      marginTop: '2px',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    <span>0</span>
+                    <span>200</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Totals — Gross & Net summed across the panel's currently-visible levels.
+                  Reflects the Max DTE slider and the panel's Min |GEX| filter. */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '8px 12px',
+                  borderBottom: '1px solid rgba(148,163,184,0.18)',
+                  background: 'rgba(30, 41, 59, 0.4)',
+                  flexShrink: 0,
+                  gap: '10px',
+                }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+                  <span
+                    style={{
+                      color: '#94a3b8',
+                      fontSize: '10px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.06em',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Gross
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      color: '#e5e7eb',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {fmtGammaB(gexPanelTotals.gross)}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, alignItems: 'flex-end' }}>
+                  <span
+                    style={{
+                      color: '#94a3b8',
+                      fontSize: '10px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.06em',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Net
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      color:
+                        gexPanelTotals.net > 0
+                          ? '#86efac'
+                          : gexPanelTotals.net < 0
+                            ? '#fca5a5'
+                            : '#e5e7eb',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {fmtGammaB(gexPanelTotals.net)}
+                  </span>
+                </div>
               </div>
 
               {/* Rows */}
