@@ -1561,23 +1561,27 @@ def _build_react_flow_payload(
     }, 200
 
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def _build_react_atm_iv_series_payload(
-        trade_date: str | None,
-        expiration_date: str | None,
+        trade_dates: list[str] | None,
 ) -> tuple[dict, int]:
     """
-    Per-minute ATM IV (vol50, in %) for plotting as a line on the React price
-    chart. Default expiration_date == trade_date for 0DTE.
+    Per-minute 0DTE ATM IV (vol50, in %) for plotting as a line on the React
+    price chart. Pulls one row per minute per requested trade_date, filtered
+    to trade_date == expir_date so each session uses its own 0DTE surface.
     """
-    if not trade_date:
-        return {"error": "Missing trade_date"}, 400
-    expir = expiration_date or trade_date
-    df = fetch_atm_iv_minute_series(trade_date, expir)
+    valid_dates = [d for d in (trade_dates or []) if _DATE_RE.match(str(d) or "")]
+    if not valid_dates:
+        return {"error": "Missing or malformed trade_dates"}, 400
+    df = fetch_atm_iv_minute_series(valid_dates)
 
     series: list[dict] = []
     if df is not None and not df.empty:
         snap = pd.to_datetime(df["snapshot_pt"])
-        for ts, vol50 in zip(snap, df["vol50"]):
+        td = pd.to_datetime(df["trade_date"]).dt.strftime("%Y-%m-%d")
+        for ts, date_iso, vol50 in zip(snap, td, df["vol50"]):
             if pd.isna(vol50):
                 continue
             try:
@@ -1587,7 +1591,11 @@ def _build_react_atm_iv_series_payload(
             if not (0 < pct <= 100):
                 continue
             hhmm = ts.strftime("%H:%M") if hasattr(ts, "strftime") else str(ts)
-            series.append({"time": hhmm, "atm_iv_pct": round(pct, 4)})
+            series.append({
+                "date": date_iso,
+                "time": hhmm,
+                "atm_iv_pct": round(pct, 4),
+            })
 
     return {"series": series}, 200
 
@@ -2857,9 +2865,16 @@ def register_ironbeam_callbacks(app):
         if not getattr(app.server, "_ironbeam_react_atm_iv_series_route_registered", False):
             @app.server.route("/api/ironbeam/atm-iv-series", methods=["GET"])
             def ironbeam_react_atm_iv_series_api():
-                trade_date = request.args.get("trade_date")
-                expiration_date = request.args.get("expiration_date") or trade_date
-                payload, status = _build_react_atm_iv_series_payload(trade_date, expiration_date)
+                # Accept either `trade_dates=YYYY-MM-DD,YYYY-MM-DD` (preferred,
+                # one entry per session visible on the chart) or a single
+                # `trade_date=YYYY-MM-DD` for backwards compatibility.
+                trade_dates_str = request.args.get("trade_dates")
+                if trade_dates_str:
+                    trade_dates = [s.strip() for s in trade_dates_str.split(",") if s.strip()]
+                else:
+                    single = request.args.get("trade_date")
+                    trade_dates = [single] if single else []
+                payload, status = _build_react_atm_iv_series_payload(trade_dates)
 
                 resp = jsonify(payload)
                 origin = request.headers.get("Origin")

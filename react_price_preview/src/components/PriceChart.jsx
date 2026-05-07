@@ -2095,14 +2095,18 @@ export default function PriceChart({
       return
     }
 
-    // PT HH:MM → IV %, RTH-only (06:30–13:00 PT inclusive)
-    const ivByHHMM = new Map()
+    // (session date, PT HH:MM) → IV %, RTH-only (06:30–13:00 PT inclusive).
+    // Keying on the date too is critical: yesterday's 08:30 IV must not be
+    // looked up for today's 08:30 candle.
+    const ivByDateHHMM = new Map()
     for (const item of atmIvSeries) {
+      const date = String(item?.date || '').trim()
       const t = String(item?.time || '').trim()
       const v = Number(item?.atm_iv_pct)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue
       if (!/^\d{2}:\d{2}$/.test(t) || !Number.isFinite(v)) continue
       if (t < '06:30' || t > '13:00') continue
-      ivByHHMM.set(t, v)
+      ivByDateHHMM.set(`${date}|${t}`, v)
     }
 
     // Group points by shifted-date (one bucket per session).
@@ -2112,11 +2116,11 @@ export default function PriceChart({
       if (!Number.isFinite(t)) continue
       const hhmm = toPtHHMM(t, interval)
       if (!hhmm || hhmm < '06:30' || hhmm > '13:00') continue
-      const iv = ivByHHMM.get(hhmm)
+      const date = shiftedDateKey(t)
+      const iv = ivByDateHHMM.get(`${date}|${hhmm}`)
       if (!Number.isFinite(iv)) continue
-      const key = shiftedDateKey(t)
-      if (!sessions.has(key)) sessions.set(key, [])
-      sessions.get(key).push({ time: t, value: iv })
+      if (!sessions.has(date)) sessions.set(date, [])
+      sessions.get(date).push({ time: t, value: iv })
     }
 
     // Always tear down and rebuild — sessions can drop in/out of view as

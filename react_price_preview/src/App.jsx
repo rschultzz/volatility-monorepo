@@ -1405,12 +1405,19 @@ export default function App() {
     }
   }, [apiBase, tradeDate, expirationDate, selectedTimes, expectedOn, loadingCenter, error])
 
-  // --- ATM IV minute-series fetch (0DTE: trade_date == expiration_date) ---
-  // Independent of the skew/smile selectedTimes — this is the full-day series
-  // for the price-chart line overlay.
+  // --- ATM IV minute-series fetch (0DTE: per-session trade_date == expir) ---
+  // Pulls the 0DTE ATM IV series for every session visible on the chart so
+  // that yesterday's bars use yesterday's IV, today's use today's, etc.
+  // Memoized into a stable comma-separated date key so the fetch only re-runs
+  // when the set of loaded dates actually changes.
+  const atmIvDatesKey = useMemo(
+    () => loadedFlowDates.join(','),
+    [loadedFlowDates]
+  )
+
   useEffect(() => {
     if (loadingCenter || error) return undefined
-    if (!tradeDate) return undefined
+    if (!atmIvDatesKey) return undefined
 
     let disposed = false
     let inFlight = false
@@ -1423,8 +1430,7 @@ export default function App() {
       activeController = controller
       try {
         const url = new URL(`${apiBase}/api/ironbeam/atm-iv-series`)
-        url.searchParams.set('trade_date', tradeDate)
-        url.searchParams.set('expiration_date', tradeDate)
+        url.searchParams.set('trade_dates', atmIvDatesKey)
 
         const response = await fetch(url.toString(), {
           method: 'GET',
@@ -1453,7 +1459,7 @@ export default function App() {
       window.clearInterval(timer)
       if (activeController) activeController.abort()
     }
-  }, [apiBase, tradeDate, loadingCenter, error])
+  }, [apiBase, atmIvDatesKey, loadingCenter, error])
 
   useEffect(() => {
     const handleMove = (event) => {
