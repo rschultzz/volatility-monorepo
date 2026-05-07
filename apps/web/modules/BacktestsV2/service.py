@@ -337,17 +337,20 @@ def _classify_gex_regime(signed_gex_bn: Optional[float]) -> str:
 @lru_cache(maxsize=512)
 def _load_signed_gex_for_date(trade_date_iso: str) -> pd.DataFrame:
     """
-    Load signed net GEX per discounted_level for a given trade date.
+    Load per-discounted_level GEX for a given trade date.
     Returns one row per discounted_level (closest SPX strike's coordinate),
-    with TWO signed sums:
+    with both NET (signed) and GROSS (magnitude) sums for 0DTE and all-exp:
       - signed_gex_0dte: SUM(gex_call - gex_put) for expir_date = trade_date
       - signed_gex_all:  SUM(gex_call - gex_put) across all expirations
+      - gross_gex_0dte:  SUM(|gex_call| + |gex_put|) for expir_date = trade_date
+      - gross_gex_all:   SUM(|gex_call| + |gex_put|) across all expirations
 
-    The 'all' sum aggregates every listed strike at the same discounted_level —
-    i.e., it's analogous to gex_walls_daily_rounded.net_gex_level but signed
-    instead of gross.
+    The 'all' sums aggregate every listed strike at the same discounted_level —
+    analogous to gex_walls_daily_rounded.net_gex_level. Net = directional
+    pressure (positive = dealers long gamma); gross = total dealer
+    positioning magnitude irrespective of direction.
 
-    For both columns, we take the most recent updated_at row per
+    For all columns, we take the most recent updated_at row per
     (strike, expir_date) before aggregating.
 
     Returns empty DataFrame on miss. Cached per process via lru_cache.
@@ -374,7 +377,8 @@ def _load_signed_gex_for_date(trade_date_iso: str) -> pd.DataFrame:
                 strike,
                 discounted_level,
                 expir_date,
-                (COALESCE(gex_call, 0) - COALESCE(gex_put, 0)) AS signed_gex
+                (COALESCE(gex_call, 0) - COALESCE(gex_put, 0)) AS signed_gex,
+                (ABS(COALESCE(gex_call, 0)) + ABS(COALESCE(gex_put, 0))) AS gross_gex
             FROM ranked
             WHERE rn = 1
               AND discounted_level IS NOT NULL
@@ -382,7 +386,9 @@ def _load_signed_gex_for_date(trade_date_iso: str) -> pd.DataFrame:
         SELECT
             discounted_level,
             SUM(CASE WHEN expir_date = :trade_date THEN signed_gex ELSE 0 END) AS signed_gex_0dte,
-            SUM(signed_gex) AS signed_gex_all
+            SUM(signed_gex) AS signed_gex_all,
+            SUM(CASE WHEN expir_date = :trade_date THEN gross_gex  ELSE 0 END) AS gross_gex_0dte,
+            SUM(gross_gex) AS gross_gex_all
         FROM per_row
         GROUP BY discounted_level
         ORDER BY discounted_level
@@ -393,7 +399,11 @@ def _load_signed_gex_for_date(trade_date_iso: str) -> pd.DataFrame:
             df = pd.read_sql(sql, conn, params={"trade_date": trade_date_iso})
         return df
     except Exception:
-        return pd.DataFrame(columns=["discounted_level", "signed_gex_0dte", "signed_gex_all"])
+        return pd.DataFrame(columns=[
+            "discounted_level",
+            "signed_gex_0dte", "signed_gex_all",
+            "gross_gex_0dte",  "gross_gex_all",
+        ])
 
 
 def _signed_gex_at_es_level(
@@ -464,6 +474,91 @@ def _signed_gex_at_es_level(
         "matched_dl":        float(row.get("discounted_level")) if row.get("discounted_level") is not None else None,
         "match_distance":    round(distance, 4),
     }
+
+
+def _gex_aggregates_around_level(
+    df: pd.DataFrame,
+    anchor_es: Optional[float],
+    sigma_pts: Optional[float],
+) -> Dict[str, Any]:
+    """
+    Compute date-wide and proximity-banded GEX aggregates (in BN), using the
+    pre-loaded per-discounted_level frame from _load_signed_gex_for_date.
+
+    Totals (anchor-independent) are returned for both 0DTE and all-exp,
+    in net (gex_call - gex_put) and gross (|call| + |put|) flavors.
+
+    Proximity aggregates are 0DTE-only and use distance from `anchor_es`
+    in points, expressed as multiples of `sigma_pts`. Returned in two
+    framings:
+      - banded (cumulative): everything within ±k·σ
+      - ringed (disjoint):   everything in [k1·σ, k2·σ]
+
+    `within_1s_*` covers the [0, 1σ] inner ring; ringed columns are only
+    needed for the outer rings (1σ–1.5σ, 1.5σ–2σ).
+
+    All BN values rounded to 4 decimals. Returns None for proximity
+    fields when σ is missing/non-positive.
+    """
+    BN = 1_000_000_000.0
+    blank = {
+        "total_0dte_net_bn":       None,
+        "total_0dte_gross_bn":     None,
+        "total_all_net_bn":        None,
+        "total_all_gross_bn":      None,
+        "within_1s_net_bn":        None,
+        "within_1s_gross_bn":      None,
+        "within_1_5s_net_bn":      None,
+        "within_1_5s_gross_bn":    None,
+        "within_2s_net_bn":        None,
+        "within_2s_gross_bn":      None,
+        "ring_1s_1_5s_net_bn":     None,
+        "ring_1s_1_5s_gross_bn":   None,
+        "ring_1_5s_2s_net_bn":     None,
+        "ring_1_5s_2s_gross_bn":   None,
+    }
+    if df is None or df.empty:
+        return blank
+
+    out = dict(blank)
+    out["total_0dte_net_bn"]   = round(float(df["signed_gex_0dte"].sum()) / BN, 4)
+    out["total_0dte_gross_bn"] = round(float(df["gross_gex_0dte"].sum())  / BN, 4)
+    out["total_all_net_bn"]    = round(float(df["signed_gex_all"].sum())  / BN, 4)
+    out["total_all_gross_bn"]  = round(float(df["gross_gex_all"].sum())   / BN, 4)
+
+    if (anchor_es is None or sigma_pts is None
+            or not math.isfinite(float(sigma_pts)) or float(sigma_pts) <= 0):
+        return out
+
+    try:
+        anchor_f = float(anchor_es)
+        sigma_f  = float(sigma_pts)
+    except Exception:
+        return out
+
+    dist = (df["discounted_level"].astype(float) - anchor_f).abs()
+
+    def _sum_bn(mask: pd.Series, col: str) -> float:
+        return round(float(df.loc[mask, col].sum()) / BN, 4)
+
+    m_1s         = dist <= 1.0 * sigma_f
+    m_1_5s       = dist <= 1.5 * sigma_f
+    m_2s         = dist <= 2.0 * sigma_f
+    m_ring_1_15  = (dist > 1.0 * sigma_f) & (dist <= 1.5 * sigma_f)
+    m_ring_15_2  = (dist > 1.5 * sigma_f) & (dist <= 2.0 * sigma_f)
+
+    out["within_1s_net_bn"]      = _sum_bn(m_1s,        "signed_gex_0dte")
+    out["within_1s_gross_bn"]    = _sum_bn(m_1s,        "gross_gex_0dte")
+    out["within_1_5s_net_bn"]    = _sum_bn(m_1_5s,      "signed_gex_0dte")
+    out["within_1_5s_gross_bn"]  = _sum_bn(m_1_5s,      "gross_gex_0dte")
+    out["within_2s_net_bn"]      = _sum_bn(m_2s,        "signed_gex_0dte")
+    out["within_2s_gross_bn"]    = _sum_bn(m_2s,        "gross_gex_0dte")
+    out["ring_1s_1_5s_net_bn"]   = _sum_bn(m_ring_1_15, "signed_gex_0dte")
+    out["ring_1s_1_5s_gross_bn"] = _sum_bn(m_ring_1_15, "gross_gex_0dte")
+    out["ring_1_5s_2s_net_bn"]   = _sum_bn(m_ring_15_2, "signed_gex_0dte")
+    out["ring_1_5s_2s_gross_bn"] = _sum_bn(m_ring_15_2, "gross_gex_0dte")
+
+    return out
 
 
 
@@ -1280,6 +1375,21 @@ def _build_study_row(
     # by gamma regime at BOTH the setup origin and the target.
     target_signed_lookup = _signed_gex_at_es_level(str(trade_date), float(target_level))
 
+    # ── Date-wide totals + proximity-banded GEX around the target level ──
+    # σ uses the trade's actual remaining session minutes (matches the
+    # rvi_*_to_close framing). For dates with missing IV we still get the
+    # totals; the ±σ bands return None.
+    _target_implied_1sigma_pts: Optional[float] = None
+    if iv_atm is not None and minutes_to_close is not None and minutes_to_close > 0:
+        _target_implied_1sigma_pts = _implied_sigma_move(
+            iv_atm, float(target_level), int(minutes_to_close)
+        )
+    _gex_aggs = _gex_aggregates_around_level(
+        _load_signed_gex_for_date(str(trade_date)),
+        anchor_es=float(target_level),
+        sigma_pts=_target_implied_1sigma_pts,
+    )
+
     # Source zone level: use the level near the pivot side of the source zone.
     # For up-moves the relevant side is zone["high"] (the wall the move launched from);
     # for down-moves it's zone["low"]. Default to mid if direction is unclear.
@@ -1325,6 +1435,30 @@ def _build_study_row(
         "target_gamma_regime":         target_signed_lookup["regime"],
         "target_level_gex_bn_all_exp": target_signed_lookup.get("signed_gex_bn_all"),
         "target_gamma_regime_all_exp": target_signed_lookup.get("regime_all", "unknown"),
+
+        # Date-wide GEX totals (anchor-independent) — net = call - put,
+        # gross = |call| + |put|. 0DTE-only and all-exp variants.
+        "total_gex_0dte_bn_net":       _gex_aggs["total_0dte_net_bn"],
+        "total_gex_0dte_bn_gross":     _gex_aggs["total_0dte_gross_bn"],
+        "total_gex_all_exp_bn_net":    _gex_aggs["total_all_net_bn"],
+        "total_gex_all_exp_bn_gross":  _gex_aggs["total_all_gross_bn"],
+
+        # Proximity-banded 0DTE GEX around the target level. σ is the
+        # implied 1-sigma move at target (using minutes_to_close). Bands
+        # are cumulative (within ±k·σ); rings are disjoint outer slices.
+        "implied_1sigma_pts_at_target":  None if _target_implied_1sigma_pts is None
+                                          else round(_target_implied_1sigma_pts, 2),
+        "gex_0dte_within_1s_bn_net":     _gex_aggs["within_1s_net_bn"],
+        "gex_0dte_within_1s_bn_gross":   _gex_aggs["within_1s_gross_bn"],
+        "gex_0dte_within_1_5s_bn_net":   _gex_aggs["within_1_5s_net_bn"],
+        "gex_0dte_within_1_5s_bn_gross": _gex_aggs["within_1_5s_gross_bn"],
+        "gex_0dte_within_2s_bn_net":     _gex_aggs["within_2s_net_bn"],
+        "gex_0dte_within_2s_bn_gross":   _gex_aggs["within_2s_gross_bn"],
+        "gex_0dte_ring_1s_1_5s_bn_net":   _gex_aggs["ring_1s_1_5s_net_bn"],
+        "gex_0dte_ring_1s_1_5s_bn_gross": _gex_aggs["ring_1s_1_5s_gross_bn"],
+        "gex_0dte_ring_1_5s_2s_bn_net":   _gex_aggs["ring_1_5s_2s_net_bn"],
+        "gex_0dte_ring_1_5s_2s_bn_gross": _gex_aggs["ring_1_5s_2s_gross_bn"],
+
         "target_zone_range": f"{target_zone['low']:.2f} – {target_zone['high']:.2f}",
         "target_ts_pt": str(target_row.get("ts_pt")),
         "target_ts_utc": pd.Timestamp(target_row.get("ts_utc")).isoformat() if target_row.get("ts_utc") is not None else None,
@@ -3308,6 +3442,14 @@ def _day_zone_results(
                     # Signed gex lookup for managed-mode rows too
                     _tgt_lookup_up = _signed_gex_at_es_level(str(trade_date), float(target_zone_up["low"]))
                     _src_lookup_up = _signed_gex_at_es_level(str(trade_date), float(zone["high"]))
+                    # Date-wide GEX totals (managed mode lacks IV/minutes_to_close,
+                    # so σ-banded proximity fields aren't computed here — only
+                    # anchor-independent totals).
+                    _gex_aggs_up = _gex_aggregates_around_level(
+                        _load_signed_gex_for_date(str(trade_date)),
+                        anchor_es=None,
+                        sigma_pts=None,
+                    )
                     row_out = {
                         "trade_date": str(trade_date),
                         "direction": "up",
@@ -3324,6 +3466,10 @@ def _day_zone_results(
                         "target_gamma_regime":           _tgt_lookup_up["regime"],
                         "target_level_gex_bn_all_exp":   _tgt_lookup_up.get("signed_gex_bn_all"),
                         "target_gamma_regime_all_exp":   _tgt_lookup_up.get("regime_all", "unknown"),
+                        "total_gex_0dte_bn_net":         _gex_aggs_up["total_0dte_net_bn"],
+                        "total_gex_0dte_bn_gross":       _gex_aggs_up["total_0dte_gross_bn"],
+                        "total_gex_all_exp_bn_net":      _gex_aggs_up["total_all_net_bn"],
+                        "total_gex_all_exp_bn_gross":    _gex_aggs_up["total_all_gross_bn"],
                         "target_zone_range": f"{target_zone_up['low']:.2f} – {target_zone_up['high']:.2f}",
                         "clean_space_points": round(float(clean_space_up), 2),
                         "start_ts_pt": str(start_row.get("ts_pt")),
@@ -3685,6 +3831,14 @@ def _day_zone_results(
                     # layer too, but this avoids redundant dict construction)
                     _tgt_lookup_dn = _signed_gex_at_es_level(str(trade_date), float(target_zone_down["high"]))
                     _src_lookup_dn = _signed_gex_at_es_level(str(trade_date), float(zone["low"]))
+                    # Date-wide GEX totals (managed mode lacks IV/minutes_to_close,
+                    # so σ-banded proximity fields aren't computed here — only
+                    # anchor-independent totals).
+                    _gex_aggs_dn = _gex_aggregates_around_level(
+                        _load_signed_gex_for_date(str(trade_date)),
+                        anchor_es=None,
+                        sigma_pts=None,
+                    )
 
                     results.append(
                         {
@@ -3703,6 +3857,10 @@ def _day_zone_results(
                             "target_gamma_regime":           _tgt_lookup_dn["regime"],
                             "target_level_gex_bn_all_exp":   _tgt_lookup_dn.get("signed_gex_bn_all"),
                             "target_gamma_regime_all_exp":   _tgt_lookup_dn.get("regime_all", "unknown"),
+                            "total_gex_0dte_bn_net":         _gex_aggs_dn["total_0dte_net_bn"],
+                            "total_gex_0dte_bn_gross":       _gex_aggs_dn["total_0dte_gross_bn"],
+                            "total_gex_all_exp_bn_net":      _gex_aggs_dn["total_all_net_bn"],
+                            "total_gex_all_exp_bn_gross":    _gex_aggs_dn["total_all_gross_bn"],
                             "target_zone_range": f"{target_zone_down['low']:.2f} – {target_zone_down['high']:.2f}",
                             "clean_space_points": round(float(clean_space_down), 2),
                             "start_ts_pt": str(start_row.get("ts_pt")),

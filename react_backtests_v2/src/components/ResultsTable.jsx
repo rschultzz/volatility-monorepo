@@ -67,6 +67,21 @@ export const COLUMN_DATA_MAP = {
   target_gamma_regime: (row) => row.target_gamma_regime,
   target_level_gex_all_exp: (row) => row.target_level_gex_bn_all_exp,
   target_gamma_regime_all_exp: (row) => row.target_gamma_regime_all_exp,
+  total_gex_0dte_net:      (row) => row.total_gex_0dte_bn_net,
+  total_gex_0dte_gross:    (row) => row.total_gex_0dte_bn_gross,
+  total_gex_all_exp_net:   (row) => row.total_gex_all_exp_bn_net,
+  total_gex_all_exp_gross: (row) => row.total_gex_all_exp_bn_gross,
+  implied_1s_at_target:    (row) => row.implied_1sigma_pts_at_target,
+  gex_0dte_within_1s_net:     (row) => row.gex_0dte_within_1s_bn_net,
+  gex_0dte_within_1s_gross:   (row) => row.gex_0dte_within_1s_bn_gross,
+  gex_0dte_within_1_5s_net:   (row) => row.gex_0dte_within_1_5s_bn_net,
+  gex_0dte_within_1_5s_gross: (row) => row.gex_0dte_within_1_5s_bn_gross,
+  gex_0dte_within_2s_net:     (row) => row.gex_0dte_within_2s_bn_net,
+  gex_0dte_within_2s_gross:   (row) => row.gex_0dte_within_2s_bn_gross,
+  gex_0dte_ring_1_15s_net:    (row) => row.gex_0dte_ring_1s_1_5s_bn_net,
+  gex_0dte_ring_1_15s_gross:  (row) => row.gex_0dte_ring_1s_1_5s_bn_gross,
+  gex_0dte_ring_15_2s_net:    (row) => row.gex_0dte_ring_1_5s_2s_bn_net,
+  gex_0dte_ring_15_2s_gross:  (row) => row.gex_0dte_ring_1_5s_2s_bn_gross,
   source_zone_signed_gex: (row) => row.source_zone_signed_gex_bn,
   source_zone_gamma_regime: (row) => row.source_zone_gamma_regime,
   source_zone_signed_gex_all_exp: (row) => row.source_zone_signed_gex_bn_all,
@@ -262,6 +277,37 @@ const ResultsTable = forwardRef(({
               case 'target_gamma_regime_all_exp':
                 val = row.target_gamma_regime_all_exp || '';
                 break;
+
+              // Date-wide totals + proximity bands/rings (CSV).
+              // Net columns: signed BN with + prefix; gross columns: plain BN.
+              case 'total_gex_0dte_net':
+              case 'total_gex_all_exp_net':
+              case 'gex_0dte_within_1s_net':
+              case 'gex_0dte_within_1_5s_net':
+              case 'gex_0dte_within_2s_net':
+              case 'gex_0dte_ring_1_15s_net':
+              case 'gex_0dte_ring_15_2s_net': {
+                const v = typeof dataKey === 'function' ? dataKey(row) : row[dataKey];
+                val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'total_gex_0dte_gross':
+              case 'total_gex_all_exp_gross':
+              case 'gex_0dte_within_1s_gross':
+              case 'gex_0dte_within_1_5s_gross':
+              case 'gex_0dte_within_2s_gross':
+              case 'gex_0dte_ring_1_15s_gross':
+              case 'gex_0dte_ring_15_2s_gross': {
+                const v = typeof dataKey === 'function' ? dataKey(row) : row[dataKey];
+                val = v != null ? `${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'implied_1s_at_target': {
+                const v = row.implied_1sigma_pts_at_target;
+                val = v != null ? `±${Number(v).toFixed(1)}` : '';
+                break;
+              }
+
               case 'source_zone_signed_gex': {
                 const v = row.source_zone_signed_gex_bn;
                 val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
@@ -401,6 +447,42 @@ const ResultsTable = forwardRef(({
         return regimeChip(row.target_gamma_regime);
       case 'target_gamma_regime_all_exp':
         return regimeChip(row.target_gamma_regime_all_exp);
+
+      // Date-wide GEX totals + proximity-banded variants. Net values are
+      // signed (gex_call - gex_put) and color-coded; gross values are
+      // magnitudes (|call| + |put|) so they're always non-negative.
+      case 'total_gex_0dte_net':
+      case 'total_gex_all_exp_net':
+      case 'gex_0dte_within_1s_net':
+      case 'gex_0dte_within_1_5s_net':
+      case 'gex_0dte_within_2s_net':
+      case 'gex_0dte_ring_1_15s_net':
+      case 'gex_0dte_ring_15_2s_net': {
+        const dataKey = COLUMN_DATA_MAP[col.id];
+        const v = typeof dataKey === 'function' ? dataKey(row) : row[dataKey];
+        if (v === null || v === undefined) return '—';
+        const sign = v > 0 ? '+' : '';
+        const color = v > 0 ? '#86efac' : v < 0 ? '#fca5a5' : '#e5e7eb';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
+      }
+      case 'total_gex_0dte_gross':
+      case 'total_gex_all_exp_gross':
+      case 'gex_0dte_within_1s_gross':
+      case 'gex_0dte_within_1_5s_gross':
+      case 'gex_0dte_within_2s_gross':
+      case 'gex_0dte_ring_1_15s_gross':
+      case 'gex_0dte_ring_15_2s_gross': {
+        const dataKey = COLUMN_DATA_MAP[col.id];
+        const v = typeof dataKey === 'function' ? dataKey(row) : row[dataKey];
+        if (v === null || v === undefined) return '—';
+        return <span>{fmt(v, 1)}BN</span>;
+      }
+      case 'implied_1s_at_target': {
+        const v = row.implied_1sigma_pts_at_target;
+        if (v === null || v === undefined) return '—';
+        return <span>±{fmt(v, 1)}</span>;
+      }
+
       case 'source_zone_signed_gex': {
         const v = row.source_zone_signed_gex_bn;
         if (v === null || v === undefined) return '—';
