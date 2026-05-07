@@ -1592,6 +1592,14 @@ export default function PriceChart({
         dragRef.current = { active: true, lastY: evt.clientY, scale: 'left' }
         return
       }
+      // Shift+drag in the plot area pans the IV line up/down independently
+      // of the candles. The candles and IV overlap the same plot area, so
+      // we need an explicit modifier to disambiguate intent.
+      if (evt.shiftKey && atmIvSeriesRefs.current.length > 0) {
+        evt.preventDefault()
+        dragRef.current = { active: true, lastY: evt.clientY, scale: 'left' }
+        return
+      }
       dragRef.current = { active: true, lastY: evt.clientY, scale: 'right' }
     }
 
