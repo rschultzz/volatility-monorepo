@@ -651,6 +651,12 @@ export default function PriceChart({
   const expectedMoveSeriesRefs = useRef([])
   const bandsSeriesRefs = useRef([])
   const atmIvSeriesRefs = useRef([])
+  // Stable session_date → ISeriesApi map. Keeping series mounted across
+  // refreshes prevents the 'left' scale from going empty (and possibly
+  // being re-mapped to the candle scale by lightweight-charts) between
+  // removeSeries and addSeries. Without this, shift+drag could end up
+  // operating on the wrong scale after a refresh.
+  const atmIvSeriesByDateRef = useRef(new Map())
   // Tracks whether the IV scale is currently mounted/visible. Used by the
   // render effect to apply `autoScale: true` only on the initial enable —
   // subsequent re-runs (polling, new bars, interval changes) must not reset
@@ -2181,13 +2187,14 @@ export default function PriceChart({
     if (!chart) return
 
     const tearDown = () => {
-      for (const s of atmIvSeriesRefs.current) {
+      for (const s of atmIvSeriesByDateRef.current.values()) {
         try {
           chart.removeSeries(s)
         } catch (err) {
           // ignore stale reference
         }
       }
+      atmIvSeriesByDateRef.current.clear()
       atmIvSeriesRefs.current = []
       try {
         chart.priceScale('left').applyOptions({ visible: false })
@@ -2232,22 +2239,12 @@ export default function PriceChart({
       sessions.get(date).push({ time: t, value: iv })
     }
 
-    // Always tear down and rebuild — sessions can drop in/out of view as
-    // candles arrive, and lightweight-charts requires sorted unique times
-    // per series. Per-session rebuild is simplest and cheap.
-    tearDown.skipScale = true
-    for (const s of atmIvSeriesRefs.current) {
-      try { chart.removeSeries(s) } catch (err) { /* ignore */ }
-    }
-    atmIvSeriesRefs.current = []
-
-    if (sessions.size === 0) {
-      try {
-        chart.priceScale('left').applyOptions({ visible: false })
-      } catch (err) { /* ignore */ }
-      return
-    }
-
+    // Reuse existing series across refreshes. Removing all series from a
+    // scale (even briefly) can cause lightweight-charts to drop the scale
+    // and re-bind newly added series to the default (right) scale. That
+    // would couple shift+drag motion to the candles. By keeping at least
+    // one series mounted on 'left', the scale's identity and manual
+    // visible-range stay stable.
     const seriesOpts = {
       color: '#06b6d4',
       lineWidth: 2,
@@ -2259,16 +2256,36 @@ export default function PriceChart({
       priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
     }
 
-    for (const [, points] of sessions) {
-      if (points.length === 0) continue
-      try {
-        const series = chart.addSeries(LineSeries, seriesOpts)
-        series.setData(points)
-        atmIvSeriesRefs.current.push(series)
-      } catch (err) {
-        console.error('[atm-iv] failed to add session series', err)
+    // 1. Remove series for sessions that no longer exist.
+    for (const [date, series] of atmIvSeriesByDateRef.current) {
+      if (!sessions.has(date)) {
+        try { chart.removeSeries(series) } catch (err) { /* ignore */ }
+        atmIvSeriesByDateRef.current.delete(date)
       }
     }
+
+    // 2. Update existing series in place / create new ones.
+    for (const [date, points] of sessions) {
+      if (points.length === 0) continue
+      let series = atmIvSeriesByDateRef.current.get(date)
+      if (!series) {
+        try {
+          series = chart.addSeries(LineSeries, seriesOpts)
+          atmIvSeriesByDateRef.current.set(date, series)
+        } catch (err) {
+          console.error('[atm-iv] failed to add session series', err)
+          continue
+        }
+      }
+      try {
+        series.setData(points)
+      } catch (err) {
+        console.error('[atm-iv] failed to set data', err)
+      }
+    }
+
+    // Sync the array view used by zoom/drag handlers.
+    atmIvSeriesRefs.current = Array.from(atmIvSeriesByDateRef.current.values())
 
     if (atmIvSeriesRefs.current.length === 0) {
       try {
