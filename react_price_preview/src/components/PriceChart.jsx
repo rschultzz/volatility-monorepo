@@ -657,6 +657,10 @@ export default function PriceChart({
   // removeSeries and addSeries. Without this, shift+drag could end up
   // operating on the wrong scale after a refresh.
   const atmIvSeriesByDateRef = useRef(new Map())
+  // True only while a shift+drag IV pan is in progress. Used to disable
+  // lightweight-charts' default time-pan during the gesture and restore
+  // it on mouseup.
+  const ivShiftDragActiveRef = useRef(false)
   // Tracks whether the IV scale is currently mounted/visible. Used by the
   // render effect to apply `autoScale: true` only on the initial enable —
   // subsequent re-runs (polling, new bars, interval changes) must not reset
@@ -1625,25 +1629,27 @@ export default function PriceChart({
       // Drag on the IV axis → pan IV scale only (mirrors the right-axis
       // native zoom behavior). Don't fall through to the candle-pan path.
       if (info.overLeftPriceAxis) {
-        console.log('[iv-debug] mousedown → scale=left (over IV axis)')
         dragRef.current = { active: true, lastY: evt.clientY, scale: 'left' }
         return
       }
       // Shift+drag in the plot area pans the IV line up/down independently
-      // of the candles. The candles and IV overlap the same plot area, so
-      // we need an explicit modifier to disambiguate intent.
+      // of the candles. We need to:
+      //   1. preventDefault + stopPropagation to keep lightweight-charts'
+      //      built-in handlers from also panning the time/price scales
+      //      (otherwise the plot scrolls horizontally beneath the IV).
+      //   2. temporarily disable handleScroll.pressedMouseMove for the
+      //      duration of the drag, since lightweight-charts attaches its
+      //      mousemove listener to the document and may still respond.
       if (evt.shiftKey && atmIvSeriesRefs.current.length > 0) {
-        console.log('[iv-debug] mousedown → scale=left (shift+drag)', {
-          seriesCount: atmIvSeriesRefs.current.length,
-        })
         evt.preventDefault()
+        evt.stopPropagation()
+        try {
+          chart.applyOptions({ handleScroll: { pressedMouseMove: false } })
+          ivShiftDragActiveRef.current = true
+        } catch (err) { /* ignore */ }
         dragRef.current = { active: true, lastY: evt.clientY, scale: 'left' }
         return
       }
-      console.log('[iv-debug] mousedown → scale=right', {
-        shiftKey: evt.shiftKey,
-        seriesCount: atmIvSeriesRefs.current.length,
-      })
       dragRef.current = { active: true, lastY: evt.clientY, scale: 'right' }
     }
 
@@ -1661,8 +1667,17 @@ export default function PriceChart({
       }
     }
 
+    const restorePlotPanIfNeeded = () => {
+      if (!ivShiftDragActiveRef.current) return
+      ivShiftDragActiveRef.current = false
+      try {
+        chart.applyOptions({ handleScroll: { pressedMouseMove: true } })
+      } catch (err) { /* ignore */ }
+    }
+
     const handleMouseUp = () => {
       dragRef.current.active = false
+      restorePlotPanIfNeeded()
       setInteractionActive(false, 180)
     }
 
@@ -1670,6 +1685,7 @@ export default function PriceChart({
       hideTooltip()
       reportLinkedCrosshair(null)
       dragRef.current.active = false
+      restorePlotPanIfNeeded()
       setInteractionActive(false, 180)
     }
 
@@ -1679,7 +1695,10 @@ export default function PriceChart({
 
     window.addEventListener('resize', handleResize)
     stage.addEventListener('wheel', handleWheel, { passive: false, capture: true })
-    stage.addEventListener('mousedown', handleMouseDown)
+    // Capture-phase mousedown so we run BEFORE lightweight-charts' own
+    // canvas listener; combined with stopPropagation in shift+drag this
+    // prevents the chart from also starting its time-pan gesture.
+    stage.addEventListener('mousedown', handleMouseDown, { capture: true })
     stage.addEventListener('mouseleave', handleMouseLeave)
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
@@ -1692,7 +1711,7 @@ export default function PriceChart({
         resizeObserver.disconnect()
       }
       stage.removeEventListener('wheel', handleWheel, { capture: true })
-      stage.removeEventListener('mousedown', handleMouseDown)
+      stage.removeEventListener('mousedown', handleMouseDown, { capture: true })
       stage.removeEventListener('mouseleave', handleMouseLeave)
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
