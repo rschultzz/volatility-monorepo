@@ -279,14 +279,15 @@ function rangesClose(a, b, eps = 1) {
   return Math.abs(Number(a.from) - Number(b.from)) <= eps && Math.abs(Number(a.to) - Number(b.to)) <= eps
 }
 
-function pointerInfo(evt, container) {
+function pointerInfo(evt, container, leftAxisWidth = 0) {
   if (!evt || !container) return null
   const rect = container.getBoundingClientRect()
   const x = evt.clientX - rect.left
   const y = evt.clientY - rect.top
   const overTimeAxis = y > rect.height - TIME_AXIS_HEIGHT
   const overPriceAxis = x >= rect.width - PRICE_AXIS_HIT_WIDTH
-  return { rect, x, y, overTimeAxis, overPriceAxis }
+  const overLeftPriceAxis = leftAxisWidth > 0 && x >= 0 && x < leftAxisWidth
+  return { rect, x, y, overTimeAxis, overPriceAxis, overLeftPriceAxis }
 }
 
 function normalizeIntervalValue(value, fallback = '1min') {
@@ -1230,6 +1231,66 @@ export default function PriceChart({
       priceScale.setVisibleRange(next)
     }
 
+    // Vertical-only zoom for the IV (left) scale. Independent of the candle
+    // scale and the time scale — wheeling on the IV axis must not pan the
+    // chart left/right. Anchors at the cursor's IV value when an IV series
+    // is mounted (so the line under the cursor stays fixed during zoom),
+    // otherwise falls back to the visible range midpoint.
+    const zoomIvAtY = (deltaY, yCoord) => {
+      const ivScale = chart.priceScale('left')
+      let vr = null
+      try {
+        vr = ivScale.getVisibleRange()
+      } catch (err) {
+        vr = null
+      }
+      if (!vr || !Number.isFinite(vr.from) || !Number.isFinite(vr.to) || vr.to <= vr.from) {
+        return
+      }
+      const plotHeight = getPlotHeight(stage)
+      const clampedY = Math.max(0, Math.min(plotHeight, yCoord))
+
+      let anchorPrice = (vr.from + vr.to) / 2
+      const ivSeries = atmIvSeriesRefs.current[0]
+      if (ivSeries) {
+        const p = ivSeries.coordinateToPrice(clampedY)
+        if (Number.isFinite(p)) anchorPrice = p
+      }
+
+      const factor = Math.exp(deltaY * 0.0015)
+      const next = {
+        from: anchorPrice - (anchorPrice - vr.from) * factor,
+        to: anchorPrice + (vr.to - anchorPrice) * factor,
+      }
+      if (!Number.isFinite(next.from) || !Number.isFinite(next.to) || next.to <= next.from) return
+      try {
+        ivScale.applyOptions({ autoScale: false })
+        ivScale.setVisibleRange(next)
+      } catch (err) {
+        // ignore — scale may have been hidden mid-event
+      }
+    }
+
+    const panIvByPixels = (deltaY) => {
+      if (!Number.isFinite(deltaY) || deltaY === 0) return
+      const ivScale = chart.priceScale('left')
+      let vr = null
+      try {
+        vr = ivScale.getVisibleRange()
+      } catch (err) {
+        vr = null
+      }
+      if (!vr || !Number.isFinite(vr.from) || !Number.isFinite(vr.to) || vr.to <= vr.from) return
+      const plotHeight = getPlotHeight(stage)
+      const deltaPrice = (deltaY / plotHeight) * (vr.to - vr.from)
+      try {
+        ivScale.applyOptions({ autoScale: false })
+        ivScale.setVisibleRange({ from: vr.from + deltaPrice, to: vr.to + deltaPrice })
+      } catch (err) {
+        // ignore
+      }
+    }
+
     const updateBand = () => {
       const next = computeSessionBands(
         chart,
@@ -1473,6 +1534,15 @@ export default function PriceChart({
       }
     }
 
+    const getLeftAxisWidth = () => {
+      try {
+        const w = Number(chart.priceScale('left').width()) || 0
+        return w
+      } catch (err) {
+        return 0
+      }
+    }
+
     const handleWheel = (evt) => {
       hasUserInteractedRef.current = true
       setInteractionActive(true)
@@ -1481,8 +1551,21 @@ export default function PriceChart({
         shiftedCandlesRef.current,
         intervalRef.current
       )
-      const info = pointerInfo(evt, stage)
-      if (!info || info.overTimeAxis || !info.overPriceAxis) {
+      const info = pointerInfo(evt, stage, getLeftAxisWidth())
+      if (!info || info.overTimeAxis) {
+        setInteractionActive(false, 180)
+        return
+      }
+      // Wheel over the IV axis → zoom only the IV scale; never the time
+      // scale, never the price scale.
+      if (info.overLeftPriceAxis) {
+        evt.preventDefault()
+        evt.stopPropagation()
+        zoomIvAtY(evt.deltaY, info.y)
+        setInteractionActive(false, 180)
+        return
+      }
+      if (!info.overPriceAxis) {
         setInteractionActive(false, 180)
         return
       }
@@ -1501,9 +1584,15 @@ export default function PriceChart({
         shiftedCandlesRef.current,
         intervalRef.current
       )
-      const info = pointerInfo(evt, stage)
+      const info = pointerInfo(evt, stage, getLeftAxisWidth())
       if (!info || info.overTimeAxis || info.overPriceAxis) return
-      dragRef.current = { active: true, lastY: evt.clientY }
+      // Drag on the IV axis → pan IV scale only (mirrors the right-axis
+      // native zoom behavior). Don't fall through to the candle-pan path.
+      if (info.overLeftPriceAxis) {
+        dragRef.current = { active: true, lastY: evt.clientY, scale: 'left' }
+        return
+      }
+      dragRef.current = { active: true, lastY: evt.clientY, scale: 'right' }
     }
 
     const handleMouseMove = (evt) => {
@@ -1512,7 +1601,11 @@ export default function PriceChart({
       const deltaY = evt.clientY - dragRef.current.lastY
       dragRef.current.lastY = evt.clientY
       if (deltaY !== 0) {
-        panPriceByPixels(deltaY)
+        if (dragRef.current.scale === 'left') {
+          panIvByPixels(deltaY)
+        } else {
+          panPriceByPixels(deltaY)
+        }
       }
     }
 
