@@ -651,6 +651,11 @@ export default function PriceChart({
   const expectedMoveSeriesRefs = useRef([])
   const bandsSeriesRefs = useRef([])
   const atmIvSeriesRefs = useRef([])
+  // Tracks whether the IV scale is currently mounted/visible. Used by the
+  // render effect to apply `autoScale: true` only on the initial enable —
+  // subsequent re-runs (polling, new bars, interval changes) must not reset
+  // the user's manual zoom/pan on the IV scale.
+  const atmIvScaleVisibleRef = useRef(false)
   const intervalRef = useRef(interval)
   const shiftedCandlesRef = useRef([])
   const dragRef = useRef({ active: false, lastY: 0 })
@@ -2189,6 +2194,9 @@ export default function PriceChart({
       } catch (err) {
         // ignore
       }
+      // Forget that we ever fit the scale, so the next time the toggle is
+      // turned on we re-fit (autoScale: true) once.
+      atmIvScaleVisibleRef.current = false
     }
 
     if (!atmIvLineEnabled || !Array.isArray(atmIvSeries) || atmIvSeries.length === 0) {
@@ -2266,17 +2274,25 @@ export default function PriceChart({
       try {
         chart.priceScale('left').applyOptions({ visible: false })
       } catch (err) { /* ignore */ }
+      atmIvScaleVisibleRef.current = false
       return
     }
 
+    // Only apply `autoScale: true` on the initial enable. Subsequent runs
+    // (polling, new candles, interval flips) must preserve the user's
+    // manual IV zoom/pan — re-applying autoScale would refit the scale and
+    // erase that interaction.
+    const isInitialEnable = !atmIvScaleVisibleRef.current
     try {
-      chart.priceScale('left').applyOptions({
+      const opts = {
         visible: true,
         borderVisible: true,
         borderColor: 'rgba(6, 182, 212, 0.45)',
         scaleMargins: { top: 0.08, bottom: 0.08 },
-        autoScale: true,
-      })
+      }
+      if (isInitialEnable) opts.autoScale = true
+      chart.priceScale('left').applyOptions(opts)
+      atmIvScaleVisibleRef.current = true
     } catch (err) {
       console.error('[atm-iv] failed to configure price scale', err)
     }
