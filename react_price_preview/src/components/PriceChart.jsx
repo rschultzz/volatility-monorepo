@@ -1762,19 +1762,22 @@ export default function PriceChart({
       onApplyIntervalChange(nextInterval)
     }
 
+    // Commit pure-React settings (IV line) before the parent-Dash sync below,
+    // so they still take effect when the React app runs standalone (no parent
+    // Dash controls present, e.g. dev/preview mode).
+    setAtmIvLineEnabled(draftAtmIvLineEnabled)
+    try {
+      window.localStorage.setItem('ib-react-atm-iv-line', draftAtmIvLineEnabled ? '1' : '0')
+    } catch (e) {
+      // ignore quota / privacy-mode errors
+    }
+
     const intervalOk = setParentRadioValue('ironbeam-bar-interval', nextInterval)
 
     if (!intervalOk) {
       setSettingsError('Could not sync bar interval with the parent Dash controls.')
       hideParentTopControls()
       return
-    }
-
-    setAtmIvLineEnabled(draftAtmIvLineEnabled)
-    try {
-      window.localStorage.setItem('ib-react-atm-iv-line', draftAtmIvLineEnabled ? '1' : '0')
-    } catch (e) {
-      // ignore quota / privacy-mode errors
     }
 
     hideParentTopControls()
