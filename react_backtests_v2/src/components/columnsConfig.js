@@ -40,6 +40,21 @@ export const COLUMN_FILTER_TYPES = {
   target_level: 'numeric',
   target_level_gex: 'numeric',
   target_level_gex_all_exp: 'numeric',
+  total_gex_0dte_net: 'numeric',
+  total_gex_0dte_gross: 'numeric',
+  total_gex_all_exp_net: 'numeric',
+  total_gex_all_exp_gross: 'numeric',
+  implied_1s_at_target: 'numeric',
+  gex_0dte_within_1s_net: 'numeric',
+  gex_0dte_within_1s_gross: 'numeric',
+  gex_0dte_within_1_5s_net: 'numeric',
+  gex_0dte_within_1_5s_gross: 'numeric',
+  gex_0dte_within_2s_net: 'numeric',
+  gex_0dte_within_2s_gross: 'numeric',
+  gex_0dte_ring_1_15s_net: 'numeric',
+  gex_0dte_ring_1_15s_gross: 'numeric',
+  gex_0dte_ring_15_2s_net: 'numeric',
+  gex_0dte_ring_15_2s_gross: 'numeric',
   source_zone_signed_gex: 'numeric',
   source_zone_signed_gex_all_exp: 'numeric',
   clean_space: 'numeric',
@@ -119,6 +134,25 @@ export const DEFAULT_COLUMNS = [
   { id: 'target_gamma_regime', label: 'Target Regime 0DTE', visible: true },
   { id: 'target_level_gex_all_exp', label: 'Target GEX All Exp (BN)', visible: false, className: 'study-col' },
   { id: 'target_gamma_regime_all_exp', label: 'Target Regime All Exp', visible: false, className: 'study-col' },
+  // Date-wide GEX totals (anchor-independent)
+  { id: 'total_gex_0dte_net',      label: 'Total GEX 0DTE Net (BN)',      visible: false, className: 'study-col' },
+  { id: 'total_gex_0dte_gross',    label: 'Total GEX 0DTE Gross (BN)',    visible: false, className: 'study-col' },
+  { id: 'total_gex_all_exp_net',   label: 'Total GEX All Exp Net (BN)',   visible: false, className: 'study-col' },
+  { id: 'total_gex_all_exp_gross', label: 'Total GEX All Exp Gross (BN)', visible: false, className: 'study-col' },
+  // Implied 1σ at target (study-only — needs IV + minutes_to_close)
+  { id: 'implied_1s_at_target',    label: '1σ @ Target (pts)',            visible: false, className: 'study-col' },
+  // 0DTE GEX within ±k·σ of target (banded / cumulative)
+  { id: 'gex_0dte_within_1s_net',     label: 'GEX 0DTE ±1σ Net (BN)',     visible: false, className: 'study-col' },
+  { id: 'gex_0dte_within_1s_gross',   label: 'GEX 0DTE ±1σ Gross (BN)',   visible: false, className: 'study-col' },
+  { id: 'gex_0dte_within_1_5s_net',   label: 'GEX 0DTE ±1.5σ Net (BN)',   visible: false, className: 'study-col' },
+  { id: 'gex_0dte_within_1_5s_gross', label: 'GEX 0DTE ±1.5σ Gross (BN)', visible: false, className: 'study-col' },
+  { id: 'gex_0dte_within_2s_net',     label: 'GEX 0DTE ±2σ Net (BN)',     visible: false, className: 'study-col' },
+  { id: 'gex_0dte_within_2s_gross',   label: 'GEX 0DTE ±2σ Gross (BN)',   visible: false, className: 'study-col' },
+  // 0DTE GEX in disjoint outer rings (within_1s already covers 0–1σ)
+  { id: 'gex_0dte_ring_1_15s_net',    label: 'GEX 0DTE 1σ–1.5σ Net (BN)',   visible: false, className: 'study-col' },
+  { id: 'gex_0dte_ring_1_15s_gross',  label: 'GEX 0DTE 1σ–1.5σ Gross (BN)', visible: false, className: 'study-col' },
+  { id: 'gex_0dte_ring_15_2s_net',    label: 'GEX 0DTE 1.5σ–2σ Net (BN)',   visible: false, className: 'study-col' },
+  { id: 'gex_0dte_ring_15_2s_gross',  label: 'GEX 0DTE 1.5σ–2σ Gross (BN)', visible: false, className: 'study-col' },
   { id: 'source_zone_signed_gex', label: 'Source GEX 0DTE (BN)', visible: false, className: 'study-col' },
   { id: 'source_zone_gamma_regime', label: 'Source Regime 0DTE', visible: false, className: 'study-col' },
   { id: 'source_zone_signed_gex_all_exp', label: 'Source GEX All Exp (BN)', visible: false, className: 'study-col' },
@@ -227,6 +261,14 @@ export const STUDY_ONLY_COLUMNS = new Set([
   'condor_short_put', 'condor_long_put', 'condor_short_call', 'condor_long_call',
   'condor_to_close_short_put', 'condor_to_close_long_put',
   'condor_to_close_short_call', 'condor_to_close_long_call',
+  // σ-banded GEX needs IV + minutes_to_close — only computed in study mode.
+  // Date-wide totals (total_gex_*) do NOT need σ, so they stay universal.
+  'implied_1s_at_target',
+  'gex_0dte_within_1s_net',     'gex_0dte_within_1s_gross',
+  'gex_0dte_within_1_5s_net',   'gex_0dte_within_1_5s_gross',
+  'gex_0dte_within_2s_net',     'gex_0dte_within_2s_gross',
+  'gex_0dte_ring_1_15s_net',    'gex_0dte_ring_1_15s_gross',
+  'gex_0dte_ring_15_2s_net',    'gex_0dte_ring_15_2s_gross',
 ]);
 
 // Compute which columns should be visible given the executionMode.
