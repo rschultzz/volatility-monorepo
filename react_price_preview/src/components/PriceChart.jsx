@@ -1247,30 +1247,16 @@ export default function PriceChart({
     }
 
     // Resolve the IV scale via the actual mounted series rather than via
-    // chart.priceScale('left'). If lightweight-charts has somehow rebound
-    // an IV series to a different scale, series.priceScale() will return
-    // that scale — and we'll be operating on the scale the line is really
-    // drawn on. Logs include identity comparison vs. the right scale so we
-    // can detect accidental rebinding.
-    const resolveIvScale = (label) => {
+    // chart.priceScale('left'). chart.priceScale('left') can return a
+    // different scale handle than the one the IV series is bound to; using
+    // series.priceScale() guarantees we operate on the scale the line is
+    // really drawn on.
+    const resolveIvScale = () => {
       const series = atmIvSeriesRefs.current[0]
-      const candleScale = chart.priceScale('right')
-      if (!series) {
-        console.log('[iv-debug]', label, 'no IV series mounted')
-        return null
-      }
-      let viaSeries = null
-      try { viaSeries = series.priceScale() } catch (err) { /* ignore */ }
-      let viaId = null
-      try { viaId = chart.priceScale('left') } catch (err) { /* ignore */ }
-      const sameAsRight = viaSeries && candleScale && viaSeries === candleScale
-      const idMatchesSeries = viaSeries && viaId && viaSeries === viaId
-      console.log('[iv-debug]', label, {
-        seriesCount: atmIvSeriesRefs.current.length,
-        sameAsRight,
-        idMatchesSeries,
-      })
-      return viaSeries || viaId
+      if (!series) return null
+      try { return series.priceScale() } catch (err) { /* ignore */ }
+      try { return chart.priceScale('left') } catch (err) { /* ignore */ }
+      return null
     }
 
     // Vertical-only zoom for the IV scale. Independent of the candle scale
@@ -1279,12 +1265,11 @@ export default function PriceChart({
     // mounted (so the line under the cursor stays fixed during zoom),
     // otherwise falls back to the visible range midpoint.
     const zoomIvAtY = (deltaY, yCoord) => {
-      const ivScale = resolveIvScale('zoomIv')
+      const ivScale = resolveIvScale()
       if (!ivScale) return
       let vr = null
       try { vr = ivScale.getVisibleRange() } catch (err) { vr = null }
       if (!vr || !Number.isFinite(vr.from) || !Number.isFinite(vr.to) || vr.to <= vr.from) {
-        console.log('[iv-debug] zoomIv: no usable visible range', vr)
         return
       }
       const plotHeight = getPlotHeight(stage)
@@ -1313,12 +1298,11 @@ export default function PriceChart({
 
     const panIvByPixels = (deltaY) => {
       if (!Number.isFinite(deltaY) || deltaY === 0) return
-      const ivScale = resolveIvScale('panIv')
+      const ivScale = resolveIvScale()
       if (!ivScale) return
       let vr = null
       try { vr = ivScale.getVisibleRange() } catch (err) { vr = null }
       if (!vr || !Number.isFinite(vr.from) || !Number.isFinite(vr.to) || vr.to <= vr.from) {
-        console.log('[iv-debug] panIv: no usable visible range', vr)
         return
       }
       const plotHeight = getPlotHeight(stage)
