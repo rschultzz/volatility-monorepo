@@ -21,8 +21,10 @@ to the container's children/config, not editing the parent's layout.
 - New component lives alongside the Price chart component
   (e.g. `ChartToggleBar.jsx` in the same folder).
 - Container handles horizontal layout and spacing between buttons.
-- Each toggle still receives its `isOpen` state and toggle handler as props
-  from the parent (no state lifted, no behavior changes).
+- Each toggle receives its `isOpen` state and toggle handler as props from
+  PriceChart. `SignalPanel`'s internal `collapsed` state is lifted to
+  PriceChart as part of this refactor so all three toggles follow the same
+  pattern. No other state is lifted, and no behavior changes.
 - No business logic moves — this is a structural refactor only.
 - Default state on page load: all three sub-charts collapsed (toggles
   closed). This is the current behavior and must be preserved.
@@ -30,6 +32,10 @@ to the container's children/config, not editing the parent's layout.
 ## Affected Files
 - The Price chart component file (locate via grep for the Smile/Signals/GEX
   button labels).
+- `SignalPanel.jsx` — its internal `collapsed` state moves out to PriceChart
+  so the SIGNALS toggle follows the same parent-owned pattern as the other
+  two. The pill rendering inside `SignalPanel` also moves to `ChartToggleBar`;
+  `SignalPanel` itself becomes the expanded-panel-only component.
 - A new file for `ChartToggleBar` in the same directory.
 - If the toggle buttons currently import from a shared style file, note
   that in the PR description for future cleanup — do not refactor styles
