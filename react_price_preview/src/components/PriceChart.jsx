@@ -8,6 +8,7 @@ import {
 } from 'lightweight-charts'
 import SmileChart from './SmileChart'
 import SignalPanel from './SignalPanel'
+import ChartToggleBar from './ChartToggleBar'
 import TradeAnnotationPanel from './TradeAnnotationPanel'
 
 const ETH_BG_COLOR = '#1f2937'
@@ -871,6 +872,13 @@ export default function PriceChart({
   // under different keys, just not the open/closed state.
   const [smileCollapsed, setSmileCollapsed] = useState(true)
   const smileResizeRef = useRef(null)
+
+  // SIGNALS panel collapsed state — owned here (lifted from SignalPanel) so all
+  // three chart-toggle pills follow the same prop-driven pattern.
+  const [signalsCollapsed, setSignalsCollapsed] = useState(true)
+  const toggleSignalsCollapsed = useCallback(() => {
+    setSignalsCollapsed(prev => !prev)
+  }, [])
 
   // ── Trade annotation mode ─────────────────────────────────────
   const [annotationState, setAnnotationState] = useState(null)
@@ -2581,6 +2589,17 @@ export default function PriceChart({
             </button>
           </div>
 
+          <ChartToggleBar
+            pills={[
+              { key: 'smile', label: 'SMILE', isOpen: !smileCollapsed, onToggle: toggleSmileCollapsed },
+              { key: 'signals', label: 'SIGNALS', isOpen: !signalsCollapsed, onToggle: toggleSignalsCollapsed },
+              ...(Array.isArray(normalizedGexSegments) && normalizedGexSegments.length > 0 && gexEnabled
+                ? [{ key: 'gex', label: 'GEX', isOpen: gexPanelOpen, onToggle: () => setGexPanelOpen(o => !o), title: 'Show GEX legend' }]
+                : []),
+            ]}
+          />
+
+          {!smileCollapsed && (
           <div
             onMouseDown={handleFloatingMouseDown}
             onWheel={(e) => e.stopPropagation()}
@@ -2739,6 +2758,7 @@ export default function PriceChart({
               </>
             )}
           </div>
+          )}
 
           {/* Trade Annotation Panel — appears when a Trade Log trade is being annotated */}
           {annotationState && (
@@ -2755,6 +2775,8 @@ export default function PriceChart({
           <SignalPanel
             tradeDate={tradeDate}
             isToday={tradeDate === new Date().toISOString().slice(0, 10)}
+            collapsed={signalsCollapsed}
+            onToggleCollapsed={toggleSignalsCollapsed}
           />
 
           {settingsOpen && (
@@ -3209,60 +3231,9 @@ export default function PriceChart({
             )
           })()}
 
-          {/* GEX legend panel toggle (only shown when panel is closed and there are levels to list).
-              Matches the SMILE / SIGNALS pill structure exactly: outer container with auto height,
-              inner wrapper with fixed 32px height that defines the pill's vertical dimension. */}
-          {!gexPanelOpen && Array.isArray(normalizedGexSegments) && normalizedGexSegments.length > 0 && gexEnabled && (
-            <div
-              onClick={() => setGexPanelOpen(true)}
-              style={{
-                position: 'absolute',
-                top: 8,
-                left: 240,
-                zIndex: 10,
-                cursor: 'pointer',
-                background: 'rgba(15, 23, 42, 0.92)',
-                border: '1px solid #1f2937',
-                borderRadius: '10px',
-                padding: '6px 14px',
-                boxShadow: '0 10px 25px rgba(0,0,0,0.4)',
-                color: '#e2e8f0',
-                fontSize: '13px',
-                pointerEvents: 'auto',
-                userSelect: 'none',
-                transition: 'all 0.2s ease',
-                display: 'flex',
-                flexDirection: 'column',
-                overflow: 'hidden',
-              }}
-              title="Show GEX legend"
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: 0,
-                  height: '32px',
-                }}
-              >
-                <div
-                  style={{
-                    fontWeight: 800,
-                    color: '#60a5fa',
-                    fontSize: '13px',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                  }}
-                >
-                  GEX
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* GEX legend panel — defaults to right-edge dock, but draggable anywhere via the header.
-              Position persists across reloads. */}
+              Position persists across reloads. The collapsed pill that opens this
+              panel lives in `<ChartToggleBar />` at the top of the chart. */}
           {gexPanelOpen && (
             <div
               onClick={(e) => e.stopPropagation()}
