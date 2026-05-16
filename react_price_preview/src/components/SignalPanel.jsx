@@ -173,6 +173,8 @@ export default function SignalPanel({
   isToday = false,
   onRefresh,
   onLabel,
+  collapsed,
+  onToggleCollapsed,
 }) {
   // If externalSignals is null, the panel manages its own fetch state
   const selfManaged = externalSignals === null
@@ -272,9 +274,12 @@ export default function SignalPanel({
     } catch (e) {}
     return { width: 310, height: 420 }
   })
-  // Signals panel always starts collapsed on reload — position/size still persist
-  // under different keys, just not the open/closed state.
-  const [collapsed, setCollapsed] = useState(true)
+  // Signals collapsed state is owned by the parent (PriceChart) so all three
+  // chart-toggle pills follow the same prop-driven pattern. Position and size
+  // still persist locally; open/closed state intentionally does not.
+  useEffect(() => {
+    try { window.localStorage.removeItem('ib-signal-panel-collapsed') } catch (e) {}
+  }, [])
 
   const dragRef = useRef(null)
   const resizeRef = useRef(null)
@@ -352,14 +357,9 @@ export default function SignalPanel({
     resizeRef.current = null
   }, [handleResizeMouseMove])
 
-  const toggleCollapsed = (e) => {
+  const handleToggleCollapsed = (e) => {
     e.stopPropagation()
-    setCollapsed(prev => {
-      const next = !prev
-      // Open/closed state is intentionally not persisted — always starts closed on reload
-      try { window.localStorage.removeItem('ib-signal-panel-collapsed') } catch (e) {}
-      return next
-    })
+    if (onToggleCollapsed) onToggleCollapsed()
   }
 
   const [selectedSignalId, setSelectedSignalId] = useState(null)
@@ -417,7 +417,7 @@ export default function SignalPanel({
     <div
       onMouseDown={handleDragMouseDown}
       onWheel={e => e.stopPropagation()}
-      onClick={collapsed ? toggleCollapsed : e => e.stopPropagation()}
+      onClick={collapsed ? handleToggleCollapsed : e => e.stopPropagation()}
       style={{
         position: 'absolute',
         zIndex: 11,
@@ -509,7 +509,7 @@ export default function SignalPanel({
             )}
             <button
               className="signal-panel-btn"
-              onClick={toggleCollapsed}
+              onClick={handleToggleCollapsed}
               style={{
                 background: 'transparent', border: 'none',
                 color: '#94a3b8', cursor: 'pointer',

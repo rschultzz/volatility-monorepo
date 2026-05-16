@@ -872,6 +872,13 @@ export default function PriceChart({
   const [smileCollapsed, setSmileCollapsed] = useState(true)
   const smileResizeRef = useRef(null)
 
+  // SIGNALS panel collapsed state — owned here (lifted from SignalPanel) so all
+  // three chart-toggle pills follow the same prop-driven pattern.
+  const [signalsCollapsed, setSignalsCollapsed] = useState(true)
+  const toggleSignalsCollapsed = useCallback(() => {
+    setSignalsCollapsed(prev => !prev)
+  }, [])
+
   // ── Trade annotation mode ─────────────────────────────────────
   const [annotationState, setAnnotationState] = useState(null)
   const annotationStateRef = useRef(null)
@@ -2755,6 +2762,8 @@ export default function PriceChart({
           <SignalPanel
             tradeDate={tradeDate}
             isToday={tradeDate === new Date().toISOString().slice(0, 10)}
+            collapsed={signalsCollapsed}
+            onToggleCollapsed={toggleSignalsCollapsed}
           />
 
           {settingsOpen && (
