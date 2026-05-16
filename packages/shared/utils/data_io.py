@@ -87,6 +87,33 @@ def fetch_skew_data(trade_date_iso: str, expiration_iso: str, times_pt: List[str
         print(f"Skew DB query failed: {e}")
         return pd.DataFrame()
 
+def fetch_atm_iv_minute_series(trade_dates_iso: List[str]) -> pd.DataFrame:
+    """
+    Per-minute 0DTE ATM IV (vol50) for one or more trade dates. Filters to
+    rows where trade_date == expir_date so each session uses its own 0DTE
+    surface.
+    Returns columns: snapshot_pt, trade_date, vol50.
+    """
+    if not trade_dates_iso:
+        return pd.DataFrame()
+    # Dates are validated upstream as YYYY-MM-DD strings, so direct quoting
+    # for the IN clause is safe.
+    placeholders = ",".join(f"'{d}'" for d in trade_dates_iso)
+    query = text(f"""
+        SELECT snapshot_pt, trade_date, vol50
+        FROM "{DB_TABLE_NAME}"
+        WHERE trade_date IN ({placeholders})
+          AND trade_date = expir_date
+        ORDER BY trade_date, snapshot_pt;
+    """)
+    try:
+        engine = get_engine()
+        with engine.connect() as connection:
+            return pd.read_sql(query, connection)
+    except Exception as e:
+        print(f"ATM IV minute series query failed: {e}")
+        return pd.DataFrame()
+
 def fetch_term_metrics_data(trade_date_iso: str, times_pt: List[str]) -> pd.DataFrame:
     if not trade_date_iso or not times_pt:
         return pd.DataFrame()

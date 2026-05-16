@@ -177,6 +177,17 @@ function computeSessionBands(chart, shiftedCandles, viewportWidth) {
   const width = Math.max(0, Number(viewportWidth) || 0)
   if (!width) return []
 
+  // timeToCoordinate returns x relative to the chart's main pane, which
+  // starts AFTER the left price scale when one is visible. Our band divs
+  // are positioned absolutely from the stage's left edge, which includes
+  // the axis area — so we need to add the left scale's width back.
+  let leftAxisWidth = 0
+  try {
+    leftAxisWidth = Number(chart.priceScale('left').width()) || 0
+  } catch (err) {
+    leftAxisWidth = 0
+  }
+
   const groups = []
   let current = null
 
@@ -207,8 +218,8 @@ function computeSessionBands(chart, shiftedCandles, viewportWidth) {
 
     if (startX == null || endX == null) continue
 
-    const rawLeft = Math.min(startX, endX) - barSpacing * 0.5
-    const rawRight = Math.max(startX, endX) + barSpacing * 0.5
+    const rawLeft = Math.min(startX, endX) - barSpacing * 0.5 + leftAxisWidth
+    const rawRight = Math.max(startX, endX) + barSpacing * 0.5 + leftAxisWidth
 
     if (!Number.isFinite(rawLeft) || !Number.isFinite(rawRight)) continue
     if (rawRight <= 0 || rawLeft >= width) continue
@@ -268,14 +279,15 @@ function rangesClose(a, b, eps = 1) {
   return Math.abs(Number(a.from) - Number(b.from)) <= eps && Math.abs(Number(a.to) - Number(b.to)) <= eps
 }
 
-function pointerInfo(evt, container) {
+function pointerInfo(evt, container, leftAxisWidth = 0) {
   if (!evt || !container) return null
   const rect = container.getBoundingClientRect()
   const x = evt.clientX - rect.left
   const y = evt.clientY - rect.top
   const overTimeAxis = y > rect.height - TIME_AXIS_HEIGHT
   const overPriceAxis = x >= rect.width - PRICE_AXIS_HIT_WIDTH
-  return { rect, x, y, overTimeAxis, overPriceAxis }
+  const overLeftPriceAxis = leftAxisWidth > 0 && x >= 0 && x < leftAxisWidth
+  return { rect, x, y, overTimeAxis, overPriceAxis, overLeftPriceAxis }
 }
 
 function normalizeIntervalValue(value, fallback = '1min') {
@@ -624,6 +636,9 @@ export default function PriceChart({
   // Computed band levels to draw on chart (ES coords, basis-corrected)
   // Shape: { shiftedStart, shiftedEnd, sigmaUpper, sigmaLower, shortPut, longPut, shortCall, longCall, anchorEs }
   bandsLevels = null,
+  // Per-minute 0DTE ATM IV series for the line overlay.
+  // Shape: [{ time: "HH:MM", atm_iv_pct: number }, ...]
+  atmIvSeries = [],
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -635,6 +650,22 @@ export default function PriceChart({
   const gexSegmentBySeriesRef = useRef(new Map())
   const expectedMoveSeriesRefs = useRef([])
   const bandsSeriesRefs = useRef([])
+  const atmIvSeriesRefs = useRef([])
+  // Stable session_date → ISeriesApi map. Keeping series mounted across
+  // refreshes prevents the 'left' scale from going empty (and possibly
+  // being re-mapped to the candle scale by lightweight-charts) between
+  // removeSeries and addSeries. Without this, shift+drag could end up
+  // operating on the wrong scale after a refresh.
+  const atmIvSeriesByDateRef = useRef(new Map())
+  // True only while a shift+drag IV pan is in progress. Used to disable
+  // lightweight-charts' default time-pan during the gesture and restore
+  // it on mouseup.
+  const ivShiftDragActiveRef = useRef(false)
+  // Tracks whether the IV scale is currently mounted/visible. Used by the
+  // render effect to apply `autoScale: true` only on the initial enable —
+  // subsequent re-runs (polling, new bars, interval changes) must not reset
+  // the user's manual zoom/pan on the IV scale.
+  const atmIvScaleVisibleRef = useRef(false)
   const intervalRef = useRef(interval)
   const shiftedCandlesRef = useRef([])
   const dragRef = useRef({ active: false, lastY: 0 })
@@ -678,6 +709,18 @@ export default function PriceChart({
       return Number.isFinite(n) && n >= 0 ? n : null
     } catch (e) {
       return null
+    }
+  })
+
+  // Min |GEX| (B) filter for the panel — independent of the chart's gexMinAbsB.
+  // The chart settings still control what's plotted; this controls only the panel list.
+  const [gexPanelMinAbsB, setGexPanelMinAbsB] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem('ib-react-gex-panel-min-abs-b')
+      if (raw == null || raw === '') return 10
+      return coerceGexMinAbsB(raw, 10)
+    } catch (e) {
+      return 10
     }
   })
 
@@ -736,6 +779,15 @@ export default function PriceChart({
     }
   }, [gexPanelMaxDte])
 
+  // Persist panel Min |GEX| (B) filter across sessions
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('ib-react-gex-panel-min-abs-b', String(gexPanelMinAbsB))
+    } catch (e) {
+      // ignore quota / disabled storage
+    }
+  }, [gexPanelMinAbsB])
+
   // Persist panel drag position (null = no persisted position, fall back to default anchor)
   useEffect(() => {
     try {
@@ -786,6 +838,18 @@ export default function PriceChart({
   const [draftGexMinAbsB, setDraftGexMinAbsB] = useState(() => coerceGexMinAbsB(gexMinAbsB, 10))
   const [draftInterval, setDraftInterval] = useState(() => normalizeIntervalValue(interval, '1min'))
   const [settingsError, setSettingsError] = useState('')
+
+  // ATM IV (0DTE) line overlay toggle — persisted in localStorage so the user's
+  // preference survives reloads. Draft state is only used while the settings
+  // modal is open; applySettings commits it to atmIvLineEnabled.
+  const [atmIvLineEnabled, setAtmIvLineEnabled] = useState(() => {
+    try {
+      return window.localStorage.getItem('ib-react-atm-iv-line') === '1'
+    } catch (e) {
+      return false
+    }
+  })
+  const [draftAtmIvLineEnabled, setDraftAtmIvLineEnabled] = useState(atmIvLineEnabled)
 
   const [floatingPos, setFloatingPos] = useState(() => {
     try {
@@ -880,9 +944,10 @@ export default function PriceChart({
     if (!settingsOpen) {
       setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
       setDraftInterval(normalizeIntervalValue(interval, '1min'))
+      setDraftAtmIvLineEnabled(atmIvLineEnabled)
       setSettingsError('')
     }
-  }, [gexMinAbsB, interval, settingsOpen])
+  }, [gexMinAbsB, interval, atmIvLineEnabled, settingsOpen])
 
   useEffect(() => {
     hideParentTopControls()
@@ -936,15 +1001,16 @@ export default function PriceChart({
   //   line from another session still works — the popup uses that segment's own
   //   data directly and ignores this filter).
   // - Always drops expired (dte < 0) rows.
-  // - When maxDte is set: drops expirations with dte > maxDte, then recomputes
-  //   net/call/put gamma per level, then drops levels whose |net| < gexMinAbsB
-  //   (matching the existing visibility threshold from the URL params).
-  // - When maxDte is null (show all): uses original totals untouched.
-  // - Sorted by |net_gamma| descending in both cases.
+  // - When maxDte is set: drops expirations with dte > maxDte and recomputes
+  //   net/call/put gamma per level from the surviving expirations.
+  // - Then drops levels whose |net| < gexPanelMinAbsB. This filter is panel-local
+  //   and intentionally decoupled from the chart's gexMinAbsB so the legend can
+  //   be filtered independently of what's plotted.
+  // - Sorted by |net_gamma| descending.
   const sortedGexSegmentsForPanel = useMemo(() => {
     if (!Array.isArray(normalizedGexSegments)) return []
     const showAll = gexPanelMaxDte == null
-    const minAbs = Math.max(0, Number(gexMinAbsB) || 0) * 1e9 // threshold in raw $
+    const minAbs = Math.max(0, Number(gexPanelMinAbsB) || 0) * 1e9 // threshold in raw $
     const tradeDateStr = String(tradeDate || '').trim()
 
     const out = []
@@ -965,22 +1031,27 @@ export default function PriceChart({
         return true
       })
 
+      let net
+      let call
+      let put
       if (showAll) {
-        // No recomputation — original headline numbers and visibleExp ride along
-        out.push({ ...seg, expirations: visibleExp })
-        continue
+        // No DTE filter: use original headline numbers
+        net = Number(seg?.net_gamma) || 0
+        call = Number(seg?.call_gamma) || 0
+        put = Number(seg?.put_gamma) || 0
+      } else {
+        // DTE filter active: recompute from surviving expirations
+        net = 0
+        call = 0
+        put = 0
+        for (const e of visibleExp) {
+          net += Number(e?.net_gamma) || 0
+          call += Number(e?.call_gamma) || 0
+          put += Number(e?.put_gamma) || 0
+        }
       }
 
-      // Slider active: recompute headline numbers from the surviving expirations
-      let net = 0
-      let call = 0
-      let put = 0
-      for (const e of visibleExp) {
-        net += Number(e?.net_gamma) || 0
-        call += Number(e?.call_gamma) || 0
-        put += Number(e?.put_gamma) || 0
-      }
-      // Drop levels that fall below the visibility threshold under this filter
+      // Apply the panel-local Min |GEX| threshold to whatever net we ended up with
       if (Math.abs(net) < minAbs) continue
 
       out.push({
@@ -996,7 +1067,24 @@ export default function PriceChart({
       (a, b) => Math.abs(Number(b?.net_gamma) || 0) - Math.abs(Number(a?.net_gamma) || 0),
     )
     return out
-  }, [normalizedGexSegments, gexPanelMaxDte, gexMinAbsB, tradeDate])
+  }, [normalizedGexSegments, gexPanelMaxDte, gexPanelMinAbsB, tradeDate])
+
+  // Totals across the panel's currently-visible levels.
+  //   Gross = Σ (call_gamma + |put_gamma|)
+  //   Net   = Σ (call_gamma - |put_gamma|)
+  // Reflects both the Max DTE slider and the panel-local Min |GEX| filter,
+  // since sortedGexSegmentsForPanel already has both applied.
+  const gexPanelTotals = useMemo(() => {
+    let gross = 0
+    let net = 0
+    for (const seg of sortedGexSegmentsForPanel) {
+      const c = Number(seg?.call_gamma) || 0
+      const p = Math.abs(Number(seg?.put_gamma) || 0)
+      gross += c + p
+      net += c - p
+    }
+    return { gross, net }
+  }, [sortedGexSegmentsForPanel])
 
   const normalizedExpectedMoveLevels = useMemo(
     () => normalizeExpectedMoveLevels(expectedMoveLevels),
@@ -1200,6 +1288,75 @@ export default function PriceChart({
       if (!next) return
       setManualPriceScale()
       priceScale.setVisibleRange(next)
+    }
+
+    // Resolve the IV scale via the actual mounted series rather than via
+    // chart.priceScale('left'). chart.priceScale('left') can return a
+    // different scale handle than the one the IV series is bound to; using
+    // series.priceScale() guarantees we operate on the scale the line is
+    // really drawn on.
+    const resolveIvScale = () => {
+      const series = atmIvSeriesRefs.current[0]
+      if (!series) return null
+      try { return series.priceScale() } catch (err) { /* ignore */ }
+      try { return chart.priceScale('left') } catch (err) { /* ignore */ }
+      return null
+    }
+
+    // Vertical-only zoom for the IV scale. Independent of the candle scale
+    // and the time scale — wheeling on the IV axis must not pan the chart
+    // left/right. Anchors at the cursor's IV value when an IV series is
+    // mounted (so the line under the cursor stays fixed during zoom),
+    // otherwise falls back to the visible range midpoint.
+    const zoomIvAtY = (deltaY, yCoord) => {
+      const ivScale = resolveIvScale()
+      if (!ivScale) return
+      let vr = null
+      try { vr = ivScale.getVisibleRange() } catch (err) { vr = null }
+      if (!vr || !Number.isFinite(vr.from) || !Number.isFinite(vr.to) || vr.to <= vr.from) {
+        return
+      }
+      const plotHeight = getPlotHeight(stage)
+      const clampedY = Math.max(0, Math.min(plotHeight, yCoord))
+
+      let anchorPrice = (vr.from + vr.to) / 2
+      const ivSeries = atmIvSeriesRefs.current[0]
+      if (ivSeries) {
+        const p = ivSeries.coordinateToPrice(clampedY)
+        if (Number.isFinite(p)) anchorPrice = p
+      }
+
+      const factor = Math.exp(deltaY * 0.0015)
+      const next = {
+        from: anchorPrice - (anchorPrice - vr.from) * factor,
+        to: anchorPrice + (vr.to - anchorPrice) * factor,
+      }
+      if (!Number.isFinite(next.from) || !Number.isFinite(next.to) || next.to <= next.from) return
+      try {
+        ivScale.applyOptions({ autoScale: false })
+        ivScale.setVisibleRange(next)
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    const panIvByPixels = (deltaY) => {
+      if (!Number.isFinite(deltaY) || deltaY === 0) return
+      const ivScale = resolveIvScale()
+      if (!ivScale) return
+      let vr = null
+      try { vr = ivScale.getVisibleRange() } catch (err) { vr = null }
+      if (!vr || !Number.isFinite(vr.from) || !Number.isFinite(vr.to) || vr.to <= vr.from) {
+        return
+      }
+      const plotHeight = getPlotHeight(stage)
+      const deltaPrice = (deltaY / plotHeight) * (vr.to - vr.from)
+      try {
+        ivScale.applyOptions({ autoScale: false })
+        ivScale.setVisibleRange({ from: vr.from + deltaPrice, to: vr.to + deltaPrice })
+      } catch (err) {
+        // ignore
+      }
     }
 
     const updateBand = () => {
@@ -1445,6 +1602,15 @@ export default function PriceChart({
       }
     }
 
+    const getLeftAxisWidth = () => {
+      try {
+        const w = Number(chart.priceScale('left').width()) || 0
+        return w
+      } catch (err) {
+        return 0
+      }
+    }
+
     const handleWheel = (evt) => {
       hasUserInteractedRef.current = true
       setInteractionActive(true)
@@ -1453,8 +1619,21 @@ export default function PriceChart({
         shiftedCandlesRef.current,
         intervalRef.current
       )
-      const info = pointerInfo(evt, stage)
-      if (!info || info.overTimeAxis || !info.overPriceAxis) {
+      const info = pointerInfo(evt, stage, getLeftAxisWidth())
+      if (!info || info.overTimeAxis) {
+        setInteractionActive(false, 180)
+        return
+      }
+      // Wheel over the IV axis → zoom only the IV scale; never the time
+      // scale, never the price scale.
+      if (info.overLeftPriceAxis) {
+        evt.preventDefault()
+        evt.stopPropagation()
+        zoomIvAtY(evt.deltaY, info.y)
+        setInteractionActive(false, 180)
+        return
+      }
+      if (!info.overPriceAxis) {
         setInteractionActive(false, 180)
         return
       }
@@ -1473,9 +1652,33 @@ export default function PriceChart({
         shiftedCandlesRef.current,
         intervalRef.current
       )
-      const info = pointerInfo(evt, stage)
+      const info = pointerInfo(evt, stage, getLeftAxisWidth())
       if (!info || info.overTimeAxis || info.overPriceAxis) return
-      dragRef.current = { active: true, lastY: evt.clientY }
+      // Drag on the IV axis → pan IV scale only (mirrors the right-axis
+      // native zoom behavior). Don't fall through to the candle-pan path.
+      if (info.overLeftPriceAxis) {
+        dragRef.current = { active: true, lastY: evt.clientY, scale: 'left' }
+        return
+      }
+      // Shift+drag in the plot area pans the IV line up/down independently
+      // of the candles. We need to:
+      //   1. preventDefault + stopPropagation to keep lightweight-charts'
+      //      built-in handlers from also panning the time/price scales
+      //      (otherwise the plot scrolls horizontally beneath the IV).
+      //   2. temporarily disable handleScroll.pressedMouseMove for the
+      //      duration of the drag, since lightweight-charts attaches its
+      //      mousemove listener to the document and may still respond.
+      if (evt.shiftKey && atmIvSeriesRefs.current.length > 0) {
+        evt.preventDefault()
+        evt.stopPropagation()
+        try {
+          chart.applyOptions({ handleScroll: { pressedMouseMove: false } })
+          ivShiftDragActiveRef.current = true
+        } catch (err) { /* ignore */ }
+        dragRef.current = { active: true, lastY: evt.clientY, scale: 'left' }
+        return
+      }
+      dragRef.current = { active: true, lastY: evt.clientY, scale: 'right' }
     }
 
     const handleMouseMove = (evt) => {
@@ -1484,12 +1687,25 @@ export default function PriceChart({
       const deltaY = evt.clientY - dragRef.current.lastY
       dragRef.current.lastY = evt.clientY
       if (deltaY !== 0) {
-        panPriceByPixels(deltaY)
+        if (dragRef.current.scale === 'left') {
+          panIvByPixels(deltaY)
+        } else {
+          panPriceByPixels(deltaY)
+        }
       }
+    }
+
+    const restorePlotPanIfNeeded = () => {
+      if (!ivShiftDragActiveRef.current) return
+      ivShiftDragActiveRef.current = false
+      try {
+        chart.applyOptions({ handleScroll: { pressedMouseMove: true } })
+      } catch (err) { /* ignore */ }
     }
 
     const handleMouseUp = () => {
       dragRef.current.active = false
+      restorePlotPanIfNeeded()
       setInteractionActive(false, 180)
     }
 
@@ -1497,6 +1713,7 @@ export default function PriceChart({
       hideTooltip()
       reportLinkedCrosshair(null)
       dragRef.current.active = false
+      restorePlotPanIfNeeded()
       setInteractionActive(false, 180)
     }
 
@@ -1506,7 +1723,10 @@ export default function PriceChart({
 
     window.addEventListener('resize', handleResize)
     stage.addEventListener('wheel', handleWheel, { passive: false, capture: true })
-    stage.addEventListener('mousedown', handleMouseDown)
+    // Capture-phase mousedown so we run BEFORE lightweight-charts' own
+    // canvas listener; combined with stopPropagation in shift+drag this
+    // prevents the chart from also starting its time-pan gesture.
+    stage.addEventListener('mousedown', handleMouseDown, { capture: true })
     stage.addEventListener('mouseleave', handleMouseLeave)
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
@@ -1519,7 +1739,7 @@ export default function PriceChart({
         resizeObserver.disconnect()
       }
       stage.removeEventListener('wheel', handleWheel, { capture: true })
-      stage.removeEventListener('mousedown', handleMouseDown)
+      stage.removeEventListener('mousedown', handleMouseDown, { capture: true })
       stage.removeEventListener('mouseleave', handleMouseLeave)
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
@@ -1715,6 +1935,7 @@ export default function PriceChart({
   function openSettings() {
     setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
     setDraftInterval(normalizeIntervalValue(interval, '1min'))
+    setDraftAtmIvLineEnabled(atmIvLineEnabled)
     setSettingsError('')
     setSettingsOpen(true)
   }
@@ -1724,6 +1945,7 @@ export default function PriceChart({
     setSettingsError('')
     setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
     setDraftInterval(normalizeIntervalValue(interval, '1min'))
+    setDraftAtmIvLineEnabled(atmIvLineEnabled)
   }
 
   function applySettings(event) {
@@ -1741,6 +1963,16 @@ export default function PriceChart({
     }
     if (typeof onApplyIntervalChange === 'function') {
       onApplyIntervalChange(nextInterval)
+    }
+
+    // Commit pure-React settings (IV line) before the parent-Dash sync below,
+    // so they still take effect when the React app runs standalone (no parent
+    // Dash controls present, e.g. dev/preview mode).
+    setAtmIvLineEnabled(draftAtmIvLineEnabled)
+    try {
+      window.localStorage.setItem('ib-react-atm-iv-line', draftAtmIvLineEnabled ? '1' : '0')
+    } catch (e) {
+      // ignore quota / privacy-mode errors
     }
 
     const intervalOk = setParentRadioValue('ironbeam-bar-interval', nextInterval)
@@ -2015,6 +2247,169 @@ export default function PriceChart({
 
     bandsSeriesRefs.current = nextRefs
   }, [bandsLevels])
+
+  // ── ATM IV (0DTE) line overlay ────────────────────────────────────────
+  // Maps atmIvSeries entries (PT HH:MM → atm_iv_pct) onto the rendered
+  // candles' shifted-epoch times so the IV line aligns to the chart's bars.
+  // Switching 1min↔5min auto-thins because we iterate the chart's bars.
+  //
+  // Scale: drawn on the built-in 'left' price scale. lightweight-charts only
+  // supports two visible price axes ('left' and 'right'); 'right' is taken
+  // by candles, so the IV axis goes on the LEFT side, with the same
+  // axisPressedMouseMove + mouseWheel zoom/pan behavior as the price axis.
+  //
+  // Session breaks: the candles backend filters out overnight bars, so we
+  // can't rely on whitespace-at-non-RTH to break the line. Instead we group
+  // the IV points by session date and create one LineSeries per session —
+  // independent series never connect across the gap.
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+
+    const tearDown = () => {
+      for (const s of atmIvSeriesByDateRef.current.values()) {
+        try {
+          chart.removeSeries(s)
+        } catch (err) {
+          // ignore stale reference
+        }
+      }
+      atmIvSeriesByDateRef.current.clear()
+      atmIvSeriesRefs.current = []
+      try {
+        chart.priceScale('left').applyOptions({ visible: false })
+      } catch (err) {
+        // ignore
+      }
+      // Forget that we ever fit the scale, so the next time the toggle is
+      // turned on we re-fit (autoScale: true) once.
+      atmIvScaleVisibleRef.current = false
+    }
+
+    if (!atmIvLineEnabled || !Array.isArray(atmIvSeries) || atmIvSeries.length === 0) {
+      tearDown()
+      return
+    }
+
+    // (session date, PT HH:MM) → IV %, RTH-only (06:30–13:00 PT inclusive).
+    // Keying on the date too is critical: yesterday's 08:30 IV must not be
+    // looked up for today's 08:30 candle.
+    const ivByDateHHMM = new Map()
+    for (const item of atmIvSeries) {
+      const date = String(item?.date || '').trim()
+      const t = String(item?.time || '').trim()
+      const v = Number(item?.atm_iv_pct)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue
+      if (!/^\d{2}:\d{2}$/.test(t) || !Number.isFinite(v)) continue
+      if (t < '06:30' || t > '13:00') continue
+      ivByDateHHMM.set(`${date}|${t}`, v)
+    }
+
+    // Group points by shifted-date (one bucket per session).
+    const sessions = new Map()
+    for (const bar of shiftedCandles) {
+      const t = Number(bar?.time)
+      if (!Number.isFinite(t)) continue
+      const hhmm = toPtHHMM(t, interval)
+      if (!hhmm || hhmm < '06:30' || hhmm > '13:00') continue
+      const date = shiftedDateKey(t)
+      const iv = ivByDateHHMM.get(`${date}|${hhmm}`)
+      if (!Number.isFinite(iv)) continue
+      if (!sessions.has(date)) sessions.set(date, [])
+      sessions.get(date).push({ time: t, value: iv })
+    }
+
+    // Reuse existing series across refreshes. Removing all series from a
+    // scale (even briefly) can cause lightweight-charts to drop the scale
+    // and re-bind newly added series to the default (right) scale. That
+    // would couple shift+drag motion to the candles. By keeping at least
+    // one series mounted on 'left', the scale's identity and manual
+    // visible-range stay stable.
+    const seriesOpts = {
+      color: '#06b6d4',
+      lineWidth: 2,
+      priceScaleId: 'left',
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerVisible: true,
+      pointMarkersVisible: false,
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+    }
+
+    // 1. Remove series for sessions that no longer exist.
+    for (const [date, series] of atmIvSeriesByDateRef.current) {
+      if (!sessions.has(date)) {
+        try { chart.removeSeries(series) } catch (err) { /* ignore */ }
+        atmIvSeriesByDateRef.current.delete(date)
+      }
+    }
+
+    // 2. Update existing series in place / create new ones.
+    for (const [date, points] of sessions) {
+      if (points.length === 0) continue
+      let series = atmIvSeriesByDateRef.current.get(date)
+      if (!series) {
+        try {
+          series = chart.addSeries(LineSeries, seriesOpts)
+          atmIvSeriesByDateRef.current.set(date, series)
+        } catch (err) {
+          console.error('[atm-iv] failed to add session series', err)
+          continue
+        }
+      }
+      try {
+        series.setData(points)
+      } catch (err) {
+        console.error('[atm-iv] failed to set data', err)
+      }
+    }
+
+    // Sync the array view used by zoom/drag handlers.
+    atmIvSeriesRefs.current = Array.from(atmIvSeriesByDateRef.current.values())
+
+    if (atmIvSeriesRefs.current.length === 0) {
+      try {
+        chart.priceScale('left').applyOptions({ visible: false })
+      } catch (err) { /* ignore */ }
+      atmIvScaleVisibleRef.current = false
+      return
+    }
+
+    // Only apply `autoScale: true` on the initial enable. Subsequent runs
+    // (polling, new candles, interval flips) must preserve the user's
+    // manual IV zoom/pan — re-applying autoScale would refit the scale and
+    // erase that interaction.
+    const isInitialEnable = !atmIvScaleVisibleRef.current
+    try {
+      const opts = {
+        visible: true,
+        borderVisible: true,
+        borderColor: 'rgba(6, 182, 212, 0.45)',
+        scaleMargins: { top: 0.08, bottom: 0.08 },
+      }
+      if (isInitialEnable) opts.autoScale = true
+      chart.priceScale('left').applyOptions(opts)
+      atmIvScaleVisibleRef.current = true
+    } catch (err) {
+      console.error('[atm-iv] failed to configure price scale', err)
+    }
+
+    // The left axis becoming visible/hidden shifts the chart's main pane
+    // horizontally, which moves where session-band divs should sit. Recompute
+    // them on the next frame so the band offsets pick up the new axis width.
+    requestAnimationFrame(() => {
+      try {
+        const next = computeSessionBands(
+          chart,
+          shiftedCandlesRef.current,
+          stageRef.current?.clientWidth || 0
+        )
+        setSessionBands(next)
+      } catch (err) {
+        // ignore
+      }
+    })
+  }, [atmIvLineEnabled, atmIvSeries, shiftedCandles, interval])
 
   const handleFloatingMouseDown = (e) => {
     // Only drag if not clicking on collapse button
@@ -2419,6 +2814,29 @@ export default function PriceChart({
                     )
                   })}
                 </div>
+
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    marginBottom: '14px',
+                    fontSize: '12px',
+                    color: '#cbd5e1',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={draftAtmIvLineEnabled}
+                    onChange={(event) => setDraftAtmIvLineEnabled(event.target.checked)}
+                    style={{ accentColor: '#06b6d4' }}
+                  />
+                  <span>
+                    Show 0DTE ATM IV line{' '}
+                    <span style={{ color: '#06b6d4', fontWeight: 700 }}>(cyan)</span>
+                  </span>
+                </label>
 
                 <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e1', marginBottom: '8px' }}>
                   Min |GEX| (B)
@@ -3121,6 +3539,201 @@ export default function PriceChart({
                     </div>
                   </div>
                 )}
+
+                {/* Min |GEX| (B) — panel-local, independent of chart's gexMinAbsB */}
+                <div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'baseline',
+                      marginBottom: '4px',
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: '#94a3b8',
+                        fontSize: '10px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.06em',
+                        fontWeight: 700,
+                      }}
+                    >
+                      Min |GEX| (B)
+                    </span>
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        color: '#cbd5e1',
+                        fontVariantNumeric: 'tabular-nums',
+                      }}
+                    >
+                      ≥ {gexPanelMinAbsB}B
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGexPanelMinAbsB((v) => coerceGexMinAbsB(v - 1, 0))
+                      }}
+                      disabled={gexPanelMinAbsB <= 0}
+                      aria-label="Decrease Min |GEX| by 1"
+                      style={{
+                        width: '24px',
+                        height: '24px',
+                        flexShrink: 0,
+                        background: 'rgba(148, 163, 184, 0.12)',
+                        border: '1px solid rgba(148, 163, 184, 0.24)',
+                        borderRadius: '6px',
+                        color: '#cbd5e1',
+                        fontSize: '14px',
+                        fontWeight: 700,
+                        lineHeight: 1,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: 0,
+                        opacity: gexPanelMinAbsB <= 0 ? 0.4 : 1,
+                      }}
+                      title="Decrease by 1B"
+                    >
+                      −
+                    </button>
+                    <input
+                      type="range"
+                      min={0}
+                      max={200}
+                      step={1}
+                      value={gexPanelMinAbsB}
+                      onChange={(e) => {
+                        setGexPanelMinAbsB(coerceGexMinAbsB(e.target.value, 10))
+                      }}
+                      style={{
+                        flex: 1,
+                        accentColor: '#60a5fa',
+                        cursor: 'pointer',
+                        minWidth: 0,
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGexPanelMinAbsB((v) => coerceGexMinAbsB(v + 1, 0))
+                      }}
+                      disabled={gexPanelMinAbsB >= 200}
+                      aria-label="Increase Min |GEX| by 1"
+                      style={{
+                        width: '24px',
+                        height: '24px',
+                        flexShrink: 0,
+                        background: 'rgba(148, 163, 184, 0.12)',
+                        border: '1px solid rgba(148, 163, 184, 0.24)',
+                        borderRadius: '6px',
+                        color: '#cbd5e1',
+                        fontSize: '14px',
+                        fontWeight: 700,
+                        lineHeight: 1,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: 0,
+                        opacity: gexPanelMinAbsB >= 200 ? 0.4 : 1,
+                      }}
+                      title="Increase by 1B"
+                    >
+                      +
+                    </button>
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      color: '#64748b',
+                      fontSize: '10px',
+                      marginTop: '2px',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    <span>0</span>
+                    <span>200</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Totals — Gross & Net summed across the panel's currently-visible levels.
+                  Reflects the Max DTE slider and the panel's Min |GEX| filter. */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '8px 12px',
+                  borderBottom: '1px solid rgba(148,163,184,0.18)',
+                  background: 'rgba(30, 41, 59, 0.4)',
+                  flexShrink: 0,
+                  gap: '10px',
+                }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+                  <span
+                    style={{
+                      color: '#94a3b8',
+                      fontSize: '10px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.06em',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Gross
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      color: '#e5e7eb',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {fmtGammaB(gexPanelTotals.gross)}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, alignItems: 'flex-end' }}>
+                  <span
+                    style={{
+                      color: '#94a3b8',
+                      fontSize: '10px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.06em',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Net
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      color:
+                        gexPanelTotals.net > 0
+                          ? '#86efac'
+                          : gexPanelTotals.net < 0
+                            ? '#fca5a5'
+                            : '#e5e7eb',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {fmtGammaB(gexPanelTotals.net)}
+                  </span>
+                </div>
               </div>
 
               {/* Rows */}

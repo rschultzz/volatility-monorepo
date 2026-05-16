@@ -25,7 +25,7 @@ from modules.Ironbeam.indicators.gex_overlay import build_gex_overlay_traces as 
 from sqlalchemy import create_engine, text
 from flask import jsonify, request
 
-from packages.shared.utils import fetch_skew_data, is_market_hours, fetch_live_orats_data, fetch_data_from_db
+from packages.shared.utils import fetch_atm_iv_minute_series, fetch_skew_data, is_market_hours, fetch_live_orats_data, fetch_data_from_db
 from packages.shared.surface_compare import k_for_abs_delta
 from packages.shared.options_orats import pt_minute_to_et
 
@@ -1561,6 +1561,45 @@ def _build_react_flow_payload(
     }, 200
 
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _build_react_atm_iv_series_payload(
+        trade_dates: list[str] | None,
+) -> tuple[dict, int]:
+    """
+    Per-minute 0DTE ATM IV (vol50, in %) for plotting as a line on the React
+    price chart. Pulls one row per minute per requested trade_date, filtered
+    to trade_date == expir_date so each session uses its own 0DTE surface.
+    """
+    valid_dates = [d for d in (trade_dates or []) if _DATE_RE.match(str(d) or "")]
+    if not valid_dates:
+        return {"error": "Missing or malformed trade_dates"}, 400
+    df = fetch_atm_iv_minute_series(valid_dates)
+
+    series: list[dict] = []
+    if df is not None and not df.empty:
+        snap = pd.to_datetime(df["snapshot_pt"])
+        td = pd.to_datetime(df["trade_date"]).dt.strftime("%Y-%m-%d")
+        for ts, date_iso, vol50 in zip(snap, td, df["vol50"]):
+            if pd.isna(vol50):
+                continue
+            try:
+                pct = float(vol50) * 100.0
+            except (TypeError, ValueError):
+                continue
+            if not (0 < pct <= 100):
+                continue
+            hhmm = ts.strftime("%H:%M") if hasattr(ts, "strftime") else str(ts)
+            series.append({
+                "date": date_iso,
+                "time": hhmm,
+                "atm_iv_pct": round(pct, 4),
+            })
+
+    return {"series": series}, 200
+
+
 def _build_react_skew_data_payload(
         trade_date: str | None,
         expiration_date: str | None,
@@ -2822,6 +2861,30 @@ def register_ironbeam_callbacks(app):
                     resp.headers["Vary"] = "Origin"
                 return resp, status
             app.server._ironbeam_react_smile_data_route_registered = True
+
+        if not getattr(app.server, "_ironbeam_react_atm_iv_series_route_registered", False):
+            @app.server.route("/api/ironbeam/atm-iv-series", methods=["GET"])
+            def ironbeam_react_atm_iv_series_api():
+                # Accept either `trade_dates=YYYY-MM-DD,YYYY-MM-DD` (preferred,
+                # one entry per session visible on the chart) or a single
+                # `trade_date=YYYY-MM-DD` for backwards compatibility.
+                trade_dates_str = request.args.get("trade_dates")
+                if trade_dates_str:
+                    trade_dates = [s.strip() for s in trade_dates_str.split(",") if s.strip()]
+                else:
+                    single = request.args.get("trade_date")
+                    trade_dates = [single] if single else []
+                payload, status = _build_react_atm_iv_series_payload(trade_dates)
+
+                resp = jsonify(payload)
+                origin = request.headers.get("Origin")
+                allowed = {"http://localhost:5173", "http://127.0.0.1:5173", "http://0.0.0.0:5173"}
+                if origin in allowed:
+                    resp.headers["Access-Control-Allow-Origin"] = origin
+                    resp.headers["Access-Control-Allow-Credentials"] = "true"
+                    resp.headers["Vary"] = "Origin"
+                return resp, status
+            app.server._ironbeam_react_atm_iv_series_route_registered = True
 
     # ---- Clientside Sync: Crosshair & Zoom ----
     app.clientside_callback(

@@ -500,6 +500,7 @@ export default function App() {
 
   const [skewData, setSkewData] = useState([])
   const [smileData, setSmileData] = useState(null)
+  const [atmIvSeries, setAtmIvSeries] = useState([])
 
   const [flowPanelHeight, setFlowPanelHeight] = useState(() => {
     try {
@@ -1404,6 +1405,62 @@ export default function App() {
     }
   }, [apiBase, tradeDate, expirationDate, selectedTimes, expectedOn, loadingCenter, error])
 
+  // --- ATM IV minute-series fetch (0DTE: per-session trade_date == expir) ---
+  // Pulls the 0DTE ATM IV series for every session visible on the chart so
+  // that yesterday's bars use yesterday's IV, today's use today's, etc.
+  // Memoized into a stable comma-separated date key so the fetch only re-runs
+  // when the set of loaded dates actually changes.
+  const atmIvDatesKey = useMemo(
+    () => loadedFlowDates.join(','),
+    [loadedFlowDates]
+  )
+
+  useEffect(() => {
+    if (loadingCenter || error) return undefined
+    if (!atmIvDatesKey) return undefined
+
+    let disposed = false
+    let inFlight = false
+    let activeController = null
+
+    const tick = async () => {
+      if (disposed || inFlight) return
+      inFlight = true
+      const controller = new AbortController()
+      activeController = controller
+      try {
+        const url = new URL(`${apiBase}/api/ironbeam/atm-iv-series`)
+        url.searchParams.set('trade_dates', atmIvDatesKey)
+
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          credentials: 'include',
+          signal: controller.signal,
+          cache: 'no-store',
+        })
+        if (!response.ok) throw new Error('ATM IV series fetch failed')
+        const payload = await response.json()
+        if (disposed) return
+        setAtmIvSeries(Array.isArray(payload?.series) ? payload.series : [])
+      } catch (err) {
+        if (err?.name !== 'AbortError') {
+          console.error('ATM IV series refresh failed', err)
+        }
+      } finally {
+        if (activeController === controller) activeController = null
+        inFlight = false
+      }
+    }
+
+    tick()
+    const timer = window.setInterval(tick, SKEW_DATA_POLL_MS)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+      if (activeController) activeController.abort()
+    }
+  }, [apiBase, atmIvDatesKey, loadingCenter, error])
+
   useEffect(() => {
     const handleMove = (event) => {
       const state = dragStateRef.current
@@ -1547,6 +1604,7 @@ export default function App() {
                 skewData={skewData}
                 smileData={smileData}
                 smileSnapshots={smileSnapshots}
+                atmIvSeries={atmIvSeries}
                 activeBandsAnchorTime={bandsAnchor?.time ?? null}
                 onBandsAnchorChange={setBandsAnchor}
                 bandsLevels={bandsLevels}
