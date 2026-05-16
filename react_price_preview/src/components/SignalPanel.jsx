@@ -413,6 +413,11 @@ export default function SignalPanel({
   const completedSignals = signals.filter(s => s.status === 'completed' || s.status === 'expired')
   const activeSignals = signals.filter(s => s.status !== 'completed' && s.status !== 'expired')
 
+  // When collapsed, the SIGNALS pill is rendered by `<ChartToggleBar />` in
+  // PriceChart, so this component has nothing to draw. Hooks above keep running
+  // so the auto-refresh interval and position/size state persist across toggles.
+  if (collapsed) return null
+
   return (
     <div
       onMouseDown={handleDragMouseDown}
