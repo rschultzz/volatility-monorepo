@@ -2,6 +2,10 @@
 
 Options analytics and algorithmic trading platform (ES/SPX). Python monorepo, PostgreSQL on Render, Flask backend (`service.py`), React frontend. Two GEX-wall-based backtest strategies (short = mature, long = in development) plus an exploratory volatility-compression iron condor. Live signal panel (`SignalPanel.jsx`) persists to the `bt_signals` table.
 
+## Vault-wide conventions
+
+Vault-wide conventions for note types, naming, frontmatter schemas, and indexing live in `/Users/ryan/My Drive/Obsidian Vault/Anonymous/Obsidian Setup/claude-vault-instructions.md` (referenced from notes as `[[claude-vault-instructions]]`). When writing to the vault, follow those conventions. The sections below describe Dash-specific overrides and code-side conventions that apply on top of them.
+
 ## Vault location
 
 Project notes live in an Obsidian vault at `/Users/ryan/My Drive/Obsidian Vault/Anonymous/Dash/`. Treat it as the durable memory layer across sessions — it's where you read prior context from and where you write session output to.
@@ -10,6 +14,7 @@ The path contains a space; quote it in any shell commands you run (e.g. `ls "/Us
 
 Vault subfolders:
 
+- `_Dash MOC.md` — project home / Map of Content (read first for project overview)
 - `sessions/` — chronological journal, one note per work session
 - `strategies/` — strategy logic, parameters, current status
 - `components/` — modules, tables, views, frontend pieces
@@ -21,10 +26,11 @@ Vault subfolders:
 
 Before doing any work, every session:
 
-1. List the 3 most recent files in `/Users/ryan/My Drive/Obsidian Vault/Anonymous/Dash/sessions/` (sorted by filename — they're `YYYY-MM-DD-<slug>` prefixed).
-2. Read at least the most recent in full. Pay particular attention to `## Open questions` and `## Next session`.
-3. If today's task overlaps with anything in `/Users/ryan/My Drive/Obsidian Vault/Anonymous/Dash/open-questions/`, read those notes too.
-4. Briefly summarize to me what's outstanding and confirm what we're tackling today before writing any code.
+1. Skim `/Users/ryan/My Drive/Obsidian Vault/Anonymous/Dash/_Dash MOC.md` for project state — strategies in flight, key data tables, current focus.
+2. List the 3 most recent files in `/Users/ryan/My Drive/Obsidian Vault/Anonymous/Dash/sessions/` (sorted by filename — they're `YYYY-MM-DD-<slug>` prefixed).
+3. Read at least the most recent in full. Pay particular attention to `## Open questions` and `## Next session`.
+4. If today's task overlaps with anything in `/Users/ryan/My Drive/Obsidian Vault/Anonymous/Dash/open-questions/`, read those notes too.
+5. Briefly summarize to me what's outstanding and confirm what we're tackling today before writing any code.
 
 ## End of session
 
