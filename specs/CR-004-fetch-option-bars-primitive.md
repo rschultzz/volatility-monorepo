@@ -5,76 +5,99 @@ The primitive is also the foundation for [[live-condor-pricing-on-dash]], which 
 Decision
 Add two functions to packages/shared/options_cache/fetcher.py:
 pythondef _fetch_option_bars_from_orats(
-    opra_symbols: list[str],
-    start: datetime,  # ET, naive
-    end: datetime,    # ET, naive
+    opra_symbol: str,
+    start_pt: datetime,  # naive PT (module convention)
+    end_pt: datetime,    # naive PT
 ) -> list[OptionMinuteBar]:
-    """Pure HTTP. Hits ORATS /strikes/option with range-tradeDate.
-    No DB I/O. No cache awareness. Used only by fetch_option_bars."""
+    """Pure HTTP. Hits ORATS /datav2/hist/live/one-minute/strikes/option
+    with the full OPRA symbol as the singular ticker param and a
+    range-tradeDate (PT→ET conversion internal, reusing
+    _format_trade_date_param). Returns ALL bars from the parsed response
+    — including the counterpart OPRA at the same strike+expir, since the
+    existing csv_parser emits 2 bars per CSV row. No DB I/O. No cache
+    awareness. Used only by fetch_option_bars."""
 
 def fetch_option_bars(
     opra_symbols: list[str],
-    start: datetime,
-    end: datetime,
-) -> FetchSummary:
-    """Cache-aware fetch. Computes per-OPRA gaps against
-    orats_options_fetched_windows, calls the private primitive
-    only for gaps, writes results to orats_options_minute and
-    new window rows to orats_options_fetched_windows.
+    start_pt: datetime,  # naive PT
+    end_pt: datetime,    # naive PT
+) -> FetchOptionBarsSummary:
+    """Cache-aware fetch. For each OPRA, computes gaps against
+    orats_options_fetched_windows, calls the private primitive one OPRA
+    at a time for each gap, writes returned bars to orats_options_minute,
+    and writes orats_options_fetched_windows rows for both the requested
+    OPRA AND the counterpart OPRA returned in the same response.
     Idempotent: re-running over the same range is a no-op."""
-Public re-export in packages/shared/options_cache/__init__.py: fetch_option_bars only. _fetch_option_bars_from_orats stays module-private.
-Additive change. fetch_chain is untouched.
+Public re-exports in packages/shared/options_cache/__init__.py: fetch_option_bars (function) and FetchOptionBarsSummary (dataclass). _fetch_option_bars_from_orats stays module-private.
+Additive change. fetch_chain / fetch_contract / legacy fetch_contracts are untouched.
 Affected files
 
 packages/shared/options_cache/fetcher.py — new functions
-packages/shared/options_cache/__init__.py — add fetch_option_bars to re-exports
+packages/shared/options_cache/models.py — new FetchOptionBarsSummary dataclass
+packages/shared/options_cache/__init__.py — add fetch_option_bars and FetchOptionBarsSummary to re-exports
 packages/shared/options_cache/tests/test_fetcher.py (new file) — new unit tests
 packages/shared/options_cache/tests/test_fetcher_smoke.py (new file) — real-ORATS smoke test, marked @pytest.mark.smoke and skipped in default CI runs
 
 Grep packages/shared/options_cache/__init__.py for fetch_option_bars after changes — should appear exactly once in the re-export list. Also grep the whole repo for fetch_option_bars to confirm no pre-existing call sites (it's a net-new symbol).
-Behavior spec
-_fetch_option_bars_from_orats(opra_symbols, start, end)
+FetchOptionBarsSummary dataclass (in models.py)
 
-URL construction per [[orats-endpoint-conventions]]: /datav2/hist/strikes/option, range-tradeDate parameter in ET format, tickers parameter as comma-joined OPRA symbols.
-Returns parsed bar records. No DB I/O.
+opras_processed: int — count of OPRAs in the input list
+gaps_filled: int — count of gaps detected and fetched across all OPRAs
+bars_written: int — total bars inserted into orats_options_minute (excludes ON CONFLICT skips)
+cache_hits: int — count of OPRAs that needed zero HTTP calls (fully cached)
+
+Behavior spec
+_fetch_option_bars_from_orats(opra_symbol, start_pt, end_pt)
+
+URL construction per [[orats-endpoint-conventions]]:
+  - path: /datav2/hist/live/one-minute/strikes/option (the Live Intraday tier's historical option path; NOT /datav2/hist/strikes/option)
+  - ticker param (singular): full OPRA symbol (e.g., "SPX24020204935000"), per the diagnostic-verified convention in scripts/orats_diagnostic.py:100 and the conventions doc
+  - tradeDate param: ET format YYYYMMDDHHMM. Single-timestamp if start_pt == end_pt; otherwise comma-joined start,end. PT→ET conversion via the existing _format_trade_date_param helper.
+Returns ALL bars from the parsed response (both call and put OPRAs at the strike+expir matching the request, as csv_parser emits 2 bars per row). No DB I/O.
 Errors bubble up; retry/backoff is the HTTP client's job (existing pattern, unchanged).
 
-fetch_option_bars(opra_symbols, start, end) — algorithm
-For each OPRA in opra_symbols:
+fetch_option_bars(opra_symbols, start_pt, end_pt) — algorithm
+Initialize counters: gaps_filled=0, bars_written=0, cache_hits=0.
+For each OPRA X in opra_symbols:
 
-Query orats_options_fetched_windows WHERE opra_symbol = X → list of (window_start_pt, window_end_pt).
-Compute gaps in [start, end] not covered by any existing window. Treat adjacency as covered (an existing window ending at exactly start means no gap at the boundary). Result is a list of (gap_start, gap_end) intervals, possibly empty.
-For each gap, call _fetch_option_bars_from_orats([X], gap_start, gap_end) (one OPRA per call — matches the ~1,440-call budget in the acceptance criteria).
-Write returned bars to orats_options_minute.
-Insert one row into orats_options_fetched_windows per gap: (opra_symbol=X, window_start_pt=gap_start, window_end_pt=gap_end).
+Query orats_options_fetched_windows WHERE opra_symbol = X via repo.get_windows_for_contract(X).
+Compute gaps in [start_pt, end_pt] not covered by any existing window via windows.find_gaps. Result is a list of TimeRange gaps, possibly empty.
+If gaps is empty: increment cache_hits, continue to next OPRA.
+For each gap, call _fetch_option_bars_from_orats(X, gap.start_pt, gap.end_pt) (one OPRA per call — matches the ~1,440-call budget in the acceptance criteria).
+Write returned bars to orats_options_minute via repo.insert_bars (idempotent via ON CONFLICT). Add the returned insert count to bars_written.
+Record orats_options_fetched_windows rows for every unique opra_symbol in the parsed response (in practice: the requested OPRA X plus the counterpart OPRA at the same strike+expir). One repo.record_fetched_window call per (opra_symbol, gap). row_count = bars-for-that-opra in the gap.
+Increment gaps_filled by len(gaps).
 
-Return a FetchSummary dict for observability: {opras_processed, gaps_filled, bars_written, cache_hits} or similar.
+Return FetchOptionBarsSummary(opras_processed=len(opra_symbols), gaps_filled=gaps_filled, bars_written=bars_written, cache_hits=cache_hits).
+Why write windows for both sides
+The ADR ([[2026-05-04 - Options Cache Schema Design]]) defines orats_options_fetched_windows as cache-state for gap detection, not request history. Recording only the requested OPRA would create a state where bars exist in orats_options_minute for an OPRA whose fetched_windows row says "not cached" — exactly the two-tables-disagreeing situation the ADR was designed to prevent. Request-history auditability belongs in orats_options_fetch_jobs, which the ADR sets up explicitly for that purpose. The aggressive recording here is also a direct benefit to [[live-condor-pricing-on-dash]], whose condors query both put and call sides.
 Empty-response handling (important)
-If _fetch_option_bars_from_orats returns zero bars for a gap (legitimate ORATS no-data case — illiquid OPRA, pre-listing window, etc.), still write the orats_options_fetched_windows row. The provenance semantics are "we asked ORATS over this window; here's what they had." Not writing the row would cause perpetual refetches of empty windows. This mirrors the reasoning in [[2026-05-04 - Options Cache Schema Design]] that explicitly rejects inferring coverage from the bars table.
+If _fetch_option_bars_from_orats returns zero bars for a gap (legitimate ORATS no-data case — illiquid OPRA, pre-listing window, etc.), still write the orats_options_fetched_windows row for the requested OPRA X. The provenance semantics are "we asked ORATS over this window; here's what they had." Not writing the row would cause perpetual refetches of empty windows. This mirrors the reasoning in [[2026-05-04 - Options Cache Schema Design]] that explicitly rejects inferring coverage from the bars table. (No counterpart-side rows are written in this case — there's no counterpart OPRA to identify when the response is empty.)
 Window-coalescing on write — explicitly out of scope
 Multiple adjacent or overlapping orats_options_fetched_windows rows per OPRA are allowed and expected. Gap detection at read time unions them correctly. Coalescing into single contiguous windows is a separable optimization for later, if the table ever gets unwieldy. Do not implement it in this CR.
 Tests required
 Unit tests (packages/shared/options_cache/tests/test_fetcher.py — new file)
 For _fetch_option_bars_from_orats:
 
-Single-OPRA URL construction (correct prefix, tradeDate ET format, tickers param)
-Multi-OPRA URL construction (comma-joined tickers)
-Response parsing into OptionMinuteBar shape
-HTTP error propagation
+URL construction with comma-range tradeDate (start_pt != end_pt): correct path /datav2/hist/live/one-minute/strikes/option, correct ticker=<full OPRA>, correct ET-formatted comma-joined tradeDate (PT→ET converted)
+URL construction with single-timestamp tradeDate (start_pt == end_pt): correct ET-formatted single timestamp
+Response parsing returns full bars list (both call-side and put-side OPRA bars per CSV row, matching csv_parser behavior)
+HTTP error propagation (OratsTransientError, OratsPermanentError both bubble)
 Empty-response handling (returns empty list, no crash)
 
 For fetch_option_bars (mock the private primitive and DB):
 
-Empty cache, single OPRA → one HTTP call over full range, both tables written
-Empty cache, multi-OPRA → N HTTP calls (one per OPRA), bars and windows written for all
-Fully cached, single OPRA → zero HTTP calls, zero DB writes, summary reflects cache hit
-Partial overlap at start: cache [a, b], request [a-X, b] → one HTTP call over [a-X, a]
-Partial overlap at end: cache [a, b], request [a, b+X] → one HTTP call over [b, b+X]
-Gap in middle: cache [a, b] ∪ [c, d], request [a, d] → one HTTP call over [b, c]
-Adjacency boundary: cache [a, b], request [b, c] → one HTTP call over [b, c] or zero calls if treating b as covered — pick one and assert. (Recommend: exact-boundary b is covered, so request [b, c] becomes a gap of [b, c] with b excluded — confirm with implementation.)
-Mixed cache states across OPRAs: OPRA A fully cached, OPRA B uncached, request [a, b] → one HTTP call for B only
-Empty ORATS response for a gap → orats_options_fetched_windows row still written, zero bars in orats_options_minute
-Post-write state correctness: assert exact rows in both tables match expectations
+Empty cache, single OPRA → one HTTP call over full range; bars written; fetched_windows rows written for BOTH the requested OPRA AND the counterpart OPRA seen in the response
+Empty cache, multi-OPRA → N HTTP calls (one per OPRA); bars and windows written for all (including counterparts)
+Fully cached, single OPRA → zero HTTP calls, zero DB writes, summary.cache_hits == 1
+Partial overlap at start: cache [a, b], request [a-X, b] → one HTTP call over [a-X, a-1min] (per windows.find_gaps semantics)
+Partial overlap at end: cache [a, b], request [a, b+X] → one HTTP call over [b+1min, b+X]
+Gap in middle: cache [a, b] ∪ [c, d], request [a, d] → one HTTP call over [b+1min, c-1min]
+Adjacency boundary: assert behavior matches windows.find_gaps semantics (existing test_windows.test_adjacent_windows_merge defines the convention — end+1min adjacency is treated as covered)
+Mixed cache states across OPRAs: OPRA A fully cached, OPRA B uncached, request [a, b] → one HTTP call for B only; summary.cache_hits == 1, gaps_filled == 1
+Empty ORATS response for a gap → fetched_windows row written for requested OPRA only (no counterpart known); zero bars in orats_options_minute
+Counterpart-side window recording: requesting a call OPRA at strike K returns bars for both call and put OPRAs at strike K; assert orats_options_fetched_windows has rows for BOTH OPRAs after the call
+Post-write state correctness: assert exact rows in both orats_options_minute and orats_options_fetched_windows match expectations
 
 Smoke test (packages/shared/options_cache/tests/test_fetcher_smoke.py — new file)
 
@@ -93,12 +116,13 @@ packages/shared/options_cache/tests/test_chunking.py, packages/shared/options_ca
 No behavior change to fetch_chain / fetch_contract / legacy fetch_contracts; verified by grep + manual call-graph review including cli.py:91.
 Acceptance criteria
 
-All existing tests still pass (97 from post-CR-003).
-New unit tests cover all gap-detection cases listed above.
+All existing tests still pass (97 from post-CR-003; verify after venv activation).
+New unit tests cover all cases listed above.
 Smoke test against real ORATS passes for one SPX OPRA over a one-day range.
 fetch_chain behavior unchanged — grep call sites, confirm no swaps.
-packages/shared/options_cache/__init__.py re-exports fetch_option_bars (and not the private function).
+packages/shared/options_cache/__init__.py re-exports fetch_option_bars and FetchOptionBarsSummary (and not the private function).
 Re-running fetch_option_bars over an already-cached range produces zero HTTP calls (verified by mock assertions in unit tests).
+After a fetch with non-empty response, orats_options_fetched_windows has rows for both the requested OPRA and the counterpart OPRA returned in the same response.
 
 Non-goals
 
