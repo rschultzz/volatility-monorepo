@@ -12,6 +12,7 @@ from datetime import date
 from packages.shared.options_cache.opra import (
     OpraSymbol,
     format_opra,
+    opra_to_orats_ticker,
     parse_opra,
 )
 
@@ -129,6 +130,50 @@ class TestRoundTrip(unittest.TestCase):
             self.assertEqual(parsed.expir, expir)
             self.assertEqual(parsed.option_type, opt_type)
             self.assertEqual(parsed.strike, strike)
+
+
+class TestOpraToOratsTicker(unittest.TestCase):
+    """CR-004: strip the side character for ORATS' option-endpoint ticker param."""
+
+    def test_spx_put(self):
+        self.assertEqual(
+            opra_to_orats_ticker("SPX240202P04935000"),
+            "SPX24020204935000",
+        )
+
+    def test_spx_call(self):
+        self.assertEqual(
+            opra_to_orats_ticker("SPX240202C04935000"),
+            "SPX24020204935000",
+        )
+
+    def test_both_sides_collide_by_design(self):
+        # Put and call at the same strike+expir map to the same ORATS ticker.
+        put_t = opra_to_orats_ticker("SPX240202P04935000")
+        call_t = opra_to_orats_ticker("SPX240202C04935000")
+        self.assertEqual(put_t, call_t)
+
+    def test_3char_root_spy(self):
+        self.assertEqual(
+            opra_to_orats_ticker("SPY240202P00493500"),
+            "SPY24020200493500",
+        )
+
+    def test_4char_root_spxw(self):
+        self.assertEqual(
+            opra_to_orats_ticker("SPXW260117P05800000"),
+            "SPXW26011705800000",
+        )
+
+    def test_4char_root_aapl_decimal_strike(self):
+        self.assertEqual(
+            opra_to_orats_ticker("AAPL260619C00210500"),
+            "AAPL26061900210500",
+        )
+
+    def test_malformed_input_raises(self):
+        with self.assertRaises(ValueError):
+            opra_to_orats_ticker("NOT_AN_OPRA")
 
 
 if __name__ == "__main__":

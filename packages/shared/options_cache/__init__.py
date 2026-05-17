@@ -30,6 +30,7 @@ Public API:
         fetch_chain(ticker, start, end, chain_filter) -> FetchSummary
         fetch_contract(opra, start, end, chain_filter) -> list[OptionMinuteBar]
         fetch_contracts(specs, chain_filter) -> dict
+        fetch_option_bars(opra_symbols, start_pt, end_pt) -> FetchOptionBarsSummary
 
     HTTP errors (http_client.py):
         OratsError, OratsTransientError, OratsPermanentError
@@ -61,12 +62,18 @@ from .condor import (
     condor_legs_for_row,
     condor_pricing_window_for_row,
 )
-from .fetcher import fetch_chain, fetch_contract, fetch_contracts
+from .fetcher import (
+    fetch_chain,
+    fetch_contract,
+    fetch_contracts,
+    fetch_option_bars,
+)
 from .http_client import OratsError, OratsPermanentError, OratsTransientError
 from .models import (
     DEFAULT_CHAIN_FILTER,
     ChainFilter,
     FetchJob,
+    FetchOptionBarsSummary,
     FetchSource,
     FetchSummary,
     FetchedWindow,
@@ -76,7 +83,7 @@ from .models import (
     OptionType,
     TimeRange,
 )
-from .opra import OpraSymbol, format_opra, parse_opra
+from .opra import OpraSymbol, format_opra, opra_to_orats_ticker, parse_opra
 from .orchestrator import (
     OrchestratorResult,
     RowResult,
@@ -98,14 +105,17 @@ __all__ = [
     "ChainFilter",
     "DEFAULT_CHAIN_FILTER",
     "FetchSummary",
+    "FetchOptionBarsSummary",
     # opra
     "OpraSymbol",
     "format_opra",
     "parse_opra",
+    "opra_to_orats_ticker",
     # fetcher
     "fetch_chain",
     "fetch_contract",
     "fetch_contracts",
+    "fetch_option_bars",
     # condor / strategies
     "Leg",
     "condor_legs_for_row",

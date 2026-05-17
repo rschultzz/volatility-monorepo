@@ -41,12 +41,13 @@ from .models import (
     DEFAULT_CHAIN_FILTER,
     ChainFilter,
     FetchedWindow,
+    FetchOptionBarsSummary,
     FetchSource,
     FetchSummary,
     OptionMinuteBar,
     TimeRange,
 )
-from .opra import parse_opra
+from .opra import opra_to_orats_ticker, parse_opra
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,143 @@ _ET = ZoneInfo("America/New_York")
 # Strikes Chain History endpoint (Live Intraday subscription tier).
 # This is the per-minute chain endpoint matching the user's subscription.
 _CHAIN_PATH = "/datav2/hist/live/one-minute/strikes/chain"
+
+# Strikes by OPRA History endpoint (same tier). Single-contract per call,
+# but supports range-tradeDate — the architectural lever the pivot relies on.
+_OPTION_PATH = "/datav2/hist/live/one-minute/strikes/option"
+
+
+# ────────────────────────────────────────────────────────────────────────
+#  fetch_option_bars (CR-004): per-OPRA, gap-aware, option-endpoint path
+# ────────────────────────────────────────────────────────────────────────
+
+def fetch_option_bars(
+    opra_symbols: Sequence[str],
+    start_pt: datetime,
+    end_pt: datetime,
+    *,
+    source: FetchSource = "historical_backfill",
+) -> FetchOptionBarsSummary:
+    """
+    Cache-aware fetch for one or more OPRA contracts via the option endpoint.
+
+    For each OPRA, computes gaps against orats_options_fetched_windows,
+    calls the private primitive one OPRA per gap, writes returned bars
+    to orats_options_minute, and writes orats_options_fetched_windows rows
+    for both the requested OPRA AND the counterpart OPRA returned in the
+    same response (the chain-shape ORATS row emits both call and put bars).
+
+    Idempotent: re-running over the same range produces zero HTTP calls.
+
+    Args:
+        opra_symbols: Full OPRA symbols (e.g. 'SPX240202P04935000').
+        start_pt: Start of range, naive Pacific Time.
+        end_pt: End of range, naive PT. Inclusive.
+        source: Provenance tag for fetched_windows rows.
+
+    Returns:
+        FetchOptionBarsSummary with operation counters.
+
+    Raises:
+        OratsTransientError or OratsPermanentError on API failures.
+        ValueError on tz-aware datetimes.
+    """
+    _validate_naive(start_pt, "start_pt")
+    _validate_naive(end_pt, "end_pt")
+
+    requested = TimeRange(start_pt=start_pt, end_pt=end_pt)
+
+    gaps_filled = 0
+    bars_written = 0
+    cache_hits = 0
+
+    for opra_symbol in opra_symbols:
+        existing = repo.get_windows_for_contract(opra_symbol)
+        gaps = W.find_gaps(requested, existing)
+
+        if not gaps:
+            cache_hits += 1
+            logger.info(
+                "fetch_option_bars %s: fully cached for [%s, %s], no API calls",
+                opra_symbol, start_pt, end_pt,
+            )
+            continue
+
+        logger.info(
+            "fetch_option_bars %s: %d gap(s) over [%s, %s]",
+            opra_symbol, len(gaps), start_pt, end_pt,
+        )
+
+        for gap in gaps:
+            bars = _fetch_option_bars_from_orats(
+                opra_symbol, gap.start_pt, gap.end_pt,
+            )
+            n_inserted = repo.insert_bars(bars)
+            bars_written += n_inserted
+
+            # Per-OPRA bar counts within this gap. Used as row_count on the
+            # fetched_windows record so downstream observability sees how
+            # dense each contract's coverage is.
+            bars_per_opra: dict[str, int] = {}
+            for b in bars:
+                bars_per_opra[b.opra_symbol] = bars_per_opra.get(b.opra_symbol, 0) + 1
+
+            # Record windows for every unique OPRA in the response (the
+            # requested one + the counterpart at the same strike+expir).
+            # On an empty response the requested OPRA still gets a row so
+            # we don't perpetually refetch empty windows.
+            opras_to_record = list(bars_per_opra.keys())
+            if opra_symbol not in bars_per_opra:
+                opras_to_record.append(opra_symbol)
+
+            for sym in opras_to_record:
+                repo.record_fetched_window(FetchedWindow(
+                    opra_symbol=sym,
+                    window_start_pt=gap.start_pt,
+                    window_end_pt=gap.end_pt,
+                    row_count=bars_per_opra.get(sym, 0),
+                    source=source,
+                ))
+
+            gaps_filled += 1
+
+    return FetchOptionBarsSummary(
+        opras_processed=len(opra_symbols),
+        gaps_filled=gaps_filled,
+        bars_written=bars_written,
+        cache_hits=cache_hits,
+    )
+
+
+def _fetch_option_bars_from_orats(
+    opra_symbol: str,
+    start_pt: datetime,
+    end_pt: datetime,
+) -> list[OptionMinuteBar]:
+    """
+    Pure HTTP. Hits the option endpoint with one OPRA + a tradeDate range
+    (or single timestamp if start_pt == end_pt). PT→ET conversion via the
+    shared _format_trade_date_param helper.
+
+    Returns all bars from the parsed response. The CSV parser emits two
+    bars per row (call OPRA + put OPRA at the same strike+expir), so a
+    request for one side returns both sides' bars.
+
+    No DB I/O. No cache awareness. Used only by fetch_option_bars.
+    """
+    _validate_naive(start_pt, "start_pt")
+    _validate_naive(end_pt, "end_pt")
+
+    chunk = TimeRange(start_pt=start_pt, end_pt=end_pt)
+    # ORATS' option endpoint takes the side-stripped form (one row covers
+    # both call and put). Sending the 18-char canonical OPRA returns 404.
+    params = {
+        "ticker": opra_to_orats_ticker(opra_symbol),
+        "tradeDate": _format_trade_date_param(chunk),
+    }
+    csv_text = get_csv(_OPTION_PATH, params)
+    bars, _, _ = parse_orats_csv(csv_text)
+    return bars
 
 
 # ────────────────────────────────────────────────────────────────────────

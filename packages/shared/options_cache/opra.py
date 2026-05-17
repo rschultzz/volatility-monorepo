@@ -148,3 +148,30 @@ def parse_opra(symbol: str) -> OpraSymbol:
         option_type=m.group("cp"),  # type: ignore[arg-type]
         strike=strike,
     )
+
+
+def opra_to_orats_ticker(opra: str) -> str:
+    """
+    Convert a canonical OPRA symbol (with C|P side character) to the
+    side-stripped form ORATS' /strikes/option endpoint expects as its
+    `ticker` URL parameter.
+
+    The option endpoint returns one row containing both call and put
+    data for the requested strike+expir, so side isn't part of the
+    query — sending the canonical 18-char OPRA returns 404. Internally
+    we keep the side-bearing form as canonical; this helper bridges to
+    the API at the request boundary.
+
+    Both put and call inputs at the same strike+expir map to the same
+    ORATS ticker, by design.
+
+    Example:
+        opra_to_orats_ticker("SPX240202P04935000") -> "SPX24020204935000"
+        opra_to_orats_ticker("SPX240202C04935000") -> "SPX24020204935000"
+
+    Raises ValueError if opra is malformed (delegated to parse_opra).
+    """
+    parsed = parse_opra(opra)
+    yymmdd = parsed.expir.strftime("%y%m%d")
+    strike_int = round(parsed.strike * 1000)
+    return f"{parsed.root}{yymmdd}{strike_int:08d}"
