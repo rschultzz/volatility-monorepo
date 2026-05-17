@@ -86,39 +86,6 @@ def end_of_day_pt(trade_date: date) -> datetime:
 
 
 # ────────────────────────────────────────────────────────────────────────
-#  SPX → SPY strike mapping
-# ────────────────────────────────────────────────────────────────────────
-
-def map_spx_strike_to_spy(spx_strike: float, spx_spot: float) -> float:
-    """
-    Map an SPX strike to the equivalent SPY strike using spot-relative
-    percentage scaling.
-
-    Math: the SPX strike is at (spx_strike / spx_spot) of SPX spot.
-    We want a SPY strike at the same fractional offset from SPY spot.
-    Since SPY ≈ SPX/10 (within basis), we use SPX spot/10 as a stand-in
-    for SPY spot — the rounding-to-nearest-dollar step absorbs the basis.
-
-    Returns the SPY strike rounded to the nearest dollar.
-
-    Examples (SPX spot 4940, SPX strike 4935):
-        ratio = 4935 / 4940 = 0.998987...
-        spy_spot ≈ 4940 / 10 = 494.0
-        spy_strike = 0.998987 × 494.0 = 493.5
-        rounded = 494
-    """
-    if spx_spot <= 0:
-        raise ValueError(f"spx_spot must be positive, got {spx_spot}")
-    if spx_strike <= 0:
-        raise ValueError(f"spx_strike must be positive, got {spx_strike}")
-
-    ratio = spx_strike / spx_spot
-    spy_spot_proxy = spx_spot / 10.0
-    spy_strike_unrounded = ratio * spy_spot_proxy
-    return float(round(spy_strike_unrounded))
-
-
-# ────────────────────────────────────────────────────────────────────────
 #  Condor strategy
 # ────────────────────────────────────────────────────────────────────────
 
@@ -165,41 +132,32 @@ def _condor_strikes_for_horizon(row: dict, horizon: str) -> Optional[dict]:
 def condor_legs_for_row(
     row: dict,
     *,
-    underlying: str = "SPY",
+    underlying: str = "SPX",
     expiration: Optional[date] = None,
 ) -> list[Leg]:
     """
     Derive the OPRA contracts for both horizons of a condor scan row.
 
-    Reads SPX strikes from row['hypothetical_condor_120m'] and
-    row['hypothetical_condor_to_close']. Maps each to the nearest SPY
-    strike using spot-relative percentage from row['target_spx_price'].
+    Reads native SPX strikes from row['hypothetical_condor_120m'] and
+    row['hypothetical_condor_to_close'] and encodes them directly into
+    SPX OPRA symbols. ORATS' Live Intraday subscription covers SPX at
+    the minute level, so no SPY proxy is needed.
 
     The returned list contains the union of both horizons — duplicates
-    (when 120m and to_close strikes round to the same SPY strike) are
-    removed but each unique leg gets a role tagged with the horizon(s)
-    that produced it.
+    (when 120m and to_close share a strike) are removed but each unique
+    leg gets a role tagged with the horizon(s) that produced it.
 
     Args:
         row: Scan row from saved-scan results.
-        underlying: Ticker for the OPRA symbols. Currently always 'SPY'.
-            When SPX intraday becomes available, this will be configurable.
+        underlying: Root for the OPRA symbols. Defaults to 'SPX'.
         expiration: Override the expiration date. By default uses
             row['trade_date'] (correct for 0DTE setups, which is all we
             support today).
 
     Returns:
         List of Leg objects. Empty list if the row lacks the data needed
-        to derive legs (missing strikes or spot).
+        to derive legs (missing strikes or trade_date).
     """
-    spx_spot = row.get("target_spx_price")
-    if spx_spot is None or spx_spot <= 0:
-        logger.debug(
-            "condor_legs_for_row: missing/invalid target_spx_price (%s) on row",
-            spx_spot,
-        )
-        return []
-
     if expiration is None:
         trade_date_str = row.get("trade_date")
         if not trade_date_str:
@@ -214,10 +172,9 @@ def condor_legs_for_row(
             )
             return []
 
-    # Build a side+role map: for each horizon, get the 4 SPX strikes,
-    # convert to SPY, and emit a Leg. We dedupe on (option_type, strike)
-    # so if 120m and to_close round to the same SPY strike, we only
-    # emit one Leg.
+    # Build a side+role map: for each horizon, get the 4 SPX strikes and
+    # emit a Leg. We dedupe on (option_type, strike) so if 120m and
+    # to_close share a strike, we only emit one Leg.
     seen: dict[tuple[str, float], Leg] = {}
 
     for horizon in (HORIZON_120M, HORIZON_TO_CLOSE):
@@ -226,12 +183,11 @@ def condor_legs_for_row(
             continue
 
         for role, spx_strike in strikes.items():
-            spy_strike = map_spx_strike_to_spy(spx_strike, spx_spot)
             option_type = "P" if "put" in role else "C"
             side = "short" if role.startswith("short") else "long"
 
-            opra = format_opra(underlying, expiration, option_type, spy_strike)
-            key = (option_type, spy_strike)
+            opra = format_opra(underlying, expiration, option_type, spx_strike)
+            key = (option_type, spx_strike)
 
             if key in seen:
                 # Same strike already added from the other horizon.
