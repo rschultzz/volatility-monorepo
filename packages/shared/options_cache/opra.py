@@ -19,9 +19,9 @@ Examples:
     SPX    2026-03-20  Call  5750.0  ->  SPX260320C05750000
     AAPL   2026-06-19  Call   210.5  ->  AAPL260619C00210500
 
-ORATS uses 'SPXW' for weekly/end-of-month SPX options (PM-settled) and
-'SPX' for the standard third-Friday monthly contracts (AM-settled). These
-have different OPRA symbols and we treat them as distinct.
+ORATS uses root `SPX` for all SPX expirations, including PM-settled
+weeklies (colloquially called SPXW). The `expiryTod` column on chain
+rows distinguishes AM vs PM settlement.
 """
 from __future__ import annotations
 

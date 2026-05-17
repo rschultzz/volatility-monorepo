@@ -60,7 +60,6 @@ from .condor import (
     Leg,
     condor_legs_for_row,
     condor_pricing_window_for_row,
-    map_spx_strike_to_spy,
 )
 from .fetcher import fetch_chain, fetch_contract, fetch_contracts
 from .http_client import OratsError, OratsPermanentError, OratsTransientError
@@ -111,7 +110,6 @@ __all__ = [
     "Leg",
     "condor_legs_for_row",
     "condor_pricing_window_for_row",
-    "map_spx_strike_to_spy",
     # orchestrator
     "fetch_for_rows",
     "get_strategy",
