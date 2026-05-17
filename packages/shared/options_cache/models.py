@@ -207,3 +207,17 @@ class FetchSummary:
     bars_total: int         # call+put bars built from kept rows (= 2 × rows_kept)
     contracts_touched: int  # unique opra_symbols seen
 
+
+@dataclass
+class FetchOptionBarsSummary:
+    """
+    Summary of a fetch_option_bars (option-endpoint) operation.
+
+    Shaped for the per-OPRA, gap-aware fetch path. Distinct from FetchSummary
+    (chain-shaped, single-ticker) — see CR-004 spec for the why.
+    """
+    opras_processed: int   # input list length
+    gaps_filled: int       # count of gaps detected and fetched across all OPRAs
+    bars_written: int      # inserted into orats_options_minute (excludes ON CONFLICT skips)
+    cache_hits: int        # OPRAs that needed zero HTTP calls (fully cached)
+
