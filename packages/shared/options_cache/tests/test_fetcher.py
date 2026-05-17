@@ -82,7 +82,9 @@ class TestFetchOptionBarsFromOratsUrl(unittest.TestCase):
         mock_get_csv.assert_called_once()
         path, params = mock_get_csv.call_args.args
         self.assertEqual(path, _OPTION_PATH)
-        self.assertEqual(params["ticker"], "SPX240202P04935000")
+        # ORATS option endpoint requires the side-stripped form (no C|P).
+        # Sending the full canonical OPRA returns 404.
+        self.assertEqual(params["ticker"], "SPX24020204935000")
         # 09:30 PT == 12:30 ET; 10:00 PT == 13:00 ET. Comma-joined for range.
         self.assertEqual(params["tradeDate"], "202402021230,202402021300")
 

@@ -47,7 +47,7 @@ from .models import (
     OptionMinuteBar,
     TimeRange,
 )
-from .opra import parse_opra
+from .opra import opra_to_orats_ticker, parse_opra
 
 logger = logging.getLogger(__name__)
 
@@ -187,8 +187,10 @@ def _fetch_option_bars_from_orats(
     _validate_naive(end_pt, "end_pt")
 
     chunk = TimeRange(start_pt=start_pt, end_pt=end_pt)
+    # ORATS' option endpoint takes the side-stripped form (one row covers
+    # both call and put). Sending the 18-char canonical OPRA returns 404.
     params = {
-        "ticker": opra_symbol,
+        "ticker": opra_to_orats_ticker(opra_symbol),
         "tradeDate": _format_trade_date_param(chunk),
     }
     csv_text = get_csv(_OPTION_PATH, params)

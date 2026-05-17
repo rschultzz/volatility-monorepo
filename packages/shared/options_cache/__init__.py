@@ -83,7 +83,7 @@ from .models import (
     OptionType,
     TimeRange,
 )
-from .opra import OpraSymbol, format_opra, parse_opra
+from .opra import OpraSymbol, format_opra, opra_to_orats_ticker, parse_opra
 from .orchestrator import (
     OrchestratorResult,
     RowResult,
@@ -110,6 +110,7 @@ __all__ = [
     "OpraSymbol",
     "format_opra",
     "parse_opra",
+    "opra_to_orats_ticker",
     # fetcher
     "fetch_chain",
     "fetch_contract",
