@@ -103,7 +103,7 @@ Smoke test (packages/shared/options_cache/tests/test_fetcher_smoke.py — new fi
 
 One real call to ORATS for one SPX OPRA over a one-day range
 Assert non-empty response, basic shape (bid/ask present, greeks populated)
-Marked @pytest.mark.smoke; skipped in default CI runs; runnable explicitly with pytest -m smoke
+Gated by @unittest.skipUnless(os.environ.get("RUN_ORATS_SMOKE") == "1", ...) + @unittest.skipUnless(os.environ.get("ORATS_API_KEY"), ...) so the test is skipped in every default test run. pytest.mark.smoke is set as a module-level pytestmark, guarded by `try: import pytest`, for forward compatibility if pytest infra ever lands. Run explicitly with: `RUN_ORATS_SMOKE=1 ORATS_API_KEY=... python -m unittest packages.shared.options_cache.tests.test_fetcher_smoke`. (Deviation from spec v2's "pytest -m smoke" mechanism: the repo has no pytest dep, no pytest.ini, no conftest.py — adding pytest infrastructure for one smoke test was out of scope.)
 
 Existing tests
 Read every packages/shared/options_cache/tests/test_*.py before implementing. CR-004 is additive, but the lesson from CR-003 is that integration/orchestrator tests can ripple unexpectedly. Specifically check:
