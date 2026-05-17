@@ -34,7 +34,8 @@ Affected files
 
 packages/shared/options_cache/fetcher.py — new functions
 packages/shared/options_cache/models.py — new FetchOptionBarsSummary dataclass
-packages/shared/options_cache/__init__.py — add fetch_option_bars and FetchOptionBarsSummary to re-exports
+packages/shared/options_cache/opra.py — new opra_to_orats_ticker(opra: str) -> str helper (strips the side character for ORATS option-endpoint requests)
+packages/shared/options_cache/__init__.py — add fetch_option_bars, FetchOptionBarsSummary, and opra_to_orats_ticker to re-exports
 packages/shared/options_cache/tests/test_fetcher.py (new file) — new unit tests
 packages/shared/options_cache/tests/test_fetcher_smoke.py (new file) — real-ORATS smoke test, marked @pytest.mark.smoke and skipped in default CI runs
 
@@ -51,7 +52,7 @@ _fetch_option_bars_from_orats(opra_symbol, start_pt, end_pt)
 
 URL construction per [[orats-endpoint-conventions]]:
   - path: /datav2/hist/live/one-minute/strikes/option (the Live Intraday tier's historical option path; NOT /datav2/hist/strikes/option)
-  - ticker param (singular): full OPRA symbol (e.g., "SPX24020204935000"), per the diagnostic-verified convention in scripts/orats_diagnostic.py:100 and the conventions doc
+  - ticker param (singular): the side-stripped OPRA form, i.e., ROOT + YYMMDD + 8-digit-strike with NO C|P character. Example: the OPRA `SPX240202P04935000` (18 chars, our internal canonical) becomes the ORATS ticker `SPX24020204935000` (17 chars). The option endpoint returns one row containing both call and put data for the requested strike+expir, so side isn't part of the query — sending the 18-char side-bearing form returns 404 (verified during CR-004 smoke testing). Conversion via a new opra_to_orats_ticker() helper in opra.py (see Affected files).
   - tradeDate param: ET format YYYYMMDDHHMM. Single-timestamp if start_pt == end_pt; otherwise comma-joined start,end. PT→ET conversion via the existing _format_trade_date_param helper.
 Returns ALL bars from the parsed response (both call and put OPRAs at the strike+expir matching the request, as csv_parser emits 2 bars per row). No DB I/O.
 Errors bubble up; retry/backoff is the HTTP client's job (existing pattern, unchanged).
@@ -79,11 +80,18 @@ Tests required
 Unit tests (packages/shared/options_cache/tests/test_fetcher.py — new file)
 For _fetch_option_bars_from_orats:
 
-URL construction with comma-range tradeDate (start_pt != end_pt): correct path /datav2/hist/live/one-minute/strikes/option, correct ticker=<full OPRA>, correct ET-formatted comma-joined tradeDate (PT→ET converted)
+URL construction with comma-range tradeDate (start_pt != end_pt): correct path /datav2/hist/live/one-minute/strikes/option, correct ticker=<side-stripped OPRA form, e.g. SPX24020204935000>, correct ET-formatted comma-joined tradeDate (PT→ET converted)
 URL construction with single-timestamp tradeDate (start_pt == end_pt): correct ET-formatted single timestamp
 Response parsing returns full bars list (both call-side and put-side OPRA bars per CSV row, matching csv_parser behavior)
 HTTP error propagation (OratsTransientError, OratsPermanentError both bubble)
 Empty-response handling (returns empty list, no crash)
+
+For opra_to_orats_ticker:
+
+Put input → side-stripped form (e.g., SPX240202P04935000 → SPX24020204935000)
+Call input → side-stripped form (e.g., SPX240202C04935000 → SPX24020204935000) — note that both sides map to the same ORATS ticker, by design
+Multiple root lengths: SPX (3), SPXW (4), AAPL (4), SPY (3) — confirm string-slicing assumptions hold
+Malformed OPRA input → ValueError (delegated to parse_opra)
 
 For fetch_option_bars (mock the private primitive and DB):
 
