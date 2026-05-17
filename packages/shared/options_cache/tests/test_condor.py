@@ -14,7 +14,6 @@ from packages.shared.options_cache.condor import (
     condor_legs_for_row,
     condor_pricing_window_for_row,
     end_of_day_pt,
-    map_spx_strike_to_spy,
     parse_utc_iso,
     utc_to_pt_naive,
 )
@@ -23,49 +22,6 @@ from packages.shared.options_cache.condor import (
 # ────────────────────────────────────────────────────────────────────────
 #  Pure helpers
 # ────────────────────────────────────────────────────────────────────────
-
-class TestMapSpxStrikeToSpy(unittest.TestCase):
-    def test_atm(self):
-        # SPX 4940, strike at 4940 → ratio 1.0 → SPY 494
-        self.assertEqual(map_spx_strike_to_spy(4940.0, 4940.0), 494.0)
-
-    def test_short_put_below_spot(self):
-        # SPX spot 4940, strike 4935 → 0.99899 × 494 = 493.5 → rounds to 494
-        # Note: banker's rounding in Python rounds 493.5 to 494
-        result = map_spx_strike_to_spy(4935.0, 4940.0)
-        self.assertIn(result, (493.0, 494.0))
-
-    def test_short_call_above_spot(self):
-        # SPX 4940, strike 4980 → 1.00810 × 494 = 498.0
-        result = map_spx_strike_to_spy(4980.0, 4940.0)
-        self.assertEqual(result, 498.0)
-
-    def test_typical_condor_set(self):
-        # Realistic SPX condor: spot 4940
-        spot = 4940.0
-        legs = {
-            "short_put":  map_spx_strike_to_spy(4935.0, spot),
-            "long_put":   map_spx_strike_to_spy(4925.0, spot),
-            "short_call": map_spx_strike_to_spy(4980.0, spot),
-            "long_call":  map_spx_strike_to_spy(4990.0, spot),
-        }
-        # Just verify all are reasonable SPY-range values
-        for name, strike in legs.items():
-            self.assertGreater(strike, 480, name)
-            self.assertLess(strike, 510, name)
-
-    def test_invalid_spot_raises(self):
-        with self.assertRaises(ValueError):
-            map_spx_strike_to_spy(4900.0, 0.0)
-        with self.assertRaises(ValueError):
-            map_spx_strike_to_spy(4900.0, -100.0)
-
-    def test_invalid_strike_raises(self):
-        with self.assertRaises(ValueError):
-            map_spx_strike_to_spy(0.0, 4940.0)
-        with self.assertRaises(ValueError):
-            map_spx_strike_to_spy(-50.0, 4940.0)
-
 
 class TestTimeHelpers(unittest.TestCase):
     def test_parse_utc_iso_with_z(self):
@@ -128,12 +84,12 @@ def _make_row(**overrides) -> dict:
 
 class TestCondorLegsForRow(unittest.TestCase):
     def test_basic_row_yields_4_legs(self):
-        # Both horizons have identical strikes → 4 unique SPY contracts
+        # Both horizons have identical strikes → 4 unique SPX contracts
         row = _make_row()
         legs = condor_legs_for_row(row)
         self.assertEqual(len(legs), 4)
 
-        # OPRA format for SPY: SPY (3) + YYMMDD (6) + C/P (1) + strike (8)
+        # OPRA format for SPX: SPX (3) + YYMMDD (6) + C/P (1) + strike (8)
         # So C/P character is at index 9
         puts = [l for l in legs if l.opra_symbol[9] == "P"]
         calls = [l for l in legs if l.opra_symbol[9] == "C"]
@@ -147,28 +103,28 @@ class TestCondorLegsForRow(unittest.TestCase):
         # Iron condor: 2 short, 2 long
         self.assertEqual(sides, ["long", "long", "short", "short"])
 
-    def test_legs_are_spy_opra(self):
+    def test_legs_are_spx_opra(self):
         row = _make_row()
         legs = condor_legs_for_row(row)
         for leg in legs:
-            self.assertTrue(leg.opra_symbol.startswith("SPY"))
-            self.assertEqual(len(leg.opra_symbol), 18)  # SPY + 6 + C/P + 8
+            self.assertTrue(leg.opra_symbol.startswith("SPX"))
+            self.assertEqual(len(leg.opra_symbol), 18)  # SPX + 6 + C/P + 8
 
     def test_different_horizons_yield_more_legs(self):
-        # Make horizons differ enough that strikes don't collide on rounding.
-        # SPX→SPY divides by ~10, so a 30-pt SPX gap = 3 SPY strikes apart.
+        # With native SPX, strike differences are preserved 1:1, so
+        # distinct horizon strikes always yield distinct OPRAs.
         row = _make_row(
             hypothetical_condor_120m={
-                "short_put_strike": 4935.0,   # → SPY 494
-                "long_put_strike": 4925.0,    # → SPY 492-493
-                "short_call_strike": 4980.0,  # → SPY 498
-                "long_call_strike": 4990.0,   # → SPY 499
+                "short_put_strike": 4935.0,
+                "long_put_strike": 4925.0,
+                "short_call_strike": 4980.0,
+                "long_call_strike": 4990.0,
             },
             hypothetical_condor_to_close={
-                "short_put_strike": 4880.0,   # → SPY ~488 (different)
-                "long_put_strike": 4870.0,    # → SPY ~487 (different)
-                "short_call_strike": 5020.0,  # → SPY ~502 (different)
-                "long_call_strike": 5030.0,   # → SPY ~503 (different)
+                "short_put_strike": 4880.0,
+                "long_put_strike": 4870.0,
+                "short_call_strike": 5020.0,
+                "long_call_strike": 5030.0,
             },
         )
         legs = condor_legs_for_row(row)
@@ -177,7 +133,7 @@ class TestCondorLegsForRow(unittest.TestCase):
         self.assertEqual(len(unique_opras), 8)
 
     def test_overlapping_horizons_dedupe(self):
-        # When both horizons produce identical SPY strikes, we get 4 legs
+        # When both horizons produce identical SPX strikes, we get 4 legs
         # (not 8) and the role string mentions both horizons.
         row = _make_row()
         legs = condor_legs_for_row(row)
@@ -186,10 +142,6 @@ class TestCondorLegsForRow(unittest.TestCase):
         for leg in legs:
             self.assertIn("120m", leg.role)
             self.assertIn("to_close", leg.role)
-
-    def test_missing_spx_spot_returns_empty(self):
-        row = _make_row(target_spx_price=None)
-        self.assertEqual(condor_legs_for_row(row), [])
 
     def test_missing_strikes_returns_empty(self):
         row = _make_row(

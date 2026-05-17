@@ -108,7 +108,8 @@ class TestFetchForRows(unittest.TestCase):
             _make_row(target_iso="2024-02-02T17:14:00Z"),  # valid
             _make_row(
                 target_iso="2024-02-02T17:30:00Z",
-                target_spx_price=None,                      # bad: no spot
+                hypothetical_condor_120m=None,              # bad: no strikes
+                hypothetical_condor_to_close=None,
             ),
         ]
         result = fetch_for_rows(rows)
