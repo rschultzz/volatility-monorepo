@@ -3,9 +3,10 @@ Multi-row pricing fetch orchestrator.
 
 Given a list of scan rows representing trades to analyze, this module:
     1. Derives legs and pricing windows for each row (per strategy)
-    2. Deduplicates (ticker, time-window) tuples — many condors on the
-       same trade date share the same chain fetch
-    3. Calls fetch_chain once per unique (ticker, window)
+    2. Deduplicates fetches by OPRA symbol — many condors on the same
+       trade date share OPRAs across rows
+    3. For each unique OPRA, computes a bounding-box window across the
+       rows that reference it and calls fetch_option_bars once
     4. Returns a summary mapping rows -> their fetched legs and any
        errors encountered
 
@@ -30,8 +31,8 @@ from .condor import (
     condor_legs_for_row,
     condor_pricing_window_for_row,
 )
-from .fetcher import fetch_chain
-from .models import ChainFilter, FetchSource, FetchSummary
+from .fetcher import fetch_option_bars
+from .models import FetchOptionBarsSummary, FetchSource
 
 logger = logging.getLogger(__name__)
 
@@ -90,10 +91,11 @@ class RowResult:
 class OrchestratorResult:
     """Aggregate result from fetch_for_rows."""
     rows: list[RowResult] = field(default_factory=list)
-    fetch_summaries: list[FetchSummary] = field(default_factory=list)
+    option_fetch_summaries: list[FetchOptionBarsSummary] = field(default_factory=list)
     rows_attempted: int = 0
     rows_with_legs: int = 0
-    unique_windows_fetched: int = 0
+    unique_opras_fetched: int = 0
+    cache_hits: int = 0
     total_api_calls: int = 0
     total_bars_inserted: int = 0
 
@@ -106,8 +108,6 @@ def fetch_for_rows(
     rows: Iterable[dict],
     *,
     strategy: str = "condor",
-    underlying: str = "SPY",
-    chain_filter: Optional[ChainFilter] = None,
     source: FetchSource = "historical_backfill",
     row_key_fn: Callable[[dict], str] = None,
 ) -> OrchestratorResult:
@@ -119,10 +119,6 @@ def fetch_for_rows(
             chosen strategy needs (for condor: trade_date, target_ts_utc,
             target_spx_price, hypothetical_condor_*).
         strategy: Strategy name. Currently only 'condor'.
-        underlying: Ticker to use for the OPRA symbols. Hardcoded to 'SPY'
-            for now. SPX will be added when ORATS coverage allows.
-        chain_filter: Filter passed to each fetch_chain call. None means
-            use fetch_chain's default (±10% strike, 0-60 DTE).
         source: Provenance tag for fetched_windows.
         row_key_fn: Function to derive a stable identifier per row, used
             for OrchestratorResult.rows. Defaults to a (trade_date,
@@ -141,11 +137,10 @@ def fetch_for_rows(
     rows_list = list(rows)
     result = OrchestratorResult(rows_attempted=len(rows_list))
 
-    # Step 1: derive legs and windows per row, collect them.
-    # A "fetch group" is one (ticker, window_start, window_end) tuple.
-    # Multiple rows can share a group; we'll deduplicate before calling
-    # fetch_chain.
-    groups: dict[tuple[str, datetime, datetime], list[str]] = defaultdict(list)
+    # Step 1: derive legs and windows per row; collect a (window list,
+    # row_keys set) per unique OPRA across all rows.
+    per_opra_windows: dict[str, list[tuple[datetime, datetime]]] = defaultdict(list)
+    opra_to_row_keys: dict[str, set[str]] = defaultdict(set)
 
     for row in rows_list:
         row_key = row_key_fn(row)
@@ -180,43 +175,54 @@ def fetch_for_rows(
         result.rows.append(row_result)
         result.rows_with_legs += 1
 
-        groups[(underlying, window[0], window[1])].append(row_key)
+        for leg in legs:
+            per_opra_windows[leg.opra_symbol].append(window)
+            opra_to_row_keys[leg.opra_symbol].add(row_key)
 
-    # Step 2: fetch each unique (ticker, window) once.
+    # Step 2: compute a bounding-box window per OPRA.
+    # Disjoint sub-ranges inside the bounding box are discovered as
+    # separate gaps by fetch_option_bars; over-fetch is bounded by the
+    # cache layer. See spec for the design rationale.
+    opra_bounding: dict[str, tuple[datetime, datetime]] = {}
+    for opra, windows in per_opra_windows.items():
+        start = min(w[0] for w in windows)
+        end = max(w[1] for w in windows)
+        opra_bounding[opra] = (start, end)
+
     logger.info(
-        "fetch_for_rows: %d rows in, %d had legs, %d unique fetch windows",
-        len(rows_list), result.rows_with_legs, len(groups),
+        "fetch_for_rows: %d rows in, %d had legs, %d unique OPRAs",
+        len(rows_list), result.rows_with_legs, len(opra_bounding),
     )
 
-    for (ticker, start_pt, end_pt), row_keys in sorted(groups.items()):
+    # Step 3: fetch each unique OPRA once over its bounding window.
+    for opra, (start_pt, end_pt) in sorted(opra_bounding.items()):
         logger.info(
-            "fetch_for_rows: chain %s [%s, %s] covers %d row(s)",
-            ticker, start_pt, end_pt, len(row_keys),
+            "fetch_for_rows: opra %s [%s, %s] covers %d row(s)",
+            opra, start_pt, end_pt, len(opra_to_row_keys[opra]),
         )
+        result.unique_opras_fetched += 1
         try:
-            summary = fetch_chain(
-                ticker=ticker,
+            summary = fetch_option_bars(
+                opra_symbols=[opra],
                 start_pt=start_pt,
                 end_pt=end_pt,
-                chain_filter=chain_filter,
                 source=source,
             )
         except Exception as e:
             logger.error(
-                "fetch_for_rows: chain fetch %s [%s, %s] failed: %s",
-                ticker, start_pt, end_pt, e,
+                "fetch_for_rows: option fetch %s [%s, %s] failed: %s",
+                opra, start_pt, end_pt, e,
             )
-            # Mark all rows in this group with the error
-            for rk in row_keys:
+            for rk in opra_to_row_keys[opra]:
                 rr = next((r for r in result.rows if r.row_key == rk), None)
                 if rr and rr.error is None:
-                    rr.error = f"fetch_chain failed: {e}"
+                    rr.error = f"fetch_option_bars failed for {opra}: {e}"
             continue
 
-        result.fetch_summaries.append(summary)
-        result.unique_windows_fetched += 1
-        result.total_api_calls += summary.api_calls
-        result.total_bars_inserted += summary.bars_inserted
+        result.option_fetch_summaries.append(summary)
+        result.total_api_calls += summary.gaps_filled
+        result.total_bars_inserted += summary.bars_written
+        result.cache_hits += summary.cache_hits
 
     return result
 
