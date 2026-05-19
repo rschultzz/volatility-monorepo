@@ -134,19 +134,18 @@ def _cmd_fetch_for_scan(args: argparse.Namespace) -> int:
 
     print(f"Loaded {len(rows)} row(s) from {args.rows_json}")
 
-    chain_filter = _build_filter(args)
     result = fetch_for_rows(
         rows,
         strategy=args.strategy,
-        chain_filter=chain_filter,
     )
 
     print(f"\n✓ done")
     print(f"  Rows attempted:        {result.rows_attempted}")
     print(f"  Rows with legs:        {result.rows_with_legs}")
-    print(f"  Unique windows fetched: {result.unique_windows_fetched}")
-    print(f"  Total API calls:        {result.total_api_calls}")
-    print(f"  Total bars inserted:    {result.total_bars_inserted:,}")
+    print(f"  Unique OPRAs fetched:  {result.unique_opras_fetched}")
+    print(f"  Cache hits:            {result.cache_hits}")
+    print(f"  Total API calls:       {result.total_api_calls}")
+    print(f"  Total bars inserted:   {result.total_bars_inserted:,}")
 
     failed = [r for r in result.rows if r.error]
     if failed:
@@ -273,7 +272,6 @@ def main(argv: list[str] | None = None) -> int:
         "--limit", type=int, default=None,
         help="optional: only process the first N rows",
     )
-    _add_filter_args(p_scan)
     p_scan.set_defaults(func=_cmd_fetch_for_scan)
 
     # inspect
