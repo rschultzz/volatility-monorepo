@@ -10,6 +10,7 @@ import SmileChart from './SmileChart'
 import SignalPanel from './SignalPanel'
 import ChartToggleBar from './ChartToggleBar'
 import TradeAnnotationPanel from './TradeAnnotationPanel'
+import CondorPricingPanel from './CondorPricingPanel'
 
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
@@ -640,6 +641,9 @@ export default function PriceChart({
   // Per-minute 0DTE ATM IV series for the line overlay.
   // Shape: [{ time: "HH:MM", atm_iv_pct: number }, ...]
   atmIvSeries = [],
+  // Live condor pricing payload from /api/condor-pricing.
+  // Renders the floating CondorPricingPanel overlay when non-null.
+  condorPricing = null,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -2553,6 +2557,7 @@ export default function PriceChart({
           className="chart-stage chart-stage-compact"
           style={{ position: 'relative' }}
         >
+          <CondorPricingPanel condorPricing={condorPricing} />
           <div
             style={{
               position: 'absolute',

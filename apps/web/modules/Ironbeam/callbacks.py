@@ -28,6 +28,7 @@ from flask import jsonify, request
 from packages.shared.utils import fetch_atm_iv_minute_series, fetch_skew_data, is_market_hours, fetch_live_orats_data, fetch_data_from_db
 from packages.shared.surface_compare import k_for_abs_delta
 from packages.shared.options_orats import pt_minute_to_et
+from packages.shared.options_cache.pricing import build_condor_pricing_payload
 
 # Import skew helpers for the React API
 from modules.Skew.callbacks import (
@@ -2885,6 +2886,36 @@ def register_ironbeam_callbacks(app):
                     resp.headers["Vary"] = "Origin"
                 return resp, status
             app.server._ironbeam_react_atm_iv_series_route_registered = True
+
+        if not getattr(app.server, "_ironbeam_react_condor_pricing_route_registered", False):
+            @app.server.route("/api/condor-pricing", methods=["GET"])
+            def ironbeam_react_condor_pricing_api():
+                try:
+                    spx = float(request.args.get("spx", ""))
+                    iv_pct = float(request.args.get("iv_pct", ""))
+                    minutes_to_expiry = float(request.args.get("minutes_to_expiry", ""))
+                except (TypeError, ValueError):
+                    return jsonify({"error": "spx, iv_pct, minutes_to_expiry must be numbers"}), 400
+
+                payload, status = build_condor_pricing_payload(
+                    trade_date=request.args.get("trade_date", ""),
+                    expiration_date=request.args.get("expiration_date", ""),
+                    spx=spx,
+                    iv_pct=iv_pct,
+                    minutes_to_expiry=minutes_to_expiry,
+                    entry_pt=request.args.get("entry_pt", ""),
+                    eval_pt=request.args.get("eval_pt", ""),
+                )
+
+                resp = jsonify(payload)
+                origin = request.headers.get("Origin")
+                allowed = {"http://localhost:5173", "http://127.0.0.1:5173", "http://0.0.0.0:5173"}
+                if origin in allowed:
+                    resp.headers["Access-Control-Allow-Origin"] = origin
+                    resp.headers["Access-Control-Allow-Credentials"] = "true"
+                    resp.headers["Vary"] = "Origin"
+                return resp, status
+            app.server._ironbeam_react_condor_pricing_route_registered = True
 
     # ---- Clientside Sync: Crosshair & Zoom ----
     app.clientside_callback(
