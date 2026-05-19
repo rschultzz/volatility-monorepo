@@ -12,6 +12,7 @@ const LIVE_OVERLAY_POLL_MS = 1000
 const FLOW_LIVE_POLL_MS = 3000
 const SKEW_DATA_POLL_MS = 10000
 const SMILE_DATA_POLL_MS = 10000
+const CONDOR_PRICING_POLL_MS = 10000
 
 function cleanBaseUrl(value) {
   const s = String(value || '').trim()
@@ -618,6 +619,11 @@ export default function App() {
   // Snapshot shape from backend:
   //   { time: "08:52", label, stock_price, atm_iv_pct, minutes_to_expiry, is_live }
   const [bandsAnchor, setBandsAnchor] = useState(null)
+  // Live condor pricing payload from /api/condor-pricing — strikes, leg
+  // prices at entry + eval, P&L summary. Drives both the chart strike
+  // lines (replacing the old inline strike math) and the floating
+  // CondorPricingPanel overlay.
+  const [condorPricing, setCondorPricing] = useState(null)
 
   // Surface the snapshots array from the smile payload (or empty).
   const smileSnapshots = useMemo(() => {
@@ -637,24 +643,90 @@ export default function App() {
     }
   }, [bandsAnchor, smileSnapshots])
 
+  // Clear pricing state whenever the anchor goes away so a fresh activation
+  // doesn't briefly render stale strikes from a prior selection.
+  useEffect(() => {
+    if (!bandsAnchor) {
+      setCondorPricing(null)
+    }
+  }, [bandsAnchor])
+
+  // --- Condor Pricing Fetch ---
+  // Initial fetch when bandsAnchor is set; poll every 10s when isLiveTradeDate.
+  // Stops when anchor is cleared OR (non-live session) after the single fetch.
+  useEffect(() => {
+    if (!bandsAnchor || !tradeDate) return undefined
+
+    let disposed = false
+    let inFlight = false
+    let activeController = null
+
+    const tick = async () => {
+      if (disposed || inFlight) return
+      inFlight = true
+      const controller = new AbortController()
+      activeController = controller
+      try {
+        const url = new URL(`${apiBase}/api/condor-pricing`)
+        url.searchParams.set('trade_date', tradeDate)
+        url.searchParams.set('expiration_date', expirationDate || tradeDate)
+        url.searchParams.set('spx', String(bandsAnchor.stock_price))
+        url.searchParams.set('iv_pct', String(bandsAnchor.atm_iv_pct))
+        url.searchParams.set('minutes_to_expiry', String(bandsAnchor.minutes_to_expiry))
+        url.searchParams.set('entry_pt', String(bandsAnchor.time))
+        url.searchParams.set('eval_pt', 'now')
+
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          credentials: 'include',
+          signal: controller.signal,
+          cache: 'no-store',
+        })
+        if (!response.ok) throw new Error(`Condor pricing fetch failed: ${response.status}`)
+        const payload = await response.json()
+        if (disposed) return
+        setCondorPricing(payload)
+      } catch (err) {
+        if (err?.name !== 'AbortError') {
+          console.error('Condor pricing refresh failed', err)
+        }
+      } finally {
+        if (activeController === controller) activeController = null
+        inFlight = false
+      }
+    }
+
+    tick()
+    // Only poll on live sessions. Non-live sessions fetch once; the backend
+    // snaps eval_pt='now' to the session close minute for us.
+    let timer = null
+    if (isLiveTradeDate) {
+      timer = window.setInterval(tick, CONDOR_PRICING_POLL_MS)
+    }
+
+    return () => {
+      disposed = true
+      if (timer != null) window.clearInterval(timer)
+      if (activeController) activeController.abort()
+    }
+  }, [apiBase, tradeDate, expirationDate, bandsAnchor, isLiveTradeDate])
+
   // Compute the band levels in ES coordinates from:
-  //  - the active SPX anchor (stock_price, atm_iv_pct, minutes_to_expiry)
+  //  - the active SPX anchor (stock_price)
+  //  - sigma_pts + strikes from the /api/condor-pricing response
+  //    (replaces the inline sigma formula and strike math that used to
+  //     live here — backend is now the single source of truth)
   //  - the corresponding ES bar at that PT minute (for basis correction)
-  // Also computes the four condor strikes (rounded to nearest 5pt SPX strike,
-  // then translated to ES coords by adding the basis at the anchor minute).
   const bandsLevels = useMemo(() => {
     if (!bandsAnchor) return null
+    if (!condorPricing || !condorPricing.strikes) return null
 
     const spx = Number(bandsAnchor.stock_price)
-    const ivPct = Number(bandsAnchor.atm_iv_pct)
-    const minsToExp = Number(bandsAnchor.minutes_to_expiry)
-    if (
-      !Number.isFinite(spx) ||
-      !Number.isFinite(ivPct) ||
-      !Number.isFinite(minsToExp) ||
-      minsToExp <= 0
-    ) {
-      console.log('[bands] anchor missing required fields', { spx, ivPct, minsToExp, anchor: bandsAnchor })
+    const sigmaPts = Number(condorPricing.sigma_pts)
+    if (!Number.isFinite(spx) || !Number.isFinite(sigmaPts) || sigmaPts <= 0) {
+      console.log('[bands] anchor or pricing missing required fields', {
+        spx, sigmaPts, anchor: bandsAnchor, pricing: condorPricing,
+      })
       return null
     }
 
@@ -702,23 +774,15 @@ export default function App() {
       return null
     }
 
-    // Time-scaled 1σ in price points (calendar-time convention, matches backend)
-    const sigmaPts = spx * (ivPct / 100) * Math.sqrt(minsToExp / (60 * 24 * 365))
-    if (!Number.isFinite(sigmaPts) || sigmaPts <= 0) {
-      console.log('[bands] invalid sigma', { sigmaPts, spx, ivPct, minsToExp })
-      return null
-    }
-
-    // SPX-coords condor strikes (matches backend _compute_hypothetical_condor logic)
-    const inc = 5
-    const wing = 10
-    const spxShortPut  = Math.floor((spx - sigmaPts) / inc) * inc
-    const spxShortCall = Math.ceil((spx + sigmaPts) / inc) * inc
-    const spxLongPut   = Math.round((spxShortPut - wing) / inc) * inc
-    const spxLongCall  = Math.round((spxShortCall + wing) / inc) * inc
+    // Strikes come from backend (SPX coords). Translate to ES coords below.
+    const spxShortPut  = Number(condorPricing.strikes.short_put)
+    const spxShortCall = Number(condorPricing.strikes.short_call)
+    const spxLongPut   = Number(condorPricing.strikes.long_put)
+    const spxLongCall  = Number(condorPricing.strikes.long_call)
 
     // Basis correction: ES bar price minus SPX cash at the same minute.
     const basis = anchorEs - spx
+    const minsToExp = Number(bandsAnchor.minutes_to_expiry)
 
     // Bands centered on ES (chart coords); strikes translated by basis.
     const bandUpper = anchorEs + sigmaPts
@@ -758,7 +822,7 @@ export default function App() {
       anchorTime: bandsAnchor.time,
       anchorLabel: bandsAnchor.label,
       anchorSpx: spx,
-      anchorIv: ivPct,
+      anchorIv: Number(bandsAnchor.atm_iv_pct),
     }
 
     // One-line console log so we can verify the math is reasonable
@@ -780,7 +844,7 @@ export default function App() {
     })
 
     return computed
-  }, [bandsAnchor, mergedBars, tradeDate])
+  }, [bandsAnchor, condorPricing, mergedBars, tradeDate])
 
 
   const loadedFlowDates = useMemo(
@@ -1608,6 +1672,7 @@ export default function App() {
                 activeBandsAnchorTime={bandsAnchor?.time ?? null}
                 onBandsAnchorChange={setBandsAnchor}
                 bandsLevels={bandsLevels}
+                condorPricing={condorPricing}
               />
             </div>
 

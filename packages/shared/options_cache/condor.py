@@ -20,6 +20,7 @@ can expand later without code changes elsewhere.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Optional
@@ -28,6 +29,66 @@ from zoneinfo import ZoneInfo
 from .opra import format_opra
 
 logger = logging.getLogger(__name__)
+
+
+# Calendar-time convention. Matches _implied_sigma_move in
+# apps/web/modules/BacktestsV2/service.py and the inline formula in
+# react_price_preview/src/App.jsx::bandsLevels.
+_MINUTES_PER_CALENDAR_YEAR = 60.0 * 24.0 * 365.0
+
+
+def condor_strikes_from_smile(
+    spx: float,
+    iv_pct: float,
+    minutes_to_expiry: float,
+    *,
+    wing_width_pts: float = 10.0,
+    strike_increment: float = 5.0,
+) -> Optional[dict]:
+    """
+    Derive the four ±1σ iron-condor strikes from a smile timeslice.
+
+    Returns a dict with sigma_pts plus the four SPX strikes. Returns None
+    if inputs are invalid (non-positive, non-finite, or missing).
+
+    Single source of truth for the strike math shared between:
+      - backend _compute_hypothetical_condor (scan pipeline)
+      - frontend bandsLevels useMemo (dashboard overlay, via the
+        /api/condor-pricing endpoint that wraps this helper)
+
+    wing_width_pts and strike_increment default to the values that have
+    always been hardcoded on the frontend (10 and 5); the backend can
+    override both via the scan-row pipeline's condor_wing_width_pts knob.
+    """
+    if spx is None or iv_pct is None or minutes_to_expiry is None:
+        return None
+    try:
+        spx_f = float(spx)
+        iv_f = float(iv_pct)
+        mins_f = float(minutes_to_expiry)
+    except (TypeError, ValueError):
+        return None
+    if spx_f <= 0 or iv_f <= 0 or mins_f <= 0:
+        return None
+
+    sigma_pts = spx_f * (iv_f / 100.0) * math.sqrt(mins_f / _MINUTES_PER_CALENDAR_YEAR)
+    if not math.isfinite(sigma_pts) or sigma_pts <= 0:
+        return None
+
+    inc = float(strike_increment)
+    wing = float(wing_width_pts)
+    short_put = math.floor((spx_f - sigma_pts) / inc) * inc
+    short_call = math.ceil((spx_f + sigma_pts) / inc) * inc
+    long_put = round((short_put - wing) / inc) * inc
+    long_call = round((short_call + wing) / inc) * inc
+
+    return {
+        "sigma_pts": sigma_pts,
+        "short_put": short_put,
+        "long_put": long_put,
+        "short_call": short_call,
+        "long_call": long_call,
+    }
 
 
 # ────────────────────────────────────────────────────────────────────────

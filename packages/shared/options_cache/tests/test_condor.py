@@ -13,6 +13,7 @@ from packages.shared.options_cache.condor import (
     Leg,
     condor_legs_for_row,
     condor_pricing_window_for_row,
+    condor_strikes_from_smile,
     end_of_day_pt,
     parse_utc_iso,
     utc_to_pt_naive,
@@ -207,6 +208,84 @@ class TestCondorPricingWindowForRow(unittest.TestCase):
     def test_missing_timestamps_returns_none(self):
         row = _make_row(target_ts_utc=None, start_ts_utc=None)
         self.assertIsNone(condor_pricing_window_for_row(row))
+
+
+# ────────────────────────────────────────────────────────────────────────
+#  condor_strikes_from_smile
+# ────────────────────────────────────────────────────────────────────────
+
+class TestCondorStrikesFromSmile(unittest.TestCase):
+    def test_basic_strike_geometry(self):
+        # spx=5800, iv=15%, mins=120 → sigma ~= 5800 * 0.15 * sqrt(120/525600)
+        # ~= 5800 * 0.15 * 0.01510 ≈ 13.14 pts
+        out = condor_strikes_from_smile(5800.0, 15.0, 120)
+        self.assertIsNotNone(out)
+        # short_put floors (5800 - sigma) / 5
+        self.assertLess(out["short_put"], 5800)
+        # short_call ceils (5800 + sigma) / 5
+        self.assertGreater(out["short_call"], 5800)
+        # default wing=10 → long legs sit 10 beyond shorts
+        self.assertAlmostEqual(out["long_put"], out["short_put"] - 10, places=6)
+        self.assertAlmostEqual(out["long_call"], out["short_call"] + 10, places=6)
+        # All strikes land on a multiple of 5
+        for k in ("short_put", "long_put", "short_call", "long_call"):
+            self.assertAlmostEqual(out[k] / 5.0, round(out[k] / 5.0), places=6)
+        # sigma_pts roundtrips against the formula
+        self.assertGreater(out["sigma_pts"], 12.0)
+        self.assertLess(out["sigma_pts"], 14.0)
+
+    def test_strike_rounding_floors_short_put_ceils_short_call(self):
+        # Construct a case where sigma puts us between two strikes; verify
+        # floor/ceil semantics — short_put rounded DOWN (further from spot),
+        # short_call rounded UP (also further from spot).
+        out = condor_strikes_from_smile(5800.0, 30.0, 60)
+        # σ at 30% IV over 60min ≈ 5800 * 0.30 * sqrt(60/525600) ≈ 18.6 pts
+        # → raw short_put ≈ 5781.4, raw short_call ≈ 5818.6
+        # floor(5781.4 / 5) * 5 = 5780
+        # ceil(5818.6 / 5) * 5 = 5820
+        self.assertEqual(out["short_put"], 5780.0)
+        self.assertEqual(out["short_call"], 5820.0)
+        self.assertEqual(out["long_put"], 5770.0)
+        self.assertEqual(out["long_call"], 5830.0)
+
+    def test_custom_wing_and_increment(self):
+        # 25-wide wings on 10-pt grid (wider underlying scenario).
+        # The wing math rounds the requested width onto the grid, so the
+        # actual wing distance can land at 20 or 30; the invariant we
+        # care about is that both wings stay symmetric and on-grid.
+        out = condor_strikes_from_smile(
+            5800.0, 15.0, 120,
+            wing_width_pts=25.0,
+            strike_increment=10.0,
+        )
+        for k in ("short_put", "long_put", "short_call", "long_call"):
+            self.assertEqual(out[k] % 10, 0, f"{k} not on 10-pt grid: {out[k]}")
+        wp = out["short_put"] - out["long_put"]
+        wc = out["long_call"] - out["short_call"]
+        self.assertEqual(wp, wc, "wings asymmetric")
+        self.assertIn(wp, (20.0, 30.0))
+
+    def test_invalid_inputs_return_none(self):
+        self.assertIsNone(condor_strikes_from_smile(None, 15.0, 120))
+        self.assertIsNone(condor_strikes_from_smile(5800.0, None, 120))
+        self.assertIsNone(condor_strikes_from_smile(5800.0, 15.0, None))
+        self.assertIsNone(condor_strikes_from_smile(5800.0, 15.0, 0))
+        self.assertIsNone(condor_strikes_from_smile(5800.0, 0, 120))
+        self.assertIsNone(condor_strikes_from_smile(-1.0, 15.0, 120))
+        self.assertIsNone(condor_strikes_from_smile("not-a-number", 15.0, 120))
+
+    def test_matches_backend_compute_hypothetical_condor(self):
+        # Regression: the helper is shared with backend
+        # _compute_hypothetical_condor (BacktestsV2/service.py). Same
+        # math, same inputs → same strikes. Pre-refactor backend output
+        # for spx=4940, iv=20%, horizon=120m, wing=10, inc=5 was:
+        #   short_put_strike=4925, long_put_strike=4915,
+        #   short_call_strike=4955, long_call_strike=4965
+        out = condor_strikes_from_smile(4940.0, 20.0, 120)
+        self.assertEqual(out["short_put"], 4925.0)
+        self.assertEqual(out["long_put"], 4915.0)
+        self.assertEqual(out["short_call"], 4955.0)
+        self.assertEqual(out["long_call"], 4965.0)
 
 
 if __name__ == "__main__":

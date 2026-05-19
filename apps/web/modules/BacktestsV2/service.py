@@ -15,6 +15,7 @@ from sqlalchemy import create_engine, text
 
 from packages.shared.utils import fetch_skew_data
 from packages.shared.surface_compare import k_for_abs_delta
+from packages.shared.options_cache.condor import condor_strikes_from_smile
 
 DEFAULT_SOURCE_VIEW = os.getenv("BT2_SOURCE_VIEW", os.getenv("BT_VIEW_NAME", "es_minutes_with_features_bt"))
 
@@ -1767,34 +1768,25 @@ def _compute_hypothetical_condor(
     }
     if anchor_price is None or iv_atm_0dte_pct is None or horizon_minutes <= 0:
         return blank
-    impl = _implied_sigma_move(iv_atm_0dte_pct, anchor_price, horizon_minutes)
-    if impl is None or impl <= 0:
+
+    strikes = condor_strikes_from_smile(
+        spx=anchor_price,
+        iv_pct=iv_atm_0dte_pct,
+        minutes_to_expiry=horizon_minutes,
+        wing_width_pts=wing_width_pts,
+        strike_increment=strike_increment,
+    )
+    if strikes is None:
         return blank
 
-    anchor_f = float(anchor_price)
-    # Round short strikes OUT from anchor (conservative: expand the box slightly)
-    # For puts, round DOWN (further from anchor); for calls, round UP
-    raw_short_put  = anchor_f - impl
-    raw_short_call = anchor_f + impl
-
-    inc = float(strike_increment)
-    short_put  = math.floor(raw_short_put  / inc) * inc
-    short_call = math.ceil(raw_short_call / inc) * inc
-
-    long_put  = short_put  - float(wing_width_pts)
-    long_call = short_call + float(wing_width_pts)
-
-    # Round wings to increment too (wings typically land on strikes naturally
-    # when wing_width is a multiple of increment, but safeguard anyway)
-    long_put  = round(long_put  / inc) * inc
-    long_call = round(long_call / inc) * inc
-
+    short_put = strikes["short_put"]
+    short_call = strikes["short_call"]
     return {
         "short_put_strike":   round(short_put, 2),
-        "long_put_strike":    round(long_put, 2),
+        "long_put_strike":    round(strikes["long_put"], 2),
         "short_call_strike":  round(short_call, 2),
-        "long_call_strike":   round(long_call, 2),
-        "implied_1sigma_pts": round(impl, 2),
+        "long_call_strike":   round(strikes["long_call"], 2),
+        "implied_1sigma_pts": round(strikes["sigma_pts"], 2),
         "short_strike_width": round(short_call - short_put, 2),
         "wing_width_pts":     float(wing_width_pts),
     }
