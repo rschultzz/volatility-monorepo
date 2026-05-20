@@ -45,8 +45,10 @@ from packages.shared.gex_landscape import compute_and_upsert_landscape  # noqa: 
 DEFAULT_VERSION = "eod-shift-hard-upsert-2025-10-31d"
 
 # Landscape compute params — must match the cron's call in job_orats_eod.py.
+# range_pts is 300 (vs the helper's 200 default) to widen the stored
+# analytical window — see the call site in job_orats_eod.py and CR-008.
 SPREAD_COEF = 8.0
-RANGE_PTS = 200.0
+RANGE_PTS = 300.0
 STEP_PTS = 1.0
 
 

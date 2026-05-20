@@ -245,7 +245,11 @@ def main():
                     ticker=TICKER,
                     trade_date=store_trade_date,
                     spread_coef=8.0,
-                    range_pts=200.0,
+                    # 300 (vs the helper's 200 default) widens the stored
+                    # analytical window so structural magnets near the grid
+                    # edge aren't prominence-suppressed (CR-008). The helper
+                    # default stays 200 for Phase 0 reproducibility.
+                    range_pts=300.0,
                     step_pts=1.0,
                     version=VERSION,
                 )
