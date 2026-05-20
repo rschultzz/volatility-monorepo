@@ -70,9 +70,16 @@ def load_env() -> None:
 
 
 def _normalize_db_url(url: str) -> str:
-    """Match apps/cron/db.py — psycopg prefers postgresql://, needs sslmode."""
+    """Coerce a DATABASE_URL into a form psycopg.connect accepts.
+
+    Handles the postgres:// alias and strips any SQLAlchemy driver suffix
+    (postgresql+psycopg://) — the repo's .env stores the SQLAlchemy form for
+    the engine-based tooling, but psycopg.connect wants a plain URL.
+    """
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql+"):
+        url = "postgresql://" + url.split("://", 1)[1]
     if "sslmode=" not in url:
         sep = "&" if "?" in url else "?"
         url = f"{url}{sep}sslmode=require"
