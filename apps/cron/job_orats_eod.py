@@ -3,11 +3,21 @@
 import os, sys, logging, argparse
 import datetime as dt
 from math import exp
+from pathlib import Path
 
 import pytz
 import requests
 
 from db import get_conn  # psycopg connection factory
+
+# Make the repo root importable so `packages.*` resolves regardless of how the
+# cron is launched (Render worker, local run config). Mirrors the bootstrap in
+# scripts/run_gex_fade_backtest.py and the other packages.* consumers.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packages.shared.gex_landscape import compute_and_upsert_landscape  # noqa: E402
 
 # ------------ Version & logging ------------------------------------------------
 VERSION = "eod-shift-hard-upsert-2025-10-31d"
@@ -224,6 +234,29 @@ def main():
                     cur.execute("REFRESH MATERIALIZED VIEW orats_gex_by_exp;")
                 except Exception as e:
                     log.warning("Refresh MV failed (non-fatal): %s", e)
+
+                # GEX landscape (CR-007) — compute + upsert on the SAME
+                # connection, before commit, so the landscape row and the
+                # orats_oi_gamma upsert share one transaction. Intentionally
+                # NOT wrapped in try/except: if it raises, the whole EOD
+                # transaction rolls back rather than committing a partial.
+                landscape_summary = compute_and_upsert_landscape(
+                    conn=conn,
+                    ticker=TICKER,
+                    trade_date=store_trade_date,
+                    spread_coef=8.0,
+                    range_pts=200.0,
+                    step_pts=1.0,
+                    version=VERSION,
+                )
+                log.info(
+                    "GEX landscape upserted for (%s, %s): n_landscape=%s "
+                    "n_walls=%s table_spot=%s",
+                    TICKER, store_trade_date.isoformat(),
+                    landscape_summary["n_landscape"],
+                    landscape_summary["n_walls"],
+                    landscape_summary["table_spot"],
+                )
 
                 conn.commit()
 
