@@ -84,6 +84,8 @@ Expected impact:
 - `packages/shared/tests/test_gex_landscape_api.py` — **new**. Unit tests on `build_gex_landscape_response` with mocked DB returning known `orats_gex_landscape` rows. Verify response shape, regime classification matches expectation for known spot/IV inputs, 404 when row missing.
 - `apps/cron/job_orats_eod.py` — change `range_pts` arg from `200.0` to `300.0` in the `compute_and_upsert_landscape` call.
 - `scripts/backfill_gex_landscape.py` — change the script's default `range_pts` from `200.0` to `300.0`.
+- `apps/web/requirements.txt` — **add `scipy`** (Amendment — pre-implementation review). `gex_landscape.py` (shipped in CR-007) imports `scipy.signal.find_peaks`; the CR-008 endpoint imports `gex_landscape` transitively, so the web service cannot start without scipy. CR-007 omitted it from the requirements files; CR-008 must add it for the endpoint to run on Render.
+- `apps/cron/requirements.txt` — **add `scipy`** (Amendment — pre-implementation review). Same latent CR-007 omission: the EOD cron imports `compute_and_upsert_landscape` → `gex_landscape` → `scipy`, so the nightly cron would crash on Render without it. CR-008 already edits `job_orats_eod.py` (the `range_pts` bump), so the one-line requirements fix lands with it rather than as a separate hotfix.
 - `react_price_preview/src/components/GexLandscapePanel.jsx` — **new**. Right-docked panel component.
 - `react_price_preview/src/components/PriceChart.jsx` — add LANDSCAPE pill to `pills` array, add `landscapeOpen` state (or lift to App.jsx), embed `<GexLandscapePanel>` when open.
 - `react_price_preview/src/App.jsx` — `landscapeData` state, fetch lifecycle (pill-on, date change, debounced spot delta in LIVE mode), IV plumbing.
