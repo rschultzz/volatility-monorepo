@@ -11,6 +11,7 @@ import SignalPanel from './SignalPanel'
 import ChartToggleBar from './ChartToggleBar'
 import TradeAnnotationPanel from './TradeAnnotationPanel'
 import CondorPricingPanel from './CondorPricingPanel'
+import GexLandscapePanel from './GexLandscapePanel'
 
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
@@ -644,6 +645,13 @@ export default function PriceChart({
   // Live condor pricing payload from /api/condor-pricing.
   // Renders the floating CondorPricingPanel overlay when non-null.
   condorPricing = null,
+  // GEX landscape panel (CR-008). State + fetch lifecycle live in App.jsx;
+  // PriceChart only owns the LANDSCAPE pill and renders the docked panel.
+  landscapeOpen = false,
+  onToggleLandscape = null,
+  landscapeData = null,
+  landscapeSpotMode = 'LIVE',
+  onLandscapeSpotModeChange = null,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -2601,8 +2609,18 @@ export default function PriceChart({
               ...(Array.isArray(normalizedGexSegments) && normalizedGexSegments.length > 0 && gexEnabled
                 ? [{ key: 'gex', label: 'GEX', isOpen: gexPanelOpen, onToggle: () => setGexPanelOpen(o => !o), title: 'Show GEX legend' }]
                 : []),
+              { key: 'landscape', label: 'LANDSCAPE', isOpen: landscapeOpen, onToggle: onToggleLandscape || (() => {}), title: 'Show GEX landscape panel' },
             ]}
           />
+
+          {landscapeOpen && (
+            <GexLandscapePanel
+              data={landscapeData}
+              spotMode={landscapeSpotMode}
+              onSpotModeChange={onLandscapeSpotModeChange}
+              onClose={onToggleLandscape || undefined}
+            />
+          )}
 
           {!smileCollapsed && (
           <div
