@@ -5,6 +5,10 @@ import AggressorFlowPanel from './components/AggressorFlowPanel'
 const FLOW_HEIGHT_STORAGE_KEY = 'ib-react-flow-panel-height'
 const FLOW_EMA_MINUTES_STORAGE_KEY = 'ib-react-flow-ema-minutes'
 const GEX_MIN_ABS_B_STORAGE_KEY = 'ib-react-gex-min-abs-b'
+const GEX_LANDSCAPE_SPOT_MODE_KEY = 'GEX_LANDSCAPE_SPOT_MODE'
+// LIVE-mode landscape re-fetches only when ES moves materially.
+const GEX_LANDSCAPE_SPOT_DELTA_PTS = 5
+const GEX_LANDSCAPE_DEBOUNCE_MS = 600
 const FLOW_MIN_HEIGHT = 140
 const FLOW_MAX_HEIGHT = 520
 const FULL_BARS_LIVE_POLL_MS = 30000
@@ -625,11 +629,43 @@ export default function App() {
   // CondorPricingPanel overlay.
   const [condorPricing, setCondorPricing] = useState(null)
 
+  // ── GEX landscape panel (CR-008) ──────────────────────────────────
+  const [landscapeOpen, setLandscapeOpen] = useState(false)
+  const [landscapeData, setLandscapeData] = useState(null)
+  const [landscapeSpotMode, setLandscapeSpotMode] = useState(() => {
+    try {
+      return window.localStorage.getItem(GEX_LANDSCAPE_SPOT_MODE_KEY) === 'OPEN'
+        ? 'OPEN'
+        : 'LIVE'
+    } catch (err) {
+      return 'LIVE'
+    }
+  })
+
   // Surface the snapshots array from the smile payload (or empty).
   const smileSnapshots = useMemo(() => {
     if (!smileData || !Array.isArray(smileData.snapshots)) return []
     return smileData.snapshots
   }, [smileData])
+
+  // Live ES price the chart is tracking — the last merged bar's close.
+  // This is the analytical spot the landscape endpoint is classified against.
+  const liveEsSpot = useMemo(() => {
+    if (!Array.isArray(mergedBars) || mergedBars.length === 0) return null
+    const close = Number(mergedBars[mergedBars.length - 1]?.close)
+    return Number.isFinite(close) ? close : null
+  }, [mergedBars])
+
+  // ATM IV (decimal) for the landscape fetch — same source SmileChart uses
+  // (the smile payload's snapshots). Prefer the live snapshot; atm_iv_pct is
+  // a percent, so divide by 100.
+  const landscapeIv = useMemo(() => {
+    const withIv = smileSnapshots.filter((s) => s && s.atm_iv_pct != null)
+    if (withIv.length === 0) return null
+    const snap = withIv.find((s) => s.is_live) || withIv[withIv.length - 1]
+    const pct = Number(snap.atm_iv_pct)
+    return Number.isFinite(pct) && pct > 0 ? pct / 100 : null
+  }, [smileSnapshots])
 
   // Clear active anchor if the time slice it referenced is no longer in
   // smile data (e.g. user removed it from the smile chart selection).
@@ -710,6 +746,114 @@ export default function App() {
       if (activeController) activeController.abort()
     }
   }, [apiBase, tradeDate, expirationDate, bandsAnchor, isLiveTradeDate])
+
+  // ── GEX landscape fetch lifecycle (CR-008) ────────────────────────
+  // landscapeOpenSpotRef — the spot captured once in OPEN mode.
+  // landscapeFetchSpotRef / landscapeFetchKeyRef — the (spot, date) of the
+  // last issued fetch, used to gate LIVE-mode re-fetches to >5pt moves.
+  const landscapeOpenSpotRef = useRef(null)
+  const landscapeFetchSpotRef = useRef(null)
+  const landscapeFetchKeyRef = useRef(null)
+  const landscapeDebounceRef = useRef(null)
+
+  // Persist the LIVE/OPEN preference.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(GEX_LANDSCAPE_SPOT_MODE_KEY, landscapeSpotMode)
+    } catch (err) {
+      /* localStorage unavailable — non-fatal */
+    }
+  }, [landscapeSpotMode])
+
+  // Reset the fetch memory whenever the panel (re)opens, the session date
+  // changes, or the spot mode flips — each warrants a fresh fetch and, in
+  // OPEN mode, a fresh spot capture.
+  useEffect(() => {
+    landscapeOpenSpotRef.current = null
+    landscapeFetchSpotRef.current = null
+    landscapeFetchKeyRef.current = null
+  }, [tradeDate, landscapeOpen, landscapeSpotMode])
+
+  // Fetch the landscape. Triggers: panel open, date change, mode change, and
+  // — in LIVE mode only — ES moving more than 5pt since the last fetch.
+  useEffect(() => {
+    if (!landscapeOpen || !tradeDate || !apiBase) return undefined
+
+    // Resolve the analytical spot for this fetch.
+    let spot
+    if (landscapeSpotMode === 'OPEN') {
+      if (landscapeOpenSpotRef.current == null) {
+        if (liveEsSpot == null) return undefined // wait for bars to load
+        landscapeOpenSpotRef.current = liveEsSpot // capture once, then freeze
+      }
+      spot = landscapeOpenSpotRef.current
+    } else {
+      if (liveEsSpot == null) return undefined
+      spot = liveEsSpot
+    }
+
+    const dateChanged = landscapeFetchKeyRef.current !== tradeDate
+    const prevSpot = landscapeFetchSpotRef.current
+    const shouldFetch =
+      dateChanged ||
+      prevSpot == null ||
+      (landscapeSpotMode === 'OPEN'
+        ? prevSpot !== spot
+        : Math.abs(spot - prevSpot) > GEX_LANDSCAPE_SPOT_DELTA_PTS)
+    if (!shouldFetch) return undefined
+
+    let disposed = false
+    const controller = new AbortController()
+
+    const doFetch = async () => {
+      try {
+        const url = new URL(`${apiBase}/api/gex-landscape`)
+        url.searchParams.set('ticker', 'SPX')
+        url.searchParams.set('date', tradeDate)
+        url.searchParams.set('spot', String(spot))
+        if (landscapeIv != null) url.searchParams.set('iv', String(landscapeIv))
+
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          credentials: 'include',
+          signal: controller.signal,
+          cache: 'no-store',
+        })
+        if (!response.ok) {
+          throw new Error(`GEX landscape fetch failed: ${response.status}`)
+        }
+        const payload = await response.json()
+        if (disposed) return
+        landscapeFetchSpotRef.current = spot
+        landscapeFetchKeyRef.current = tradeDate
+        setLandscapeData(payload)
+      } catch (err) {
+        if (err?.name !== 'AbortError') {
+          console.error('GEX landscape refresh failed', err)
+        }
+      }
+    }
+
+    // Debounce LIVE spot-delta re-fetches; fetch immediately on open / date
+    // change / mode change (prevSpot is null then, or the date changed).
+    if (landscapeSpotMode === 'LIVE' && !dateChanged && prevSpot != null) {
+      if (landscapeDebounceRef.current) {
+        window.clearTimeout(landscapeDebounceRef.current)
+      }
+      landscapeDebounceRef.current = window.setTimeout(doFetch, GEX_LANDSCAPE_DEBOUNCE_MS)
+    } else {
+      doFetch()
+    }
+
+    return () => {
+      disposed = true
+      controller.abort()
+      if (landscapeDebounceRef.current) {
+        window.clearTimeout(landscapeDebounceRef.current)
+        landscapeDebounceRef.current = null
+      }
+    }
+  }, [landscapeOpen, tradeDate, apiBase, landscapeSpotMode, liveEsSpot, landscapeIv])
 
   // Compute the band levels in ES coordinates from:
   //  - the active SPX anchor (stock_price)
@@ -1673,6 +1817,11 @@ export default function App() {
                 onBandsAnchorChange={setBandsAnchor}
                 bandsLevels={bandsLevels}
                 condorPricing={condorPricing}
+                landscapeOpen={landscapeOpen}
+                onToggleLandscape={() => setLandscapeOpen((o) => !o)}
+                landscapeData={landscapeData}
+                landscapeSpotMode={landscapeSpotMode}
+                onLandscapeSpotModeChange={setLandscapeSpotMode}
               />
             </div>
 
