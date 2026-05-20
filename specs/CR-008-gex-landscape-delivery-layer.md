@@ -25,6 +25,8 @@ The builder — `build_gex_landscape_response(conn, ticker, trade_date, spot, *,
 - Runs the spot-dependent classifier chain — `classify_regime`, `_annotate_distance_class`, `classify_per_bucket`, `summarize_per_bucket`, `analyze_confluence`, `find_intraday_subtarget`, `find_proximate_negative_zones` — on top of those fresh walls/peaks plus the provided `(spot, iv)`.
 - Returns the structured dict the Phase 0 script prints, JSON-serialized.
 
+**Amendment — pre-implementation review (`conn` type):** `callbacks.py` has no psycopg connection path — it owns a module-level SQLAlchemy engine (`engine = create_engine(_get_db_url(), pool_pre_ping=True)`) and every DB-reading route uses `with engine.connect() as conn` (e.g. `_fetch_gex_grouped_by_level`). The builder's `conn` parameter is therefore a SQLAlchemy `Connection`, and the route passes `engine.connect()` into it — NOT a psycopg connection. This differs from `compute_and_upsert_landscape(conn, ...)` in `gex_landscape.py`, whose `conn` is psycopg (the cron/backfill path); the two functions share a parameter name but not a connection type. The builder reads its single `orats_gex_landscape` row with `conn.execute(text(...))`; psycopg's JSONB→Python adaptation still applies underneath SQLAlchemy, so `landscape` / `walls` / `peaks_by_bucket` come back as native lists/dicts ready to reconstruct into a DataFrame.
+
 **Important about edge clipping**: recomputing peaks from the stored landscape does NOT add data outside the stored window. CR-008 mitigates this by bumping the cron's `range_pts` default from 200 to 300 (see piece 4 below) — wider stored grid means features previously sitting near the upper edge get prominence-qualifying buffer space on the rising side. For SPX with table_spot offsets typically in the 30–130pt range from session spot, range_pts=300 keeps the analytical window comfortably in-bounds. Edge-clipping is now a theoretical concern for very large overnight gaps rather than a practical one on typical days.
 
 **2. Frontend panel** — `react_price_preview/src/components/GexLandscapePanel.jsx` (new). Right-docked panel matching the visual aesthetic of `outputs/landscape_2026-05-20_stacked.png`. Shares Y-axis range with `PriceChart`. Renders:
@@ -77,7 +79,7 @@ Expected impact:
 
 ## Affected Files
 
-- `apps/web/modules/Ironbeam/callbacks.py` — add `GET /api/gex-landscape` route. Thin: parse args, CORS, delegate to builder.
+- `apps/web/modules/Ironbeam/callbacks.py` — add `GET /api/gex-landscape` route. Thin: parse args, CORS, open `engine.connect()` on the existing module-level SQLAlchemy engine, delegate to builder.
 - `packages/shared/gex_landscape_api.py` — **new**. Houses `build_gex_landscape_response(conn, ticker, trade_date, spot, *, iv=None, implied_move=None)`. Pure function, no Flask coupling. Imports from `packages.shared.gex_landscape` for the analytical pipeline.
 - `packages/shared/tests/test_gex_landscape_api.py` — **new**. Unit tests on `build_gex_landscape_response` with mocked DB returning known `orats_gex_landscape` rows. Verify response shape, regime classification matches expectation for known spot/IV inputs, 404 when row missing.
 - `apps/cron/job_orats_eod.py` — change `range_pts` arg from `200.0` to `300.0` in the `compute_and_upsert_landscape` call.
