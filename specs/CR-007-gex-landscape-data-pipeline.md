@@ -53,6 +53,8 @@ CREATE TABLE orats_gex_landscape (
 CREATE INDEX orats_gex_landscape_date_idx ON orats_gex_landscape (trade_date DESC);
 ```
 
+The DDL ships as a standalone, idempotent migration file at `infra/sql/orats_gex_landscape.sql` (`CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`, wrapped in `BEGIN;`/`COMMIT;`). This repo has **no migration tool and no migrations directory** — the only tracked precedent is `Documents/migration.sql`, a "run once, idempotent" SQL file. The migration is applied manually (psql) before the cron's first run; neither the cron nor the helper issues DDL, so the cron transaction stays pure data writes. (Amendment — pre-implementation review: `infra/` is untracked/empty in the repo and there is no migration framework; the spec previously left this open.)
+
 Add a new `compute_and_upsert_landscape(conn, ticker, trade_date, *, spread_coef, range_pts, step_pts, version)` helper in `packages/shared/gex_landscape.py`. The helper re-queries the just-upserted `orats_oi_gamma` rows, reads `stock_price` from the first row (used only as `table_spot` metadata + as the landscape grid center), runs `compute_landscape` + `find_walls` + `find_peaks_per_bucket`, serializes to JSONB-compatible dicts, and UPSERTs.
 
 **3. Add cron block to `apps/cron/job_orats_eod.py`.** After the existing `orats_oi_gamma` upsert completes, call `compute_and_upsert_landscape` on the same DB connection — single transaction with the `orats_oi_gamma` upsert so both halves succeed or roll back together.
@@ -74,7 +76,7 @@ python scripts/backfill_gex_landscape.py --date 2026-05-20  # single
 - `packages/shared/__init__.py` — may need an export depending on existing conventions; check `packages/shared/options_cache/__init__.py` for the pattern.
 - `apps/cron/job_orats_eod.py` — add one `compute_and_upsert_landscape` call after the `orats_oi_gamma` upsert block. No changes to the existing fetch/upsert logic.
 - `scripts/backfill_gex_landscape.py` — **new**.
-- DB migration — wherever migrations live in this repo. Check `infra/` and the existing migration pattern for `orats_oi_gamma`, `orats_monies_minute`, `bt_signals` tables. **Read first; do not assume a migration tool exists.**
+- `infra/sql/orats_gex_landscape.sql` — **new**. Standalone idempotent migration (the repo has no migration tool; this matches the `Documents/migration.sql` precedent). Applied manually before the cron runs.
 - `packages/shared/tests/test_gex_landscape.py` (or wherever this codebase's Python tests live for `packages/shared/` — see CR-004's lesson: `packages/shared/options_cache/tests/` is the pattern, NOT a top-level `tests/`). Unit tests for the refactored shared functions (snapshot tests on known inputs) and for `compute_and_upsert_landscape` (mocked DB).
 
 ## Acceptance Criteria
