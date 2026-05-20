@@ -89,7 +89,7 @@ python scripts/backfill_gex_landscape.py --date 2026-05-20  # single
 - `orats_gex_landscape` table exists with the schema above.
 - After the cron runs once, one row is present for `(SPX, today)`.
 - The `landscape` JSONB array has ~400 rows (range_pts=200, step_pts=1, so ~401 points).
-- The `walls` JSONB array contains both positive and negative entries with `sign` set correctly.
+- The `walls` JSONB array contains one entry per detected prominence wall, each with `sign` set correctly as an integer (`+1` / `-1`). Which signs are present depends on the day: walls for this coarse set are detected on the `table_spot`-centered window at prominence 0.10, so a dominant wall near a window edge can be prominence-suppressed out of it. For `2026-05-20` the stored `walls` are both negative — the dominant `+7520` wall sits ~37pt from the upper edge of the `table_spot`-centered window (table_spot ≈ 7357.6), where `find_peaks` suppresses its prominence below threshold. The full `+7520` structure is still present in the stored `landscape` field; request-time classifiers re-derive walls from `landscape` at a more sensitive prominence. (Amendment — verification: the original criterion assumed both signs are always present, which does not hold for the spec-mandated `table_spot`-centered window.)
 - The `peaks_by_bucket` JSONB object has keys `"0DTE"`, `"1-7 DTE"`, `"8-30 DTE"`, `"30+ DTE"`, each holding a list of peak dicts with `price`, `gex`, `prominence`, `fwhm`.
 - `table_spot` matches `stock_price` from the corresponding `orats_oi_gamma` row.
 - `version` matches the cron's `VERSION` constant.
