@@ -995,6 +995,28 @@ def find_confluence_clusters(
     return clusters
 
 
+def classify_confluence_quality(score: float, avg_fwhm: float) -> str:
+    """
+    Tag a confluence with a quality grade.
+
+    Score is the raw (n_buckets × max_gex / fwhm) value in $/pt. Divide by 1e9
+    for B/pt. Empirical thresholds based on observed days:
+        5/7 pin-grade : score ≈ 84 B/pt, fwhm ≈ 25pt
+        5/20 waypoint : score ≈  3 B/pt, fwhm ≈ 84pt
+
+    pin-grade   — Sharp, multi-bucket, strong magnet. Price likely to stick.
+    drift-grade — Moderate strength or breadth. Transitional / waypoint level.
+    waypoint    — Soft level, easily passed through; just a feature of the
+                  field, not a pin candidate.
+    """
+    score_b_per_pt = score / 1e9
+    if score_b_per_pt >= 30 and avg_fwhm < 40:
+        return "pin-grade"
+    if score_b_per_pt < 5 or avg_fwhm > 80:
+        return "waypoint"
+    return "drift-grade"
+
+
 def score_confluence(cluster: list) -> dict:
     """Score a cluster:
         score = n_unique_buckets × max_gex / max(avg_fwhm, 5)
@@ -1028,6 +1050,7 @@ def score_confluence(cluster: list) -> dict:
         "sum_gex":       float(sum_gex),
         "avg_fwhm":      float(avg_fwhm),
         "score":         float(score),
+        "quality":       classify_confluence_quality(score, avg_fwhm),
         "peaks":         cluster,
     }
 
@@ -1134,6 +1157,62 @@ def find_intraday_subtarget(
     # Prefer highest-score candidate within reach
     candidates.sort(key=lambda c: c["score"], reverse=True)
     return candidates[0]
+
+
+def find_proximate_negative_zones(
+    walls: pd.DataFrame,
+    spot: float,
+    implied_move: float,
+    *,
+    dom_strength: Optional[float] = None,
+    max_sigma: float = 1.5,
+    significance_ratio: float = 0.15,
+) -> list:
+    """
+    Find significant negative GEX walls within max_sigma of spot.
+
+    A negative zone is "significant" if abs(gex) >= significance_ratio × dom_strength
+    (using the strongest positive wall as the reference; if none, uses max abs neg).
+
+    Returns list of dicts sorted by abs(gex) descending — deepest neg zones first.
+    """
+    if implied_move <= 0 or walls is None or walls.empty:
+        return []
+
+    pos = walls[walls["sign"] > 0]
+    neg = walls[walls["sign"] < 0].copy()
+    if neg.empty:
+        return []
+
+    # Reference for significance
+    if dom_strength is None or dom_strength <= 0:
+        pos_max = float(pos["gex"].max()) if not pos.empty else 0.0
+        neg_max = float(neg["gex"].abs().max())
+        dom_strength = max(pos_max, neg_max)
+
+    if dom_strength <= 0:
+        return []
+
+    threshold = significance_ratio * dom_strength
+
+    zones = []
+    for _, w in neg.iterrows():
+        if abs(w["gex"]) < threshold:
+            continue
+        distance = abs(float(w["price"]) - spot)
+        sigma = distance / implied_move
+        if sigma > max_sigma:
+            continue
+        zones.append({
+            "price":     float(w["price"]),
+            "gex":       float(w["gex"]),
+            "distance":  float(distance),
+            "sigma":     float(sigma),
+            "direction": "below" if w["price"] < spot else "above",
+        })
+
+    zones.sort(key=lambda z: abs(z["gex"]), reverse=True)
+    return zones
 
 
 # ─── Plotting ───────────────────────────────────────────────────────────────
@@ -1406,7 +1485,8 @@ def plot_stacked(
                label=f"Spot {spot:.1f}", zorder=10)
 
     # Confluence lines: horizontal markers at price levels where multiple
-    # buckets agree on a peak. Width and opacity scale with n_buckets.
+    # buckets agree on a peak. Width and opacity scale with n_buckets;
+    # line style reflects quality grade.
     if confluences:
         xlim = ax.get_xlim()
         x_right = xlim[1]
@@ -1416,15 +1496,23 @@ def plot_stacked(
             colors = {2: "#fbbf24", 3: "#fb923c", 4: ACTIVE_C}
             line_color = colors.get(n, ACTIVE_C)
             line_alpha = 0.35 + 0.20 * (n - 2)
-            line_width = 1.2 + 0.5 * (n - 2)
+            # Line style by quality: pin-grade solid, drift-grade dashed, waypoint dotted
+            quality = c.get("quality", "waypoint")
+            style_map = {"pin-grade": "-", "drift-grade": "--", "waypoint": ":"}
+            line_style = style_map.get(quality, ":")
+            line_width = {"pin-grade": 2.0, "drift-grade": 1.5, "waypoint": 1.0}.get(
+                quality, 1.0
+            )
             ax.axhline(c["center_price"], color=line_color,
-                       linewidth=line_width, linestyle=":",
+                       linewidth=line_width, linestyle=line_style,
                        alpha=line_alpha, zorder=8)
             # Annotation on the right edge — small but readable
+            quality_short = {"pin-grade": "PIN", "drift-grade": "DRIFT",
+                             "waypoint": "soft"}.get(quality, "")
             ax.text(
                 x_right * 0.985,
                 c["center_price"],
-                f"{c['center_price']:.0f}  {'★' * n}",
+                f"{c['center_price']:.0f}  {'★' * n}  {quality_short}",
                 ha="right", va="center",
                 color=line_color, fontsize=8.5, fontweight="bold",
                 alpha=0.9,
@@ -1661,12 +1749,14 @@ def run_one_date(trade_date: dt.date, args, out_dir: Path):
                 cls_tag = f"  [{cls['class']}, {cls['sigma']:.1f}σ]"
             else:
                 cls_tag = ""
+            quality_tag = f"  [{c['quality']}]"
             print(
                 f"   {marker} {c['center_price']:>6.0f}  {stars:<4s}  "
                 f"({c['n_buckets']} buckets: {buckets_str})  "
                 f"max={c['max_gex']/1e9:>5.0f}B  "
                 f"fwhm={c['avg_fwhm']:>4.0f}pt  "
-                f"score={c['score']/1e9:.1f}B/pt  "
+                f"score={c['score']/1e9:.1f}B/pt"
+                f"{quality_tag}  "
                 f"[{distance:+.0f}pt from spot]{cls_tag}"
             )
     else:
@@ -1706,6 +1796,40 @@ def run_one_date(trade_date: dt.date, args, out_dir: Path):
                     f"structural pull only — today's range likely stays within "
                     f"{spot-1.5*implied_move:.0f}–{spot+1.5*implied_move:.0f} unless catalyst"
                 )
+
+    # High-volatility zones: significant negative GEX walls within 1.5σ.
+    # These aren't magnets but they ARE high-attention strikes that act as
+    # accelerators or bounce candidates depending on arrival conditions.
+    if implied_move > 0:
+        dom_strength_for_neg = (
+            regime["dominant_wall"]["gex"]
+            if "dominant_wall" in regime else None
+        )
+        neg_zones = find_proximate_negative_zones(
+            walls, spot, implied_move,
+            dom_strength=dom_strength_for_neg,
+        )
+        if neg_zones:
+            print()
+            print(f"  HIGH-VOL ZONES  (negative GEX within 1.5σ — accelerators, not magnets):")
+            for z in neg_zones[:3]:
+                arrow = "↓" if z["direction"] == "below" else "↑"
+                print(
+                    f"   ⚠ {z['price']:>6.0f} ({z['gex']/1e9:+5.0f}B, "
+                    f"{z['distance']:.0f}pt {z['direction']} spot, "
+                    f"{z['sigma']:.1f}σ)  {arrow}"
+                )
+                # Conditional arrival framing
+                if z["direction"] == "below":
+                    print(f"               grind-down approach → acceleration through "
+                          f"(trapdoor)")
+                    print(f"               gap-down to here    → bounce candidate "
+                          f"(put profit-taking)")
+                else:
+                    print(f"               grind-up approach   → acceleration through "
+                          f"(squeeze)")
+                    print(f"               gap-up to here      → exhaustion / fade "
+                          f"candidate")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     p1 = out_dir / f"landscape_{trade_date.isoformat()}_compare.png"
