@@ -20,7 +20,6 @@ UPSERTs them into orats_gex_landscape on the caller-supplied connection.
 from __future__ import annotations
 
 import datetime as dt
-import json
 from typing import Optional
 
 import numpy as np
@@ -1062,3 +1061,171 @@ def find_proximate_negative_zones(
 
     zones.sort(key=lambda z: abs(z["gex"]), reverse=True)
     return zones
+
+
+# ─── Persistence (CR-007) ───────────────────────────────────────────────────
+#
+# compute_and_upsert_landscape is the cron/backfill entry point. It persists
+# only the spot-agnostic artifacts of the field — the landscape grid, the
+# walls, and the per-bucket peaks — all pure functions of the OI/gamma data.
+# Spot-dependent classification (regime, confluence, neg zones) is left to
+# request-time callers. See [[2026-05-20 - GEX Landscape Spot-Agnostic Storage]].
+
+_LANDSCAPE_QUERY = """
+    SELECT discounted_level, strike, expir_date, dte,
+           stock_price, call_oi, put_oi, gamma, gex_call, gex_put
+    FROM orats_oi_gamma
+    WHERE ticker = %s
+      AND trade_date = %s
+      AND expir_date >= %s
+      AND discounted_level IS NOT NULL
+    ORDER BY expir_date, discounted_level
+"""
+
+_UPSERT_SQL = """
+    INSERT INTO orats_gex_landscape
+        (ticker, trade_date, landscape, walls, peaks_by_bucket,
+         spread_coef, range_pts, step_pts, table_spot, version)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (ticker, trade_date) DO UPDATE SET
+        landscape       = EXCLUDED.landscape,
+        walls           = EXCLUDED.walls,
+        peaks_by_bucket = EXCLUDED.peaks_by_bucket,
+        spread_coef     = EXCLUDED.spread_coef,
+        range_pts       = EXCLUDED.range_pts,
+        step_pts        = EXCLUDED.step_pts,
+        table_spot      = EXCLUDED.table_spot,
+        version         = EXCLUDED.version,
+        computed_at     = NOW()
+"""
+
+
+def _landscape_records(landscape: pd.DataFrame) -> list:
+    """Serialize the landscape DataFrame to JSONB-ready dicts (native floats)."""
+    return [
+        {
+            "price":      float(row.price),
+            "gex_total":  float(row.gex_total),
+            "gex_0dte":   float(row.gex_0dte),
+            "gex_near":   float(row.gex_near),
+            "gex_med":    float(row.gex_med),
+            "gex_struct": float(row.gex_struct),
+        }
+        for row in landscape.itertuples(index=False)
+    ]
+
+
+def _walls_records(walls: pd.DataFrame) -> list:
+    """Serialize the walls DataFrame to JSONB-ready dicts. sign is cast to int."""
+    return [
+        {
+            "price":      float(row.price),
+            "gex":        float(row.gex),
+            "prominence": float(row.prominence),
+            "sign":       int(row.sign),
+        }
+        for row in walls.itertuples(index=False)
+    ]
+
+
+def _peaks_records(peaks_by_bucket: dict) -> dict:
+    """Serialize find_peaks_per_bucket output to JSONB-ready native floats."""
+    return {
+        label: [
+            {
+                "price":      float(p["price"]),
+                "gex":        float(p["gex"]),
+                "prominence": float(p["prominence"]),
+                "fwhm":       float(p["fwhm"]),
+            }
+            for p in peaks
+        ]
+        for label, peaks in peaks_by_bucket.items()
+    }
+
+
+def compute_and_upsert_landscape(
+    conn,
+    ticker: str,
+    trade_date: dt.date,
+    *,
+    spread_coef: float = 8.0,
+    range_pts: float = 200.0,
+    step_pts: float = 1.0,
+    version: str,
+) -> dict:
+    """
+    Compute the spot-agnostic GEX landscape for (ticker, trade_date) and UPSERT
+    it into orats_gex_landscape.
+
+    Reads the orats_oi_gamma rows already visible on `conn` (same filter the
+    Phase 0 script uses: live expirations only, discounted_level not null),
+    builds the Gaussian landscape grid, the walls, and the per-bucket peaks,
+    and writes one orats_gex_landscape row.
+
+    Runs entirely on the caller's connection and transaction — it issues no
+    COMMIT. The EOD cron passes the same connection it used for the
+    orats_oi_gamma upsert, so the landscape write and that upsert succeed or
+    roll back together. The backfill script commits per date itself.
+
+    stock_price from the first orats_oi_gamma row is stored as table_spot
+    (reference metadata) and used as the landscape grid center; it is NOT an
+    analytical spot — regime/confluence classification happens at request time
+    against a caller-supplied spot (see the spot-agnostic-storage ADR).
+
+    Raises ValueError if no orats_oi_gamma rows exist for (ticker, trade_date)
+    or if their stock_price is NULL.
+
+    Returns a summary dict: ticker, trade_date, n_landscape, n_walls,
+    n_peaks_by_bucket, table_spot, version.
+    """
+    from psycopg.types.json import Jsonb
+
+    with conn.cursor() as cur:
+        cur.execute(_LANDSCAPE_QUERY, (ticker, trade_date, trade_date))
+        rows = cur.fetchall()
+        cols = [d.name for d in cur.description]
+
+    if not rows:
+        raise ValueError(
+            f"compute_and_upsert_landscape: no orats_oi_gamma rows for "
+            f"({ticker!r}, {trade_date})"
+        )
+
+    df = pd.DataFrame(rows, columns=cols)
+
+    raw_spot = df["stock_price"].iloc[0]
+    if raw_spot is None or pd.isna(raw_spot):
+        raise ValueError(
+            f"compute_and_upsert_landscape: stock_price is NULL for "
+            f"({ticker!r}, {trade_date})"
+        )
+    table_spot = float(raw_spot)
+
+    landscape = compute_landscape(
+        df, table_spot,
+        range_pts=range_pts, step_pts=step_pts, spread_coef=spread_coef,
+    )
+    walls = find_walls(landscape)
+    peaks_by_bucket = find_peaks_per_bucket(landscape)
+
+    landscape_json = _landscape_records(landscape)
+    walls_json = _walls_records(walls)
+    peaks_json = _peaks_records(peaks_by_bucket)
+
+    with conn.cursor() as cur:
+        cur.execute(_UPSERT_SQL, (
+            ticker, trade_date,
+            Jsonb(landscape_json), Jsonb(walls_json), Jsonb(peaks_json),
+            spread_coef, range_pts, step_pts, table_spot, version,
+        ))
+
+    return {
+        "ticker":            ticker,
+        "trade_date":        trade_date,
+        "n_landscape":       len(landscape_json),
+        "n_walls":           len(walls_json),
+        "n_peaks_by_bucket": {k: len(v) for k, v in peaks_json.items()},
+        "table_spot":        table_spot,
+        "version":           version,
+    }
