@@ -5,19 +5,32 @@ import {
   ColorType,
   CandlestickSeries,
   LineSeries,
+  LineStyle,
 } from 'lightweight-charts'
 import SmileChart from './SmileChart'
 import SignalPanel from './SignalPanel'
 import ChartToggleBar from './ChartToggleBar'
 import TradeAnnotationPanel from './TradeAnnotationPanel'
 import CondorPricingPanel from './CondorPricingPanel'
-import GexLandscapePanel from './GexLandscapePanel'
+import GexLandscapePanel, {
+  PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH,
+  CONFLUENCE_COLORS,
+  QUALITY_SHORT,
+} from './GexLandscapePanel'
+import LandscapeChartOverlay from './LandscapeChartOverlay'
 
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
 const TIME_AXIS_HEIGHT = 24
 const MIN_PRICE_RANGE = 0.25
 const MIN_CHART_HEIGHT = 180
+
+// CR-009 item 2 — confluence quality grade → lightweight-charts line style.
+const CONFLUENCE_LINE_STYLE = {
+  'pin-grade': LineStyle.Solid,
+  'drift-grade': LineStyle.Dashed,
+  waypoint: LineStyle.Dotted,
+}
 
 const TOOLTIP_OFFSET_X = 14
 const TOOLTIP_OFFSET_Y = 14
@@ -282,15 +295,20 @@ function rangesClose(a, b, eps = 1) {
   return Math.abs(Number(a.from) - Number(b.from)) <= eps && Math.abs(Number(a.to) - Number(b.to)) <= eps
 }
 
-function pointerInfo(evt, container, leftAxisWidth = 0) {
+function pointerInfo(evt, container, leftAxisWidth = 0, rightInset = 0) {
   if (!evt || !container) return null
   const rect = container.getBoundingClientRect()
   const x = evt.clientX - rect.left
   const y = evt.clientY - rect.top
   const overTimeAxis = y > rect.height - TIME_AXIS_HEIGHT
-  const overPriceAxis = x >= rect.width - PRICE_AXIS_HIT_WIDTH
+  // rightInset accounts for the docked GEX landscape panel: when it's open
+  // the chart (and its right price scale) ends `rightInset` px short of the
+  // stage's right edge, and that trailing strip is the panel, not the chart.
+  const chartRight = rect.width - rightInset
+  const overLandscapePanel = rightInset > 0 && x >= chartRight
+  const overPriceAxis = x >= chartRight - PRICE_AXIS_HIT_WIDTH && x < chartRight
   const overLeftPriceAxis = leftAxisWidth > 0 && x >= 0 && x < leftAxisWidth
-  return { rect, x, y, overTimeAxis, overPriceAxis, overLeftPriceAxis }
+  return { rect, x, y, overTimeAxis, overPriceAxis, overLeftPriceAxis, overLandscapePanel }
 }
 
 function normalizeIntervalValue(value, fallback = '1min') {
@@ -680,6 +698,10 @@ export default function PriceChart({
   // the user's manual zoom/pan on the IV scale.
   const atmIvScaleVisibleRef = useRef(false)
   const intervalRef = useRef(interval)
+  // Mirrors the landscapeOpen prop into a ref so the wheel/mouse handlers
+  // created inside the chart-setup effect (which doesn't re-run on prop
+  // change) always see the current value. CR-009 regression A.
+  const landscapeOpenRef = useRef(landscapeOpen)
   const shiftedCandlesRef = useRef([])
   const dragRef = useRef({ active: false, lastY: 0 })
   const hasUserInteractedRef = useRef(false)
@@ -896,6 +918,16 @@ export default function PriceChart({
   const [annotationState, setAnnotationState] = useState(null)
   const annotationStateRef = useRef(null)
 
+  // CR-009 item 1 — the chart's currently-visible price window, sampled from
+  // the candlestick series and handed to GexLandscapePanel so its Y-axis
+  // tracks the chart's. Shape: { priceTop, priceBot, paneHeight }, or null
+  // before the first sample (panel falls back to its full stored range).
+  const [visiblePriceRange, setVisiblePriceRange] = useState(null)
+
+  // CR-009 items 2 & 4 — IPriceLine handles for the confluence lines and the
+  // intraday-subtarget annotation drawn on the candlestick series.
+  const landscapeLinesRef = useRef([])
+
   // Poll annotation state every 1.5s
   useEffect(() => {
     let cancelled = false
@@ -979,6 +1011,10 @@ export default function PriceChart({
   useEffect(() => {
     intervalRef.current = interval
   }, [interval])
+
+  useEffect(() => {
+    landscapeOpenRef.current = landscapeOpen
+  }, [landscapeOpen])
 
   const shiftedCandles = useMemo(() => {
     return (Array.isArray(candles) ? candles : []).map((bar) => ({
@@ -1516,6 +1552,10 @@ export default function PriceChart({
 
     if (resizeObserver) {
       resizeObserver.observe(stage)
+      // Also observe the chart host directly: when the LANDSCAPE panel opens
+      // it shrinks the host's width (so the right price scale clears the
+      // panel), and that width change doesn't resize the stage.
+      resizeObserver.observe(container)
     }
 
     const handleClick = (param) => {
@@ -1639,8 +1679,9 @@ export default function PriceChart({
         shiftedCandlesRef.current,
         intervalRef.current
       )
-      const info = pointerInfo(evt, stage, getLeftAxisWidth())
-      if (!info || info.overTimeAxis) {
+      const rightInset = landscapeOpenRef.current ? LANDSCAPE_PANEL_WIDTH : 0
+      const info = pointerInfo(evt, stage, getLeftAxisWidth(), rightInset)
+      if (!info || info.overTimeAxis || info.overLandscapePanel) {
         setInteractionActive(false, 180)
         return
       }
@@ -1672,8 +1713,13 @@ export default function PriceChart({
         shiftedCandlesRef.current,
         intervalRef.current
       )
-      const info = pointerInfo(evt, stage, getLeftAxisWidth())
-      if (!info || info.overTimeAxis || info.overPriceAxis) return
+      const info = pointerInfo(
+        evt,
+        stage,
+        getLeftAxisWidth(),
+        landscapeOpenRef.current ? LANDSCAPE_PANEL_WIDTH : 0,
+      )
+      if (!info || info.overTimeAxis || info.overPriceAxis || info.overLandscapePanel) return
       // Drag on the IV axis → pan IV scale only (mirrors the right-axis
       // native zoom behavior). Don't fall through to the candle-pan path.
       if (info.overLeftPriceAxis) {
@@ -1787,6 +1833,114 @@ export default function PriceChart({
       }
     }
   }, [onVisibleLogicalRangeChange, onInteractionActiveChange])
+
+  // CR-009 item 1 — publish the chart's visible price window to the landscape
+  // panel. lightweight-charts has no price-scale visible-range event (only the
+  // time scale fires range events, and not on vertical price-scale drag), so
+  // we poll the candlestick series each animation frame while the panel is
+  // open. coordinateToPrice(0) / coordinateToPrice(paneHeight) give the prices
+  // at the top and bottom pixels of the price pane; the panel rebuilds the
+  // chart's exact affine transform from those three numbers.
+  useEffect(() => {
+    if (!landscapeOpen) {
+      setVisiblePriceRange(null)
+      return undefined
+    }
+    let rafId = 0
+    let last = null
+    const sample = () => {
+      const series = seriesRef.current
+      const stage = stageRef.current
+      if (series && stage) {
+        const paneHeight = getPlotHeight(stage)
+        const priceTop = series.coordinateToPrice(0)
+        const priceBot = series.coordinateToPrice(paneHeight)
+        if (
+          Number.isFinite(priceTop) &&
+          Number.isFinite(priceBot) &&
+          priceTop !== priceBot
+        ) {
+          if (
+            !last ||
+            last.priceTop !== priceTop ||
+            last.priceBot !== priceBot ||
+            last.paneHeight !== paneHeight
+          ) {
+            last = { priceTop, priceBot, paneHeight }
+            setVisiblePriceRange(last)
+          }
+        }
+      }
+      rafId = requestAnimationFrame(sample)
+    }
+    rafId = requestAnimationFrame(sample)
+    return () => cancelAnimationFrame(rafId)
+  }, [landscapeOpen])
+
+  // CR-009 items 2 & 4 — draw the landscape's confluence levels (and the
+  // intraday subtarget) as price lines on the candlestick series, mirroring
+  // the panel's styling (color by bucket count, line style by quality
+  // grade). Lines are torn down and rebuilt whenever the landscape payload
+  // changes or the panel is toggled.
+  useEffect(() => {
+    const series = seriesRef.current
+    if (!series) return undefined
+
+    const clearLines = () => {
+      for (const line of landscapeLinesRef.current) {
+        try {
+          series.removePriceLine(line)
+        } catch (err) {
+          /* series already disposed — ignore */
+        }
+      }
+      landscapeLinesRef.current = []
+    }
+    clearLines()
+
+    if (landscapeOpen && landscapeData) {
+      const confluences = Array.isArray(landscapeData.confluences)
+        ? landscapeData.confluences
+        : []
+      for (const c of confluences) {
+        const price = Number(c.center_price)
+        if (!Number.isFinite(price)) continue
+        const n = c.n_buckets
+        const quality = c.quality || 'waypoint'
+        landscapeLinesRef.current.push(
+          series.createPriceLine({
+            price,
+            color: CONFLUENCE_COLORS[n] || '#10b981',
+            lineWidth: quality === 'pin-grade' ? 2 : 1,
+            lineStyle: CONFLUENCE_LINE_STYLE[quality] ?? LineStyle.Dotted,
+            axisLabelVisible: true,
+            title: `★ × ${n} ${QUALITY_SHORT[quality] || ''}`.trim(),
+          }),
+        )
+      }
+
+      // CR-009 item 4 — the intraday subtarget: a thicker dotted line in a
+      // direction-tinted pale color, distinct from the confluence lines.
+      const subtarget = landscapeData.intraday_subtarget
+      const subPrice = Number(subtarget?.price)
+      if (Number.isFinite(subPrice)) {
+        const spot = Number(landscapeData.spot)
+        const above = Number.isFinite(spot) ? subPrice >= spot : true
+        landscapeLinesRef.current.push(
+          series.createPriceLine({
+            price: subPrice,
+            color: above ? '#86efac' : '#fca5a5',
+            lineWidth: 3,
+            lineStyle: LineStyle.Dotted,
+            axisLabelVisible: true,
+            title: `→ ${Math.round(subPrice)} ${subtarget.type || ''}`.trim(),
+          }),
+        )
+      }
+    }
+
+    return clearLines
+  }, [landscapeData, landscapeOpen])
 
   useEffect(() => {
     function handleParentMessage(event) {
@@ -2614,11 +2768,19 @@ export default function PriceChart({
           />
 
           {landscapeOpen && (
+            <LandscapeChartOverlay
+              negZones={landscapeData?.neg_zones}
+              visiblePriceRange={visiblePriceRange}
+            />
+          )}
+
+          {landscapeOpen && (
             <GexLandscapePanel
               data={landscapeData}
               spotMode={landscapeSpotMode}
               onSpotModeChange={onLandscapeSpotModeChange}
               onClose={onToggleLandscape || undefined}
+              visiblePriceRange={visiblePriceRange}
             />
           )}
 
@@ -3905,7 +4067,14 @@ export default function PriceChart({
             </div>
           )}
 
-          <div ref={hostRef} className="chart-host" style={{ width: '100%', height: '100%' }} />
+          <div
+            ref={hostRef}
+            className="chart-host"
+            style={{
+              width: landscapeOpen ? `calc(100% - ${LANDSCAPE_PANEL_WIDTH}px)` : '100%',
+              height: '100%',
+            }}
+          />
         </div>
       </div>
     </div>

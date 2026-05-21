@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-const PANEL_WIDTH = 300
+export const PANEL_WIDTH = 300
 
 // DTE buckets — landscape column -> label + curve color (matches the Phase 0
 // script's DTE_BUCKETS / plot_stacked palette).
@@ -29,12 +29,14 @@ const REGIME_COLORS = {
 }
 
 // Confluence line color by bucket count; line style by quality grade.
-const CONFLUENCE_COLORS = { 2: '#fbbf24', 3: '#fb923c', 4: '#10b981' }
+// CONFLUENCE_COLORS / QUALITY_SHORT / NEG_COLOR are exported so PriceChart
+// can mirror the panel's styling on its chart-side annotations (CR-009).
+export const CONFLUENCE_COLORS = { 2: '#fbbf24', 3: '#fb923c', 4: '#10b981' }
 const QUALITY_DASH = { 'pin-grade': null, 'drift-grade': '6 4', waypoint: '2 4' }
-const QUALITY_SHORT = { 'pin-grade': 'PIN', 'drift-grade': 'DRIFT', waypoint: 'soft' }
+export const QUALITY_SHORT = { 'pin-grade': 'PIN', 'drift-grade': 'DRIFT', waypoint: 'soft' }
 
 const SPOT_COLOR = '#fbbf24'
-const NEG_COLOR = '#06b6d4'
+export const NEG_COLOR = '#06b6d4'
 const PAD = { top: 12, right: 14, bottom: 26, left: 46 }
 
 function fmtB(raw) {
@@ -73,9 +75,19 @@ function SpotModeSwitch({ mode, onChange }) {
   )
 }
 
-export default function GexLandscapePanel({ data, spotMode = 'LIVE', onSpotModeChange, onClose }) {
+export default function GexLandscapePanel({
+  data,
+  spotMode = 'LIVE',
+  onSpotModeChange,
+  onClose,
+  // CR-009 item 1 — the chart's visible price window, { priceTop, priceBot,
+  // paneHeight }. When present, the panel's Y-axis follows the chart's
+  // exactly. null before the chart's first sample → fall back to the full
+  // stored landscape range.
+  visiblePriceRange = null,
+}) {
   const bodyRef = useRef(null)
-  const [size, setSize] = useState({ width: PANEL_WIDTH, height: 360 })
+  const [size, setSize] = useState({ width: PANEL_WIDTH, height: 360, offsetTop: 0 })
 
   useEffect(() => {
     const el = bodyRef.current
@@ -83,7 +95,14 @@ export default function GexLandscapePanel({ data, spotMode = 'LIVE', onSpotModeC
     const ro = new ResizeObserver((entries) => {
       for (const e of entries) {
         const { width, height } = e.contentRect
-        setSize({ width: Math.max(120, width), height: Math.max(120, height) })
+        setSize({
+          width: Math.max(120, width),
+          height: Math.max(120, height),
+          // Distance from the panel root's top to the plot body — the header
+          // height. The plot SVG sits this far below the chart-stage top;
+          // CR-009 item 1's synced Y-transform subtracts it.
+          offsetTop: el.offsetTop,
+        })
       }
     })
     ro.observe(el)
@@ -120,12 +139,43 @@ export default function GexLandscapePanel({ data, spotMode = 'LIVE', onSpotModeC
     const gPad = (gMax - gMin) * 0.06 || 1
     gMin -= gPad
     gMax += gPad
-    const priceSpan = pMax - pMin || 1
     const gexSpan = gMax - gMin || 1
+
+    // CR-009 item 1 — when the chart publishes its visible price window,
+    // adopt the chart's exact affine price→pixel transform so a price X
+    // lands at the same screen pixel on the panel and the chart. The chart
+    // pane's y=0 is the chart-stage top; the panel SVG sits `offsetTop`
+    // pixels below that (the header), so subtract it. Off-range features
+    // map outside [0, size.height] and are clipped by the SVG viewport.
+    const synced =
+      visiblePriceRange &&
+      Number.isFinite(visiblePriceRange.priceTop) &&
+      Number.isFinite(visiblePriceRange.priceBot) &&
+      Number.isFinite(visiblePriceRange.paneHeight) &&
+      visiblePriceRange.priceTop !== visiblePriceRange.priceBot
+
+    let pLo
+    let pHi
+    let yOf
+    if (synced) {
+      const { priceTop, priceBot, paneHeight } = visiblePriceRange
+      pLo = Math.min(priceTop, priceBot)
+      pHi = Math.max(priceTop, priceBot)
+      const offset = size.offsetTop || 0
+      yOf = (price) =>
+        ((priceTop - price) / (priceTop - priceBot)) * paneHeight - offset
+    } else {
+      pLo = pMin
+      pHi = pMax
+      const priceSpan = pMax - pMin || 1
+      yOf = (price) => PAD.top + ((pMax - price) / priceSpan) * plotH
+    }
+
     geom = {
-      pMin,
-      pMax,
-      yOf: (price) => PAD.top + ((pMax - price) / priceSpan) * plotH,
+      pMin: pLo,
+      pMax: pHi,
+      synced,
+      yOf,
       xOf: (gexB) => PAD.left + ((gexB - gMin) / gexSpan) * plotW,
     }
   }
