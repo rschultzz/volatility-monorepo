@@ -295,15 +295,20 @@ function rangesClose(a, b, eps = 1) {
   return Math.abs(Number(a.from) - Number(b.from)) <= eps && Math.abs(Number(a.to) - Number(b.to)) <= eps
 }
 
-function pointerInfo(evt, container, leftAxisWidth = 0) {
+function pointerInfo(evt, container, leftAxisWidth = 0, rightInset = 0) {
   if (!evt || !container) return null
   const rect = container.getBoundingClientRect()
   const x = evt.clientX - rect.left
   const y = evt.clientY - rect.top
   const overTimeAxis = y > rect.height - TIME_AXIS_HEIGHT
-  const overPriceAxis = x >= rect.width - PRICE_AXIS_HIT_WIDTH
+  // rightInset accounts for the docked GEX landscape panel: when it's open
+  // the chart (and its right price scale) ends `rightInset` px short of the
+  // stage's right edge, and that trailing strip is the panel, not the chart.
+  const chartRight = rect.width - rightInset
+  const overLandscapePanel = rightInset > 0 && x >= chartRight
+  const overPriceAxis = x >= chartRight - PRICE_AXIS_HIT_WIDTH && x < chartRight
   const overLeftPriceAxis = leftAxisWidth > 0 && x >= 0 && x < leftAxisWidth
-  return { rect, x, y, overTimeAxis, overPriceAxis, overLeftPriceAxis }
+  return { rect, x, y, overTimeAxis, overPriceAxis, overLeftPriceAxis, overLandscapePanel }
 }
 
 function normalizeIntervalValue(value, fallback = '1min') {
@@ -693,6 +698,10 @@ export default function PriceChart({
   // the user's manual zoom/pan on the IV scale.
   const atmIvScaleVisibleRef = useRef(false)
   const intervalRef = useRef(interval)
+  // Mirrors the landscapeOpen prop into a ref so the wheel/mouse handlers
+  // created inside the chart-setup effect (which doesn't re-run on prop
+  // change) always see the current value. CR-009 regression A.
+  const landscapeOpenRef = useRef(landscapeOpen)
   const shiftedCandlesRef = useRef([])
   const dragRef = useRef({ active: false, lastY: 0 })
   const hasUserInteractedRef = useRef(false)
@@ -1002,6 +1011,10 @@ export default function PriceChart({
   useEffect(() => {
     intervalRef.current = interval
   }, [interval])
+
+  useEffect(() => {
+    landscapeOpenRef.current = landscapeOpen
+  }, [landscapeOpen])
 
   const shiftedCandles = useMemo(() => {
     return (Array.isArray(candles) ? candles : []).map((bar) => ({
@@ -1666,8 +1679,9 @@ export default function PriceChart({
         shiftedCandlesRef.current,
         intervalRef.current
       )
-      const info = pointerInfo(evt, stage, getLeftAxisWidth())
-      if (!info || info.overTimeAxis) {
+      const rightInset = landscapeOpenRef.current ? LANDSCAPE_PANEL_WIDTH : 0
+      const info = pointerInfo(evt, stage, getLeftAxisWidth(), rightInset)
+      if (!info || info.overTimeAxis || info.overLandscapePanel) {
         setInteractionActive(false, 180)
         return
       }
@@ -1699,8 +1713,13 @@ export default function PriceChart({
         shiftedCandlesRef.current,
         intervalRef.current
       )
-      const info = pointerInfo(evt, stage, getLeftAxisWidth())
-      if (!info || info.overTimeAxis || info.overPriceAxis) return
+      const info = pointerInfo(
+        evt,
+        stage,
+        getLeftAxisWidth(),
+        landscapeOpenRef.current ? LANDSCAPE_PANEL_WIDTH : 0,
+      )
+      if (!info || info.overTimeAxis || info.overPriceAxis || info.overLandscapePanel) return
       // Drag on the IV axis → pan IV scale only (mirrors the right-axis
       // native zoom behavior). Don't fall through to the candle-pan path.
       if (info.overLeftPriceAxis) {
