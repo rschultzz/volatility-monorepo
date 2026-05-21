@@ -51,11 +51,18 @@ Lifecycle: hold the created `IPriceLine` refs in a `useRef` array; on landscape 
 
 **Item 3 — Negative-zone bands behind candles.**
 
-For each `neg_zones[i]`, render a thin horizontal band at `neg_zones[i].price` on the price chart, behind the candles. Semi-transparent cyan (matching the panel's neg-wall tick mark color), band height ±2pt around the price.
+For each `neg_zones[i]`, render a thin horizontal band at `neg_zones[i].price` on the price chart. Semi-transparent cyan (matching the panel's neg-wall tick mark color, `#06b6d4`), band height ±2pt around the price.
 
-lightweight-charts does not natively support filled price bands, so this requires a small SVG overlay layer positioned absolutely over the chart container, with band Y-positions derived from `chart.priceScale('right').priceToCoordinate(price)`. The overlay sits between the chart canvas and any pointer-event capture, so it doesn't interfere with crosshair / tooltip / drag / scroll-wheel zoom.
+lightweight-charts does not natively support filled price bands, so this requires a small SVG overlay layer positioned absolutely over the chart container, with band Y-positions derived from the visible-range transform.
 
-Re-position on chart visible-range change (same subscription used by item 1).
+Re-position on chart visible-range change (driven by the same Item 1 `requestAnimationFrame` poll).
+
+**Amendment — pre-implementation review (Item 3 overlay):** Two reconciliations:
+
+- **Z-order: "behind the candles" is reframed as a semi-transparent tint *above* the canvas.** A sibling SVG overlay is composited above the lightweight-charts `<canvas>`; it cannot sit behind the candles in true DOM z-order because the chart canvas background (`ETH_BG_COLOR`) is opaque and would hide anything beneath it. The bands render as a low-opacity (~0.12) cyan fill on an overlay above the canvas — the candles remain fully legible *through* the tint, which reads as a highlighted price zone. `pointer-events: none` on the overlay (and its SVG children) lets crosshair / tooltip / drag / scroll-wheel zoom pass straight through to the chart canvas (AC #15).
+- **Y-positioning uses the Item 1 transform, not `priceScale.priceToCoordinate`.** `priceToCoordinate` is on `ISeriesApi`, not `IPriceScaleApi`, and would couple the overlay to the series handle. Instead the overlay consumes the same `visiblePriceRange` (`{ priceTop, priceBot, paneHeight }`) published by the Item 1 poll, mapping `y(price) = ((priceTop - price) / (priceTop - priceBot)) * paneHeight`. One source of truth for price→pixel across the panel and the overlay. Before the first poll publishes, the overlay renders nothing (bands appear within one frame).
+
+The overlay is factored into `react_price_preview/src/components/LandscapeChartOverlay.jsx` (the new file the spec flagged as acceptable).
 
 **Item 4 — Intraday subtarget annotation.**
 
@@ -101,7 +108,7 @@ No backend changes expected. No new Python files. No new endpoint params. No new
 
 **Neg-zone bands (item 3):**
 
-12. Each entry in `neg_zones` renders as a thin semi-transparent cyan horizontal band on the price chart at the entry's `price`, behind the candles.
+12. Each entry in `neg_zones` renders as a thin semi-transparent cyan horizontal band at the entry's `price` — a low-opacity tint on an overlay above the canvas that the candles remain clearly legible through.
 13. Bands re-position on chart pan/zoom such that the same `price` always maps to the same pixel-Y on the chart.
 14. Bands are removed when the panel is toggled off or when a new landscape payload arrives without that entry.
 15. Bands don't interfere with chart pointer events — crosshair, tooltip, drag, and scroll-wheel zoom all work normally over band areas.
