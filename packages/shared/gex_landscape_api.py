@@ -104,6 +104,7 @@ def build_gex_landscape_response(
     *,
     iv: Optional[float] = None,
     implied_move: Optional[float] = None,
+    accuracy: Optional[str] = "low",
 ) -> tuple[dict, int]:
     """
     Build the GET /api/gex-landscape response payload.
@@ -124,6 +125,16 @@ def build_gex_landscape_response(
     stored landscape field — the stored extracted arrays are cron diagnostics.
     """
     # ── param validation ────────────────────────────────────────────────
+    if accuracy is None:
+        accuracy_mode = "low"
+    else:
+        accuracy_mode = str(accuracy).strip().lower()
+        if accuracy_mode not in ("low", "high"):
+            return (
+                {"error": f"invalid accuracy: {accuracy!r} (allowed values: low, high)"},
+                400,
+            )
+
     if iv is not None and implied_move is not None:
         return ({"error": "iv and implied_move are mutually exclusive"}, 400)
 
@@ -249,6 +260,9 @@ def build_gex_landscape_response(
             "confluences": confluences,
             "intraday_subtarget": intraday_subtarget,
             "neg_zones": neg_zones,
+            "accuracy": accuracy_mode,
+            "recomputed_at": None,
+            "params_source": None,
         }
         return (_to_native(payload), 200)
 

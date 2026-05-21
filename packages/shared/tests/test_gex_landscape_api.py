@@ -86,6 +86,7 @@ _TOP_LEVEL_KEYS = {
     "spread_coef", "range_pts", "step_pts", "version", "computed_at",
     "landscape", "walls", "peaks_by_bucket", "regime", "per_bucket",
     "bucket_summary", "confluences", "intraday_subtarget", "neg_zones",
+    "accuracy", "recomputed_at", "params_source",
 }
 
 
