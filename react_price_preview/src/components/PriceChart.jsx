@@ -1858,10 +1858,11 @@ export default function PriceChart({
     return () => cancelAnimationFrame(rafId)
   }, [landscapeOpen])
 
-  // CR-009 item 2 — draw the landscape's confluence levels as price lines on
-  // the candlestick series, mirroring the panel's styling (color by bucket
-  // count, line style by quality grade). Lines are torn down and rebuilt
-  // whenever the landscape payload changes or the panel is toggled.
+  // CR-009 items 2 & 4 — draw the landscape's confluence levels (and the
+  // intraday subtarget) as price lines on the candlestick series, mirroring
+  // the panel's styling (color by bucket count, line style by quality
+  // grade). Lines are torn down and rebuilt whenever the landscape payload
+  // changes or the panel is toggled.
   useEffect(() => {
     const series = seriesRef.current
     if (!series) return undefined
@@ -1895,6 +1896,25 @@ export default function PriceChart({
             lineStyle: CONFLUENCE_LINE_STYLE[quality] ?? LineStyle.Dotted,
             axisLabelVisible: true,
             title: `★ × ${n} ${QUALITY_SHORT[quality] || ''}`.trim(),
+          }),
+        )
+      }
+
+      // CR-009 item 4 — the intraday subtarget: a thicker dotted line in a
+      // direction-tinted pale color, distinct from the confluence lines.
+      const subtarget = landscapeData.intraday_subtarget
+      const subPrice = Number(subtarget?.price)
+      if (Number.isFinite(subPrice)) {
+        const spot = Number(landscapeData.spot)
+        const above = Number.isFinite(spot) ? subPrice >= spot : true
+        landscapeLinesRef.current.push(
+          series.createPriceLine({
+            price: subPrice,
+            color: above ? '#86efac' : '#fca5a5',
+            lineWidth: 3,
+            lineStyle: LineStyle.Dotted,
+            axisLabelVisible: true,
+            title: `→ ${Math.round(subPrice)} ${subtarget.type || ''}`.trim(),
           }),
         )
       }
