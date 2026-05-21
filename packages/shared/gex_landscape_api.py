@@ -20,7 +20,13 @@ from it here. CR-008 also widened the stored grid to range_pts=300.
 conn is a SQLAlchemy Connection (see the spec amendment) — callbacks.py owns a
 module-level SQLAlchemy engine, not a psycopg connection.
 
-See specs/CR-008-gex-landscape-delivery-layer.md.
+CR-010 adds an accuracy=high path: instead of the stored landscape, recompute
+it from raw orats_oi_gamma strikes at request time with the caller's spot as
+the grid center — closing the stored grid's table_spot-centering limitation
+documented in CR-008's wrap-up.
+
+See specs/CR-008-gex-landscape-delivery-layer.md and
+specs/CR-010-gex-landscape-high-accuracy-path.md.
 """
 from __future__ import annotations
 
@@ -35,6 +41,7 @@ from sqlalchemy import text
 
 from packages.shared.gex_landscape import (
     _annotate_distance_class,
+    _landscape_records,
     _peaks_records,
     _walls_records,
     analyze_confluence,
@@ -42,6 +49,7 @@ from packages.shared.gex_landscape import (
     classify_per_bucket,
     classify_regime,
     compute_implied_move,
+    compute_landscape,
     find_intraday_subtarget,
     find_peaks_per_bucket,
     find_proximate_negative_zones,
@@ -62,6 +70,66 @@ _ROW_QUERY = text("""
     FROM orats_gex_landscape
     WHERE ticker = :ticker AND trade_date = :trade_date
 """)
+
+# High-accuracy path (CR-010): raw OI/gamma strikes for the request-time
+# landscape recompute. Cribs the column set + WHERE filter from _LANDSCAPE_QUERY
+# in gex_landscape.py (the cron's psycopg query) but is a SQLAlchemy text()
+# query — build_gex_landscape_response receives a SQLAlchemy Connection, not a
+# psycopg one. stock_price is selected so the high path can derive table_spot
+# the same way compute_and_upsert_landscape does. See the spec amendment in
+# specs/CR-010-gex-landscape-high-accuracy-path.md.
+_STRIKES_QUERY = text("""
+    SELECT discounted_level, dte, gex_call, gex_put, stock_price
+    FROM orats_oi_gamma
+    WHERE ticker = :ticker
+      AND trade_date = :trade_date
+      AND expir_date >= :trade_date
+      AND discounted_level IS NOT NULL
+    ORDER BY expir_date, discounted_level
+""")
+
+# Lean params lookup for the high-accuracy path — just the compute_landscape
+# parameters plus stored-row metadata. Avoids pulling the large landscape JSONB.
+_PARAMS_QUERY = text("""
+    SELECT spread_coef, range_pts, step_pts, version, computed_at
+    FROM orats_gex_landscape
+    WHERE ticker = :ticker AND trade_date = :trade_date
+""")
+
+
+def _fetch_oi_gamma_strikes(conn, ticker: str, trade_date: dt.date) -> pd.DataFrame:
+    """Fetch raw OI/gamma strikes for the high-accuracy recompute path.
+
+    Returns a DataFrame with the columns compute_landscape consumes
+    (discounted_level, dte, gex_call, gex_put) plus stock_price. Empty
+    DataFrame when no strikes exist for (ticker, trade_date).
+    """
+    rows = conn.execute(
+        _STRIKES_QUERY, {"ticker": ticker, "trade_date": trade_date}
+    ).mappings().all()
+    return pd.DataFrame([dict(r) for r in rows])
+
+
+def _fetch_landscape_params(conn, ticker: str, trade_date: dt.date) -> Optional[dict]:
+    """Fetch the stored compute_landscape parameters for (ticker, trade_date).
+
+    Returns None when no orats_gex_landscape row exists — the high-accuracy
+    path falls back to documented defaults in that case.
+    """
+    row = conn.execute(
+        _PARAMS_QUERY, {"ticker": ticker, "trade_date": trade_date}
+    ).mappings().first()
+    if row is None:
+        return None
+    return {
+        "spread_coef": float(row["spread_coef"]),
+        "range_pts": float(row["range_pts"]),
+        "step_pts": float(row["step_pts"]),
+        "version": row["version"],
+        "computed_at": (
+            row["computed_at"].isoformat() if row["computed_at"] else None
+        ),
+    }
 
 
 def _coerce_date(value) -> dt.date:
@@ -111,9 +179,9 @@ def build_gex_landscape_response(
 
     Returns (payload, http_status):
       200 — success
-      400 — bad params (missing/non-numeric spot, malformed date, iv and
-            implied_move both supplied, negative iv/implied_move)
-      404 — no orats_gex_landscape row for (ticker, trade_date)
+      400 — bad params (invalid accuracy, missing/non-numeric spot, malformed
+            date, iv and implied_move both supplied, negative iv/implied_move)
+      404 — landscape data missing for (ticker, trade_date)
       500 — unexpected error
 
     conn is a SQLAlchemy Connection. iv and implied_move are mutually
@@ -121,8 +189,17 @@ def build_gex_landscape_response(
     via compute_implied_move. If neither is given, distance classifications
     come back class="unknown" and intraday_subtarget / neg_zones are omitted.
 
-    walls and peaks_by_bucket in the response are recomputed fresh from the
-    stored landscape field — the stored extracted arrays are cron diagnostics.
+    accuracy selects the landscape data source (CR-010):
+      "low" (default) — read the stored orats_gex_landscape row. 404 if the
+            row is missing.
+      "high" — recompute the landscape from raw orats_oi_gamma strikes at
+            request time, with the caller's spot as the grid center. 404 if no
+            strikes exist for (ticker, trade_date). Compute params come from
+            the stored orats_gex_landscape row.
+    Invalid accuracy values → 400.
+
+    walls and peaks_by_bucket in the response are always recomputed from the
+    landscape field — the stored extracted arrays are cron diagnostics.
     """
     # ── param validation ────────────────────────────────────────────────
     if accuracy is None:
@@ -169,30 +246,87 @@ def build_gex_landscape_response(
     else:
         move = 0.0
 
-    # ── read the stored row + run the analytical chain ──────────────────
+    # ── resolve the landscape: stored fast path vs high-accuracy recompute ─
     try:
-        row = conn.execute(
-            _ROW_QUERY, {"ticker": ticker, "trade_date": td}
-        ).mappings().first()
+        if accuracy_mode == "high":
+            # High-accuracy path (CR-010): recompute the landscape from raw
+            # orats_oi_gamma strikes with the caller's spot as the grid center.
+            strikes = _fetch_oi_gamma_strikes(conn, ticker, td)
+            if strikes.empty:
+                return (
+                    {"error": f"no orats_oi_gamma strikes for "
+                              f"({ticker}, {td.isoformat()})"},
+                    404,
+                )
 
-        if row is None:
-            return (
-                {"error": f"no gex_landscape row for ({ticker}, {td.isoformat()})"},
-                404,
+            # table_spot / prior_spot come from the strikes' stock_price — the
+            # same EOD reference compute_and_upsert_landscape records.
+            raw_spot = strikes["stock_price"].iloc[0]
+            table_spot = (
+                float(raw_spot)
+                if raw_spot is not None and not pd.isna(raw_spot)
+                else None
             )
 
-        landscape_records = row["landscape"]
-        if not landscape_records:
-            return ({"error": "stored landscape row has no landscape data"}, 500)
+            # Compute params come from the stored row so the recompute is
+            # parameter-compatible with the stored landscape.
+            params = _fetch_landscape_params(conn, ticker, td)
+            if params is None:
+                # Defaults fallback lands in the next commit; for now a missing
+                # stored row is a 404 on the high path too.
+                return (
+                    {"error": f"no gex_landscape row for "
+                              f"({ticker}, {td.isoformat()})"},
+                    404,
+                )
+            spread_coef = params["spread_coef"]
+            range_pts = params["range_pts"]
+            step_pts = params["step_pts"]
+            version = params["version"]
+            computed_at = params["computed_at"]
+            params_source = "stored"
 
-        landscape = pd.DataFrame(landscape_records)
+            landscape = compute_landscape(
+                strikes, spot_f,
+                range_pts=range_pts, step_pts=step_pts, spread_coef=spread_coef,
+            )
+            landscape_records = _landscape_records(landscape)
+            recomputed_at = dt.datetime.now(dt.timezone.utc).isoformat()
+        else:
+            # Low-accuracy path (CR-008): read the stored landscape row.
+            row = conn.execute(
+                _ROW_QUERY, {"ticker": ticker, "trade_date": td}
+            ).mappings().first()
 
-        table_spot = (
-            float(row["table_spot"]) if row["table_spot"] is not None else None
-        )
+            if row is None:
+                return (
+                    {"error": f"no gex_landscape row for "
+                              f"({ticker}, {td.isoformat()})"},
+                    404,
+                )
 
-        # Recompute walls + per-bucket peaks fresh from the stored landscape
-        # field (NOT the stored extracted arrays — see the module docstring).
+            landscape_records = row["landscape"]
+            if not landscape_records:
+                return ({"error": "stored landscape row has no landscape data"}, 500)
+
+            landscape = pd.DataFrame(landscape_records)
+            table_spot = (
+                float(row["table_spot"]) if row["table_spot"] is not None else None
+            )
+            spread_coef = float(row["spread_coef"])
+            range_pts = float(row["range_pts"])
+            step_pts = float(row["step_pts"])
+            version = row["version"]
+            computed_at = (
+                row["computed_at"].isoformat() if row["computed_at"] else None
+            )
+            recomputed_at = None
+            params_source = None
+
+        # ── spot-dependent classifier chain (shared by both paths) ─────────
+        # Walls + per-bucket peaks are recomputed from the landscape field —
+        # the stored grid on the low path, the request-time recompute on the
+        # high path. The stored extracted arrays are cron diagnostics only.
         walls = find_walls(landscape)
         peaks_by_bucket = find_peaks_per_bucket(landscape)
 
@@ -244,14 +378,12 @@ def build_gex_landscape_response(
             "iv": iv_f,
             "implied_move": move if move > 0 else None,
             "table_spot": table_spot,
-            "spread_coef": float(row["spread_coef"]),
-            "range_pts": float(row["range_pts"]),
-            "step_pts": float(row["step_pts"]),
-            "version": row["version"],
-            "computed_at": (
-                row["computed_at"].isoformat() if row["computed_at"] else None
-            ),
-            "landscape": landscape_records,            # stored, passed through
+            "spread_coef": spread_coef,
+            "range_pts": range_pts,
+            "step_pts": step_pts,
+            "version": version,
+            "computed_at": computed_at,
+            "landscape": landscape_records,
             "walls": _walls_records(walls),            # recomputed
             "peaks_by_bucket": _peaks_records(peaks_by_bucket),  # recomputed
             "regime": regime,
@@ -261,8 +393,8 @@ def build_gex_landscape_response(
             "intraday_subtarget": intraday_subtarget,
             "neg_zones": neg_zones,
             "accuracy": accuracy_mode,
-            "recomputed_at": None,
-            "params_source": None,
+            "recomputed_at": recomputed_at,
+            "params_source": params_source,
         }
         return (_to_native(payload), 200)
 
