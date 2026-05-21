@@ -73,9 +73,19 @@ function SpotModeSwitch({ mode, onChange }) {
   )
 }
 
-export default function GexLandscapePanel({ data, spotMode = 'LIVE', onSpotModeChange, onClose }) {
+export default function GexLandscapePanel({
+  data,
+  spotMode = 'LIVE',
+  onSpotModeChange,
+  onClose,
+  // CR-009 item 1 — the chart's visible price window, { priceTop, priceBot,
+  // paneHeight }. When present, the panel's Y-axis follows the chart's
+  // exactly. null before the chart's first sample → fall back to the full
+  // stored landscape range.
+  visiblePriceRange = null,
+}) {
   const bodyRef = useRef(null)
-  const [size, setSize] = useState({ width: PANEL_WIDTH, height: 360 })
+  const [size, setSize] = useState({ width: PANEL_WIDTH, height: 360, offsetTop: 0 })
 
   useEffect(() => {
     const el = bodyRef.current
@@ -83,7 +93,14 @@ export default function GexLandscapePanel({ data, spotMode = 'LIVE', onSpotModeC
     const ro = new ResizeObserver((entries) => {
       for (const e of entries) {
         const { width, height } = e.contentRect
-        setSize({ width: Math.max(120, width), height: Math.max(120, height) })
+        setSize({
+          width: Math.max(120, width),
+          height: Math.max(120, height),
+          // Distance from the panel root's top to the plot body — the header
+          // height. The plot SVG sits this far below the chart-stage top;
+          // CR-009 item 1's synced Y-transform subtracts it.
+          offsetTop: el.offsetTop,
+        })
       }
     })
     ro.observe(el)
@@ -120,12 +137,43 @@ export default function GexLandscapePanel({ data, spotMode = 'LIVE', onSpotModeC
     const gPad = (gMax - gMin) * 0.06 || 1
     gMin -= gPad
     gMax += gPad
-    const priceSpan = pMax - pMin || 1
     const gexSpan = gMax - gMin || 1
+
+    // CR-009 item 1 — when the chart publishes its visible price window,
+    // adopt the chart's exact affine price→pixel transform so a price X
+    // lands at the same screen pixel on the panel and the chart. The chart
+    // pane's y=0 is the chart-stage top; the panel SVG sits `offsetTop`
+    // pixels below that (the header), so subtract it. Off-range features
+    // map outside [0, size.height] and are clipped by the SVG viewport.
+    const synced =
+      visiblePriceRange &&
+      Number.isFinite(visiblePriceRange.priceTop) &&
+      Number.isFinite(visiblePriceRange.priceBot) &&
+      Number.isFinite(visiblePriceRange.paneHeight) &&
+      visiblePriceRange.priceTop !== visiblePriceRange.priceBot
+
+    let pLo
+    let pHi
+    let yOf
+    if (synced) {
+      const { priceTop, priceBot, paneHeight } = visiblePriceRange
+      pLo = Math.min(priceTop, priceBot)
+      pHi = Math.max(priceTop, priceBot)
+      const offset = size.offsetTop || 0
+      yOf = (price) =>
+        ((priceTop - price) / (priceTop - priceBot)) * paneHeight - offset
+    } else {
+      pLo = pMin
+      pHi = pMax
+      const priceSpan = pMax - pMin || 1
+      yOf = (price) => PAD.top + ((pMax - price) / priceSpan) * plotH
+    }
+
     geom = {
-      pMin,
-      pMax,
-      yOf: (price) => PAD.top + ((pMax - price) / priceSpan) * plotH,
+      pMin: pLo,
+      pMax: pHi,
+      synced,
+      yOf,
       xOf: (gexB) => PAD.left + ((gexB - gMin) / gexSpan) * plotW,
     }
   }

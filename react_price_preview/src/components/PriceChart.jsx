@@ -896,6 +896,12 @@ export default function PriceChart({
   const [annotationState, setAnnotationState] = useState(null)
   const annotationStateRef = useRef(null)
 
+  // CR-009 item 1 — the chart's currently-visible price window, sampled from
+  // the candlestick series and handed to GexLandscapePanel so its Y-axis
+  // tracks the chart's. Shape: { priceTop, priceBot, paneHeight }, or null
+  // before the first sample (panel falls back to its full stored range).
+  const [visiblePriceRange, setVisiblePriceRange] = useState(null)
+
   // Poll annotation state every 1.5s
   useEffect(() => {
     let cancelled = false
@@ -1792,6 +1798,49 @@ export default function PriceChart({
     }
   }, [onVisibleLogicalRangeChange, onInteractionActiveChange])
 
+  // CR-009 item 1 — publish the chart's visible price window to the landscape
+  // panel. lightweight-charts has no price-scale visible-range event (only the
+  // time scale fires range events, and not on vertical price-scale drag), so
+  // we poll the candlestick series each animation frame while the panel is
+  // open. coordinateToPrice(0) / coordinateToPrice(paneHeight) give the prices
+  // at the top and bottom pixels of the price pane; the panel rebuilds the
+  // chart's exact affine transform from those three numbers.
+  useEffect(() => {
+    if (!landscapeOpen) {
+      setVisiblePriceRange(null)
+      return undefined
+    }
+    let rafId = 0
+    let last = null
+    const sample = () => {
+      const series = seriesRef.current
+      const stage = stageRef.current
+      if (series && stage) {
+        const paneHeight = getPlotHeight(stage)
+        const priceTop = series.coordinateToPrice(0)
+        const priceBot = series.coordinateToPrice(paneHeight)
+        if (
+          Number.isFinite(priceTop) &&
+          Number.isFinite(priceBot) &&
+          priceTop !== priceBot
+        ) {
+          if (
+            !last ||
+            last.priceTop !== priceTop ||
+            last.priceBot !== priceBot ||
+            last.paneHeight !== paneHeight
+          ) {
+            last = { priceTop, priceBot, paneHeight }
+            setVisiblePriceRange(last)
+          }
+        }
+      }
+      rafId = requestAnimationFrame(sample)
+    }
+    rafId = requestAnimationFrame(sample)
+    return () => cancelAnimationFrame(rafId)
+  }, [landscapeOpen])
+
   useEffect(() => {
     function handleParentMessage(event) {
       const data = event && event.data
@@ -2623,6 +2672,7 @@ export default function PriceChart({
               spotMode={landscapeSpotMode}
               onSpotModeChange={onLandscapeSpotModeChange}
               onClose={onToggleLandscape || undefined}
+              visiblePriceRange={visiblePriceRange}
             />
           )}
 
