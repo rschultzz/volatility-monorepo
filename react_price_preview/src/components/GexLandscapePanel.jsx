@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-const PANEL_WIDTH = 300
+export const PANEL_WIDTH = 300
 
 // DTE buckets — landscape column -> label + curve color (matches the Phase 0
 // script's DTE_BUCKETS / plot_stacked palette).

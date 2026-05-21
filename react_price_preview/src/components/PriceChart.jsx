@@ -11,7 +11,7 @@ import SignalPanel from './SignalPanel'
 import ChartToggleBar from './ChartToggleBar'
 import TradeAnnotationPanel from './TradeAnnotationPanel'
 import CondorPricingPanel from './CondorPricingPanel'
-import GexLandscapePanel from './GexLandscapePanel'
+import GexLandscapePanel, { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from './GexLandscapePanel'
 
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
@@ -1516,6 +1516,10 @@ export default function PriceChart({
 
     if (resizeObserver) {
       resizeObserver.observe(stage)
+      // Also observe the chart host directly: when the LANDSCAPE panel opens
+      // it shrinks the host's width (so the right price scale clears the
+      // panel), and that width change doesn't resize the stage.
+      resizeObserver.observe(container)
     }
 
     const handleClick = (param) => {
@@ -3905,7 +3909,14 @@ export default function PriceChart({
             </div>
           )}
 
-          <div ref={hostRef} className="chart-host" style={{ width: '100%', height: '100%' }} />
+          <div
+            ref={hostRef}
+            className="chart-host"
+            style={{
+              width: landscapeOpen ? `calc(100% - ${LANDSCAPE_PANEL_WIDTH}px)` : '100%',
+              height: '100%',
+            }}
+          />
         </div>
       </div>
     </div>
