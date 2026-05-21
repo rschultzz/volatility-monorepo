@@ -2937,10 +2937,15 @@ def register_ironbeam_callbacks(app):
                 iv_arg = iv_raw if (iv_raw is not None and iv_raw != "") else None
                 move_arg = move_raw if (move_raw is not None and move_raw != "") else None
 
+                # accuracy is optional; pass through as-is so the builder owns
+                # validation (case-insensitive low/high, 400 on anything else).
+                accuracy_arg = request.args.get("accuracy")
+
                 with engine.connect() as conn:
                     payload, status = build_gex_landscape_response(
                         conn, ticker, date_str, spot_raw,
                         iv=iv_arg, implied_move=move_arg,
+                        accuracy=accuracy_arg,
                     )
 
                 resp = jsonify(payload)
