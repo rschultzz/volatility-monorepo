@@ -41,9 +41,11 @@ When `visiblePriceRange` is undefined (first render before the subscription has 
 
 For each confluence in `gexLandscapeData.confluences`, draw a horizontal line on the chart's main candlestick series using lightweight-charts' `ISeriesApi.createPriceLine`. Styling mirrors the panel:
 
-- Quality → line style: `pin` solid, `drift` dashed, `soft` dotted
-- `n_buckets` → color: 2 = yellow, 3 = orange, 4 = green
-- `title` includes star count + quality tag (e.g. `★ × 2 PIN`) so the chart's right-edge price ruler shows the label
+- Quality → line style: `pin-grade` → `LineStyle.Solid`, `drift-grade` → `LineStyle.Dashed`, `waypoint` → `LineStyle.Dotted`
+- `n_buckets` → color: 2 = yellow (`#fbbf24`), 3 = orange (`#fb923c`), 4 = green (`#10b981`)
+- `title` includes star count + quality short-tag (e.g. `★ × 2 PIN`) so the chart's right-edge price ruler shows the label; short-tags are `PIN` / `DRIFT` / `soft`
+
+**Amendment — pre-implementation review (Item 2 quality values):** The endpoint's confluence `quality` field is set by `classify_confluence_quality` in `packages/shared/gex_landscape.py`, which emits exactly `"pin-grade"`, `"drift-grade"`, and `"waypoint"` — not the `pin` / `drift` / `soft` strings the spec draft used. `GexLandscapePanel.jsx` already keys its `QUALITY_DASH` / `QUALITY_SHORT` maps off those real values. The bullets above are corrected to the real strings; mismapped keys would otherwise fall through to the default style on every confluence. Confluence price comes from the `center_price` field (not `price`).
 
 Lifecycle: hold the created `IPriceLine` refs in a `useRef` array; on landscape data refresh (LIVE-mode debounced spot delta, date change, or panel toggle off→on), remove the existing lines via `series.removePriceLine(ref)` and recreate from the new payload.
 
@@ -92,7 +94,7 @@ No backend changes expected. No new Python files. No new endpoint params. No new
 
 **Confluence lines extended (item 2):**
 
-8. Each entry in `confluences` renders as a horizontal price line on the price chart, with line style by quality (pin solid / drift dashed / soft dotted) and color by `n_buckets` (2 = yellow / 3 = orange / 4 = green).
+8. Each entry in `confluences` renders as a horizontal price line on the price chart at its `center_price`, with line style by quality (`pin-grade` solid / `drift-grade` dashed / `waypoint` dotted) and color by `n_buckets` (2 = yellow / 3 = orange / 4 = green).
 9. Confluence labels (`★ × N <quality>`) appear on the chart's right-edge price ruler (the same scale restored in item 0).
 10. Lines are removed and recreated on landscape data refresh (LIVE-mode spot delta, date change, panel toggle off→on).
 11. When the LANDSCAPE pill is off, no confluence price lines are present on the chart.
