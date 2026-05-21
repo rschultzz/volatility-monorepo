@@ -87,6 +87,13 @@ No frontend changes. `react_price_preview` is untouched.
 
 13. `accuracy=high` for a typical day's strike count returns in under 2 seconds against the production DB. If recompute consistently exceeds 2s on the 5/20 reference, raise it as a defect in the spec amendment cycle rather than shipping.
 
+**Amendment — implementation review (`range_pts` grid semantics):** `compute_landscape` builds its price grid as `np.arange(center - range_pts, center + range_pts + step_pts, step_pts)` — the grid spans the **full ±`range_pts`** around the center (width `2 × range_pts`, `2 × range_pts / step_pts + 1` points), not `±range_pts/2`. Confirmed against `packages/shared/gex_landscape.py` and consistent with CR-008's "401 → 601 grid points" note for `range_pts` 200 → 300. Corrections:
+
+- **AC #7** — the recomputed grid covers `[spot - range_pts, spot + range_pts]`, i.e. `[7092, 7692]` for `spot=7392, range_pts=300` (601 points), not `[7242, 7542]`.
+- **Verification → Manual smoke** — the high-accuracy grid for `spot=7392` is `[7092, 7692]`, not `[7242, 7542]`.
+- **Problem section** — the window figures (`[7257.625, 7457.625]` at `range_pts=200`; `[7207.625, 7507.625]` and `[7242, 7542]` at `range_pts=300`) use the same half-width convention and are superseded by the `±range_pts` reading: the `range_pts=200` stored grid is `table_spot ± 200`, the `range_pts=300` stored grid is `table_spot ± 300` (→ upper edge `7657.6`, matching CR-008's amendment).
+- **AC #6 / #8 outcomes are unchanged and verified.** The high-accuracy path still surfaces the 30+ DTE `~7520` bucket peak that the low path misses. The operative mechanism is the one CR-008's amendment documented: the 30+ DTE bucket is a broad plateau, and `scipy.signal.find_peaks` needs enough upper headroom past the peak for the plateau to drop and register prominence. The spot-centered high-accuracy grid extends to `spot + range_pts = 7692`, versus the stored `table_spot`-centered grid's `7657.6` — the extra headroom is what lets the plateau peak surface.
+
 ### Verification
 
 **Automated:**
