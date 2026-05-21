@@ -31,6 +31,12 @@ When `visiblePriceRange` is undefined (first render before the subscription has 
 
 **Rendering invariant to assert in AC:** a horizontal line at price X is drawn at the same vertical pixel position on both the price chart and the panel, when X is within the chart's visible Y-range. Outside that range, the panel clips (structural features above/below the visible window aren't shown; the user can pan/zoom the chart to bring them into view).
 
+**Amendment — pre-implementation review (Item 1 mechanism):** Verified against lightweight-charts 5.1.0 (`react_price_preview/node_modules/lightweight-charts/dist/typings.d.ts`). Three reconciliations:
+
+- **No price-scale visible-range subscription exists.** `IPriceScaleApi` exposes `getVisibleRange()` / `setVisibleRange()` (synchronous) but no `subscribeVisibleRangeChange`. The only range-change events — `subscribeVisibleLogicalRangeChange` / `subscribeVisibleTimeRangeChange` — live on the *time* scale and fire on horizontal interaction only; they do not fire on the vertical price-scale pan/zoom this chart implements via custom handlers (`panPriceByPixels` / `zoomPriceAtY` in `PriceChart.jsx`). Replace "`PriceChart.jsx` subscribes to its own right `priceScale` for visible-range changes" with: **`PriceChart` runs a `requestAnimationFrame` polling loop** (active only while the LANDSCAPE pill is on) that samples the candlestick series' `coordinateToPrice()` each frame and publishes when the value changes.
+- **`visiblePriceRange` is an object, not a `[min, max]` tuple.** To make AC #2 / #5 pixel-alignment achievable (handoff checklist point 3), the panel must reproduce the chart pane's *exact* affine price→pixel transform, not merely clamp to a price span. `PriceChart` publishes `{ priceTop, priceBot, paneHeight }` — the prices at pixel `y = 0` and `y = paneHeight` of the price pane, plus the pane height. The panel maps `yOf(price) = ((priceTop - price) / (priceTop - priceBot)) * paneHeight`. Because the default lightweight-charts price scale is linear, two sampled points reproduce the chart's transform exactly; the panel SVG and the chart pane share the `.chart-stage` `top: 0` origin, so the pixel-Y matches. The panel's existing `PAD.top` / `PAD.bottom` Y-insets are bypassed in synced mode (they remain for the undefined-prop fallback).
+- **State stays in `PriceChart`, no `App.jsx` round-trip.** `PriceChart` already renders `<GexLandscapePanel>` directly — it is the common parent of both the chart and the panel. `visiblePriceRange` is therefore `PriceChart`-local `useState`, passed straight to `<GexLandscapePanel visiblePriceRange={...}>`. The spec's original "lift into `App.jsx` state" predates confirming the component tree; no `App.jsx` change is needed for Item 1.
+
 **Item 2 — Confluence lines across the price chart.**
 
 For each confluence in `gexLandscapeData.confluences`, draw a horizontal line on the chart's main candlestick series using lightweight-charts' `ISeriesApi.createPriceLine`. Styling mirrors the panel:
@@ -61,9 +67,9 @@ When `intraday_subtarget` is null or absent, no annotation renders. Same lifecyc
 
 ### Affected Files
 
-- `react_price_preview/src/components/PriceChart.jsx` — ensure lightweight-charts right `priceScale.visible = true` (item 0); subscribe to right-priceScale visible-range change (item 1); lift range to App; host `createPriceLine` calls for confluence lines (item 2) + subtarget annotation (item 4); mount SVG overlay for neg-zone bands (item 3).
+- `react_price_preview/src/components/PriceChart.jsx` — restore the right price scale by shrinking the `.chart-host` width when the panel is open, so the scale renders left of the panel (item 0); run the `requestAnimationFrame` poll that publishes `visiblePriceRange` and hold it as local state (item 1); host `createPriceLine` calls for confluence lines (item 2) + subtarget annotation (item 4); mount the SVG overlay for neg-zone bands (item 3); pass `visiblePriceRange` to `<GexLandscapePanel>`.
 - `react_price_preview/src/components/GexLandscapePanel.jsx` — accept `visiblePriceRange` prop; consume for Y-bounds with fallback to full landscape range when prop is undefined.
-- `react_price_preview/src/App.jsx` (or whichever container holds chart + panel) — layout fix so the panel sits to the right of the chart's full extent including the price scale (item 0); `visiblePriceRange` state piping between `PriceChart` (publisher) and `GexLandscapePanel` (consumer) (item 1); pass `gexLandscapeData` to `PriceChart` so it can drive the chart-side annotations.
+- `react_price_preview/src/App.jsx` — **no change required.** `landscapeData` is already passed to `PriceChart`; the Item 1 amendment keeps `visiblePriceRange` state inside `PriceChart` (the common parent of the chart and the panel), so no App-level piping is needed. The item-0 layout fix lives in `PriceChart.jsx`, which owns the `.chart-host` container and renders the panel.
 
 A new `react_price_preview/src/components/LandscapeChartOverlay.jsx` factoring out the SVG overlay layer (and optionally hosting `createPriceLine` orchestration) is acceptable if the pre-implementation review prefers it for separation of concerns. Not required.
 
@@ -82,7 +88,7 @@ No backend changes expected. No new Python files. No new endpoint params. No new
 4. When the LANDSCAPE pill is on, panning or zooming the price chart causes the panel's curves, spot line, confluence lines, and negative-wall ticks to re-render against the chart's new visible Y-range.
 5. The spot dashed line sits at the same vertical pixel position on both the price chart and the panel. The same invariant holds for any confluence price drawn on both sides, when the price is within the chart's visible Y-range.
 6. Structural features (peaks, confluences, neg walls) outside the chart's visible Y-range are clipped on the panel without visual artifacts at the panel edges.
-7. Before the chart's visible-range subscription has fired (initial mount, pre-interaction), the panel renders against the full stored landscape range as a sensible default. Once the subscription fires, the panel re-renders against the chart's range.
+7. Before the chart's visible-range polling loop has published its first value (initial mount, pre-interaction), the panel renders against the full stored landscape range as a sensible default. Once the loop publishes, the panel re-renders against the chart's range.
 
 **Confluence lines extended (item 2):**
 
