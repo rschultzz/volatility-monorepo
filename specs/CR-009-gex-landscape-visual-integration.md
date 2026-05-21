@@ -123,6 +123,11 @@ No backend changes expected. No new Python files. No new endpoint params. No new
 
 19. All chart annotations (confluence lines, neg bands, subtarget) appear when the LANDSCAPE pill is on and disappear cleanly when it's off — no orphan refs, no lingering DOM, no console warnings.
 
+**Post-smoke regression fixes (PR #9):**
+
+20. Scroll-wheel over the chart's right-edge price scale zooms the Y-axis; scroll-wheel over the candle area zooms the X-axis (both behaviors verified with in-browser smoke).
+21. `PriceChart` and `AggressorFlowPanel` share a common time-axis range — a timestamp at horizontal position X on the price chart corresponds to the same timestamp at horizontal position X on the flow panel.
+
 ### Verification
 
 **Automated:**
@@ -154,6 +159,16 @@ Explicitly deferred to Phase 2:
 - Containment zone bands spanning both panels
 - Live intraday landscape recomputation from `orats_oi_gamma` at request time (Phase 1 is still EOD-only for the landscape field itself; only spot-dependent classifications update intraday)
 - `accuracy=high` endpoint query param for grid-recentering on analytical spot — would enable bucket-level 30+ DTE peak detection through the endpoint; documented limitation from CR-008
+
+### Post-smoke regressions (PR #9)
+
+Pre-merge smoke on PR #9 surfaced two regressions, both rooted in Item 0's `.chart-host` layout change: when the LANDSCAPE pill is on, the host shrinks by the panel width (300px) so the right price scale clears the panel — but two downstream consumers still assumed the chart spanned the full container width. Fixed under AC #20 and AC #21; one fix commit per regression.
+
+**Regression A — Y-axis scroll-zoom over the price scale broken.** `PriceChart`'s custom capture-phase wheel handler routes a wheel event to Y-axis zoom (`zoomPriceAtY`) only when the cursor is over the price scale, detected by `pointerInfo` as `x >= stageWidth - PRICE_AXIS_HIT_WIDTH`. With the panel open the price scale moved 300px left, but the hit region stayed anchored to the stage's right edge — now inside the panel. Wheels over the relocated price scale fell through to the candle-area branch and zoomed the X-axis. **Fix:** `pointerInfo` takes a `rightInset` (the panel width when the LANDSCAPE pill is on, 0 otherwise); the price-axis hit region becomes `[chartRight - PRICE_AXIS_HIT_WIDTH, chartRight]` where `chartRight = stageWidth - rightInset`. The handler reads live panel state through a ref so the closure created inside the chart-setup effect doesn't go stale. A wheel/mousedown over the docked panel itself is now classified `overLandscapePanel` and ignored by the chart handlers.
+
+**Regression B — `AggressorFlowPanel` time-axis misaligned with `PriceChart`.** The two panels share an X-axis via a common logical range (`sharedLogicalRange`). Pixel alignment requires their candle areas to be equal width. Item 0 shrank the price chart's host by 300px but the flow panel still spanned the full container, so the same logical range mapped to different pixels. **Fix:** shrink `.react-bottom-pane` by the panel width when the LANDSCAPE pill is on — symmetric with Item 0 — so both candle areas shrink by the identical 300px and stay equal. The flow chart's existing `ResizeObserver` on `.flow-stage` picks up the width change and resizes.
+
+Neither fix alters the Item 1–4 behaviors (confluence lines, neg-zone tint, subtarget annotation, panel Y-axis sync); AC #1–19 are re-checked to confirm no regression.
 
 ### Handoff prompt (implementation phase)
 
