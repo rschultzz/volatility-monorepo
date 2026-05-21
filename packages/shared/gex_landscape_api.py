@@ -96,6 +96,12 @@ _PARAMS_QUERY = text("""
     WHERE ticker = :ticker AND trade_date = :trade_date
 """)
 
+# Documented defaults for the high-accuracy path when no orats_gex_landscape row
+# exists — match the cron config (job_orats_eod.py passes range_pts=300.0).
+_DEFAULT_RANGE_PTS = 300.0
+_DEFAULT_STEP_PTS = 1.0
+_DEFAULT_SPREAD_COEF = 8.0
+
 
 def _fetch_oi_gamma_strikes(conn, ticker: str, trade_date: dt.date) -> pd.DataFrame:
     """Fetch raw OI/gamma strikes for the high-accuracy recompute path.
@@ -195,7 +201,8 @@ def build_gex_landscape_response(
       "high" — recompute the landscape from raw orats_oi_gamma strikes at
             request time, with the caller's spot as the grid center. 404 if no
             strikes exist for (ticker, trade_date). Compute params come from
-            the stored orats_gex_landscape row.
+            the stored orats_gex_landscape row when present, else documented
+            defaults — params_source distinguishes the two.
     Invalid accuracy values → 400.
 
     walls and peaks_by_bucket in the response are always recomputed from the
@@ -269,22 +276,24 @@ def build_gex_landscape_response(
             )
 
             # Compute params come from the stored row so the recompute is
-            # parameter-compatible with the stored landscape.
+            # parameter-compatible with the stored landscape. If no stored row
+            # exists, fall back to documented defaults — accuracy=high is the
+            # way to get a landscape when the stored row is missing.
             params = _fetch_landscape_params(conn, ticker, td)
-            if params is None:
-                # Defaults fallback lands in the next commit; for now a missing
-                # stored row is a 404 on the high path too.
-                return (
-                    {"error": f"no gex_landscape row for "
-                              f"({ticker}, {td.isoformat()})"},
-                    404,
-                )
-            spread_coef = params["spread_coef"]
-            range_pts = params["range_pts"]
-            step_pts = params["step_pts"]
-            version = params["version"]
-            computed_at = params["computed_at"]
-            params_source = "stored"
+            if params is not None:
+                spread_coef = params["spread_coef"]
+                range_pts = params["range_pts"]
+                step_pts = params["step_pts"]
+                version = params["version"]
+                computed_at = params["computed_at"]
+                params_source = "stored"
+            else:
+                spread_coef = _DEFAULT_SPREAD_COEF
+                range_pts = _DEFAULT_RANGE_PTS
+                step_pts = _DEFAULT_STEP_PTS
+                version = None
+                computed_at = None
+                params_source = "defaults"
 
             landscape = compute_landscape(
                 strikes, spot_f,
