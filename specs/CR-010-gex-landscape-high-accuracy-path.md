@@ -44,6 +44,12 @@ Param validation: `accuracy` accepts only `low` and `high` (case-insensitive). U
 - `accuracy=low`: 404 if `orats_gex_landscape` row missing (existing CR-008 behavior).
 - `accuracy=high`: 404 if `orats_oi_gamma` has no rows for the requested `(ticker, trade_date)`. Missing `orats_gex_landscape` row is *not* a 404 on the high-accuracy path — params fall back to defaults.
 
+**Amendment — pre-implementation review (high-accuracy strike fetch + field provenance):** The *Affected Files* line below says `job_orats_eod.py` is "cribbed for the query pattern." Two corrections from reading the code:
+
+- `job_orats_eod.py` does not query `orats_oi_gamma` for the landscape directly — it delegates to `compute_and_upsert_landscape`, and the actual SELECT (`_LANDSCAPE_QUERY` in `packages/shared/gex_landscape.py`) is **psycopg-style** (`%s` placeholders, `conn.cursor()`). `build_gex_landscape_response` receives a **SQLAlchemy `Connection`** (CR-008 amendment `7ee3b3a`), so that query cannot be cribbed verbatim. The high-accuracy strike fetch is therefore a SQLAlchemy `text()` query local to `gex_landscape_api.py`, mirroring the existing `_ROW_QUERY` pattern (named bind params, `conn.execute(...).mappings()`). It cribs only the **column set and WHERE filter** from `_LANDSCAPE_QUERY`: `ticker = :ticker AND trade_date = :trade_date AND expir_date >= :trade_date AND discounted_level IS NOT NULL`. Same filter the stored landscape was computed under, so the recompute is data-consistent.
+
+- The strike-fetch query also selects `stock_price`. On the high-accuracy path the response's `table_spot` field — and the `prior_spot` argument threaded into the classifier chain for broken-magnet detection — are derived from the first fetched strike row's `stock_price`, exactly as `compute_and_upsert_landscape` derives `table_spot`. This makes the high path's `table_spot` available independent of whether an `orats_gex_landscape` row exists. The stored-metadata fields `version` and `computed_at` come from the `orats_gex_landscape` row when one exists (`params_source: "stored"`) and are `null` when it does not (`params_source: "defaults"`) — they describe the stored landscape, which the high path does not otherwise consume.
+
 ### Affected Files
 
 - `packages/shared/gex_landscape_api.py` — primary surface. Branch in `build_gex_landscape_response` for `accuracy=high`; helper to fetch raw strikes from `orats_oi_gamma`; helper to fetch params from `orats_gex_landscape` with default fallback; new response fields.
