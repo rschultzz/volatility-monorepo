@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
+import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from './components/GexLandscapePanel'
 
 const FLOW_HEIGHT_STORAGE_KEY = 'ib-react-flow-panel-height'
 const FLOW_EMA_MINUTES_STORAGE_KEY = 'ib-react-flow-ema-minutes'
@@ -1832,7 +1833,21 @@ export default function App() {
                   onMouseDown={beginResize}
                   title="Drag to resize panels"
                 />
-                <div className="react-bottom-pane" style={{ width: '100%', minWidth: 0, height: `${flowPanelHeight}px` }}>
+                <div
+                  className="react-bottom-pane"
+                  style={{
+                    // CR-009 regression B — shrink the flow pane by the GEX
+                    // landscape panel width when the panel is open, mirroring
+                    // item 0's .chart-host shrink, so the flow chart's candle
+                    // area stays the same pixel width as the price chart's
+                    // and the shared time-axis range still aligns.
+                    width: landscapeOpen
+                      ? `calc(100% - ${LANDSCAPE_PANEL_WIDTH}px)`
+                      : '100%',
+                    minWidth: 0,
+                    height: `${flowPanelHeight}px`,
+                  }}
+                >
                   <AggressorFlowPanel
                     dataPoints={flowPoints}
                     candles={mergedBarsWithLiveTimeline}
