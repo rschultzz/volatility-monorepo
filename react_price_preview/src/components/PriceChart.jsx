@@ -5,19 +5,31 @@ import {
   ColorType,
   CandlestickSeries,
   LineSeries,
+  LineStyle,
 } from 'lightweight-charts'
 import SmileChart from './SmileChart'
 import SignalPanel from './SignalPanel'
 import ChartToggleBar from './ChartToggleBar'
 import TradeAnnotationPanel from './TradeAnnotationPanel'
 import CondorPricingPanel from './CondorPricingPanel'
-import GexLandscapePanel, { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from './GexLandscapePanel'
+import GexLandscapePanel, {
+  PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH,
+  CONFLUENCE_COLORS,
+  QUALITY_SHORT,
+} from './GexLandscapePanel'
 
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
 const TIME_AXIS_HEIGHT = 24
 const MIN_PRICE_RANGE = 0.25
 const MIN_CHART_HEIGHT = 180
+
+// CR-009 item 2 — confluence quality grade → lightweight-charts line style.
+const CONFLUENCE_LINE_STYLE = {
+  'pin-grade': LineStyle.Solid,
+  'drift-grade': LineStyle.Dashed,
+  waypoint: LineStyle.Dotted,
+}
 
 const TOOLTIP_OFFSET_X = 14
 const TOOLTIP_OFFSET_Y = 14
@@ -901,6 +913,10 @@ export default function PriceChart({
   // tracks the chart's. Shape: { priceTop, priceBot, paneHeight }, or null
   // before the first sample (panel falls back to its full stored range).
   const [visiblePriceRange, setVisiblePriceRange] = useState(null)
+
+  // CR-009 items 2 & 4 — IPriceLine handles for the confluence lines and the
+  // intraday-subtarget annotation drawn on the candlestick series.
+  const landscapeLinesRef = useRef([])
 
   // Poll annotation state every 1.5s
   useEffect(() => {
@@ -1840,6 +1856,51 @@ export default function PriceChart({
     rafId = requestAnimationFrame(sample)
     return () => cancelAnimationFrame(rafId)
   }, [landscapeOpen])
+
+  // CR-009 item 2 — draw the landscape's confluence levels as price lines on
+  // the candlestick series, mirroring the panel's styling (color by bucket
+  // count, line style by quality grade). Lines are torn down and rebuilt
+  // whenever the landscape payload changes or the panel is toggled.
+  useEffect(() => {
+    const series = seriesRef.current
+    if (!series) return undefined
+
+    const clearLines = () => {
+      for (const line of landscapeLinesRef.current) {
+        try {
+          series.removePriceLine(line)
+        } catch (err) {
+          /* series already disposed — ignore */
+        }
+      }
+      landscapeLinesRef.current = []
+    }
+    clearLines()
+
+    if (landscapeOpen && landscapeData) {
+      const confluences = Array.isArray(landscapeData.confluences)
+        ? landscapeData.confluences
+        : []
+      for (const c of confluences) {
+        const price = Number(c.center_price)
+        if (!Number.isFinite(price)) continue
+        const n = c.n_buckets
+        const quality = c.quality || 'waypoint'
+        landscapeLinesRef.current.push(
+          series.createPriceLine({
+            price,
+            color: CONFLUENCE_COLORS[n] || '#10b981',
+            lineWidth: quality === 'pin-grade' ? 2 : 1,
+            lineStyle: CONFLUENCE_LINE_STYLE[quality] ?? LineStyle.Dotted,
+            axisLabelVisible: true,
+            title: `★ × ${n} ${QUALITY_SHORT[quality] || ''}`.trim(),
+          }),
+        )
+      }
+    }
+
+    return clearLines
+  }, [landscapeData, landscapeOpen])
 
   useEffect(() => {
     function handleParentMessage(event) {

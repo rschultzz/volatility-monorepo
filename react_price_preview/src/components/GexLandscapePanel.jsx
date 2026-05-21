@@ -29,12 +29,14 @@ const REGIME_COLORS = {
 }
 
 // Confluence line color by bucket count; line style by quality grade.
-const CONFLUENCE_COLORS = { 2: '#fbbf24', 3: '#fb923c', 4: '#10b981' }
+// CONFLUENCE_COLORS / QUALITY_SHORT / NEG_COLOR are exported so PriceChart
+// can mirror the panel's styling on its chart-side annotations (CR-009).
+export const CONFLUENCE_COLORS = { 2: '#fbbf24', 3: '#fb923c', 4: '#10b981' }
 const QUALITY_DASH = { 'pin-grade': null, 'drift-grade': '6 4', waypoint: '2 4' }
-const QUALITY_SHORT = { 'pin-grade': 'PIN', 'drift-grade': 'DRIFT', waypoint: 'soft' }
+export const QUALITY_SHORT = { 'pin-grade': 'PIN', 'drift-grade': 'DRIFT', waypoint: 'soft' }
 
 const SPOT_COLOR = '#fbbf24'
-const NEG_COLOR = '#06b6d4'
+export const NEG_COLOR = '#06b6d4'
 const PAD = { top: 12, right: 14, bottom: 26, left: 46 }
 
 function fmtB(raw) {
