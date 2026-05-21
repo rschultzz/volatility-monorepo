@@ -17,6 +17,7 @@ import GexLandscapePanel, {
   CONFLUENCE_COLORS,
   QUALITY_SHORT,
 } from './GexLandscapePanel'
+import LandscapeChartOverlay from './LandscapeChartOverlay'
 
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
@@ -2726,6 +2727,13 @@ export default function PriceChart({
               { key: 'landscape', label: 'LANDSCAPE', isOpen: landscapeOpen, onToggle: onToggleLandscape || (() => {}), title: 'Show GEX landscape panel' },
             ]}
           />
+
+          {landscapeOpen && (
+            <LandscapeChartOverlay
+              negZones={landscapeData?.neg_zones}
+              visiblePriceRange={visiblePriceRange}
+            />
+          )}
 
           {landscapeOpen && (
             <GexLandscapePanel
