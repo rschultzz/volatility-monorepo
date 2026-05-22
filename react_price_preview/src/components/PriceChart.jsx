@@ -22,6 +22,26 @@ import LandscapeChartOverlay from './LandscapeChartOverlay'
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
 const TIME_AXIS_HEIGHT = 24
+
+// CR-012 Item 1 — condor panel default anchor: top-right, inboard of the
+// price-axis label column so the y-axis labels stay visible. Offsets are
+// measured from the price axis (the .chart-host right edge) and the chart
+// top. The rendered `right` is relative to the full-width .chart-stage, so
+// when LANDSCAPE is open it adds the landscape-column width (see render).
+const CONDOR_DEFAULT_RIGHT_OFFSET = PRICE_AXIS_HIT_WIDTH + 8
+const CONDOR_DEFAULT_TOP_OFFSET = 8
+
+// CR-012 Item 2 — persisted condor panel position. Payload is
+// { rightOffset, topOffset } (right-anchored, measured from the price axis)
+// so a user-dragged position keeps its distance from the price axis across
+// the LANDSCAPE toggle.
+const CONDOR_PANEL_POSITION_STORAGE_KEY = 'ib-react-condor-panel-pos'
+
+// CR-012 Item 4 — GEX legend panel default anchor: top-left, below the row
+// of pills/buttons. 56 = settings-gear bottom (top 8 + height 44) + 4px
+// inset; 12 aligns with the settings gear's left inset.
+const GEX_LEGEND_DEFAULT_TOP = 56
+const GEX_LEGEND_DEFAULT_LEFT = 12
 const MIN_PRICE_RANGE = 0.25
 const MIN_CHART_HEIGHT = 180
 
@@ -777,6 +797,27 @@ export default function PriceChart({
   // computes new offsets in mousemove, persists final position on mouseup.
   const gexPanelDragRef = useRef(null)
 
+  // CR-012 Item 2 — condor panel drag position (right-anchored offsets from
+  // the price axis). null = no persisted position, use the default anchor.
+  const [condorPanelPos, setCondorPanelPos] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(CONDOR_PANEL_POSITION_STORAGE_KEY)
+      if (!raw) return null
+      const parsed = JSON.parse(raw)
+      const rightOffset = Number(parsed?.rightOffset)
+      const topOffset = Number(parsed?.topOffset)
+      if (Number.isFinite(rightOffset) && Number.isFinite(topOffset)) {
+        return { rightOffset, topOffset }
+      }
+    } catch (e) {
+      // ignore parse errors
+    }
+    return null
+  })
+  // Drag bookkeeping — captures start cursor + start offsets + .chart-host
+  // bounds on mousedown; computes clamped offsets in mousemove.
+  const condorPanelDragRef = useRef(null)
+
   // Dismiss the GEX popup or panel on Escape (popup first if both are open)
   useEffect(() => {
     if (!clickedGexSegment && !gexPanelOpen) return undefined
@@ -835,6 +876,22 @@ export default function PriceChart({
       // ignore quota / disabled storage
     }
   }, [gexPanelPos])
+
+  // CR-012 Item 2 — persist the condor panel position (null clears it).
+  useEffect(() => {
+    try {
+      if (condorPanelPos) {
+        window.localStorage.setItem(
+          CONDOR_PANEL_POSITION_STORAGE_KEY,
+          JSON.stringify(condorPanelPos),
+        )
+      } else {
+        window.localStorage.removeItem(CONDOR_PANEL_POSITION_STORAGE_KEY)
+      }
+    } catch (e) {
+      // ignore quota / disabled storage
+    }
+  }, [condorPanelPos])
 
   // Highlight the chart line when a panel row is hovered. The cleanup function
   // restores the original line width so rapid hover changes don't leave a stuck
@@ -2711,6 +2768,61 @@ export default function PriceChart({
     })
   }
 
+  // CR-012 Items 1-2 — condor panel position. Offsets are measured from the
+  // price axis (.chart-host right edge); the rendered `right` is relative to
+  // .chart-stage, which spans the full width, so when LANDSCAPE is open the
+  // landscape-column width is added to keep the panel's distance from the
+  // price axis constant across the LANDSCAPE toggle.
+  const condorRightOffset = condorPanelPos ? condorPanelPos.rightOffset : CONDOR_DEFAULT_RIGHT_OFFSET
+  const condorTopOffset = condorPanelPos ? condorPanelPos.topOffset : CONDOR_DEFAULT_TOP_OFFSET
+  const condorPanelStyle = {
+    top: `${condorTopOffset}px`,
+    right: `${condorRightOffset + (landscapeOpen ? LANDSCAPE_PANEL_WIDTH : 0)}px`,
+  }
+
+  // CR-012 Item 2 — condor panel drag. Mirrors the GEX legend panel's
+  // gexPanelDragRef pattern: capture start state on mousedown, add window
+  // listeners for the drag duration, clamp to .chart-host bounds.
+  function handleCondorDragStart(event) {
+    // Don't start a drag from an interactive control in the header.
+    if (event.target.closest('button')) return
+    const hostRect = hostRef.current?.getBoundingClientRect()
+    if (!hostRect) return
+    const panelEl = event.currentTarget.closest('[data-condor-panel]')
+    const panelRect = panelEl?.getBoundingClientRect()
+    event.preventDefault()
+    condorPanelDragRef.current = {
+      startCursorX: event.clientX,
+      startCursorY: event.clientY,
+      startRightOffset: condorRightOffset,
+      startTopOffset: condorTopOffset,
+      hostW: hostRect.width,
+      hostH: hostRect.height,
+      panelW: panelRect?.width || 0,
+      panelH: panelRect?.height || 0,
+    }
+    const onMove = (ev) => {
+      const d = condorPanelDragRef.current
+      if (!d) return
+      const dx = ev.clientX - d.startCursorX
+      const dy = ev.clientY - d.startCursorY
+      // rightOffset grows as the panel moves left. Clamp so the panel stays
+      // fully inside .chart-host (its right edge is the price axis).
+      const maxRight = Math.max(0, d.hostW - d.panelW)
+      const maxTop = Math.max(0, d.hostH - d.panelH)
+      const rightOffset = Math.max(0, Math.min(maxRight, d.startRightOffset - dx))
+      const topOffset = Math.max(0, Math.min(maxTop, d.startTopOffset + dy))
+      setCondorPanelPos({ rightOffset, topOffset })
+    }
+    const onUp = () => {
+      condorPanelDragRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   return (
     <div className="chart-shell chart-shell-compact">
       <div className="chart-frame chart-frame-compact">
@@ -2719,7 +2831,12 @@ export default function PriceChart({
           className="chart-stage chart-stage-compact"
           style={{ position: 'relative' }}
         >
-          <CondorPricingPanel condorPricing={condorPricing} />
+          <CondorPricingPanel
+            condorPricing={condorPricing}
+            positionStyle={condorPanelStyle}
+            onHandleMouseDown={handleCondorDragStart}
+            onResetPosition={() => setCondorPanelPos(null)}
+          />
           <div
             style={{
               position: 'absolute',
@@ -3416,18 +3533,20 @@ export default function PriceChart({
             )
           })()}
 
-          {/* GEX legend panel — defaults to right-edge dock, but draggable anywhere via the header.
-              Position persists across reloads. The collapsed pill that opens this
-              panel lives in `<ChartToggleBar />` at the top of the chart. */}
+          {/* GEX legend panel — defaults to a top-left dock below the button row,
+              but draggable anywhere via the header. Position persists across
+              reloads. The collapsed pill that opens this panel lives in
+              `<ChartToggleBar />` at the top of the chart. */}
           {gexPanelOpen && (
             <div
               onClick={(e) => e.stopPropagation()}
               style={{
                 position: 'absolute',
-                // When user has dragged, use their saved position; otherwise default top-right dock
+                // When user has dragged, use their saved position; otherwise the
+                // default top-left dock below the row of pills/buttons.
                 ...(gexPanelPos
                   ? { left: `${gexPanelPos.left}px`, top: `${gexPanelPos.top}px` }
-                  : { top: '8px', right: `${PRICE_AXIS_HIT_WIDTH + 8}px`, bottom: `${TIME_AXIS_HEIGHT + 8}px` }),
+                  : { top: `${GEX_LEGEND_DEFAULT_TOP}px`, left: `${GEX_LEGEND_DEFAULT_LEFT}px`, bottom: `${TIME_AXIS_HEIGHT + 8}px` }),
                 width: '320px',
                 maxHeight: gexPanelPos ? '70vh' : 'calc(100% - 48px)',
                 zIndex: 10,

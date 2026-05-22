@@ -20,7 +20,12 @@ function pnlColor(gross) {
   return '#bbb'
 }
 
-export default function CondorPricingPanel({ condorPricing }) {
+export default function CondorPricingPanel({
+  condorPricing,
+  positionStyle,
+  onHandleMouseDown,
+  onResetPosition,
+}) {
   if (!condorPricing) return null
 
   const { sigma_pts, entry, eval: evalBlock, pnl, warnings } = condorPricing
@@ -30,10 +35,10 @@ export default function CondorPricingPanel({ condorPricing }) {
 
   return (
     <div
+      data-condor-panel
       style={{
         position: 'absolute',
-        top: 8,
-        right: 8,
+        ...positionStyle,
         zIndex: 5,
         background: 'rgba(20, 24, 33, 0.92)',
         border: '1px solid #2a3140',
@@ -47,8 +52,39 @@ export default function CondorPricingPanel({ condorPricing }) {
         pointerEvents: 'none',
       }}
     >
-      <div style={{ fontWeight: 'bold', marginBottom: 2, color: '#9fb' }}>
-        condor (1σ)
+      <div
+        onMouseDown={onHandleMouseDown}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          fontWeight: 'bold',
+          marginBottom: 2,
+          color: '#9fb',
+          cursor: 'grab',
+          userSelect: 'none',
+          pointerEvents: 'auto',
+        }}
+      >
+        <span>condor (1σ)</span>
+        <button
+          type="button"
+          onClick={onResetPosition}
+          title="Reset panel position"
+          aria-label="Reset panel position"
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: '#9fb',
+            cursor: 'pointer',
+            fontSize: 12,
+            lineHeight: 1,
+            padding: '0 2px',
+            pointerEvents: 'auto',
+          }}
+        >
+          ↺
+        </button>
       </div>
       <div>σ: {fmt(sigma_pts)} pts</div>
       <div>
