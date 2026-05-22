@@ -129,6 +129,48 @@ Cost: largest model change. New data model field, new score formula, new thresho
 
 **Recommendation.** Option B. It directly addresses the root cause (FWHM-vs-DTE mismatch), the cost is contained to one new field and a small change to one function signature, and the calibration is straightforward (the FWHM ratio against the model's own physics is well-defined). Option A leaves the root cause in place; Option C is over-investment for a metric that hasn't been validated to outperform the FWHM-ratio approach yet. Recommend shipping Option B and treating Option C as a future CR if the labeled-set calibration reveals cases B can't handle.
 
+**Amendment 1 — pre-implementation review (metric pivot from Option B to peak strength).** Running `analyze_confluence` over the four confirmed days' stored landscapes (production DB, `orats_gex_landscape`) measured all three candidate metrics for each day's top cluster:
+
+| Day  | Label   | score (B/pt) | max_gex ($B) | avg_fwhm | fwhm_ratio | mass_conc (±15pt) |
+|------|---------|--------------|--------------|----------|------------|-------------------|
+| 5/6  | target  | 16.2         | 612          | 75.5     | 2.00       | 0.122             |
+| 5/7  | pin     | 13.1         | 712          | 109.0    | 2.89       | 0.111             |
+| 5/18 | feature | 6.2          | 505          | 162.0    | 1.97       | 0.116             |
+| 5/20 | feature | 3.0          | 125          | 84.0     | 2.23       | 0.121             |
+
+Findings:
+
+- **Option B's `fwhm_ratio` is anti-correlated with the labels.** The canonical pin (5/7) has the *highest* ratio (2.89); a feature day (5/18) has the *lowest* (1.97). Gating `pin` on a *low* fwhm_ratio is exactly backwards. Applying the spec's Option B thresholds yields only 2/4 correct (5/7 → feature, 5/18 → target). Root cause: 5/7's pin is a 1-7 DTE peak with FWHM 109 — roughly 3× the single-strike Gaussian ideal — because it is layered multi-strike mass. That breadth *is* the pinning capability (the Problem section says exactly this); normalizing it by DTE does not rescue it, because the breadth is not a DTE artifact.
+- **Option C's `mass_concentration` is flat.** 0.111–0.122 across all four days — no discriminating power.
+- **`max_gex` (peak GEX strength, $B) is monotonic in the correct order:** pin 712 > target 612 > feature 505 > feature 125. It is the only measured metric that separates all three tiers.
+
+Decision: ship a **peak-strength classifier**, not Option B. This still honours the Problem section's thesis — "the model conflates peak sharpness with pinning capability" — but the fix is to *stop gating on sharpness at all*, not to normalize it. No FWHM term, absolute or relative, enters the quality gate.
+
+Revised design:
+
+```python
+def classify_confluence_quality(max_gex: float) -> str:
+    max_gex_b = max_gex / 1e9
+    if max_gex_b >= 650:
+        return "pin"
+    if max_gex_b < 550:
+        return "feature"
+    return "target"
+```
+
+- `classify_confluence_quality` takes a single argument, `max_gex` (raw $, as already carried in the score record), not `(score, fwhm_ratio)`.
+- **No new data-model field.** `max_gex` already exists in `score_confluence`'s output and in every `/api/gex-landscape` confluence item, so the classification is already inspectable from `quality` + `max_gex`. `fwhm_ratio` is not added — it proved non-predictive, and an unused field is dead weight.
+- `score` keeps its current formula and meaning (`n_buckets × max_gex / max(avg_fwhm, 5)`); it still drives the `analyze_confluence` ranking. Only `classify_confluence_quality` stops consuming it.
+- Thresholds 650 / 550 ($B): the 550 boundary is the midpoint of the highest feature (505) and the lone target (612); 650 sits 38 above the target and 55 below the lowest `pin` confluence (5/7's secondary cluster at 705 — the Problem section expects 5/7's 7371 confluence to tag `pin` too).
+
+AC corrections:
+
+- **AC #4** — `classify_confluence_quality` signature is `(max_gex)`. The empirical-anchor comment references the labeled set.
+- **AC #5 / #6** — no new metric field. `score_confluence` and `analyze_confluence` outputs keep their existing field set unchanged; classification keys off the existing `max_gex` field.
+- **Affected Files / Breaking-change advisory / AC #11** — the additive per-confluence field is dropped. The only response-shape change is the `quality` value domain.
+
+The `target` tier rests on a single calibration point (5/6) — open questions #3 (whether `target` warrants its own tier) and #7 (re-assessment cadence) both stand. The "structural-bucket-dominated stretch day" pending coverage case is the known weak spot for a distance-blind, strength-only classifier; flagged for the post-merge re-assessment.
+
 ### Calibration set
 
 The recalibration needs a labeled set of days, each tagged with the expected quality (`pin` / `target` / `feature`) based on **observed end-of-session price behavior, per the operational definitions above**. Labels must be defensible from session price charts — not from existing model output, which would be circular.
