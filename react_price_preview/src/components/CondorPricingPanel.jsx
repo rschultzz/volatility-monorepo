@@ -20,7 +20,12 @@ function pnlColor(gross) {
   return '#bbb'
 }
 
-export default function CondorPricingPanel({ condorPricing, positionStyle, onHandleMouseDown }) {
+export default function CondorPricingPanel({
+  condorPricing,
+  positionStyle,
+  onHandleMouseDown,
+  onResetPosition,
+}) {
   if (!condorPricing) return null
 
   const { sigma_pts, entry, eval: evalBlock, pnl, warnings } = condorPricing
@@ -62,6 +67,24 @@ export default function CondorPricingPanel({ condorPricing, positionStyle, onHan
         }}
       >
         <span>condor (1σ)</span>
+        <button
+          type="button"
+          onClick={onResetPosition}
+          title="Reset panel position"
+          aria-label="Reset panel position"
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: '#9fb',
+            cursor: 'pointer',
+            fontSize: 12,
+            lineHeight: 1,
+            padding: '0 2px',
+            pointerEvents: 'auto',
+          }}
+        >
+          ↺
+        </button>
       </div>
       <div>σ: {fmt(sigma_pts)} pts</div>
       <div>

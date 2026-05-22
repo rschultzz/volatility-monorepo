@@ -36,6 +36,12 @@ const CONDOR_DEFAULT_TOP_OFFSET = 8
 // so a user-dragged position keeps its distance from the price axis across
 // the LANDSCAPE toggle.
 const CONDOR_PANEL_POSITION_STORAGE_KEY = 'ib-react-condor-panel-pos'
+
+// CR-012 Item 4 — GEX legend panel default anchor: top-left, below the row
+// of pills/buttons. 56 = settings-gear bottom (top 8 + height 44) + 4px
+// inset; 12 aligns with the settings gear's left inset.
+const GEX_LEGEND_DEFAULT_TOP = 56
+const GEX_LEGEND_DEFAULT_LEFT = 12
 const MIN_PRICE_RANGE = 0.25
 const MIN_CHART_HEIGHT = 180
 
@@ -2829,6 +2835,7 @@ export default function PriceChart({
             condorPricing={condorPricing}
             positionStyle={condorPanelStyle}
             onHandleMouseDown={handleCondorDragStart}
+            onResetPosition={() => setCondorPanelPos(null)}
           />
           <div
             style={{
@@ -3526,18 +3533,20 @@ export default function PriceChart({
             )
           })()}
 
-          {/* GEX legend panel — defaults to right-edge dock, but draggable anywhere via the header.
-              Position persists across reloads. The collapsed pill that opens this
-              panel lives in `<ChartToggleBar />` at the top of the chart. */}
+          {/* GEX legend panel — defaults to a top-left dock below the button row,
+              but draggable anywhere via the header. Position persists across
+              reloads. The collapsed pill that opens this panel lives in
+              `<ChartToggleBar />` at the top of the chart. */}
           {gexPanelOpen && (
             <div
               onClick={(e) => e.stopPropagation()}
               style={{
                 position: 'absolute',
-                // When user has dragged, use their saved position; otherwise default top-right dock
+                // When user has dragged, use their saved position; otherwise the
+                // default top-left dock below the row of pills/buttons.
                 ...(gexPanelPos
                   ? { left: `${gexPanelPos.left}px`, top: `${gexPanelPos.top}px` }
-                  : { top: '8px', right: `${PRICE_AXIS_HIT_WIDTH + 8}px`, bottom: `${TIME_AXIS_HEIGHT + 8}px` }),
+                  : { top: `${GEX_LEGEND_DEFAULT_TOP}px`, left: `${GEX_LEGEND_DEFAULT_LEFT}px`, bottom: `${TIME_AXIS_HEIGHT + 8}px` }),
                 width: '320px',
                 maxHeight: gexPanelPos ? '70vh' : 'calc(100% - 48px)',
                 zIndex: 10,
