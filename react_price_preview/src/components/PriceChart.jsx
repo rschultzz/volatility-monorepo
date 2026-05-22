@@ -22,6 +22,14 @@ import LandscapeChartOverlay from './LandscapeChartOverlay'
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
 const TIME_AXIS_HEIGHT = 24
+
+// CR-012 Item 1 — condor panel default anchor: top-right, inboard of the
+// price-axis label column so the y-axis labels stay visible. Offsets are
+// measured from the price axis (the .chart-host right edge) and the chart
+// top. The rendered `right` is relative to the full-width .chart-stage, so
+// when LANDSCAPE is open it adds the landscape-column width (see render).
+const CONDOR_DEFAULT_RIGHT_OFFSET = PRICE_AXIS_HIT_WIDTH + 8
+const CONDOR_DEFAULT_TOP_OFFSET = 8
 const MIN_PRICE_RANGE = 0.25
 const MIN_CHART_HEIGHT = 180
 
@@ -2711,6 +2719,16 @@ export default function PriceChart({
     })
   }
 
+  // CR-012 Item 1 — condor panel position. Offsets are measured from the
+  // price axis (.chart-host right edge); the rendered `right` is relative to
+  // .chart-stage, which spans the full width, so when LANDSCAPE is open the
+  // landscape-column width is added to keep the panel's distance from the
+  // price axis constant across the LANDSCAPE toggle.
+  const condorPanelStyle = {
+    top: `${CONDOR_DEFAULT_TOP_OFFSET}px`,
+    right: `${CONDOR_DEFAULT_RIGHT_OFFSET + (landscapeOpen ? LANDSCAPE_PANEL_WIDTH : 0)}px`,
+  }
+
   return (
     <div className="chart-shell chart-shell-compact">
       <div className="chart-frame chart-frame-compact">
@@ -2719,7 +2737,10 @@ export default function PriceChart({
           className="chart-stage chart-stage-compact"
           style={{ position: 'relative' }}
         >
-          <CondorPricingPanel condorPricing={condorPricing} />
+          <CondorPricingPanel
+            condorPricing={condorPricing}
+            positionStyle={condorPanelStyle}
+          />
           <div
             style={{
               position: 'absolute',

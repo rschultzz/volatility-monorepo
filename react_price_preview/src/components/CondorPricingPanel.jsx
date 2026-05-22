@@ -20,7 +20,7 @@ function pnlColor(gross) {
   return '#bbb'
 }
 
-export default function CondorPricingPanel({ condorPricing }) {
+export default function CondorPricingPanel({ condorPricing, positionStyle }) {
   if (!condorPricing) return null
 
   const { sigma_pts, entry, eval: evalBlock, pnl, warnings } = condorPricing
@@ -32,8 +32,7 @@ export default function CondorPricingPanel({ condorPricing }) {
     <div
       style={{
         position: 'absolute',
-        top: 8,
-        right: 8,
+        ...positionStyle,
         zIndex: 5,
         background: 'rgba(20, 24, 33, 0.92)',
         border: '1px solid #2a3140',
