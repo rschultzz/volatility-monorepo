@@ -153,6 +153,111 @@ scoping discipline.
   user-facing escape hatch, and clamping the persisted position to current bounds on load
   is a cheap additional safeguard worth adding.
 
+### Pre-implementation review amendments
+
+Reading `CondorPricingPanel.jsx`, `PriceChart.jsx`, `App.jsx`, and `ChartToggleBar.jsx`
+against the drafted spec surfaced four reconciliations. Each is recorded here per the
+CR-008/009/010/011 amendment-thread discipline; the original draft text above is left
+intact so the reconciliation is visible.
+
+**Amendment 1 — Condor panel positioning context: `.chart-stage` vs `.chart-host`.**
+Item 1 claims a right-anchored child "automatically follows the new right edge with no
+extra logic" when `.chart-host` shrinks. That is wrong about the DOM. `<CondorPricingPanel>`
+renders as a child of `.chart-stage` (`PriceChart.jsx:2722`), which spans the full chart
+width and does **not** shrink when the LANDSCAPE pill is on. Only `.chart-host` — the
+lightweight-charts mount node (`hostRef`) — shrinks: its width is
+`calc(100% - LANDSCAPE_PANEL_WIDTH)` when LANDSCAPE is open (`PriceChart.jsx:4074`). The
+docked `GexLandscapePanel` occupies the rightmost `LANDSCAPE_PANEL_WIDTH` (300px) of
+`.chart-stage`. The price-axis label column sits at `.chart-host`'s right edge — confirmed
+no CSS scrollbar or other element between the candle area and the price axis.
+
+Reparenting the condor panel into `.chart-host` is not viable — lightweight-charts owns
+that node's DOM.
+
+Reconciliation: the panel stays a child of `.chart-stage`. The persisted `rightOffset` is
+measured from the price axis (`.chart-host`'s right edge). The rendered CSS `right` value
+(relative to `.chart-stage`) is computed at render time:
+
+```
+right = rightOffset + (landscapeOpen ? LANDSCAPE_PANEL_WIDTH : 0)
+```
+
+The `+ LANDSCAPE_PANEL_WIDTH` term is the "extra logic" Item 1 said was unnecessary. It is
+one conditional term in the style object. AC #6 and AC #7 still hold: with LANDSCAPE off
+the term is 0 and `right` is the price-axis offset directly; with LANDSCAPE on the term
+shifts the panel left by exactly the landscape-column width, so its distance from the
+price axis is unchanged. `LANDSCAPE_PANEL_WIDTH` is the existing `PANEL_WIDTH` (300)
+re-exported from `GexLandscapePanel.jsx` and already imported into `PriceChart.jsx`.
+
+**Amendment 2 — Condor panel position state lives in `PriceChart.jsx`, not `App.jsx`.**
+The drafted Affected Files entry places the condor position state in `App.jsx`.
+`<CondorPricingPanel>` is rendered in `PriceChart.jsx:2722` — `App.jsx` only passes the
+`condorPricing` payload down to `<PriceChart>`, which renders the panel. The position
+state, `CONDOR_PANEL_POSITION_STORAGE_KEY`, the default-position constant, the drag
+handler, and the reset all belong in `PriceChart.jsx`, mirroring the GEX legend panel's
+existing `gexPanelPos` state and `ib-react-gex-panel-pos` persistence already in that
+file. `App.jsx` requires no change. This mirrors CR-009's amendment ("state stays in
+`PriceChart`, no `App.jsx` round-trip"). `CondorPricingPanel.jsx` stays presentational —
+it receives the computed position style plus `onHandleMouseDown` / `onResetPosition`
+callbacks.
+
+Affected Files corrected: `App.jsx` is **removed** from the list. The two edited files are
+`CondorPricingPanel.jsx` and `PriceChart.jsx`.
+
+**Amendment 3 — Pattern to mirror is `gexPanelDragRef`, not `dragStateRef`.**
+Item 2 says to mirror `App.jsx`'s `dragStateRef` flow-panel resize pattern. That pattern
+is a 1-D *resize* (height delta only, persistent window listeners in a `useEffect`).
+`PriceChart.jsx` already contains a complete 2-D draggable-overlay-panel implementation —
+the GEX legend panel's `gexPanelDragRef` (`PriceChart.jsx:3447-3493`): `onMouseDown`
+captures the start cursor and start panel position, adds window `mousemove`/`mouseup`
+listeners for the duration of the drag, computes clamped offsets in `mousemove`, and tears
+the listeners down in `mouseup`. That is the closer pattern — same file, same interaction
+class — and the condor drag handler mirrors it. The window-level `mousemove`/`mouseup`
+mechanism the spec named is identical; the GEX legend version is the 2-D specialization
+with clamping already worked out. Clamping is done at drag time against `.chart-host`'s
+bounds captured at `mousedown` (satisfies AC #3); on-load re-clamping of stale persisted
+offsets stays deferred per the third Open Question (reset button is the escape hatch).
+
+`CONDOR_PANEL_POSITION_STORAGE_KEY` value: `'ib-react-condor-panel-pos'`, matching the
+`ib-react-gex-panel-pos` / `ib-react-flow-panel-height` naming family.
+
+**Amendment 4 — GEX legend popup is the GEX legend *panel*; button-row offset is hard-coded.**
+The "GEX legend popup" is the GEX legend panel block gated by `gexPanelOpen`
+(`PriceChart.jsx:3422`). Its default-anchor logic is at `PriceChart.jsx:3430` —
+`{ top: '8px', right: PRICE_AXIS_HIT_WIDTH + 8, bottom: TIME_AXIS_HEIGHT + 8 }`, a
+right-anchored default against `.chart-stage`. Because `.chart-stage` does not shrink
+(Amendment 1), that right anchor lands inside the landscape column when LANDSCAPE is on —
+exactly the defect Item 4 fixes. Item 4 changes only the `: { ... }` default branch of the
+`gexPanelPos ? ... : ...` ternary; the dragged-position branch and the persistence
+(`ib-react-gex-panel-pos`) are untouched, so AC #9 (still draggable) holds for free.
+
+New default: left-anchored — `{ top: GEX_LEGEND_DEFAULT_TOP, left: GEX_LEGEND_DEFAULT_LEFT }`.
+Being left-anchored, it does not overlap the landscape column regardless of LANDSCAPE
+state, so no LANDSCAPE-conditional term is needed for it.
+
+Button-row height is **hard-coded**, not measured. The top-of-chart controls are
+fixed-size literals already in the codebase: the settings gear button is `top: 8px`,
+`height: 44px` (`PriceChart.jsx`), and `ChartToggleBar` pills are `top: 8`, `height: 32px`
+(`ChartToggleBar.jsx`). The button row's bottom edge is therefore a compile-time constant
+(`8 + 44 = 52`, the gear being the taller element). Measuring `getBoundingClientRect()` at
+mount would add a ref + layout effect + resize re-measure for a value that never changes.
+`GEX_LEGEND_DEFAULT_TOP = 56` (gear bottom + 4px inset) clears the row;
+`GEX_LEGEND_DEFAULT_LEFT = 12` aligns with the settings gear's left inset. This matches
+how `PRICE_AXIS_HIT_WIDTH` / `TIME_AXIS_HEIGHT` are already hard-coded module constants.
+
+**Drag affordance decision (Open Question resolved): header-only.** The condor panel's
+`condor (1σ)` title row becomes the drag handle, matching the GEX legend panel (drags from
+its header). The panel root currently sets `pointerEvents: 'none'` so chart interactions
+pass through; the header handle and the reset button set `pointerEvents: 'auto'` to
+receive their own events, while the rest of the panel body keeps `pointerEvents: 'none'`.
+
+**AC corrections:**
+
+- **AC #8** — "below the row of pills/buttons" is satisfied by `GEX_LEGEND_DEFAULT_TOP = 56`,
+  clearing the 44px settings gear (the tallest top-left control) plus a 4px inset.
+- **Affected Files** — `App.jsx` is removed (Amendment 2). The edited files are
+  `CondorPricingPanel.jsx` and `PriceChart.jsx`.
+
 ### Verification
 
 **Automated:**
