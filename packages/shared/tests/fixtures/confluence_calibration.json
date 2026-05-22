@@ -1,0 +1,63 @@
+{
+  "_description": "CR-011 confluence-quality calibration set. Each confirmed entry is a session labeled pin/target/feature from observed end-of-session price behavior (not model output). top_cluster_max_gex_b is the measured max_gex ($B) of the day's top confluence over its stored orats_gex_landscape row, and is the input classify_confluence_quality is calibrated against. Designed for cheap incremental growth — add a day by appending one entry.",
+  "confirmed": [
+    {
+      "trade_date": "2026-05-06",
+      "ticker": "SPX",
+      "spot": 7326,
+      "implied_move": 40,
+      "dominant_bucket": "1-7 DTE",
+      "top_cluster_center": 7306,
+      "top_cluster_max_gex_b": 612.01,
+      "expected_quality": "target",
+      "rationale": "Spot opened 7326 with a magnet above at ~7350-7360 (~30pt away, within session range). Price drifted upward across the session toward the magnet. The marked level was the destination of the directional move, though not a tight pin."
+    },
+    {
+      "trade_date": "2026-05-07",
+      "ticker": "SPX",
+      "spot": 7400,
+      "implied_move": 40,
+      "dominant_bucket": "1-7 DTE",
+      "top_cluster_center": 7353,
+      "top_cluster_max_gex_b": 711.77,
+      "expected_quality": "pin",
+      "rationale": "Spot opened ~7400 and fell to lock in at 7353 with a tight last-hour range around the level. The canonical pin day — the level was both destination and trap."
+    },
+    {
+      "trade_date": "2026-05-18",
+      "ticker": "SPX",
+      "spot": 7378,
+      "implied_move": 40,
+      "dominant_bucket": "8-30 DTE",
+      "top_cluster_center": 7530,
+      "top_cluster_max_gex_b": 504.87,
+      "expected_quality": "feature",
+      "rationale": "Spot reference 7378; marked levels at 7510 and 7530 sat 132-152pt above, a multi-sigma distance. Session range ~7370-7460 — the marked levels were never approached. Regime tagged UNTETHERED. Price action was driven by factors other than the marked features."
+    },
+    {
+      "trade_date": "2026-05-20",
+      "ticker": "SPX",
+      "spot": 7392,
+      "implied_move": 40,
+      "dominant_bucket": "1-7 DTE",
+      "top_cluster_center": 7456,
+      "top_cluster_max_gex_b": 124.86,
+      "expected_quality": "feature",
+      "rationale": "Spot reference 7392; marked levels at 7456 and 7505 on a diffuse 30+ DTE bulge. Session topped at ~7460 (just above 7456) but did not engage it as a destination — the day's dynamics were driven by the amplification underbelly, not the marked levels."
+    }
+  ],
+  "pending": [
+    {
+      "coverage_case": "0DTE-dominated pin day — a session where 0DTE owns 30%+ of GEX and the pin forms at or very near spot (sharp FWHM, small bucket DTE). The 'easy' pin case the pre-CR-011 thresholds were aimed at. Expected label when observed: pin."
+    },
+    {
+      "coverage_case": "Structural-bucket-dominated stretch day — 30+ DTE dominates and its peak sits multi-sigma from spot. Tests that a strength-only classifier does not over-tag a far structural magnet. Known weak spot — the classifier is distance-blind. Expected label when observed: feature."
+    },
+    {
+      "coverage_case": "Catalyst day — the landscape read one structure but news (FOMC, CPI, etc.) overrode it. Tests that 'right about structure, wrong about outcome' does not distort calibration. Expected label when observed: feature."
+    },
+    {
+      "coverage_case": "Second target-grade day — 5/6 is the only target example so far; the target tier rests on a single calibration point. A second day anchors the pin/target and target/feature boundaries. Expected label when observed: target."
+    }
+  ]
+}

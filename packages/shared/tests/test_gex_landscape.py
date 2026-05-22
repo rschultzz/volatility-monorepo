@@ -12,8 +12,10 @@ Run with:
 from __future__ import annotations
 
 import datetime as dt
+import json
 import unittest
 from collections import namedtuple
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -21,12 +23,29 @@ import pandas as pd
 
 from packages.shared.gex_landscape import (
     _UPSERT_SQL,
+    classify_confluence_quality,
     classify_regime,
     compute_and_upsert_landscape,
     compute_landscape,
     find_peaks_per_bucket,
     find_walls,
 )
+
+_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
+
+
+def _calibration_set() -> dict:
+    """Load the CR-011 confluence-quality calibration fixture."""
+    with open(_FIXTURE_DIR / "confluence_calibration.json") as f:
+        return json.load(f)
+
+
+def _confirmed_day(trade_date: str) -> dict:
+    """Return the confirmed calibration entry for a trade date."""
+    for entry in _calibration_set()["confirmed"]:
+        if entry["trade_date"] == trade_date:
+            return entry
+    raise KeyError(f"no confirmed calibration entry for {trade_date}")
 
 # psycopg's JSONB adapter — the helper wraps each JSONB column in this.
 from psycopg.types.json import Jsonb
@@ -296,6 +315,39 @@ class TestComputeAndUpsertLandscape(unittest.TestCase):
             compute_and_upsert_landscape(
                 conn, "SPX", dt.date(2026, 5, 20), version="v",
             )
+
+
+# ────────────────────────────────────────────────────────────────────────
+#  classify_confluence_quality — CR-011 calibration set
+# ────────────────────────────────────────────────────────────────────────
+
+class TestClassifyConfluenceQuality(unittest.TestCase):
+    """The recalibrated quality classifier against the labeled calibration
+    set in fixtures/confluence_calibration.json. Each test loads one confirmed
+    day and asserts the classifier reproduces its observed-behavior label from
+    the day's top-cluster peak strength (max_gex)."""
+
+    def _assert_day(self, trade_date: str) -> None:
+        entry = _confirmed_day(trade_date)
+        quality = classify_confluence_quality(entry["top_cluster_max_gex_b"] * 1e9)
+        self.assertEqual(
+            quality, entry["expected_quality"],
+            f"{trade_date}: top-cluster max_gex "
+            f"{entry['top_cluster_max_gex_b']}B classified {quality!r}, "
+            f"expected {entry['expected_quality']!r}",
+        )
+
+    def test_5_06_top_cluster_is_target(self):
+        self._assert_day("2026-05-06")
+
+    def test_5_07_top_cluster_is_pin(self):
+        self._assert_day("2026-05-07")
+
+    def test_5_18_top_cluster_is_feature(self):
+        self._assert_day("2026-05-18")
+
+    def test_5_20_top_cluster_is_feature(self):
+        self._assert_day("2026-05-20")
 
 
 if __name__ == "__main__":
