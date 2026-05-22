@@ -20,7 +20,7 @@ function pnlColor(gross) {
   return '#bbb'
 }
 
-export default function CondorPricingPanel({ condorPricing, positionStyle }) {
+export default function CondorPricingPanel({ condorPricing, positionStyle, onHandleMouseDown }) {
   if (!condorPricing) return null
 
   const { sigma_pts, entry, eval: evalBlock, pnl, warnings } = condorPricing
@@ -30,6 +30,7 @@ export default function CondorPricingPanel({ condorPricing, positionStyle }) {
 
   return (
     <div
+      data-condor-panel
       style={{
         position: 'absolute',
         ...positionStyle,
@@ -46,8 +47,21 @@ export default function CondorPricingPanel({ condorPricing, positionStyle }) {
         pointerEvents: 'none',
       }}
     >
-      <div style={{ fontWeight: 'bold', marginBottom: 2, color: '#9fb' }}>
-        condor (1σ)
+      <div
+        onMouseDown={onHandleMouseDown}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          fontWeight: 'bold',
+          marginBottom: 2,
+          color: '#9fb',
+          cursor: 'grab',
+          userSelect: 'none',
+          pointerEvents: 'auto',
+        }}
+      >
+        <span>condor (1σ)</span>
       </div>
       <div>σ: {fmt(sigma_pts)} pts</div>
       <div>
