@@ -216,7 +216,15 @@ The calibration set is expected to grow over the weeks following CR-011's ship. 
 - `packages/shared/tests/fixtures/confluence_calibration.json` (new) — labeled set of days with expected quality tags. Format described in the *Calibration set* section.
 - `scripts/explore_gex_landscape.py` — `style_map`, line-width, and `quality_short` dicts updated to map the new label values to display styles (matching the *Display strings* table). The stdout printer's `[quality_tag]` formatting renders the new internal names.
 - `react_price_preview/src/components/GexLandscapePanel.jsx` — `QUALITY_DASH` and `QUALITY_SHORT` maps updated to key off the new label values. Display strings `PIN | TGT | soft`. Exported `QUALITY_SHORT` is consumed by `PriceChart.jsx`, which gets the new strings automatically.
-- `react_price_preview/src/components/PriceChart.jsx` — no code changes, but the rendered short labels change from `PIN | DRIFT | soft` to `PIN | TGT | soft` via the imported `QUALITY_SHORT`.
+- `react_price_preview/src/components/PriceChart.jsx` — see Amendment 2: this file has its own quality→line-style map and hardcoded label literals, so it *does* need code changes.
+
+**Amendment 2 — pre-implementation review (`PriceChart.jsx` needs code changes).** The drafted *Affected Files* entry assumed `PriceChart.jsx` only consumes the imported `QUALITY_SHORT` and needs no edits. Reading the file shows otherwise:
+
+- `CONFLUENCE_LINE_STYLE` (a module-level map) is keyed on the old vocabulary — `'pin-grade'`, `'drift-grade'`, `waypoint` — and must be rekeyed to `pin` / `target` / `feature`.
+- The default fallback `c.quality || 'waypoint'` must become `|| 'feature'`.
+- The line-width literal `quality === 'pin-grade' ? 2 : 1` must compare against `'pin'`.
+
+`PriceChart.jsx` is therefore an edited file in this CR. It still also gets the new `QUALITY_SHORT` strings for free via the import.
 
 **Breaking change advisory.** The `quality` field's value domain changes. Any external or downstream consumer that hardcoded `pin-grade` / `drift-grade` / `waypoint` strings (none known today, but worth confirming) will break. The change is co-located: backend, frontend, and matplotlib script all update in the same CR. No backward-compat aliasing.
 
