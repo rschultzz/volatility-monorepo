@@ -27,9 +27,9 @@ const MIN_CHART_HEIGHT = 180
 
 // CR-009 item 2 — confluence quality grade → lightweight-charts line style.
 const CONFLUENCE_LINE_STYLE = {
-  'pin-grade': LineStyle.Solid,
-  'drift-grade': LineStyle.Dashed,
-  waypoint: LineStyle.Dotted,
+  pin: LineStyle.Solid,
+  target: LineStyle.Dashed,
+  feature: LineStyle.Dotted,
 }
 
 const TOOLTIP_OFFSET_X = 14
@@ -1906,12 +1906,12 @@ export default function PriceChart({
         const price = Number(c.center_price)
         if (!Number.isFinite(price)) continue
         const n = c.n_buckets
-        const quality = c.quality || 'waypoint'
+        const quality = c.quality || 'feature'
         landscapeLinesRef.current.push(
           series.createPriceLine({
             price,
             color: CONFLUENCE_COLORS[n] || '#10b981',
-            lineWidth: quality === 'pin-grade' ? 2 : 1,
+            lineWidth: quality === 'pin' ? 2 : 1,
             lineStyle: CONFLUENCE_LINE_STYLE[quality] ?? LineStyle.Dotted,
             axisLabelVisible: true,
             title: `★ × ${n} ${QUALITY_SHORT[quality] || ''}`.trim(),

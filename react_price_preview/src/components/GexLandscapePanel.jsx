@@ -32,8 +32,8 @@ const REGIME_COLORS = {
 // CONFLUENCE_COLORS / QUALITY_SHORT / NEG_COLOR are exported so PriceChart
 // can mirror the panel's styling on its chart-side annotations (CR-009).
 export const CONFLUENCE_COLORS = { 2: '#fbbf24', 3: '#fb923c', 4: '#10b981' }
-const QUALITY_DASH = { 'pin-grade': null, 'drift-grade': '6 4', waypoint: '2 4' }
-export const QUALITY_SHORT = { 'pin-grade': 'PIN', 'drift-grade': 'DRIFT', waypoint: 'soft' }
+const QUALITY_DASH = { pin: null, target: '6 4', feature: '2 4' }
+export const QUALITY_SHORT = { pin: 'PIN', target: 'TGT', feature: 'soft' }
 
 const SPOT_COLOR = '#fbbf24'
 export const NEG_COLOR = '#06b6d4'
@@ -358,7 +358,7 @@ export default function GexLandscapePanel({
             {confluences.map((c, i) => {
               const n = c.n_buckets
               const color = CONFLUENCE_COLORS[n] || '#10b981'
-              const quality = c.quality || 'waypoint'
+              const quality = c.quality || 'feature'
               const y = geom.yOf(Number(c.center_price))
               return (
                 <g key={`conf-${i}`}>
@@ -368,7 +368,7 @@ export default function GexLandscapePanel({
                     y1={y}
                     y2={y}
                     stroke={color}
-                    strokeWidth={quality === 'pin-grade' ? 2 : 1.3}
+                    strokeWidth={quality === 'pin' ? 2 : 1.3}
                     strokeDasharray={QUALITY_DASH[quality] || undefined}
                     opacity="0.85"
                   />
