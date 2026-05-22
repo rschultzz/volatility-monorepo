@@ -843,26 +843,35 @@ def find_confluence_clusters(
     return clusters
 
 
-def classify_confluence_quality(score: float, avg_fwhm: float) -> str:
+def classify_confluence_quality(max_gex: float) -> str:
     """
-    Tag a confluence with a quality grade.
+    Tag a confluence with a quality grade from its peak GEX strength.
 
-    Score is the raw (n_buckets × max_gex / fwhm) value in $/pt. Divide by 1e9
-    for B/pt. Empirical thresholds based on observed days:
-        5/7 pin-grade : score ≈ 84 B/pt, fwhm ≈ 25pt
-        5/20 waypoint : score ≈  3 B/pt, fwhm ≈ 84pt
+    max_gex is the strongest peak in the cluster, in raw $ (divide by 1e9 for
+    $B). Thresholds are calibrated against the labeled day set in
+    tests/fixtures/confluence_calibration.json — top-cluster max_gex in $B:
+        5/7  pin     — 712, 705
+        5/6  target  — 612
+        5/18 feature — 505
+        5/20 feature — 125
 
-    pin-grade   — Sharp, multi-bucket, strong magnet. Price likely to stick.
-    drift-grade — Moderate strength or breadth. Transitional / waypoint level.
-    waypoint    — Soft level, easily passed through; just a feature of the
-                  field, not a pin candidate.
+    Peak strength, not peak width, separates the tiers. A real pin built on
+    layered multi-strike hedging mass is broad, not sharp — see CR-011, which
+    measured peak-width metrics (absolute FWHM, DTE-relative FWHM ratio, mass
+    concentration) against the labeled set and found none of them monotonic.
+
+    pin     — Strong magnet. Price locks in here if it reaches the level.
+    target  — Moderate magnet. The destination of a directional move, but not
+              a tight pin.
+    feature — Weak level. A real feature of the field, but not a destination;
+              price passes through it easily.
     """
-    score_b_per_pt = score / 1e9
-    if score_b_per_pt >= 30 and avg_fwhm < 40:
-        return "pin-grade"
-    if score_b_per_pt < 5 or avg_fwhm > 80:
-        return "waypoint"
-    return "drift-grade"
+    max_gex_b = max_gex / 1e9
+    if max_gex_b >= 650:
+        return "pin"
+    if max_gex_b < 550:
+        return "feature"
+    return "target"
 
 
 def score_confluence(cluster: list) -> dict:
@@ -898,7 +907,7 @@ def score_confluence(cluster: list) -> dict:
         "sum_gex":       float(sum_gex),
         "avg_fwhm":      float(avg_fwhm),
         "score":         float(score),
-        "quality":       classify_confluence_quality(score, avg_fwhm),
+        "quality":       classify_confluence_quality(max_gex),
         "peaks":         cluster,
     }
 
