@@ -484,19 +484,19 @@ def plot_stacked(
             colors = {2: "#fbbf24", 3: "#fb923c", 4: ACTIVE_C}
             line_color = colors.get(n, ACTIVE_C)
             line_alpha = 0.35 + 0.20 * (n - 2)
-            # Line style by quality: pin-grade solid, drift-grade dashed, waypoint dotted
-            quality = c.get("quality", "waypoint")
-            style_map = {"pin-grade": "-", "drift-grade": "--", "waypoint": ":"}
+            # Line style by quality: pin solid, target dashed, feature dotted
+            quality = c.get("quality", "feature")
+            style_map = {"pin": "-", "target": "--", "feature": ":"}
             line_style = style_map.get(quality, ":")
-            line_width = {"pin-grade": 2.0, "drift-grade": 1.5, "waypoint": 1.0}.get(
+            line_width = {"pin": 2.0, "target": 1.5, "feature": 1.0}.get(
                 quality, 1.0
             )
             ax.axhline(c["center_price"], color=line_color,
                        linewidth=line_width, linestyle=line_style,
                        alpha=line_alpha, zorder=8)
             # Annotation on the right edge — small but readable
-            quality_short = {"pin-grade": "PIN", "drift-grade": "DRIFT",
-                             "waypoint": "soft"}.get(quality, "")
+            quality_short = {"pin": "PIN", "target": "TGT",
+                             "feature": "soft"}.get(quality, "")
             ax.text(
                 x_right * 0.985,
                 c["center_price"],
