@@ -133,19 +133,28 @@ export default function App() {
     setFlags([]);
 
     try {
-      const [propRes, analogRes, landscapeRes, flagsRes] = await Promise.all([
+      const results = await Promise.allSettled([
         fetchProposals(date, ticker),
         fetchAnalogues(date, ticker),
         fetchLandscape(date, ticker),
         fetchFlags(date, ticker),
       ]);
-      if (propRes.ok) setProposals(propRes);
-      else setError(propRes.error || 'Proposals error');
-      if (analogRes?.ok) setAnalogues(analogRes);
-      if (landscapeRes?.ok !== false) setAnchorLandscape(landscapeRes);
-      if (flagsRes?.flags) setFlags(flagsRes.flags);
-    } catch (e) {
-      setError(e.message);
+      const [propR, analogR, landscapeR, flagsR] = results;
+
+      // Proposals — surface error but don't block the other panels.
+      if (propR.status === 'fulfilled' && propR.value?.ok) {
+        setProposals(propR.value);
+      } else {
+        const msg = propR.status === 'rejected'
+          ? propR.reason?.message || 'Proposals error'
+          : (propR.value?.error || 'Proposals error');
+        setError(msg);
+      }
+
+      // Analogues, landscape, flags — independent; use whatever succeeded.
+      if (analogR.status === 'fulfilled' && analogR.value?.ok) setAnalogues(analogR.value);
+      if (landscapeR.status === 'fulfilled' && landscapeR.value?.ok !== false) setAnchorLandscape(landscapeR.value);
+      if (flagsR.status === 'fulfilled' && flagsR.value?.flags) setFlags(flagsR.value.flags);
     } finally {
       setLoading(false);
     }
