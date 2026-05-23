@@ -4,6 +4,11 @@ import { useState, useEffect, useRef } from 'react'
 import { GexLandscape, MiniPriceChart, PANEL_WIDTH as LANDSCAPE_WIDTH } from 'web-shared'
 
 const ROW_HEIGHT = 480
+// GexLandscape's header height (measured: 35px). Padding the chart wrapper by
+// this amount aligns the chart's y=0 with the landscape's SVG body y=0 so
+// that cluster price lines on the chart and cluster labels on the landscape
+// land at the same viewport y-pixel.
+const LANDSCAPE_HEADER_PX = 35
 
 const REGIME_COLORS = {
   'magnetic-pin': '#10b981',
@@ -105,15 +110,18 @@ export default function DayView({
       {/* Chart + landscape side-by-side row */}
       {date && (
         <div style={{ display: 'flex', gap: 8, height: ROW_HEIGHT, alignItems: 'stretch' }}>
-          {/* Mini price chart — fills remaining width on the left */}
-          <div style={{ flex: 1, minWidth: 0, height: '100%' }}>
+          {/* Mini price chart — fills remaining width on the left.
+              paddingTop matches the landscape's header height so that chart y=0
+              (price pane top) is at the same viewport pixel as the landscape's
+              SVG body y=0, giving pixel-accurate cluster line / label alignment. */}
+          <div style={{ flex: 1, minWidth: 0, height: '100%', paddingTop: LANDSCAPE_HEADER_PX }}>
             <MiniPriceChart
               ref={miniChartRef}
               date={date}
               ticker={ticker}
               apiBase={apiBase}
               clusters={clusters}
-              height={ROW_HEIGHT}
+              height={ROW_HEIGHT - LANDSCAPE_HEADER_PX}
               onPriceRangeChange={setPriceRange}
             />
           </div>

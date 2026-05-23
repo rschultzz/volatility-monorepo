@@ -8,6 +8,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   plugins: [react()],
   base: '/today-setup/',
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8060',
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            const creds = Buffer.from('ryan:ChangeThisPassword123!').toString('base64')
+            proxyReq.setHeader('Authorization', `Basic ${creds}`)
+          })
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       'web-shared': path.resolve(__dirname, '../packages/web-shared/src/index.js'),
