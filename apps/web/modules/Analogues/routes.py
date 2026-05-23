@@ -1,15 +1,19 @@
-"""Analogues routes — Flask wiring for /api/analogues (CR-013, v0.5).
+"""Analogues routes — Flask wiring for /api/analogues (CR-013, v0.5;
+label-gate removed in CR-014).
 
 Endpoint:
     GET /api/analogues?date=YYYY-MM-DD&spot=<float>&implied_move=<float>
         [&k=5][&ticker=SPX][&feature_version=v0.5.0]
 
-Returns the K nearest historical days (from labeled candidates in
-bt_daily_features ⋈ bt_signals) ranked by σ-normalized weighted
-Euclidean distance over the day's feature vector.
+Returns the K nearest historical days from bt_daily_features ranked by
+σ-normalized weighted Euclidean distance over the day's feature vector.
+Candidates are any day with a stored feature vector at the requested
+feature_version — no human-label requirement (CR-014). When labels do
+exist for a returned analogue's trade_date, they ride along as the
+`labeled_signals` enrichment on that analogue's response object.
 
 Empty corpus → analogues: []. The anchor day is excluded from its own
-neighbor list. Unlabeled days are never returned.
+neighbor list.
 """
 from __future__ import annotations
 
@@ -108,9 +112,16 @@ def _materialize_anchor_features(conn, ticker: str, trade_date: dt.date,
     return extract_features(payload, spot, implied_move)
 
 
-def _load_labeled_candidates(conn, ticker: str, version: str) -> list[tuple]:
-    """All candidate days for similarity ranking: those with a feature
-    vector AND at least one labeled signal in bt_signals."""
+def _load_candidates(conn, ticker: str, version: str) -> list[tuple]:
+    """All candidate days for similarity ranking: every day with a stored
+    feature vector at the requested feature_version (CR-014).
+
+    CR-013 originally joined on bt_signals and required label IS NOT NULL.
+    CR-014 dropped that gate — the analogues panel is a structural day
+    comparison (auto-classified features + price outcomes), not a
+    label-based backtest. Labels still ride along as optional enrichment
+    via _fetch_labeled_signals when they exist.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -118,11 +129,6 @@ def _load_labeled_candidates(conn, ticker: str, version: str) -> list[tuple]:
             FROM bt_daily_features f
             WHERE f.ticker = %s
               AND f.feature_version = %s
-              AND EXISTS (
-                  SELECT 1 FROM bt_signals s
-                  WHERE s.trade_date = f.trade_date
-                    AND s.label IS NOT NULL
-              )
             """,
             (ticker, version),
         )
@@ -329,7 +335,7 @@ def register_analogues_routes(server) -> None:
                 }), 404
 
             # ── candidates ────────────────────────────────────────────────
-            candidates = _load_labeled_candidates(conn, ticker, version)
+            candidates = _load_candidates(conn, ticker, version)
             stats = feature_stats(v for (_, v) in candidates) if candidates else {}
             ranked = rank_analogues(
                 anchor_vec, candidates, k,
