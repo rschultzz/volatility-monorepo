@@ -86,7 +86,15 @@ export default function MiniPriceChart({ date, ticker = 'SPX', apiBase = '', clu
           return
         }
         seriesRef.current?.setData(bars)
-        chartRef.current?.timeScale().fitContent()
+        // Add 10 minutes of left-pad before the first bar so the opening
+        // candle isn't crammed against the left axis.
+        const LEFT_PAD_SECONDS = 600
+        const firstTime = bars[0].time
+        const lastTime = bars[bars.length - 1].time
+        chartRef.current?.timeScale().setVisibleRange({
+          from: firstTime - LEFT_PAD_SECONDS,
+          to: lastTime,
+        })
         setStatus('ok')
       })
       .catch(() => {
