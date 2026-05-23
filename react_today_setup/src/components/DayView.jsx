@@ -1,0 +1,259 @@
+// DayView — renders the GEX landscape + mini price chart for one day,
+// with flag controls (regime_wrong, not_a_true_analogue).
+import { useState, useEffect, useRef } from 'react'
+import { GexLandscape, MiniPriceChart, PANEL_WIDTH as LANDSCAPE_WIDTH } from 'web-shared'
+
+const ROW_HEIGHT = 480
+// GexLandscape's header height (measured: 35px). Padding the chart wrapper by
+// this amount aligns the chart's y=0 with the landscape's SVG body y=0 so
+// that cluster price lines on the chart and cluster labels on the landscape
+// land at the same viewport y-pixel.
+const LANDSCAPE_HEADER_PX = 35
+
+const REGIME_COLORS = {
+  'magnetic-pin': '#10b981',
+  'magnet-above': '#fbbf24',
+  'magnet-below': '#fbbf24',
+  bounded: '#10b981',
+  amplification: '#06b6d4',
+  'broken-magnet': '#a78bfa',
+  untethered: '#94a3b8',
+  pinned: '#10b981',
+}
+
+const VALID_REGIMES = [
+  'magnetic-pin', 'magnet-above', 'magnet-below',
+  'bounded', 'amplification', 'untethered', 'broken-magnet',
+]
+
+export default function DayView({
+  label,            // "Anchor" | "Selected"
+  date,             // "YYYY-MM-DD"
+  ticker,
+  apiBase,
+  landscapeData,    // data for GexLandscape (or null)
+  regime,           // effective regime string
+  autoRegime,       // stored auto regime
+  flag,             // existing flag object or null
+  allowPairFlag,    // bool — show "not a true analogue" control
+  onRegimeFlag,     // (correctedRegime) => void
+  onPromote,        // () => void
+  onDemote,         // () => void
+  onDeleteFlag,     // () => void
+  onPairFlag,       // () => void — flag as not a true analogue
+}) {
+  const [showRegimePicker, setShowRegimePicker] = useState(false)
+  const [selectedCorrection, setSelectedCorrection] = useState('')
+  // Shared Y range from MiniPriceChart rAF poll — { priceTop, priceBot, paneHeight }.
+  // Forwarded to GexLandscape so both panels use the same chart-driven coordinate system.
+  const [priceRange, setPriceRange] = useState(null)
+  // Ref to MiniPriceChart — used to forward the chart instance to GexLandscape
+  // so landscape-initiated wheel zoom can call chart.priceScale('right').setVisibleRange()
+  // directly without a React state round-trip.
+  const miniChartRef = useRef(null)
+
+  // Reset shared range when the date changes so a newly selected day
+  // starts at its own natural price extent (AC #6: zoom doesn't carry over).
+  useEffect(() => {
+    setPriceRange(null)
+  }, [date])
+
+  const regimeColor = REGIME_COLORS[regime] || '#94a3b8'
+  const isFlagged = flag != null
+  const isPromoted = flag?.promoted === true
+
+  const clusters = Array.isArray(landscapeData?.confluences)
+    ? landscapeData.confluences.map(c => ({
+        center_price: c.center_price,
+        max_gex: c.max_gex,
+      }))
+    : []
+
+  function handleSubmitRegimeFlag() {
+    if (!selectedCorrection) return
+    onRegimeFlag?.(selectedCorrection)
+    setShowRegimePicker(false)
+    setSelectedCorrection('')
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, position: 'relative' }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          {label}
+        </span>
+        {date && (
+          <span style={{ fontSize: 12, color: '#e2e8f0', fontFamily: 'monospace' }}>{date}</span>
+        )}
+        {regime && (
+          <span style={{
+            fontSize: 10, fontWeight: 700, letterSpacing: '0.05em',
+            padding: '2px 7px', borderRadius: 5,
+            color: regimeColor, background: `${regimeColor}22`, border: `1px solid ${regimeColor}55`,
+          }}>
+            {regime.replace(/-/g, ' ')}
+          </span>
+        )}
+        {isFlagged && (
+          <span style={{ fontSize: 9, color: '#ef4444', fontWeight: 700, letterSpacing: '0.04em' }}>
+            ⚑ FLAGGED{isPromoted ? ' (promoted)' : ''}
+          </span>
+        )}
+        {isFlagged && flag.corrected_regime && flag.corrected_regime !== autoRegime && (
+          <span style={{ fontSize: 10, color: '#94a3b8' }}>
+            auto: {autoRegime} → yours: {flag.corrected_regime}
+          </span>
+        )}
+      </div>
+
+      {/* Chart + landscape side-by-side row */}
+      {date && (
+        <div style={{ display: 'flex', gap: 8, height: ROW_HEIGHT, alignItems: 'stretch' }}>
+          {/* Mini price chart — fills remaining width on the left.
+              paddingTop matches the landscape's header height so that chart y=0
+              (price pane top) is at the same viewport pixel as the landscape's
+              SVG body y=0, giving pixel-accurate cluster line / label alignment. */}
+          <div style={{ flex: 1, minWidth: 0, height: '100%', paddingTop: LANDSCAPE_HEADER_PX }}>
+            <MiniPriceChart
+              ref={miniChartRef}
+              date={date}
+              ticker={ticker}
+              apiBase={apiBase}
+              clusters={clusters}
+              height={ROW_HEIGHT - LANDSCAPE_HEADER_PX}
+              onPriceRangeChange={setPriceRange}
+            />
+          </div>
+          {/* GEX landscape — fixed width on the right */}
+          <div style={{ width: LANDSCAPE_WIDTH, flexShrink: 0, height: '100%', position: 'relative' }}>
+            {landscapeData ? (
+              <GexLandscape
+                data={landscapeData}
+                spotMode="OPEN"
+                onSpotModeChange={() => {}}
+                visiblePriceRange={priceRange}
+                chartRef={miniChartRef}
+                showPriceAxis={false}
+              />
+            ) : (
+              <div style={emptyBox}>No landscape data</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Flag controls */}
+      {date && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {/* Regime flag */}
+          {!isFlagged ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setShowRegimePicker(v => !v)}
+                style={smallBtn('#1e3a5f', '#60a5fa')}
+              >
+                ⚑ Regime is wrong
+              </button>
+              {showRegimePicker && (
+                <>
+                  <select
+                    value={selectedCorrection}
+                    onChange={e => setSelectedCorrection(e.target.value)}
+                    style={selectStyle}
+                  >
+                    <option value="">Pick regime…</option>
+                    {VALID_REGIMES.map(r => (
+                      <option key={r} value={r}>{r}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleSubmitRegimeFlag}
+                    disabled={!selectedCorrection}
+                    style={smallBtn('#1a3a1a', '#22c55e')}
+                  >
+                    Submit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowRegimePicker(false); setSelectedCorrection('') }}
+                    style={smallBtn('#2d1a1a', '#ef4444')}
+                  >
+                    Cancel
+                  </button>
+                </>
+              )}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                type="button"
+                onClick={onDeleteFlag}
+                style={smallBtn('#2d1a1a', '#ef4444')}
+              >
+                ✕ Remove flag
+              </button>
+              {!isPromoted ? (
+                <button type="button" onClick={onPromote} style={smallBtn('#1e3a5f', '#60a5fa')}>
+                  ↑ Promote
+                </button>
+              ) : (
+                <button type="button" onClick={onDemote} style={smallBtn('#2d1f0a', '#fbbf24')}>
+                  ↓ Demote
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Pair flag — only in analogue mode for the selected-day panel */}
+          {allowPairFlag && (
+            <button
+              type="button"
+              onClick={onPairFlag}
+              style={smallBtn('#2d1f0a', '#fb923c')}
+            >
+              ✗ Not a true analogue
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const emptyBox = {
+  height: '100%',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  color: '#475569',
+  fontSize: 13,
+  border: '1px dashed #334155',
+  borderRadius: 8,
+}
+
+function smallBtn(bg, color) {
+  return {
+    padding: '3px 10px',
+    fontSize: 10,
+    fontWeight: 700,
+    border: `1px solid ${color}44`,
+    borderRadius: 5,
+    background: bg,
+    color,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  }
+}
+
+const selectStyle = {
+  background: '#0f172a',
+  color: '#e2e8f0',
+  border: '1px solid #334155',
+  borderRadius: 5,
+  padding: '2px 6px',
+  fontSize: 11,
+  fontFamily: 'inherit',
+}

@@ -15,11 +15,12 @@ import CondorPricingPanel from './CondorPricingPanel'
 import AnaloguesPanel, {
   PANEL_WIDTH as ANALOGUES_PANEL_WIDTH,
 } from './AnaloguesPanel'
-import GexLandscapePanel, {
+import {
+  GexLandscape,
   PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH,
   CONFLUENCE_COLORS,
   QUALITY_SHORT,
-} from './GexLandscapePanel'
+} from 'web-shared'
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 
 const ETH_BG_COLOR = '#1f2937'
@@ -989,7 +990,7 @@ export default function PriceChart({
   const annotationStateRef = useRef(null)
 
   // CR-009 item 1 — the chart's currently-visible price window, sampled from
-  // the candlestick series and handed to GexLandscapePanel so its Y-axis
+  // the candlestick series and handed to GexLandscape so its Y-axis
   // tracks the chart's. Shape: { priceTop, priceBot, paneHeight }, or null
   // before the first sample (panel falls back to its full stored range).
   const [visiblePriceRange, setVisiblePriceRange] = useState(null)
@@ -2906,7 +2907,7 @@ export default function PriceChart({
           )}
 
           {landscapeOpen && (
-            <GexLandscapePanel
+            <GexLandscape
               data={landscapeData}
               spotMode={landscapeSpotMode}
               onSpotModeChange={onLandscapeSpotModeChange}

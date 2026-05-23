@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
-import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from './components/GexLandscapePanel'
+import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
+
 
 const FLOW_HEIGHT_STORAGE_KEY = 'ib-react-flow-panel-height'
 const FLOW_EMA_MINUTES_STORAGE_KEY = 'ib-react-flow-ema-minutes'

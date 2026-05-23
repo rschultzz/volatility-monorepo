@@ -47,6 +47,10 @@ from modules.BacktestsV2.routes import (
 )
 from modules.TradeLog.routes import trade_log_bp
 from modules.Analogues.routes import register_analogues_routes
+from modules.TodaySetup.routes import register_today_setup_routes
+from modules.Bars.routes import register_bars_routes
+from modules.AuditFlags.routes import register_audit_flags_routes
+from modules.DayBrowser.routes import register_day_browser_routes
 
 # ===== IDs =====
 CLOCK_ID = "CLOCK"
@@ -192,8 +196,51 @@ server.register_blueprint(trade_log_bp)
 # Mount the Day Analogue Comparison API (CR-013)
 register_analogues_routes(server)
 
+# Mount the Day Setup Recommendations API (CR-015)
+register_today_setup_routes(server)
+
+# Mount the RTH bars API (CR-016)
+register_bars_routes(server)
+
+# Mount the Audit Flags API (CR-016)
+register_audit_flags_routes(server)
+
+# Mount the Day Browser API (CR-016)
+register_day_browser_routes(server)
+
 # Mount the React Price Chart preview
 REACT_PREVIEW_DIST_DIR = (REPO_ROOT / "react_price_preview" / "dist").resolve()
+
+# Mount the Today Setup React app (CR-015)
+TODAY_SETUP_DIST_DIR = (REPO_ROOT / "react_today_setup" / "dist").resolve()
+
+
+def _today_setup_build_ready() -> bool:
+    return TODAY_SETUP_DIST_DIR.exists() and (TODAY_SETUP_DIST_DIR / "index.html").exists()
+
+
+@server.route("/today-setup")
+@server.route("/today-setup/")
+def today_setup_index():
+    if not _today_setup_build_ready():
+        return (
+            "Today Setup build not found. Run: cd react_today_setup && npm run build",
+            503,
+        )
+    return send_from_directory(str(TODAY_SETUP_DIST_DIR), "index.html")
+
+
+@server.route("/today-setup/<path:path>")
+def today_setup_assets(path):
+    if not _today_setup_build_ready():
+        return (
+            "Today Setup build not found. Run: cd react_today_setup && npm run build",
+            503,
+        )
+    candidate = (TODAY_SETUP_DIST_DIR / path).resolve()
+    if candidate.exists() and candidate.is_file():
+        return send_from_directory(str(TODAY_SETUP_DIST_DIR), path)
+    return send_from_directory(str(TODAY_SETUP_DIST_DIR), "index.html")
 
 
 def _react_preview_build_ready() -> bool:
@@ -460,9 +507,25 @@ def serve_layout():
                             dcc.Tab(label="Price Chart", value=TAB_PRICE_CHART, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                             dcc.Tab(label="Backtests", value=TAB_BACKTESTS, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                         ],
-                    )
+                    ),
+                    html.A(
+                        "Today's Setup",
+                        href="/today-setup",
+                        style={
+                            "marginLeft": "12px",
+                            "alignSelf": "center",
+                            "padding": "10px 16px",
+                            "borderRadius": "12px",
+                            "fontSize": "13px",
+                            "fontWeight": "700",
+                            "color": "#93c5fd",
+                            "textDecoration": "none",
+                            "whiteSpace": "nowrap",
+                            "border": "0px",
+                        },
+                    ),
                 ],
-                style=TABS_WRAP_STYLE,
+                style={**TABS_WRAP_STYLE, "display": "flex", "alignItems": "stretch"},
             ),
             html.Div(
                 id="dashboard-container",
