@@ -19,7 +19,7 @@ Ship a Day Analogue Comparison feature that:
 
 ### Feature vector — locked schema for v0.5
 
-29 active features + 5 deferred vol-surface slots. All numeric (binary indicators are 0/1 numeric for distance computation).
+30 active features + 5 deferred vol-surface slots. All numeric (binary indicators are 0/1 numeric for distance computation).
 
 **Regime / structure (6 features)**
 - `is_pin_day`, `is_magnet_day`, `is_bounded_day`, `is_untethered_day`, `is_amplification_day` — binary indicators derived from `landscape.regime`.
@@ -67,7 +67,7 @@ Mapping (from `classify_regime` output → indicators):
 - `atm_iv_percentile`, `skew_percentile`, `smile_convexity`, `term_structure_slope`, `vol_risk_premium`.
 - Populated NULL at extraction time. Similarity function detects NULL and skips them (see Similarity section).
 
-**Total: 29 active + 5 deferred = 34 schema slots.**
+**Total: 30 active + 5 deferred = 35 schema slots.**
 
 ### Similarity function
 
@@ -75,7 +75,7 @@ Weighted Euclidean distance over the feature vector, with:
 
 1. **σ-normalization at extraction** for distance features (cluster signed_distance_sigma × 3, nearest_neg_signed_distance_sigma). These are already dimensionless when they hit the similarity function.
 2. **Inverse-variance scaling per feature, computed across the labeled corpus**: each feature is z-scored using corpus mean/stddev, with a small epsilon floor on stddev to prevent division-by-zero on near-constant features.
-3. **NULL-aware**: features whose value is NULL on either the query day or the candidate day are skipped in the distance sum. After summation, the distance is rescaled by `sqrt(n_total_features / n_active_features)` so distances stay comparable across queries with different active-feature counts. For v0.5 this matters only for the 5 vol-surface slots, which are NULL everywhere; effectively every query in v0.5 uses 29-of-34 dimensions.
+3. **NULL-aware**: features whose value is NULL on either the query day or the candidate day are skipped in the distance sum. After summation, the distance is rescaled by `sqrt(n_total_features / n_active_features)` so distances stay comparable across queries with different active-feature counts. For v0.5 this matters only for the 5 vol-surface slots, which are NULL everywhere; effectively every query in v0.5 uses 30-of-35 dimensions.
 
 ```python
 def similarity_distance(query_vec, candidate_vec, feature_stats):
@@ -231,7 +231,7 @@ Response shape:
   "ok": true,
   "anchor": {
     "trade_date": "2026-05-22",
-    "feature_vector": {...},          // 34 keys per FEATURE_NAMES
+    "feature_vector": {...},          // 35 keys per FEATURE_NAMES
     "implied_move": 40.5
   },
   "analogues": [
@@ -310,7 +310,7 @@ Wiring:
 
 ### Acceptance criteria
 
-1. **Feature extraction is deterministic.** `extract_features(landscape, spot, implied_move)` returns the same 34-key dict for the same inputs across runs.
+1. **Feature extraction is deterministic.** `extract_features(landscape, spot, implied_move)` returns the same 35-key dict for the same inputs across runs.
 2. **σ-normalization is correct.** Unit test: a cluster at +50pt with implied_move=30 produces `signed_distance_sigma = +1.667`; a cluster at -40pt with implied_move=80 produces `signed_distance_sigma = -0.5`.
 3. **All four labeled days from CR-011 have populated rows in `bt_daily_features`** after backfill: 5/6, 5/7, 5/18, 5/20. The vectors are inspectable via SQL.
 4. **Endpoint returns analogues** for `GET /api/analogues?date=2026-05-22&spot=7400&implied_move=40&k=5`, sorted closest-first by `similarity_score`. With the v0.5 labeled corpus empty, the endpoint returns `analogues: []` gracefully; AC #4 becomes operative once labels are added.
