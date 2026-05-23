@@ -235,11 +235,14 @@ export default function AnaloguesPanel({
             <div style={{ padding: 16, fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
               {nCandidates === 0 ? (
                 <>
-                  No labeled days in <code style={{ color: '#94a3b8' }}>bt_signals</code> yet.
-                  Label signals via the SIGNALS panel to populate the analogue corpus.
+                  No candidate days yet — run the daily-features backfill
+                  to populate <code style={{ color: '#94a3b8' }}>bt_daily_features</code>.
                 </>
               ) : (
-                <>No close analogues found.</>
+                <>
+                  No close analogues — today's landscape is unusual against
+                  the current corpus.
+                </>
               )}
             </div>
           )}
@@ -261,7 +264,7 @@ export default function AnaloguesPanel({
             color: '#64748b',
           }}
         >
-          {nCandidates} labeled candidate{nCandidates === 1 ? '' : 's'}
+          {nCandidates} candidate{nCandidates === 1 ? '' : 's'}
         </div>
       </div>
 

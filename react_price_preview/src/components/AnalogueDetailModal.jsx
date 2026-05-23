@@ -199,7 +199,9 @@ export default function AnalogueDetailModal({ analogue, onClose }) {
               LABELED SIGNALS ({signals.length})
             </h3>
             {signals.length === 0 && (
-              <div style={{ fontSize: 11, color: '#64748b' }}>No labeled signals.</div>
+              <div style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic' }}>
+                No labels for this day yet.
+              </div>
             )}
             {signals.map((s) => (
               <div
