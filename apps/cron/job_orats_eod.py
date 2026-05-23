@@ -18,6 +18,10 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packages.shared.gex_landscape import compute_and_upsert_landscape  # noqa: E402
+from packages.shared.day_features import (  # noqa: E402
+    compute_and_upsert_daily_features,
+    FEATURE_VERSION as DAY_FEATURES_VERSION,
+)
 
 # ------------ Version & logging ------------------------------------------------
 VERSION = "eod-shift-hard-upsert-2025-10-31d"
@@ -260,6 +264,25 @@ def main():
                     landscape_summary["n_landscape"],
                     landscape_summary["n_walls"],
                     landscape_summary["table_spot"],
+                )
+
+                # Day-features (CR-013, v0.5) — same transaction. Reads the
+                # landscape row just written above and the ATM IV from
+                # orats_monies_minute to compute the day's feature vector
+                # for the analogue-comparison KNN.
+                day_features_summary = compute_and_upsert_daily_features(
+                    conn=conn,
+                    ticker=TICKER,
+                    trade_date=store_trade_date,
+                    version=DAY_FEATURES_VERSION,
+                )
+                log.info(
+                    "bt_daily_features upserted for (%s, %s): "
+                    "version=%s implied_move=%.2f n_features=%s",
+                    TICKER, store_trade_date.isoformat(),
+                    day_features_summary["feature_version"],
+                    day_features_summary["implied_move"],
+                    day_features_summary["n_features"],
                 )
 
                 conn.commit()

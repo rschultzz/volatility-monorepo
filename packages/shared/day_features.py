@@ -286,6 +286,9 @@ _IMPLIED_MOVE_SQL = """
     ORDER BY snapshot_pt DESC, dte ASC
     LIMIT 1
 """
+# orats_monies_minute.trade_date is stored as TEXT (ISO YYYY-MM-DD); we
+# pass trade_date.isoformat() rather than the date object so the cast
+# happens client-side.
 
 
 def _materialize_payload(landscape_rows: list, spot: float, implied_move: float) -> dict:
@@ -388,7 +391,7 @@ def compute_and_upsert_daily_features(
     # Implied move — ATM IV at last snapshot, smallest dte>0, computed
     # against spot via compute_implied_move(spot, iv, dte=1.0).
     with conn.cursor() as cur:
-        cur.execute(_IMPLIED_MOVE_SQL, (trade_date, ticker))
+        cur.execute(_IMPLIED_MOVE_SQL, (trade_date.isoformat(), ticker))
         iv_row = cur.fetchone()
     if iv_row and iv_row[0] is not None:
         try:
