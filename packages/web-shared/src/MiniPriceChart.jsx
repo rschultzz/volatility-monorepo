@@ -23,29 +23,29 @@ export default function MiniPriceChart({ date, ticker = 'SPX', apiBase = '', clu
     if (!containerRef.current) return
     const chart = createChart(containerRef.current, {
       layout: {
-        background: { type: ColorType.Solid, color: '#0b1220' },
-        textColor: '#64748b',
+        background: { type: ColorType.Solid, color: '#1f2937' },
+        textColor: '#cbd5e1',
       },
       grid: {
-        vertLines: { color: '#1e293b' },
-        horzLines: { color: '#1e293b' },
+        vertLines: { color: 'rgba(148, 163, 184, 0.08)' },
+        horzLines: { color: 'rgba(148, 163, 184, 0.08)' },
       },
       timeScale: {
-        borderColor: '#334155',
+        borderColor: 'rgba(148, 163, 184, 0.18)',
         timeVisible: true,
         secondsVisible: false,
       },
-      rightPriceScale: { borderColor: '#334155' },
+      rightPriceScale: { borderColor: 'rgba(148, 163, 184, 0.18)' },
       crosshair: { mode: 1 },
       handleScroll: false,
       handleScale: false,
     })
     const series = chart.addSeries(CandlestickSeries, {
-      upColor: '#22c55e',
-      downColor: '#ef4444',
+      upColor: '#60a5fa',
+      downColor: '#e5e7eb',
       borderVisible: false,
-      wickUpColor: '#22c55e',
-      wickDownColor: '#ef4444',
+      wickUpColor: '#60a5fa',
+      wickDownColor: '#e5e7eb',
     })
     chartRef.current = chart
     seriesRef.current = series
