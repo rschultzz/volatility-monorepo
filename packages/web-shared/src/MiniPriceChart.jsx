@@ -65,10 +65,18 @@ const MiniPriceChart = forwardRef(function MiniPriceChart({
       },
       rightPriceScale: {
         borderColor: 'rgba(148, 163, 184, 0.18)',
+        // No scale margins — the displayed range equals setVisibleRange's from/to,
+        // which is required for the wheel-zoom math to converge. With default
+        // margins (top: 0.2, bottom: 0.1), the displayed span is ~1.43× what we
+        // set, so each zoom iteration the rAF poll reads the inflated span and
+        // feeds it back to setVisibleRange, monotonically expanding the range in
+        // both directions. The 4% pad in rangeAnchor.priceBot/priceTop provides
+        // visual breathing room. (Originally CR-017 hotfix 1; lost in CR-018.)
+        scaleMargins: { top: 0, bottom: 0 },
       },
       crosshair: { mode: 1 },
       handleScroll: { vertTouchDrag: true },
-      handleScale: { axisPressedMouseMove: { price: true, time: false }, mouseWheel: true, pinch: true },
+      handleScale: { axisPressedMouseMove: { price: true, time: false }, mouseWheel: false, pinch: false },
     })
     const series = chart.addSeries(CandlestickSeries, {
       upColor: '#60a5fa',
@@ -145,6 +153,38 @@ const MiniPriceChart = forwardRef(function MiniPriceChart({
     }
     rafId = requestAnimationFrame(sample)
     return () => cancelAnimationFrame(rafId)
+  }, [])
+
+  // Custom Y-axis-only wheel handler. lightweight-charts' handleScale.mouseWheel
+  // controls the *time* scale (X axis), which is the wrong direction for this
+  // chart. With mouseWheel: false above, the library does no wheel handling;
+  // here we capture wheel events on the chart container and call setVisibleRange
+  // on the *price* scale, mirroring the math GexLandscape's wheel handler uses.
+  // The rAF poll picks up the new range and emits to DayView, so the landscape
+  // re-renders in lock-step. Min span 5pt; zoom factor 1.06 per wheel tick.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return undefined
+    function onWheel(e) {
+      const last = lastEmittedRafRef.current
+      const chart = chartRef.current
+      if (!last || !chart) return
+      e.preventDefault()
+      const span = last.priceTop - last.priceBot
+      const MIN_SPAN = 5
+      const factor = e.deltaY > 0 ? 1.06 : 1 / 1.06
+      const newSpan = Math.max(MIN_SPAN, span * factor)
+      const mid = (last.priceTop + last.priceBot) / 2
+      const newTop = mid + newSpan / 2
+      const newBot = mid - newSpan / 2
+      try {
+        chart.priceScale('right').setVisibleRange({ from: newBot, to: newTop })
+      } catch (_) {
+        /* setVisibleRange can throw before the chart has a sized scale; ignore. */
+      }
+    }
+    container.addEventListener('wheel', onWheel, { passive: false })
+    return () => container.removeEventListener('wheel', onWheel)
   }, [])
 
   // Fetch bars when date/ticker change.

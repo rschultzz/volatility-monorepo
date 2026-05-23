@@ -134,6 +134,7 @@ export default function DayView({
                 onSpotModeChange={() => {}}
                 visiblePriceRange={priceRange}
                 chartRef={miniChartRef}
+                showPriceAxis={false}
               />
             ) : (
               <div style={emptyBox}>No landscape data</div>

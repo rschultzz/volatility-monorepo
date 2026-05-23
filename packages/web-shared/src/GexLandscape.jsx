@@ -87,6 +87,11 @@ export default function GexLandscape({
   // Ref to MiniPriceChart (via DayView) — { getChart() } — used by the landscape
   // wheel handler to drive zoom directly on the chart's price scale (no React round-trip).
   chartRef = null,
+  // When false, suppress the landscape's own evenly-spaced price-axis tick labels
+  // (and grid lines). Used by today-setup so the paired chart's right-side axis
+  // labels are the single visible Y axis for both panes. Default true preserves
+  // existing behavior on the main page.
+  showPriceAxis = true,
 }) {
   const bodyRef = useRef(null)
   const rootRef = useRef(null)
@@ -337,8 +342,11 @@ export default function GexLandscape({
               strokeWidth="0.8"
             />
 
-            {/* price-axis ticks */}
-            {priceTicks.map((p, i) => (
+            {/* price-axis ticks — suppressed when showPriceAxis is false so the
+                paired chart's right-side axis labels serve as the single visible Y
+                axis for both panes (today-setup). Cluster lines, spot line, and
+                negative-wall markers are annotations, not axis ticks, and remain. */}
+            {showPriceAxis && priceTicks.map((p, i) => (
               <g key={`tick-${i}`}>
                 <line
                   x1={PAD.left}
