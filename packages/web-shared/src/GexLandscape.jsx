@@ -80,20 +80,20 @@ export default function GexLandscape({
   spotMode = 'LIVE',
   onSpotModeChange,
   onClose,
-  // The chart's visible price window { priceTop, priceBot }. When present,
-  // the landscape Y-axis follows the chart's range exactly.
-  // null before the chart's first sample → fall back to the full stored range.
+  // The chart's visible price window { priceTop, priceBot, paneHeight }. When present,
+  // the landscape Y-axis uses chart-pixel coordinates to align with the chart.
+  // null before the chart's first rAF sample → fall back to the full stored range.
   visiblePriceRange = null,
-  // Called with { priceBot, priceTop } when the user wheel-zooms the landscape.
-  // DayView uses this to push the new range back to MiniPriceChart.
-  onRangeChange = null,
+  // Ref to MiniPriceChart (via DayView) — { getChart() } — used by the landscape
+  // wheel handler to drive zoom directly on the chart's price scale (no React round-trip).
+  chartRef = null,
 }) {
   const bodyRef = useRef(null)
   const rootRef = useRef(null)
   // Refs so the wheel handler can read the latest geometry without stale closures.
   const geomRef = useRef(null)
-  const onRangeChangeRef = useRef(onRangeChange)
-  useEffect(() => { onRangeChangeRef.current = onRangeChange }, [onRangeChange])
+  const chartRefRef = useRef(chartRef)
+  useEffect(() => { chartRefRef.current = chartRef }, [chartRef])
 
   const [size, setSize] = useState({ width: PANEL_WIDTH, height: 360, offsetTop: 0 })
 
@@ -114,25 +114,33 @@ export default function GexLandscape({
     return () => ro.disconnect()
   }, [])
 
-  // Non-passive wheel listener for Y-axis zoom. Must be registered imperatively
-  // so we can call preventDefault() and suppress page scrolling.
+  // Non-passive wheel listener for Y-axis zoom. Drives the chart's price scale
+  // directly via chartRef.getChart().priceScale('right').setVisibleRange() — no
+  // React state round-trip. The chart's rAF poll picks up the new range and the
+  // landscape re-renders automatically.
   useEffect(() => {
     const el = rootRef.current
     if (!el) return undefined
     function onWheel(e) {
-      if (!onRangeChangeRef.current || !geomRef.current) {
+      const geom = geomRef.current
+      const chart = chartRefRef.current?.current?.getChart?.()
+      if (!geom) {
         e.stopPropagation()
         return
       }
       e.preventDefault()
       e.stopPropagation()
-      const { pMin, pMax } = geomRef.current
+      const { pMin, pMax } = geom
       const span = pMax - pMin
       const MIN_SPAN = 5
       const factor = e.deltaY > 0 ? 1.06 : 1 / 1.06
       const newSpan = Math.max(MIN_SPAN, span * factor)
       const mid = (pMin + pMax) / 2
-      onRangeChangeRef.current({ priceBot: mid - newSpan / 2, priceTop: mid + newSpan / 2 })
+      const newBot = mid - newSpan / 2
+      const newTop = mid + newSpan / 2
+      if (chart) {
+        chart.priceScale('right').setVisibleRange({ from: newBot, to: newTop })
+      }
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
@@ -170,24 +178,26 @@ export default function GexLandscape({
     gMax += gPad
     const gexSpan = gMax - gMin || 1
 
-    // CR-017 — when the chart publishes its visible price window, use the same
-    // price range in the landscape but map it to the landscape's own SVG
-    // coordinate system (PAD.top..PAD.top+plotH). This keeps labels aligned
-    // without depending on absolute pixel positions across two different DOM trees.
+    // CR-018 — when the chart publishes its visible price window (with paneHeight),
+    // map prices directly to chart-pixel coordinates: yOf(price) = 0 at priceTop,
+    // yOf(price) = paneHeight at priceBot. No PAD.top offset — the landscape SVG
+    // body's y=0 corresponds to the chart's y=0 (plot-area top).
     const synced =
       visiblePriceRange &&
       Number.isFinite(visiblePriceRange.priceTop) &&
       Number.isFinite(visiblePriceRange.priceBot) &&
+      Number.isFinite(visiblePriceRange.paneHeight) &&
       visiblePriceRange.priceTop !== visiblePriceRange.priceBot
 
     let pLo
     let pHi
     let yOf
     if (synced) {
-      const { priceTop, priceBot } = visiblePriceRange
+      const { priceTop, priceBot, paneHeight } = visiblePriceRange
       pLo = Math.min(priceTop, priceBot)
       pHi = Math.max(priceTop, priceBot)
-      yOf = (price) => PAD.top + ((pHi - price) / (pHi - pLo)) * plotH
+      const span = pHi - pLo
+      yOf = (price) => ((priceTop - price) / span) * paneHeight
     } else {
       pLo = pMin
       pHi = pMax
