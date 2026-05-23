@@ -6,22 +6,23 @@
 //   apiBase             string  base URL for the backend (e.g. "http://localhost:8050")
 //   clusters            array   [{ center_price, max_gex }] — drawn as horizontal price lines
 //   height              number  default 200
-//   onPriceRangeChange  fn      ({ priceBot, priceTop }) => void — fires after bars + clusters
-//                               both contribute to the union range; lets DayView sync
-//                               GexLandscape's visiblePriceRange to the same Y window.
-//   externalRange       { priceBot, priceTop } | null — when non-null, the chart's visible
-//                               price scale is set to this range (used for landscape→chart zoom).
-import { useEffect, useRef, useState } from 'react'
+//   onPriceRangeChange  fn      ({ priceTop, priceBot, paneHeight }) => void — fires every rAF
+//                               with the chart's actual visible price window; lets DayView sync
+//                               GexLandscape via chart-pixel coordinates.
+// Ref:  caller can do miniChartRef.current.getChart() to get the lightweight-charts
+//       IChartApi instance, used by GexLandscape for direct zoom via setVisibleRange.
+import { useEffect, useImperativeHandle, useRef, forwardRef, useState } from 'react'
 import { createChart, CandlestickSeries, LineSeries, LineStyle, ColorType } from 'lightweight-charts'
 import { utcEpochShowingZoneTime } from './timezone.js'
 
 const CLUSTER_POS_COLOR = '#d946ef'  // magenta — positive GEX
 const CLUSTER_NEG_COLOR = '#06b6d4'  // teal — negative GEX
+const TIME_AXIS_HEIGHT = 24           // lightweight-charts time-axis strip height (px)
 
-export default function MiniPriceChart({
+const MiniPriceChart = forwardRef(function MiniPriceChart({
   date, ticker = 'SPX', apiBase = '', clusters = [], height = 200,
-  onPriceRangeChange, externalRange = null,
-}) {
+  onPriceRangeChange,
+}, ref) {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
   const seriesRef = useRef(null)
@@ -31,17 +32,19 @@ export default function MiniPriceChart({
   // Latest loaded bars (stored after setData so the union-range effect can
   // read them when clusters change independently of a bars re-fetch).
   const barsRef = useRef([])
-  // Track the last range we emitted so we don't react to our own emission
-  // when externalRange echoes back through DayView state.
-  const lastEmittedRef = useRef(null)
-  // Current visible range — kept as a ref so the wheel handler can read it
-  // without a stale closure. Updated whenever we call setVisibleRange.
-  const currentRangeRef = useRef(null)
-  // Keep onPriceRangeChange stable in the wheel handler without listing it
+  // Last rAF-emitted range — used to skip no-change frames.
+  const lastEmittedRafRef = useRef(null)
+  // Keep onPriceRangeChange stable in the rAF callback without listing it
   // as a useEffect dep (it can change reference on every render).
   const onRangeChangeRef = useRef(onPriceRangeChange)
   useEffect(() => { onRangeChangeRef.current = onPriceRangeChange }, [onPriceRangeChange])
   const [status, setStatus] = useState('idle')  // idle | loading | empty | ok | error
+
+  // Expose getChart() so DayView can forward the instance to GexLandscape
+  // for landscape-initiated zoom via chart.priceScale('right').setVisibleRange().
+  useImperativeHandle(ref, () => ({
+    getChart: () => chartRef.current,
+  }))
 
   // Initialise lightweight-charts once on mount.
   useEffect(() => {
@@ -62,11 +65,10 @@ export default function MiniPriceChart({
       },
       rightPriceScale: {
         borderColor: 'rgba(148, 163, 184, 0.18)',
-        scaleMargins: { top: 0, bottom: 0 },
       },
       crosshair: { mode: 1 },
-      handleScroll: false,
-      handleScale: false,
+      handleScroll: { vertTouchDrag: true },
+      handleScale: { axisPressedMouseMove: { price: true, time: false }, mouseWheel: true, pinch: true },
     })
     const series = chart.addSeries(CandlestickSeries, {
       upColor: '#60a5fa',
@@ -103,7 +105,46 @@ export default function MiniPriceChart({
       seriesRef.current = null
       rangeAnchorRef.current = null
       barsRef.current = []
+      lastEmittedRafRef.current = null
     }
+  }, [])
+
+  // rAF polling loop — samples the chart's actual visible price window each
+  // animation frame and emits { priceTop, priceBot, paneHeight } whenever it
+  // changes. This is the chart-driven publish step; DayView forwards the
+  // payload to GexLandscape so the landscape conforms to the chart's Y-axis.
+  // Mirrors the approach in react_price_preview/PriceChart.jsx lines 1915–1949.
+  useEffect(() => {
+    let rafId = 0
+    let last = null
+    const sample = () => {
+      const series = seriesRef.current
+      const container = containerRef.current
+      if (series && container) {
+        const paneHeight = Math.max(80, container.clientHeight - TIME_AXIS_HEIGHT)
+        const priceTop = series.coordinateToPrice(0)
+        const priceBot = series.coordinateToPrice(paneHeight)
+        if (
+          Number.isFinite(priceTop) &&
+          Number.isFinite(priceBot) &&
+          priceTop !== priceBot
+        ) {
+          if (
+            !last ||
+            last.priceTop !== priceTop ||
+            last.priceBot !== priceBot ||
+            last.paneHeight !== paneHeight
+          ) {
+            last = { priceTop, priceBot, paneHeight }
+            lastEmittedRafRef.current = last
+            onRangeChangeRef.current?.(last)
+          }
+        }
+      }
+      rafId = requestAnimationFrame(sample)
+    }
+    rafId = requestAnimationFrame(sample)
+    return () => cancelAnimationFrame(rafId)
   }, [])
 
   // Fetch bars when date/ticker change.
@@ -151,9 +192,8 @@ export default function MiniPriceChart({
   }, [date, ticker, apiBase])
 
   // Compute union Y range (bars high/low + cluster centers) whenever either changes.
-  // Runs after status→'ok' (new bars loaded) and whenever clusters update.
-  // Pins the chart's price scale to exactly this range (no auto-scale padding)
-  // and fires onPriceRangeChange so DayView can sync GexLandscape.
+  // Updates the invisible rangeAnchor so auto-scale expands to include all cluster
+  // prices even if they fall outside the bar range.
   useEffect(() => {
     const bars = barsRef.current
     if (!bars.length || status !== 'ok') return
@@ -173,60 +213,7 @@ export default function MiniPriceChart({
         { time: bars[bars.length - 1].time, value: priceTop },
       ])
     }
-    // Pin the chart to exactly priceBot..priceTop so the displayed range
-    // matches what we emit (no additional lightweight-charts scale margin).
-    chartRef.current?.priceScale('right').setVisibleRange({ from: priceBot, to: priceTop })
-    const range = { priceBot, priceTop }
-    lastEmittedRef.current = range
-    currentRangeRef.current = range
-    onPriceRangeChange?.(range)
-  }, [clusters, status, onPriceRangeChange])
-
-  // Apply externalRange to the chart when the landscape (or DayView) drives a zoom.
-  // Skip if we just emitted this range ourselves to avoid feedback loops.
-  useEffect(() => {
-    if (!externalRange || !chartRef.current) return
-    const last = lastEmittedRef.current
-    if (
-      last &&
-      Math.abs(last.priceBot - externalRange.priceBot) < 0.01 &&
-      Math.abs(last.priceTop - externalRange.priceTop) < 0.01
-    ) return
-    chartRef.current.priceScale('right').setVisibleRange({
-      from: externalRange.priceBot,
-      to: externalRange.priceTop,
-    })
-  }, [externalRange])
-
-  // Wheel-zoom handler on the chart container — zooms the shared Y axis.
-  // Registered as non-passive so we can call preventDefault() and prevent
-  // the page from scrolling while the user zooms the chart.
-  const outerRef = useRef(null)
-  useEffect(() => {
-    const el = outerRef.current
-    if (!el) return
-    function onWheel(e) {
-      const range = currentRangeRef.current
-      if (!range || !chartRef.current) return
-      e.preventDefault()
-      const { priceBot, priceTop } = range
-      const span = priceTop - priceBot
-      const MIN_SPAN = 5
-      // deltaY > 0 → scroll down → zoom out; < 0 → zoom in
-      const factor = e.deltaY > 0 ? 1.06 : 1 / 1.06
-      const newSpan = Math.max(MIN_SPAN, span * factor)
-      const mid = (priceBot + priceTop) / 2
-      const newBot = mid - newSpan / 2
-      const newTop = mid + newSpan / 2
-      chartRef.current.priceScale('right').setVisibleRange({ from: newBot, to: newTop })
-      const newRange = { priceBot: newBot, priceTop: newTop }
-      lastEmittedRef.current = newRange
-      currentRangeRef.current = newRange
-      onRangeChangeRef.current?.(newRange)
-    }
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
-  }, [])
+  }, [clusters, status])
 
   // Price lines for cluster centers — recreated whenever clusters or status change.
   const priceLineRefs = useRef([])
@@ -252,14 +239,16 @@ export default function MiniPriceChart({
   }, [clusters, status])
 
   return (
-    <div ref={outerRef} style={{ position: 'relative', width: '100%', height }}>
+    <div style={{ position: 'relative', width: '100%', height }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
       {status === 'loading' && <div style={overlay}>Loading chart…</div>}
       {status === 'empty' && <div style={overlay}>No bar data for {date}</div>}
       {status === 'error' && <div style={overlay}>Chart unavailable</div>}
     </div>
   )
-}
+})
+
+export default MiniPriceChart
 
 const overlay = {
   position: 'absolute',

@@ -1,6 +1,6 @@
 // DayView — renders the GEX landscape + mini price chart for one day,
 // with flag controls (regime_wrong, not_a_true_analogue).
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { GexLandscape, MiniPriceChart, PANEL_WIDTH as LANDSCAPE_WIDTH } from 'web-shared'
 
 const ROW_HEIGHT = 480
@@ -39,9 +39,13 @@ export default function DayView({
 }) {
   const [showRegimePicker, setShowRegimePicker] = useState(false)
   const [selectedCorrection, setSelectedCorrection] = useState('')
-  // Shared Y range from MiniPriceChart — forwarded to GexLandscape so both
-  // panels show the same price window (clusters visible even outside bar range).
+  // Shared Y range from MiniPriceChart rAF poll — { priceTop, priceBot, paneHeight }.
+  // Forwarded to GexLandscape so both panels use the same chart-driven coordinate system.
   const [priceRange, setPriceRange] = useState(null)
+  // Ref to MiniPriceChart — used to forward the chart instance to GexLandscape
+  // so landscape-initiated wheel zoom can call chart.priceScale('right').setVisibleRange()
+  // directly without a React state round-trip.
+  const miniChartRef = useRef(null)
 
   // Reset shared range when the date changes so a newly selected day
   // starts at its own natural price extent (AC #6: zoom doesn't carry over).
@@ -104,13 +108,13 @@ export default function DayView({
           {/* Mini price chart — fills remaining width on the left */}
           <div style={{ flex: 1, minWidth: 0, height: '100%' }}>
             <MiniPriceChart
+              ref={miniChartRef}
               date={date}
               ticker={ticker}
               apiBase={apiBase}
               clusters={clusters}
               height={ROW_HEIGHT}
               onPriceRangeChange={setPriceRange}
-              externalRange={priceRange}
             />
           </div>
           {/* GEX landscape — fixed width on the right */}
@@ -121,7 +125,7 @@ export default function DayView({
                 spotMode="OPEN"
                 onSpotModeChange={() => {}}
                 visiblePriceRange={priceRange}
-                onRangeChange={setPriceRange}
+                chartRef={miniChartRef}
               />
             ) : (
               <div style={emptyBox}>No landscape data</div>
