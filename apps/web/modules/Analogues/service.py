@@ -110,3 +110,42 @@ def rank_analogues(
     ]
     scored.sort(key=lambda x: x[1])
     return scored[:k]
+
+
+def feature_distance_breakdown(
+    anchor_vec: dict,
+    candidate_vec: dict,
+    stats: dict,
+    *,
+    top_n: int = 5,
+) -> list[dict]:
+    """Return the top-N features by absolute σ-normalized contribution to distance.
+
+    Each entry: { feature_name, anchor_value, analogue_value, sigma_delta, contribution }
+    where sigma_delta = (z_anchor - z_candidate) and contribution = sigma_delta^2.
+    """
+    contributions = []
+    for name in FEATURE_NAMES:
+        q = anchor_vec.get(name)
+        c = candidate_vec.get(name)
+        if q is None or c is None:
+            continue
+        try:
+            qf = float(q)
+            cf = float(c)
+        except (TypeError, ValueError):
+            continue
+        s = stats.get(name, {"mean": 0.0, "std": 0.0})
+        std = max(s["std"], EPSILON)
+        z_q = (qf - s["mean"]) / std
+        z_c = (cf - s["mean"]) / std
+        sigma_delta = z_q - z_c
+        contributions.append({
+            "feature_name": name,
+            "anchor_value": qf,
+            "analogue_value": cf,
+            "sigma_delta": round(sigma_delta, 4),
+            "contribution": round(sigma_delta ** 2, 4),
+        })
+    contributions.sort(key=lambda x: abs(x["contribution"]), reverse=True)
+    return contributions[:top_n]

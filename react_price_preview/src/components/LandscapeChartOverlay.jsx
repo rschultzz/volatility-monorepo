@@ -7,7 +7,7 @@
 // chart. Band Y-positions use the same affine price→pixel transform
 // PriceChart publishes for the panel's Y-axis sync (item 1).
 
-import { PANEL_WIDTH, NEG_COLOR } from './GexLandscapePanel'
+import { PANEL_WIDTH, NEG_COLOR } from 'web-shared'
 
 const BAND_HALF_PTS = 2 // band spans ±2pt around the zone price
 const BAND_OPACITY = 0.12

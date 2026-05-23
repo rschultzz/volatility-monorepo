@@ -48,6 +48,9 @@ from modules.BacktestsV2.routes import (
 from modules.TradeLog.routes import trade_log_bp
 from modules.Analogues.routes import register_analogues_routes
 from modules.TodaySetup.routes import register_today_setup_routes
+from modules.Bars.routes import register_bars_routes
+from modules.AuditFlags.routes import register_audit_flags_routes
+from modules.DayBrowser.routes import register_day_browser_routes
 
 # ===== IDs =====
 CLOCK_ID = "CLOCK"
@@ -195,6 +198,15 @@ register_analogues_routes(server)
 
 # Mount the Day Setup Recommendations API (CR-015)
 register_today_setup_routes(server)
+
+# Mount the RTH bars API (CR-016)
+register_bars_routes(server)
+
+# Mount the Audit Flags API (CR-016)
+register_audit_flags_routes(server)
+
+# Mount the Day Browser API (CR-016)
+register_day_browser_routes(server)
 
 # Mount the React Price Chart preview
 REACT_PREVIEW_DIST_DIR = (REPO_ROOT / "react_price_preview" / "dist").resolve()

@@ -1,17 +1,19 @@
-"""TodaySetup routes — Flask wiring for /api/setup/proposals (CR-015).
+"""TodaySetup routes — Flask wiring for /api/setup/proposals (CR-015/016).
 
 Endpoint:
     GET /api/setup/proposals
         ?date=YYYY-MM-DD
-        &spot=<float>
-        &implied_move=<float>
+        [&spot=<float>]         optional; resolved from ironbeam_es_1m_bars when absent
+        [&implied_move=<float>] optional; resolved from orats_monies_minute when absent
         [&ticker=SPX]
         [&anchor_strategy=cluster_centered]
 
-Returns JSON with ok, context, and proposals list. The landscape is fetched
-from orats_gex_landscape and materialised via _materialize_payload. When
-implied_move is 0 or omitted, the endpoint attempts to resolve it from
-orats_monies_minute (same logic as the Analogues routes).
+Returns JSON with ok, context (includes spot_source), and proposals list.
+CR-016: spot is now optional. When absent, the first RTH bar's open from
+ironbeam_es_1m_bars is used. spot_source in the response indicates the
+resolution path: "param" | "bars" | "landscape" | "default".
+
+Promoted regime_wrong audit overrides are applied for template selection.
 """
 from __future__ import annotations
 
@@ -25,7 +27,9 @@ from flask import jsonify, request
 
 from packages.shared.day_features import _materialize_payload
 from packages.shared.gex_landscape import compute_implied_move
+from packages.shared.audit_overrides import get_effective_regime
 
+from apps.web.modules.Bars.service import fetch_rth_open
 from .service import build_proposals_response
 
 
@@ -155,10 +159,7 @@ def register_today_setup_routes(server) -> None:
         if not trade_date:
             return jsonify({"ok": False, "error": "date is required (YYYY-MM-DD)"}), 400
 
-        spot = _parse_float(request.args.get("spot"))
-        if spot is None or spot <= 0:
-            return jsonify({"ok": False, "error": "spot is required and must be > 0"}), 400
-
+        spot_param = _parse_float(request.args.get("spot"))
         implied_move_param = _parse_float(request.args.get("implied_move"))
         ticker = (request.args.get("ticker") or "SPX").strip() or "SPX"
         anchor_strategy = (
@@ -184,15 +185,38 @@ def register_today_setup_routes(server) -> None:
                 }), 404
 
             landscape_rows, table_spot = row
-            if spot is None and table_spot is not None:
-                spot = float(table_spot)
+
+            # ── Spot resolution (CR-016) ──────────────────────────────────
+            spot = spot_param
+            spot_source = "param"
+            if spot is None or spot <= 0:
+                bars_open = fetch_rth_open(conn, trade_date)
+                if bars_open is not None and bars_open > 0:
+                    spot = bars_open
+                    spot_source = "bars"
+                elif table_spot is not None:
+                    spot = float(table_spot)
+                    spot_source = "landscape"
+                else:
+                    spot = 5000.0
+                    spot_source = "default"
 
             implied_move = implied_move_param
             if not implied_move:
                 implied_move = _resolve_implied_move(conn, ticker, trade_date, spot)
 
             payload = _materialize_payload(landscape_rows, spot, implied_move)
+
+            # ── Effective-regime override (CR-016) ────────────────────────
+            effective_regime = get_effective_regime(conn, ticker, trade_date)
+            if effective_regime and effective_regime != payload.get("regime", {}).get("regime"):
+                # Patch the payload's regime so template selection uses the override.
+                payload = dict(payload)
+                payload["regime"] = dict(payload.get("regime") or {})
+                payload["regime"]["regime"] = effective_regime
+
             context = _build_context(trade_date, ticker, spot, implied_move, payload)
+            context["spot_source"] = spot_source
             response = build_proposals_response(
                 payload, spot, implied_move, context, anchor_strategy
             )

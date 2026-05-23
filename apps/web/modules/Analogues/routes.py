@@ -35,8 +35,11 @@ from packages.shared.day_features import (
     extract_features,
 )
 from packages.shared.gex_landscape import compute_implied_move
+from packages.shared.audit_overrides import get_effective_regime
 
-from .service import feature_stats, rank_analogues
+from apps.web.modules.Bars.service import fetch_rth_open
+
+from .service import feature_stats, rank_analogues, feature_distance_breakdown
 
 
 _K_DEFAULT = 5
@@ -270,6 +273,24 @@ def _resolve_implied_move(conn, ticker: str, trade_date: dt.date,
         return 0.0
 
 
+def _fetch_excluded_analogues(conn, ticker: str, anchor_date: dt.date) -> set[str]:
+    """Return ISO date strings of analogues flagged as 'not_a_true_analogue'
+    for this specific anchor date."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT analogue_date
+            FROM bt_audit_flags
+            WHERE ticker = %s
+              AND trade_date = %s
+              AND flag_type = 'not_a_true_analogue'
+            """,
+            (ticker, anchor_date),
+        )
+        rows = cur.fetchall()
+    return {r[0].isoformat() if hasattr(r[0], "isoformat") else str(r[0]) for r in rows if r[0]}
+
+
 def _latest_feature_version(conn, ticker: str) -> str:
     with conn.cursor() as cur:
         cur.execute(
@@ -299,16 +320,8 @@ def register_analogues_routes(server) -> None:
             return jsonify({"ok": False,
                             "error": "date is required (YYYY-MM-DD)"}), 400
 
-        spot = _parse_float(request.args.get("spot"))
-        if spot is None or spot <= 0:
-            return jsonify({"ok": False,
-                            "error": "spot is required and must be > 0"}), 400
-
-        implied_move = _parse_float(request.args.get("implied_move"))
-        if implied_move is None or implied_move < 0:
-            return jsonify({"ok": False,
-                            "error": "implied_move is required and must be >= 0"}), 400
-
+        spot_param = _parse_float(request.args.get("spot"))
+        implied_move_param = _parse_float(request.args.get("implied_move"))
         ticker = (request.args.get("ticker") or "SPX").strip() or "SPX"
 
         try:
@@ -327,6 +340,33 @@ def register_analogues_routes(server) -> None:
             return jsonify({"ok": False, "error": f"db connect failed: {e}"}), 500
 
         try:
+            # ── Spot resolution (CR-016) ──────────────────────────────────
+            spot = spot_param
+            spot_source = "param"
+            if spot is None or spot <= 0:
+                bars_open = fetch_rth_open(conn, anchor_date)
+                if bars_open is not None and bars_open > 0:
+                    spot = bars_open
+                    spot_source = "bars"
+                else:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT table_spot FROM orats_gex_landscape "
+                            "WHERE ticker=%s AND trade_date=%s LIMIT 1",
+                            (ticker, anchor_date),
+                        )
+                        row = cur.fetchone()
+                    if row and row[0] is not None:
+                        spot = float(row[0])
+                        spot_source = "landscape"
+                    else:
+                        spot = 5000.0
+                        spot_source = "default"
+
+            implied_move = implied_move_param
+            if implied_move is None or implied_move < 0:
+                implied_move = _resolve_implied_move(conn, ticker, anchor_date, spot)
+
             version = (request.args.get("feature_version") or "").strip()
             if not version:
                 version = _latest_feature_version(conn, ticker)
@@ -346,8 +386,11 @@ def register_analogues_routes(server) -> None:
                     ),
                 }), 404
 
-            # ── candidates ────────────────────────────────────────────────
+            # ── candidates (excluding flagged not_a_true_analogue) ────────
+            excluded_dates = _fetch_excluded_analogues(conn, ticker, anchor_date)
             candidates = _load_candidates(conn, ticker, version)
+            candidates = [(d, v) for (d, v) in candidates if d not in excluded_dates]
+
             stats = feature_stats(v for (_, v) in candidates) if candidates else {}
             ranked = rank_analogues(
                 anchor_vec, candidates, k,
@@ -365,14 +408,21 @@ def register_analogues_routes(server) -> None:
                     conn, ticker, trade_date_iso,
                     implied_move=float(vec.get("implied_move_1d", 0.0) or 0.0),
                 )
+                # Feature-distance breakdown (CR-016)
+                distances = feature_distance_breakdown(anchor_vec, vec, stats)
+                # Effective regime (CR-016)
+                analogue_date = dt.date.fromisoformat(trade_date_iso)
+                effective_regime = get_effective_regime(conn, ticker, analogue_date)
                 analogues.append({
                     "trade_date": trade_date_iso,
                     "similarity_score": float(distance),
                     "feature_vector": vec,
-                    "regime": ls_summary.get("regime"),
+                    "regime": effective_regime or ls_summary.get("regime"),
+                    "auto_regime": ls_summary.get("regime"),
                     "labeled_signals": signals,
                     "outcomes": outcomes,
                     "landscape_summary": ls_summary,
+                    "feature_distances": distances,
                 })
 
             return jsonify({
@@ -383,6 +433,7 @@ def register_analogues_routes(server) -> None:
                     "feature_version": version,
                     "feature_vector": anchor_vec,
                     "spot": spot,
+                    "spot_source": spot_source,
                     "implied_move": implied_move,
                 },
                 "k": k,

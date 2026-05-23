@@ -1,0 +1,14 @@
+{
+  "name": "web-shared",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Shared React components for react_price_preview and react_today_setup (CR-016)",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "peerDependencies": {
+    "lightweight-charts": ">=5.0.0",
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  }
+}
