@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Dash+React Preview" type="CompoundRunConfigurationType">
+    <toRun name="React Price" type="js.build_tools.npm" />
+    <toRun name="Dash" type="PythonConfigurationType" />
+    <method v="2" />
+  </configuration>
+</component>

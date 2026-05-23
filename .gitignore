@@ -26,3 +26,7 @@ dist/
 # Render/Logs
 render-build.log
 /Local Stuff/
+
+react_backtests_v2/node_modules/
+react_price_preview/node_modules/
+react_price_preview/.vite/

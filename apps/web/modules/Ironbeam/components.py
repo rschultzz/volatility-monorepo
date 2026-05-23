@@ -1,0 +1,189 @@
+# apps/web/modules/Ironbeam/components.py
+#
+# Step 2:
+# - Keeps Classic vs React Preview toggle.
+# - Replaces the placeholder preview card with an iframe that points to a local React dev server.
+# - The iframe URL is configurable with IRONBEAM_REACT_PREVIEW_URL.
+
+from dash import html, dcc
+import os
+
+
+REACT_PREVIEW_URL = os.getenv("IRONBEAM_REACT_PREVIEW_URL", "/react-preview")
+
+
+def ironbeam_layout():
+    return html.Div(
+        [
+            dcc.Interval(id="ironbeam-interval", interval=10000, n_intervals=0),
+            dcc.Store(
+                id="ib-indicator-state",
+                storage_type="local",
+                data={"enabled": ["aggressor_flow", "gex_overlay"], "cfg": {}},
+            ),
+            dcc.Store(id="ib-shared-xrange", storage_type="memory"),
+            dcc.Store(
+                id="ib-ui-state",
+                storage_type="local",
+                data={"sidebar_collapsed": False},
+            ),
+            dcc.Input(
+                id="ib-react-timeslice-bridge",
+                type="text",
+                value="",
+                style={"display": "none"},
+            ),
+            dcc.Input(
+                id="ib-react-timeslice-parent",
+                type="text",
+                value="",
+                style={"display": "none"},
+            ),
+            html.Button(
+                "bridge",
+                id="ib-react-timeslice-trigger",
+                n_clicks=0,
+                style={"display": "none"},
+            ),
+            html.Button(
+                "«",
+                id="ib-sidebar-toggle",
+                n_clicks=0,
+                title="Collapse/expand indicators",
+                style={"display": "none"},
+            ),
+            html.Div(
+                id="ib-ironbeam-row",
+                children=[
+                    html.Div(
+                        [
+                            html.Div(
+                                "Indicators",
+                                style={
+                                    "color": "white",
+                                    "fontWeight": "800",
+                                    "fontSize": "14px",
+                                    "marginBottom": "10px",
+                                    "marginLeft": "6px",
+                                },
+                            ),
+                            html.Div(
+                                id="ib-sidebar-content",
+                                children=[
+                                    dcc.Checklist(
+                                        id="ib-indicator-enabled",
+                                        options=[],
+                                        value=["aggressor_flow", "gex_overlay"],
+                                        inputStyle={"marginRight": "8px"},
+                                        labelStyle={
+                                            "display": "block",
+                                            "color": "white",
+                                            "fontSize": "13px",
+                                            "marginBottom": "6px",
+                                        },
+                                        style={"marginBottom": "10px"},
+                                    ),
+                                    html.Div(
+                                        style={
+                                            "height": "1px",
+                                            "backgroundColor": "#1f2937",
+                                            "margin": "10px 0",
+                                        }
+                                    ),
+                                    html.Div(
+                                        [
+                                            dcc.Dropdown(
+                                                id="ib-settings-indicator",
+                                                options=[],
+                                                value="gex_overlay",
+                                                clearable=False,
+                                                style={"display": "none", "width": "100%", "minWidth": 0, "minHeight": 0, "flex": "1 1 auto", "height": "100%"},
+                                            ),
+                                            html.Div(id="ib-settings-form", style={"display": "none"}),
+                                        ],
+                                        style={"display": "none", "width": "100%", "minWidth": 0, "minHeight": 0, "flex": "1 1 auto", "height": "100%"},
+                                    ),
+                                ],
+                                style={"display": "none", "width": "100%", "minWidth": 0, "minHeight": 0, "flex": "1 1 auto", "height": "100%"},
+                            ),
+                        ],
+                        id="ib-indicator-sidebar",
+                        style={
+                            "width": "0px",
+                            "minWidth": "0px",
+                            "padding": "0px",
+                            "border": "0px",
+                            "overflow": "hidden",
+                            "display": "none",
+                        },
+                    ),
+                    html.Div(
+                        [
+                            html.Div(
+                                id="ib-classic-chart-wrap",
+                                children=[
+                                    dcc.Graph(
+                                        id="ironbeam-chart",
+                                        clear_on_unhover=True,
+                                        style={
+                                            "flex": "1 1 auto",
+                                            "height": "100%",
+                                            "minHeight": "260px",
+                                        },
+                                        config={
+                                            "displaylogo": False,
+                                            "scrollZoom": True,
+                                            "modeBarButtonsToRemove": ["autoScale2d"],
+                                            "responsive": True,
+                                        },
+                                    ),
+                                    html.Div(
+                                        id="ib-indicator-panels",
+                                        style={"flex": "0 0 auto", "marginTop": "10px"},
+                                    ),
+                                ],
+                                style={
+                                    "display": "flex",
+                                    "flexDirection": "column",
+                                    "flex": "1 1 auto",
+                                    "minHeight": 0,
+                                },
+                            ),
+                            html.Div(
+                                id="ib-react-preview-wrap",
+                                children=[
+                                    html.Iframe(
+                                        id="ib-react-preview-frame",
+                                        src=REACT_PREVIEW_URL,
+                                        style={
+                                            "display": "block",
+                                            "width": "100%",
+                                            "height": "100%",
+                                            "minHeight": 0,
+                                            "flex": "1 1 auto",
+                                            "border": "1px solid #1f2937",
+                                            "borderRadius": "14px",
+                                            "backgroundColor": "#020617",
+                                        },
+                                    ),
+                                ],
+                                style={"display": "none", "width": "100%", "minWidth": 0, "minHeight": 0, "flex": "1 1 auto", "height": "100%"},
+                            ),
+                        ],
+                        id="ib-chart-area",
+                        style={
+                            "flex": "1 1 auto",
+                            "width": "100%",
+                            "minWidth": 0,
+                            "minHeight": 0,
+                            "height": "100%",
+                            "display": "flex",
+                            "flexDirection": "column",
+                        },
+                    ),
+                ],
+                style={"display": "flex", "gap": "0px", "alignItems": "stretch", "width": "100%", "minWidth": 0, "flex": "1 1 auto", "minHeight": 0},
+            ),
+        ],
+        style={"marginTop": "4px", "position": "relative", "width": "100%", "minWidth": 0, "display": "flex", "flexDirection": "column", "flex": "1 1 auto", "minHeight": 0},
+    )

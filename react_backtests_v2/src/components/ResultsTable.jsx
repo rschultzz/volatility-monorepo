@@ -1,0 +1,879 @@
+import React, { useMemo, useState, forwardRef, useImperativeHandle } from 'react';
+import ColumnFilterPopover from './ColumnFilterPopover';
+import { isFilterActive } from './columnFilters';
+
+function fmt(value, digits = 2) {
+  if (value === null || value === undefined || value === '') return '—';
+  const num = Number(value);
+  if (Number.isNaN(num)) return String(value);
+  return num.toFixed(digits);
+}
+
+// Render the gamma regime as a small color-coded chip.
+// positive (call-heavy / dealer-long-gamma) — green
+// negative (put-heavy  / dealer-short-gamma) — red
+// neutral / unknown — muted gray
+function regimeChip(regime) {
+  if (!regime || regime === 'unknown') return <span style={{ color: '#64748b' }}>—</span>;
+  const palette = {
+    positive: { bg: 'rgba(34, 197, 94, 0.18)', border: 'rgba(34, 197, 94, 0.35)', fg: '#bbf7d0' },
+    negative: { bg: 'rgba(239, 68, 68, 0.18)', border: 'rgba(239, 68, 68, 0.35)', fg: '#fecaca' },
+    neutral:  { bg: 'rgba(148, 163, 184, 0.16)', border: 'rgba(148, 163, 184, 0.30)', fg: '#cbd5e1' },
+  };
+  const p = palette[regime] || palette.neutral;
+  return (
+    <span style={{
+      display: 'inline-block',
+      padding: '2px 8px',
+      borderRadius: '999px',
+      fontSize: '10px',
+      fontWeight: 700,
+      textTransform: 'uppercase',
+      background: p.bg,
+      border: `1px solid ${p.border}`,
+      color: p.fg,
+    }}>
+      {regime}
+    </span>
+  );
+}
+
+function rowKey(row, idx) {
+  return `${row.trade_date}-${row.start_ts_utc}-${row.target_ts_utc}-${idx}`;
+}
+
+function setupLabel(row) {
+  if (row.direction === 'up') return row.short_setup_found ? 'Short setup' : 'No setup';
+  if (row.direction === 'down') return row.long_setup_found ? 'Long setup' : 'No setup';
+  return 'N/A';
+}
+
+function tradeLabel(row) {
+  return row.trade_entry_found ? 'Trade entered' : 'No trade';
+}
+
+export const COLUMN_DATA_MAP = {
+  date: 'trade_date',
+  direction: 'direction',
+  source_zone: 'source_zone_low',
+  zone_levels: 'source_zone_levels',
+  start_time: 'start_ts_pt',
+  start_open: 'start_open',
+  pivot_px: 'start_pivot_price',
+  target_time: 'target_ts_pt',
+  target_open: 'target_open',
+  target_level: 'target_level',
+  target_level_gex: (row) => row.target_level_gex_bn,
+  target_gamma_regime: (row) => row.target_gamma_regime,
+  target_level_gex_all_exp: (row) => row.target_level_gex_bn_all_exp,
+  target_gamma_regime_all_exp: (row) => row.target_gamma_regime_all_exp,
+  total_gex_0dte_net:      (row) => row.total_gex_0dte_bn_net,
+  total_gex_0dte_gross:    (row) => row.total_gex_0dte_bn_gross,
+  total_gex_all_exp_net:   (row) => row.total_gex_all_exp_bn_net,
+  total_gex_all_exp_gross: (row) => row.total_gex_all_exp_bn_gross,
+  implied_1s_at_target:    (row) => row.implied_1sigma_pts_at_target,
+  gex_0dte_within_1s_net:     (row) => row.gex_0dte_within_1s_bn_net,
+  gex_0dte_within_1s_gross:   (row) => row.gex_0dte_within_1s_bn_gross,
+  gex_0dte_within_1_5s_net:   (row) => row.gex_0dte_within_1_5s_bn_net,
+  gex_0dte_within_1_5s_gross: (row) => row.gex_0dte_within_1_5s_bn_gross,
+  gex_0dte_within_2s_net:     (row) => row.gex_0dte_within_2s_bn_net,
+  gex_0dte_within_2s_gross:   (row) => row.gex_0dte_within_2s_bn_gross,
+  gex_0dte_ring_1_15s_net:    (row) => row.gex_0dte_ring_1s_1_5s_bn_net,
+  gex_0dte_ring_1_15s_gross:  (row) => row.gex_0dte_ring_1s_1_5s_bn_gross,
+  gex_0dte_ring_15_2s_net:    (row) => row.gex_0dte_ring_1_5s_2s_bn_net,
+  gex_0dte_ring_15_2s_gross:  (row) => row.gex_0dte_ring_1_5s_2s_bn_gross,
+  source_zone_signed_gex: (row) => row.source_zone_signed_gex_bn,
+  source_zone_gamma_regime: (row) => row.source_zone_gamma_regime,
+  source_zone_signed_gex_all_exp: (row) => row.source_zone_signed_gex_bn_all,
+  source_zone_gamma_regime_all_exp: (row) => row.source_zone_gamma_regime_all,
+  clean_space: 'clean_space_points',
+  move_pts: 'move_points',
+  bars: 'elapsed_bars',
+  consol_mins: 'consolidation_minutes_observed',
+  setup: (row) => row.direction === 'down' ? row.long_setup_found : row.short_setup_found,
+  signal_time: (row) => row.direction === 'down' ? row.long_signal_ts_pt : row.short_signal_ts_pt,
+  signal_px: (row) => row.direction === 'down' ? row.long_signal_price : row.short_signal_price,
+  put_skew: (row) => row.direction === 'down' ? row.long_signal_delta_put_skew_pct : row.short_signal_delta_put_skew_pct,
+  call_skew: (row) => row.direction === 'down' ? row.long_signal_delta_call_skew_pct : row.short_signal_delta_call_skew_pct,
+  trade: 'trade_entry_found',
+  range_high: 'trade_range_high_at_entry',
+  range_low: 'trade_range_low_at_entry',
+  entry_band: 'trade_entry_band_floor',
+  entry_time: 'trade_entry_ts_pt',
+  entry_px: 'trade_entry_price',
+  init_stop: 'trade_initial_stop_price',
+  take_profit: 'trade_take_profit_price',
+  trailing_stop: 'trade_trailing_stop_price',
+  exit_time: 'trade_exit_ts_pt',
+  exit_px: 'trade_exit_price',
+  exit_reason: 'trade_exit_reason',
+  realized_pts: 'trade_realized_points',
+  mfe: 'trade_mfe_points',
+  mae: 'trade_mae_points',
+  outcome: 'trade_outcome',
+  reason: (row) => row.direction === 'down' ? row.long_setup_reason : row.short_setup_reason,
+  prior_down_pts: 'prior_session_down_pts',
+  prior_down_ratio: 'prior_down_vs_up_ratio',
+  start_pct_range: 'start_pct_of_session_range',
+
+  // ── Study mode columns ──
+  skew_passed: 'skew_threshold_passed',
+  target_price: 'target_price',
+
+  fwd_30m_mfe:   (row) => row.forward_outcomes?.['30m']?.mfe_pts,
+  fwd_30m_mae:   (row) => row.forward_outcomes?.['30m']?.mae_pts,
+  fwd_30m_close: (row) => row.forward_outcomes?.['30m']?.close_pts,
+
+  fwd_60m_mfe:   (row) => row.forward_outcomes?.['60m']?.mfe_pts,
+  fwd_60m_mae:   (row) => row.forward_outcomes?.['60m']?.mae_pts,
+  fwd_60m_close: (row) => row.forward_outcomes?.['60m']?.close_pts,
+
+  fwd_90m_mfe:   (row) => row.forward_outcomes?.['90m']?.mfe_pts,
+  fwd_90m_mae:   (row) => row.forward_outcomes?.['90m']?.mae_pts,
+  fwd_90m_close: (row) => row.forward_outcomes?.['90m']?.close_pts,
+
+  fwd_120m_mfe:   (row) => row.forward_outcomes?.['120m']?.mfe_pts,
+  fwd_120m_mae:   (row) => row.forward_outcomes?.['120m']?.mae_pts,
+  fwd_120m_close: (row) => row.forward_outcomes?.['120m']?.close_pts,
+
+  fwd_180m_mfe:   (row) => row.forward_outcomes?.['180m']?.mfe_pts,
+  fwd_180m_mae:   (row) => row.forward_outcomes?.['180m']?.mae_pts,
+  fwd_180m_close: (row) => row.forward_outcomes?.['180m']?.close_pts,
+
+  fwd_eod_mfe:   (row) => row.forward_outcomes?.['eod']?.mfe_pts,
+  fwd_eod_mae:   (row) => row.forward_outcomes?.['eod']?.mae_pts,
+  fwd_eod_close: (row) => row.forward_outcomes?.['eod']?.close_pts,
+
+  // IV snapshot at entry (study mode)
+  iv_atm_0dte: (row) => row.iv?.atm_0dte_pct,
+
+  // SPX cash index level at target touch (used for condor strike sizing)
+  target_spx_price: (row) => row.target_spx_price,
+
+  // Minutes remaining in session at target touch
+  minutes_to_close: (row) => row.minutes_to_close,
+
+  // Skew deltas at target touch vs predicted (the signal that fired study-mode)
+  skew_delta_put:  (row) => row.skew_delta_put_pct,
+  skew_delta_call: (row) => row.skew_delta_call_pct,
+
+  // Realized vs implied at 120m (short-vol lens)
+  rvi_ratio_120m: (row) => row.realized_vs_implied?.['120m']?.close_over_1sigma,
+  rvi_inside_1s_120m: (row) => row.realized_vs_implied?.['120m']?.inside_1sigma,
+
+  // Realized vs implied at entry-to-close (uses each trade's actual minutes_to_close)
+  rvi_ratio_to_close:     (row) => row.realized_vs_implied?.['to_close']?.close_over_1sigma,
+  rvi_inside_1s_to_close: (row) => row.realized_vs_implied?.['to_close']?.inside_1sigma,
+
+  // Hypothetical 120m iron condor strikes
+  condor_short_put:  (row) => row.hypothetical_condor_120m?.short_put_strike,
+  condor_long_put:   (row) => row.hypothetical_condor_120m?.long_put_strike,
+  condor_short_call: (row) => row.hypothetical_condor_120m?.short_call_strike,
+  condor_long_call:  (row) => row.hypothetical_condor_120m?.long_call_strike,
+
+  // Hypothetical entry-to-close iron condor strikes
+  condor_to_close_short_put:  (row) => row.hypothetical_condor_to_close?.short_put_strike,
+  condor_to_close_long_put:   (row) => row.hypothetical_condor_to_close?.long_put_strike,
+  condor_to_close_short_call: (row) => row.hypothetical_condor_to_close?.short_call_strike,
+  condor_to_close_long_call:  (row) => row.hypothetical_condor_to_close?.long_call_strike,
+};
+
+const ResultsTable = forwardRef(({
+  rows,
+  selectedRowKey,
+  onSelectRow,
+  columns,
+  // Optional column-filter integration. When provided, render filter icons
+  // in column headers and open a popover on click.
+  columnFilters = null,        // { [columnId]: filterObject }
+  onColumnFilterChange = null, // (columnId, filterObject | null) => void
+  filterTypeForColumn = null,  // (columnId) => 'numeric'|'date'|'categorical'|null
+}, ref) => {
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
+  // Filter popover state (which column is open, and the anchor rect for positioning)
+  const [openFilterColumnId, setOpenFilterColumnId] = useState(null);
+  const [openFilterAnchorRect, setOpenFilterAnchorRect] = useState(null);
+
+  const filtersEnabled = Boolean(columnFilters && onColumnFilterChange && filterTypeForColumn);
+
+  const handleSort = (colId) => {
+    let direction = 'asc';
+    if (sortConfig.key === colId && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    } else if (sortConfig.key === colId && sortConfig.direction === 'desc') {
+      // Optional: cycle back to no sort
+      setSortConfig({ key: null, direction: 'asc' });
+      return;
+    }
+    setSortConfig({ key: colId, direction });
+  };
+
+  const processedRows = useMemo(() => {
+    let result = [...rows];
+
+    if (sortConfig.key) {
+      const dataKey = COLUMN_DATA_MAP[sortConfig.key];
+      if (dataKey) {
+        result.sort((a, b) => {
+          let aVal, bVal;
+          if (typeof dataKey === 'function') {
+            aVal = dataKey(a);
+            bVal = dataKey(b);
+          } else {
+            aVal = a[dataKey];
+            bVal = b[dataKey];
+          }
+
+          if (aVal === bVal) return 0;
+          if (aVal === null || aVal === undefined || aVal === '') return 1;
+          if (bVal === null || bVal === undefined || bVal === '') return -1;
+
+          const comparison = aVal < bVal ? -1 : 1;
+          return sortConfig.direction === 'asc' ? comparison : -comparison;
+        });
+      }
+    }
+
+    return result;
+  }, [rows, sortConfig]);
+
+  useImperativeHandle(ref, () => ({
+    downloadCSV: () => {
+      if (!processedRows.length) return;
+
+      const visibleCols = columns.filter(c => c.visible && c.id !== 'select');
+      const headers = visibleCols.map(c => c.label);
+      
+      const csvContent = [
+        headers.join(','),
+        ...processedRows.map(row => {
+          return visibleCols.map(col => {
+            let val;
+            const dataKey = COLUMN_DATA_MAP[col.id];
+            
+            switch (col.id) {
+              case 'source_zone':
+                val = `${fmt(row.source_zone_low)} - ${fmt(row.source_zone_high)}`;
+                break;
+              case 'start_time':
+                val = `${row.start_ts_pt}${row.start_context ? ' (' + row.start_context + ')' : ''}`;
+                break;
+              case 'target_level':
+                val = `${fmt(row.target_level)}${row.target_zone_range ? ' (' + row.target_zone_range + ')' : ''}`;
+                break;
+              case 'target_level_gex': {
+                const v = row.target_level_gex_bn;
+                val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'target_level_gex_all_exp': {
+                const v = row.target_level_gex_bn_all_exp;
+                val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'target_gamma_regime':
+                val = row.target_gamma_regime || '';
+                break;
+              case 'target_gamma_regime_all_exp':
+                val = row.target_gamma_regime_all_exp || '';
+                break;
+
+              // Date-wide totals + proximity bands/rings (CSV).
+              // Net columns: signed BN with + prefix; gross columns: plain BN.
+              case 'total_gex_0dte_net':
+              case 'total_gex_all_exp_net':
+              case 'gex_0dte_within_1s_net':
+              case 'gex_0dte_within_1_5s_net':
+              case 'gex_0dte_within_2s_net':
+              case 'gex_0dte_ring_1_15s_net':
+              case 'gex_0dte_ring_15_2s_net': {
+                const v = typeof dataKey === 'function' ? dataKey(row) : row[dataKey];
+                val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'total_gex_0dte_gross':
+              case 'total_gex_all_exp_gross':
+              case 'gex_0dte_within_1s_gross':
+              case 'gex_0dte_within_1_5s_gross':
+              case 'gex_0dte_within_2s_gross':
+              case 'gex_0dte_ring_1_15s_gross':
+              case 'gex_0dte_ring_15_2s_gross': {
+                const v = typeof dataKey === 'function' ? dataKey(row) : row[dataKey];
+                val = v != null ? `${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'implied_1s_at_target': {
+                const v = row.implied_1sigma_pts_at_target;
+                val = v != null ? `±${Number(v).toFixed(1)}` : '';
+                break;
+              }
+
+              case 'source_zone_signed_gex': {
+                const v = row.source_zone_signed_gex_bn;
+                val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'source_zone_signed_gex_all_exp': {
+                const v = row.source_zone_signed_gex_bn_all;
+                val = v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}BN` : '';
+                break;
+              }
+              case 'source_zone_gamma_regime':
+                val = row.source_zone_gamma_regime || '';
+                break;
+              case 'source_zone_gamma_regime_all_exp':
+                val = row.source_zone_gamma_regime_all || '';
+                break;
+              case 'consol_mins':
+                val = `${row.consolidation_minutes_observed ?? ''}${row.consolidation_end_ts_pt ? ' ' + row.consolidation_end_ts_pt : ''}`;
+                break;
+              case 'setup':
+                val = setupLabel(row);
+                break;
+              case 'trade':
+                val = tradeLabel(row);
+                break;
+              case 'signal_time':
+                val = (row.direction === 'down' ? row.long_signal_ts_pt : row.short_signal_ts_pt) || '';
+                break;
+              case 'put_skew':
+                val = fmt(row.direction === 'down' ? row.long_signal_delta_put_skew_pct : row.short_signal_delta_put_skew_pct);
+                break;
+              case 'call_skew':
+                val = fmt(row.direction === 'down' ? row.long_signal_delta_call_skew_pct : row.short_signal_delta_call_skew_pct);
+                break;
+              case 'reason':
+                val = (row.direction === 'down' ? row.long_setup_reason : row.short_setup_reason) || '';
+                break;
+              case 'prior_down_ratio':
+                val = fmt(row.prior_down_vs_up_ratio, 2);
+                break;
+              case 'start_pct_range':
+                val = row.start_pct_of_session_range != null ? (row.start_pct_of_session_range * 100).toFixed(1) + '%' : '';
+                break;
+              default:
+                val = typeof dataKey === 'function' ? dataKey(row) : row[dataKey];
+            }
+
+            if (val === null || val === undefined) return '';
+            const s = String(val).replace(/"/g, '""');
+            return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s}"` : s;
+          }).join(',');
+        })
+      ].join('\n');
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `backtest_results_${new Date().toISOString().slice(0, 10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+  }));
+
+  if (!rows.length) {
+    return (
+      <div className="empty-state">
+        No instances yet. Open Settings, tune the scan, and run it.
+      </div>
+    );
+  }
+
+  const renderCell = (col, row, idx) => {
+    switch (col.id) {
+      case 'select':
+        return (
+          <input
+            type="radio"
+            name="bt2-selected-trade"
+            checked={selectedRowKey === rowKey(row, idx)}
+            onChange={() => onSelectRow(row, idx)}
+          />
+        );
+      case 'date': return row.trade_date;
+      case 'direction':
+        return (
+          <span className={`direction-chip ${row.direction === 'up' ? 'up' : 'down'}`}>
+            {row.direction}
+          </span>
+        );
+      case 'source_zone':
+        return (
+          <>
+            <div>{fmt(row.source_zone_low)} – {fmt(row.source_zone_high)}</div>
+            <div className="subcell">width {fmt(row.source_zone_width)}</div>
+          </>
+        );
+      case 'zone_levels':
+        return <div>{row.source_zone_levels}</div>;
+      case 'start_time':
+        return (
+          <>
+            <div>{row.start_ts_pt}</div>
+            <div className="subcell">{row.start_context}</div>
+          </>
+        );
+      case 'start_open': return fmt(row.start_open);
+      case 'pivot_px': return fmt(row.start_pivot_price);
+      case 'target_time': return row.target_ts_pt;
+      case 'target_open': return fmt(row.target_open);
+      case 'target_level':
+        return (
+          <>
+            <div>{fmt(row.target_level)}</div>
+            <div className="subcell">{row.target_zone_range}</div>
+          </>
+        );
+      case 'target_level_gex': {
+        const v = row.target_level_gex_bn;
+        if (v === null || v === undefined) return '—';
+        const sign = v > 0 ? '+' : '';
+        // Green = positive GEX (dealers long gamma → resistance/pin expected)
+        // Red   = negative GEX (dealers short gamma → acceleration expected)
+        const color = v > 0 ? '#86efac' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
+      }
+      case 'target_level_gex_all_exp': {
+        const v = row.target_level_gex_bn_all_exp;
+        if (v === null || v === undefined) return '—';
+        const sign = v > 0 ? '+' : '';
+        const color = v > 0 ? '#86efac' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
+      }
+      case 'target_gamma_regime':
+        return regimeChip(row.target_gamma_regime);
+      case 'target_gamma_regime_all_exp':
+        return regimeChip(row.target_gamma_regime_all_exp);
+
+      // Date-wide GEX totals + proximity-banded variants. Net values are
+      // signed (gex_call - gex_put) and color-coded; gross values are
+      // magnitudes (|call| + |put|) so they're always non-negative.
+      case 'total_gex_0dte_net':
+      case 'total_gex_all_exp_net':
+      case 'gex_0dte_within_1s_net':
+      case 'gex_0dte_within_1_5s_net':
+      case 'gex_0dte_within_2s_net':
+      case 'gex_0dte_ring_1_15s_net':
+      case 'gex_0dte_ring_15_2s_net': {
+        const dataKey = COLUMN_DATA_MAP[col.id];
+        const v = typeof dataKey === 'function' ? dataKey(row) : row[dataKey];
+        if (v === null || v === undefined) return '—';
+        const sign = v > 0 ? '+' : '';
+        const color = v > 0 ? '#86efac' : v < 0 ? '#fca5a5' : '#e5e7eb';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
+      }
+      case 'total_gex_0dte_gross':
+      case 'total_gex_all_exp_gross':
+      case 'gex_0dte_within_1s_gross':
+      case 'gex_0dte_within_1_5s_gross':
+      case 'gex_0dte_within_2s_gross':
+      case 'gex_0dte_ring_1_15s_gross':
+      case 'gex_0dte_ring_15_2s_gross': {
+        const dataKey = COLUMN_DATA_MAP[col.id];
+        const v = typeof dataKey === 'function' ? dataKey(row) : row[dataKey];
+        if (v === null || v === undefined) return '—';
+        return <span>{fmt(v, 1)}BN</span>;
+      }
+      case 'implied_1s_at_target': {
+        const v = row.implied_1sigma_pts_at_target;
+        if (v === null || v === undefined) return '—';
+        return <span>±{fmt(v, 1)}</span>;
+      }
+
+      case 'source_zone_signed_gex': {
+        const v = row.source_zone_signed_gex_bn;
+        if (v === null || v === undefined) return '—';
+        const sign = v > 0 ? '+' : '';
+        const color = v > 0 ? '#86efac' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
+      }
+      case 'source_zone_signed_gex_all_exp': {
+        const v = row.source_zone_signed_gex_bn_all;
+        if (v === null || v === undefined) return '—';
+        const sign = v > 0 ? '+' : '';
+        const color = v > 0 ? '#86efac' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}BN</span>;
+      }
+      case 'source_zone_gamma_regime':
+        return regimeChip(row.source_zone_gamma_regime);
+      case 'source_zone_gamma_regime_all_exp':
+        return regimeChip(row.source_zone_gamma_regime_all);
+      case 'clean_space': return fmt(row.clean_space_points);
+      case 'move_pts': return fmt(row.move_points);
+      case 'bars': return row.elapsed_bars;
+      case 'consol_mins':
+        return (
+          <>
+            <div>{row.consolidation_minutes_observed ?? '—'}</div>
+            <div className="subcell">{row.consolidation_end_ts_pt || '—'}</div>
+          </>
+        );
+      case 'setup':
+        return (
+          <span className={`setup-chip ${(row.short_setup_found || row.long_setup_found) ? 'hit' : 'miss'}`}>
+            {setupLabel(row)}
+          </span>
+        );
+      case 'signal_time':
+        return (row.direction === 'down' ? row.long_signal_ts_pt : row.short_signal_ts_pt) || '—';
+      case 'signal_px':
+        return fmt(row.direction === 'down' ? row.long_signal_price : row.short_signal_price);
+      case 'put_skew':
+        return fmt(row.direction === 'down' ? row.long_signal_delta_put_skew_pct : row.short_signal_delta_put_skew_pct);
+      case 'call_skew':
+        return fmt(row.direction === 'down' ? row.long_signal_delta_call_skew_pct : row.short_signal_delta_call_skew_pct);
+      case 'trade':
+        return (
+          <span className={`trade-chip ${row.trade_entry_found ? 'hit' : 'miss'}`}>
+            {tradeLabel(row)}
+          </span>
+        );
+      case 'range_high': return fmt(row.trade_range_high_at_entry);
+      case 'range_low': return fmt(row.trade_range_low_at_entry);
+      case 'entry_band': return fmt(row.trade_entry_band_floor);
+      case 'entry_time': return row.trade_entry_ts_pt || '—';
+      case 'entry_px': return fmt(row.trade_entry_price);
+      case 'init_stop': return fmt(row.trade_initial_stop_price);
+      case 'take_profit': return fmt(row.trade_take_profit_price);
+      case 'trailing_stop': return fmt(row.trade_trailing_stop_price);
+      case 'exit_time': return row.trade_exit_ts_pt || '—';
+      case 'exit_px': return fmt(row.trade_exit_price);
+      case 'exit_reason': return row.trade_exit_reason || '—';
+      case 'realized_pts': return fmt(row.trade_realized_points);
+      case 'mfe': return fmt(row.trade_mfe_points);
+      case 'mae': return fmt(row.trade_mae_points);
+      case 'outcome': return row.trade_outcome || '—';
+      case 'reason':
+        return (row.direction === 'down' ? row.long_setup_reason : row.short_setup_reason) || '—';
+      case 'prior_down_pts': return fmt(row.prior_session_down_pts);
+      case 'prior_down_ratio': {
+        const ratio = row.prior_down_vs_up_ratio;
+        if (ratio === null || ratio === undefined) return '—';
+        const color = ratio > 1.5 ? '#fca5a5' : ratio > 1.0 ? '#fcd34d' : '#86efac';
+        return <span style={{ color, fontWeight: 700 }}>{fmt(ratio, 2)}</span>;
+      }
+      case 'start_pct_range': {
+        const pct = row.start_pct_of_session_range;
+        if (pct === null || pct === undefined) return '—';
+        // Target's % of session range, asymmetric by direction:
+        //   up→short wants target high in range (≥ 0.70 = green, ≤ 0.50 = red)
+        //   down→long wants target low in range  (≤ 0.30 = green, ≥ 0.50 = red)
+        const isDown = row.direction === 'down';
+        const good = isDown ? pct <= 0.30 : pct >= 0.70;
+        const bad  = isDown ? pct >= 0.50 : pct <= 0.50;
+        const color = good ? '#86efac' : bad ? '#fca5a5' : '#fcd34d';
+        return <span style={{ color }}>{(pct * 100).toFixed(1)}%</span>;
+      }
+
+      // ── Study mode columns ──
+      case 'skew_passed': {
+        if (row.skew_threshold_passed === null || row.skew_threshold_passed === undefined) return '—';
+        return row.skew_threshold_passed
+          ? <span style={{ color: '#86efac', fontWeight: 700 }}>✓</span>
+          : <span style={{ color: '#fca5a5', fontWeight: 700 }}>✗</span>;
+      }
+      case 'target_price': return fmt(row.target_price);
+
+      // Close columns: color green if > 0, red if < 0
+      case 'fwd_30m_close':
+      case 'fwd_60m_close':
+      case 'fwd_90m_close':
+      case 'fwd_120m_close':
+      case 'fwd_180m_close':
+      case 'fwd_eod_close': {
+        const horizonKey = col.id === 'fwd_eod_close' ? 'eod' : col.id.replace('fwd_', '').replace('_close', '');
+        const v = row.forward_outcomes?.[horizonKey]?.close_pts;
+        if (v === null || v === undefined) return '—';
+        const color = v > 0 ? '#86efac' : v < 0 ? '#fca5a5' : '#e5e7eb';
+        return <span style={{ color, fontWeight: 600 }}>{fmt(v)}</span>;
+      }
+
+      // MFE columns: always positive favorable, show in green if > 0
+      case 'fwd_30m_mfe':
+      case 'fwd_60m_mfe':
+      case 'fwd_90m_mfe':
+      case 'fwd_120m_mfe':
+      case 'fwd_180m_mfe':
+      case 'fwd_eod_mfe': {
+        const horizonKey = col.id === 'fwd_eod_mfe' ? 'eod' : col.id.replace('fwd_', '').replace('_mfe', '');
+        const v = row.forward_outcomes?.[horizonKey]?.mfe_pts;
+        if (v === null || v === undefined) return '—';
+        const color = v > 0 ? '#86efac' : '#94a3b8';
+        return <span style={{ color }}>{fmt(v)}</span>;
+      }
+
+      // MAE columns: adverse magnitude (positive number), show in amber/red proportional
+      case 'fwd_30m_mae':
+      case 'fwd_60m_mae':
+      case 'fwd_90m_mae':
+      case 'fwd_120m_mae':
+      case 'fwd_180m_mae':
+      case 'fwd_eod_mae': {
+        const horizonKey = col.id === 'fwd_eod_mae' ? 'eod' : col.id.replace('fwd_', '').replace('_mae', '');
+        const v = row.forward_outcomes?.[horizonKey]?.mae_pts;
+        if (v === null || v === undefined) return '—';
+        const color = v > 0 ? '#fca5a5' : '#94a3b8';
+        return <span style={{ color }}>{fmt(v)}</span>;
+      }
+
+      // IV at entry (0DTE ATM) — plain numeric, no color prejudice
+      case 'iv_atm_0dte': {
+        const v = row.iv?.atm_0dte_pct;
+        if (v === null || v === undefined) return '—';
+        return <span>{fmt(v, 2)}</span>;
+      }
+
+      // SPX cash level at target touch (from ORATS monies)
+      case 'target_spx_price': {
+        const v = row.target_spx_price;
+        if (v === null || v === undefined) return '—';
+        return <span>{fmt(v, 2)}</span>;
+      }
+
+      // Minutes remaining in session. Color-coded for tradable window:
+      // red if < 30m (tight theta window, may not be worth it)
+      // amber if 30-60m (usable but compressed)
+      // green if 60m+ (ample time for a 0DTE condor to work)
+      case 'minutes_to_close': {
+        const v = row.minutes_to_close;
+        if (v === null || v === undefined) return '—';
+        const color = v < 30 ? '#fca5a5' : v < 60 ? '#fcd34d' : '#86efac';
+        return <span style={{ color, fontWeight: 600 }}>{v}</span>;
+      }
+
+      // Skew delta on puts (observed vs predicted, in %).
+      // For up-move shorts, higher positive = stronger "dealers bidding puts" signal.
+      // Color-coded by magnitude, sign-neutral (both directions informative).
+      case 'skew_delta_put': {
+        const v = row.skew_delta_put_pct;
+        if (v === null || v === undefined) return '—';
+        const mag = Math.abs(v);
+        const color = mag >= 100 ? '#86efac' : mag >= 50 ? '#fcd34d' : '#94a3b8';
+        const sign = v > 0 ? '+' : '';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}%</span>;
+      }
+
+      // Skew delta on calls (observed vs predicted, in %).
+      // For up-move shorts, threshold is the ceiling — large positive values
+      // mean call-side is also being bid (less clean signal).
+      case 'skew_delta_call': {
+        const v = row.skew_delta_call_pct;
+        if (v === null || v === undefined) return '—';
+        const mag = Math.abs(v);
+        const color = mag >= 100 ? '#fcd34d' : '#94a3b8';
+        const sign = v > 0 ? '+' : '';
+        return <span style={{ color, fontWeight: 600 }}>{sign}{fmt(v, 1)}%</span>;
+      }
+
+      // Realized vs implied at 120m: |close| / implied_1sigma
+      // Color green if <1 (realized tighter than priced), red if >=1
+      case 'rvi_ratio_120m': {
+        const v = row.realized_vs_implied?.['120m']?.close_over_1sigma;
+        if (v === null || v === undefined) return '—';
+        const color = v < 1.0 ? '#86efac' : v < 2.0 ? '#fcd34d' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{fmt(v, 2)}</span>;
+      }
+
+      // Inside ±1σ at 120m: ✓ if price stayed within the implied band
+      case 'rvi_inside_1s_120m': {
+        const v = row.realized_vs_implied?.['120m']?.inside_1sigma;
+        if (v === null || v === undefined) return '—';
+        return v
+          ? <span style={{ color: '#86efac', fontWeight: 700 }}>✓</span>
+          : <span style={{ color: '#fca5a5', fontWeight: 700 }}>✗</span>;
+      }
+
+      // Realized vs implied at entry-to-close: |close|/1σ over the actual trade window
+      case 'rvi_ratio_to_close': {
+        const v = row.realized_vs_implied?.['to_close']?.close_over_1sigma;
+        if (v === null || v === undefined) return '—';
+        const color = v < 1.0 ? '#86efac' : v < 2.0 ? '#fcd34d' : '#fca5a5';
+        return <span style={{ color, fontWeight: 600 }}>{fmt(v, 2)}</span>;
+      }
+
+      // Inside ±1σ at entry-to-close: ✓ if close at session end was within the implied band
+      case 'rvi_inside_1s_to_close': {
+        const v = row.realized_vs_implied?.['to_close']?.inside_1sigma;
+        if (v === null || v === undefined) return '—';
+        return v
+          ? <span style={{ color: '#86efac', fontWeight: 700 }}>✓</span>
+          : <span style={{ color: '#fca5a5', fontWeight: 700 }}>✗</span>;
+      }
+
+      // Hypothetical 120m iron condor strikes.
+      // Short strikes colored (amber) — they're the ones the trade "stays below/above"
+      // Long strikes faded — they're the defensive wings.
+      case 'condor_short_put': {
+        const v = row.hypothetical_condor_120m?.short_put_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#fcd34d', fontWeight: 600 }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_short_call': {
+        const v = row.hypothetical_condor_120m?.short_call_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#fcd34d', fontWeight: 600 }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_long_put': {
+        const v = row.hypothetical_condor_120m?.long_put_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#94a3b8' }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_long_call': {
+        const v = row.hypothetical_condor_120m?.long_call_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#94a3b8' }}>{fmt(v, 0)}</span>;
+      }
+
+      // Hypothetical entry-to-close iron condor strikes (sized to actual minutes_to_close).
+      // Same color treatment as the 120m version — short strikes amber, longs faded.
+      case 'condor_to_close_short_put': {
+        const v = row.hypothetical_condor_to_close?.short_put_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#fcd34d', fontWeight: 600 }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_to_close_short_call': {
+        const v = row.hypothetical_condor_to_close?.short_call_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#fcd34d', fontWeight: 600 }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_to_close_long_put': {
+        const v = row.hypothetical_condor_to_close?.long_put_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#94a3b8' }}>{fmt(v, 0)}</span>;
+      }
+      case 'condor_to_close_long_call': {
+        const v = row.hypothetical_condor_to_close?.long_call_strike;
+        if (v === null || v === undefined) return '—';
+        return <span style={{ color: '#94a3b8' }}>{fmt(v, 0)}</span>;
+      }
+
+      default: return null;
+    }
+  };
+
+  const visibleColumns = columns.filter(c => c.visible);
+
+  return (
+    <div className="table-wrap">
+      <table className="results-table">
+        <thead>
+          <tr>
+            {visibleColumns.map(col => {
+              const isSortable = col.id !== 'select';
+              const isSorted = sortConfig.key === col.id;
+              const colFilterType = filtersEnabled ? filterTypeForColumn(col.id) : null;
+              const colFilter = filtersEnabled ? columnFilters[col.id] : null;
+              const colFilterActive = filtersEnabled && isFilterActive(colFilter);
+
+              return (
+                <th
+                  key={col.id}
+                  className={isSortable ? 'sortable-header' : ''}
+                  onClick={() => isSortable && handleSort(col.id)}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ flex: 1 }}>{col.label}</span>
+                    {isSorted && (
+                      <span className="sort-indicator">
+                        {sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}
+                      </span>
+                    )}
+                    {colFilterType && (
+                      <button
+                        type="button"
+                        className="filter-icon-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          if (openFilterColumnId === col.id) {
+                            setOpenFilterColumnId(null);
+                            setOpenFilterAnchorRect(null);
+                          } else {
+                            setOpenFilterColumnId(col.id);
+                            setOpenFilterAnchorRect(rect);
+                          }
+                        }}
+                        title={colFilterActive ? 'Edit filter' : 'Add filter'}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: 2,
+                          cursor: 'pointer',
+                          color: colFilterActive ? '#3b82f6' : '#475569',
+                          fontSize: 12,
+                          lineHeight: 1,
+                          position: 'relative',
+                        }}
+                      >
+                        {/* Funnel SVG */}
+                        <svg
+                          width="11" height="11"
+                          viewBox="0 0 24 24"
+                          fill={colFilterActive ? 'currentColor' : 'none'}
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+                        </svg>
+                        {colFilterActive && (
+                          <span style={{
+                            position: 'absolute',
+                            top: 0, right: 0,
+                            width: 6, height: 6,
+                            borderRadius: '50%',
+                            background: '#3b82f6',
+                          }} />
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </th>
+              );
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {processedRows.map((row, idx) => {
+            const key = rowKey(row, idx);
+            return (
+              <tr key={key} className={selectedRowKey === key ? 'selected-row' : ''}>
+                {visibleColumns.map(col => (
+                  <td key={col.id} className={col.className || ''}>
+                    {renderCell(col, row, idx)}
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {filtersEnabled && openFilterColumnId && (() => {
+        const colDef = visibleColumns.find(c => c.id === openFilterColumnId);
+        if (!colDef) return null;
+        const t = filterTypeForColumn(openFilterColumnId);
+        if (!t) return null;
+        return (
+          <ColumnFilterPopover
+            filterType={t}
+            filter={columnFilters[openFilterColumnId]}
+            anchorRect={openFilterAnchorRect}
+            columnLabel={colDef.label}
+            columnId={openFilterColumnId}
+            rows={rows}
+            dataMap={COLUMN_DATA_MAP}
+            onChange={(next) => onColumnFilterChange(openFilterColumnId, next)}
+            onClear={() => onColumnFilterChange(openFilterColumnId, null)}
+            onClose={() => { setOpenFilterColumnId(null); setOpenFilterAnchorRect(null); }}
+          />
+        );
+      })()}
+    </div>
+  );
+});
+
+export default ResultsTable;

@@ -4,19 +4,23 @@ import os
 import datetime as dt
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output, callback
+from dash import Input, Output, State, callback
 from sqlalchemy import text
 from sqlalchemy import create_engine
 from sqlalchemy.engine.url import make_url
+from zoneinfo import ZoneInfo
+
+# Import utilities for live data and market hours
+from packages.shared.utils import is_market_hours
 
 # ---------- Config ----------
 # Optional zoom: set GEX_ZOOM_PCT to a float like "0.03" for ±3% of max call gamma.
 # Leave 0 (default) to show the full width with a 5% padding.
 ZOOM_PCT = float(os.getenv("GEX_ZOOM_PCT", "0"))
 
-# Colors (old dash look)
-PUT_COLOR  = os.getenv("GEX_PUT_COLOR",  "#E5E7EB")  # light gray
-CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#334155")  # slate/dark blue
+# Colors
+PUT_COLOR  = os.getenv("GEX_PUT_COLOR",  "#E5E7EB")  # down candles
+CALL_COLOR = os.getenv("GEX_CALL_COLOR", "#60a5fa") # up candles
 
 # Filter by symbol if your table contains more than SPX
 TICKER = os.getenv("GEX_TICKER", "SPX")
@@ -65,7 +69,12 @@ def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
         else "CAST(ROUND(discounted_level) AS INTEGER)"
     )
 
-    where = ["trade_date = :d", "discounted_level IS NOT NULL"]
+    # Exclude already-expired contracts (expir_date < trade_date). The
+    # orats_oi_gamma table can carry rows where expir_date < trade_date because
+    # OI snapshots include contracts that expired the prior session — including
+    # them inflates levels with gamma that's no longer live. Matches the same
+    # filter used by the Ironbeam price-chart GEX queries.
+    where = ["trade_date = :d", "discounted_level IS NOT NULL", "expir_date >= :d"]
     params: dict[str, object] = {"d": trade_date.isoformat()}
     if TICKER:
         where.append("ticker = :tkr")
@@ -98,7 +107,7 @@ def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
 
 
 # ---------- Figure ----------
-def _build_gex_figure(df: pd.DataFrame, trade_date_str: str) -> go.Figure:
+def _build_gex_figure(df: pd.DataFrame, trade_date_str: str, es_open_1501: float | None = None) -> go.Figure:
     fig = go.Figure()
     fig.update_layout(
         template="plotly_dark",
@@ -118,7 +127,8 @@ def _build_gex_figure(df: pd.DataFrame, trade_date_str: str) -> go.Figure:
         fig.add_vline(x=0, line_width=1, line_dash="dot")
         return fig
 
-    y = df["level"].astype(str)
+    # Use numeric levels for y-axis (not strings) so we can set range properly
+    y = df["level"]
 
     fig.add_bar(
         x=df["put_gamma"], y=y, orientation="h", name="Puts",
@@ -149,6 +159,17 @@ def _build_gex_figure(df: pd.DataFrame, trade_date_str: str) -> go.Figure:
     elif max_abs > 0:
         # Default: show full width (+5% padding)
         fig.update_xaxes(range=[-max_abs * 1.05, max_abs * 1.05])
+    
+    # If we have ES open price at 15:01 PT on prior day, set default y-axis zoom to ±3% of that price
+    # User can still zoom out and scroll to see other levels
+    if es_open_1501 is not None and es_open_1501 > 0:
+        # Calculate ±3% range for y-axis zoom
+        zoom_range = es_open_1501 * 0.03
+        y_min = es_open_1501 - zoom_range
+        y_max = es_open_1501 + zoom_range
+        
+        # Set the y-axis range (user can still zoom out/scroll)
+        fig.update_yaxes(range=[y_min, y_max])
 
     # Zero line
     fig.add_vline(x=0, line_width=1, line_dash="dot", opacity=0.6)
@@ -156,14 +177,148 @@ def _build_gex_figure(df: pd.DataFrame, trade_date_str: str) -> go.Figure:
     return fig
 
 
+# ---------- Helper to fetch ES open price at 15:01 PT on prior day ----------
+def _fetch_es_open_at_1501_prior_day(trade_date: dt.date) -> float | None:
+    """
+    Fetch the ES open price at 15:01 PT on the day before the trade_date.
+    Returns None if no data is available.
+    """
+    from zoneinfo import ZoneInfo
+    
+    pt_tz = ZoneInfo("America/Los_Angeles")
+    prior_date = trade_date - dt.timedelta(days=1)
+    
+    # Target time: 15:01 PT on prior day
+    target_time_pt = dt.datetime.combine(prior_date, dt.time(15, 1), tzinfo=pt_tz)
+    target_time_utc = target_time_pt.astimezone(ZoneInfo("UTC"))
+    
+    # Query the ironbeam_es_1m_bars table
+    eng = get_engine()
+    
+    # Look for bars within a 2-minute window around 15:01 PT
+    start_utc = target_time_utc - dt.timedelta(minutes=1)
+    end_utc = target_time_utc + dt.timedelta(minutes=1)
+    
+    sql = text("""
+        SELECT datetime, open
+        FROM ironbeam_es_1m_bars
+        WHERE datetime >= :start_utc
+          AND datetime <= :end_utc
+        ORDER BY datetime ASC
+        LIMIT 1
+    """)
+    
+    try:
+        with eng.connect() as con:
+            result = con.execute(sql, {"start_utc": start_utc, "end_utc": end_utc})
+            row = result.fetchone()
+            if row:
+                return float(row[1])  # return the open price
+    except Exception as e:
+        print(f"[gamma] Error fetching ES open at 15:01 prior day: {e}")
+    
+    return None
+
+
+# ---------- Helper to fetch live ES price ----------
+def _fetch_live_es_price() -> float | None:
+    """
+    Fetch the most recent ES price from the ironbeam_es_trades table.
+    Returns None if no recent data is available.
+    """
+    eng = get_engine()
+    
+    # Get the most recent trade within the last 2 minutes (more aggressive)
+    sql = text("""
+        SELECT price, ts_utc
+        FROM ironbeam_es_trades
+        WHERE ts_utc >= NOW() - INTERVAL '2 minutes'
+        ORDER BY ts_utc DESC
+        LIMIT 1
+    """)
+    
+    try:
+        with eng.connect() as con:
+            result = con.execute(sql)
+            row = result.fetchone()
+            if row:
+                price = float(row[0])
+                ts = row[1]
+                print(f"[gamma] Fetched live ES price: {price} at {ts}")
+                return price
+    except Exception as e:
+        print(f"[gamma] Error fetching live ES price: {e}")
+    
+    print("[gamma] No recent ES price found")
+    return None
+
+
 # ---------- Dash callback ----------
 @callback(
     Output("GEX_GRAPH", "figure"),
-    Input("trade-date", "date"),
+    [Input("trade-date", "date"),
+     Input("live-update-timer", "n_intervals")],
+    [State("GEX_GRAPH", "relayoutData")],
 )
-def render_gex(trade_date_iso: str | None):
+def render_gex(trade_date_iso: str | None, n_intervals: int, relayout_data: dict | None):
+    from dash import ctx
+    
     if not trade_date_iso:
         return _build_gex_figure(pd.DataFrame(), "—")
+    
     trade_date = dt.date.fromisoformat(trade_date_iso)
     df = _fetch_gex_grouped_by_level(trade_date)
-    return _build_gex_figure(df, trade_date_iso)
+    
+    # Fetch ES open price at 15:01 PT on prior day for zoom calculation
+    es_open_1501 = _fetch_es_open_at_1501_prior_day(trade_date)
+    
+    # Check if this is a live update (not a date change)
+    triggered_id = ctx.triggered_id if ctx.triggered else None
+    is_live_update = (triggered_id == "live-update-timer")
+    
+    fig = _build_gex_figure(df, trade_date_iso, es_open_1501)
+    
+    # Preserve user's zoom/pan state if this is a live update
+    if is_live_update and relayout_data:
+        # Preserve x-axis range
+        if "xaxis.range[0]" in relayout_data and "xaxis.range[1]" in relayout_data:
+            fig.update_xaxes(range=[relayout_data["xaxis.range[0]"], relayout_data["xaxis.range[1]"]])
+        elif "xaxis.range" in relayout_data:
+            fig.update_xaxes(range=relayout_data["xaxis.range"])
+        
+        # Preserve y-axis range
+        if "yaxis.range[0]" in relayout_data and "yaxis.range[1]" in relayout_data:
+            fig.update_yaxes(range=[relayout_data["yaxis.range[0]"], relayout_data["yaxis.range[1]"]])
+        elif "yaxis.range" in relayout_data:
+            fig.update_yaxes(range=relayout_data["yaxis.range"])
+    
+    # Add live price line only during RTH when trade_date = today
+    pt_tz = ZoneInfo("America/Los_Angeles")
+    today = dt.datetime.now(pt_tz).date()
+    
+    if trade_date == today and is_market_hours():
+        live_price = _fetch_live_es_price()
+        if live_price is not None:
+            # Add red dotted horizontal line at live price with annotation on y-axis
+            fig.add_hline(
+                y=live_price,
+                line_width=2,
+                line_dash="dot",
+                line_color="red",
+                annotation_text=f"{live_price:.2f}",
+                annotation_position="left",
+                annotation=dict(
+                    font=dict(size=11, color="white", family="monospace", weight="bold"),
+                    bgcolor="red",
+                    bordercolor="white",
+                    borderwidth=1,
+                    borderpad=4,
+                    xanchor="right",
+                    xshift=-5,  # Shift left to align with y-axis labels
+                )
+            )
+    
+    # Add uirevision to prevent full resets on live updates
+    fig.update_layout(uirevision=f"gex-{trade_date_iso}")
+    
+    return fig
