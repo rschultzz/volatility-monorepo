@@ -22,7 +22,10 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from apps.web.modules.Analogues.routes import _load_candidates
+from apps.web.modules.Analogues.routes import (
+    _fetch_session_outcomes,
+    _load_candidates,
+)
 
 
 class _StubCursor:
@@ -101,6 +104,56 @@ class TestLoadCandidates(unittest.TestCase):
         conn = _StubConn([])
         _load_candidates(conn, "ES", "v0.5.1")
         self.assertEqual(conn._cursor.last_params, ("ES", "v0.5.1"))
+
+
+class TestFetchSessionOutcomes(unittest.TestCase):
+    """Hotfix for CR-013 bug: query was referencing nonexistent `ts_pt`
+    column. Verifies the corrected query uses `datetime`, applies the
+    UTC→PT conversion in the WHERE clause, and returns the expected
+    outcome shape with PT-converted session timestamps."""
+
+    def _bars(self):
+        # 5/22/2026 PT session — 06:30 open through 13:00 close, naive
+        # UTC datetimes (matches the column's storage convention).
+        # 06:30 PT = 13:30 UTC; 13:00 PT = 20:00 UTC.
+        return [
+            (dt.datetime(2026, 5, 22, 13, 30), 5290.00, 5295.00, 5288.00, 5293.00),
+            (dt.datetime(2026, 5, 22, 14, 00), 5293.00, 5302.50, 5292.00, 5301.00),
+            (dt.datetime(2026, 5, 22, 16, 30), 5301.00, 5310.00, 5285.00, 5288.50),
+            (dt.datetime(2026, 5, 22, 19, 00), 5288.50, 5296.00, 5280.00, 5283.00),
+            (dt.datetime(2026, 5, 22, 20, 00), 5283.00, 5286.00, 5278.00, 5279.00),
+        ]
+
+    def test_returns_populated_outcome_block(self):
+        conn = _StubConn(self._bars())
+        result = _fetch_session_outcomes(conn, "2026-05-22")
+
+        self.assertIn("eod_return_pts", result)
+        self.assertAlmostEqual(result["eod_return_pts"], 5279.00 - 5290.00)
+        self.assertAlmostEqual(result["intraday_range_pts"], 5310.00 - 5278.00)
+        self.assertAlmostEqual(result["mfe_above_open_pts"], 5310.00 - 5290.00)
+        self.assertAlmostEqual(result["mfe_below_open_pts"], 5278.00 - 5290.00)
+        # Session timestamps converted to PT for frontend friendliness.
+        # 13:30 UTC -> 06:30 PT, 20:00 UTC -> 13:00 PT.
+        self.assertEqual(result["session_start"], "2026-05-22T06:30:00-07:00")
+        self.assertEqual(result["session_end"], "2026-05-22T13:00:00-07:00")
+
+    def test_empty_corpus_returns_empty_dict(self):
+        conn = _StubConn([])
+        result = _fetch_session_outcomes(conn, "2026-05-22")
+        self.assertEqual(result, {})
+
+    def test_query_uses_datetime_column_not_ts_pt(self):
+        """Regression guard for the original CR-013 column-name bug."""
+        conn = _StubConn([])
+        _fetch_session_outcomes(conn, "2026-05-22")
+        sql = (conn._cursor.last_sql or "").lower()
+        self.assertNotIn("ts_pt", sql)
+        self.assertIn("datetime", sql)
+        # Confirm the UTC→PT conversion is in the WHERE clause — naive
+        # UTC must be tagged before being converted to PT.
+        self.assertIn("at time zone 'utc'", sql)
+        self.assertIn("at time zone 'america/los_angeles'", sql)
 
 
 if __name__ == "__main__":

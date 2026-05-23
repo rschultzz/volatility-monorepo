@@ -20,9 +20,13 @@ from __future__ import annotations
 import datetime as dt
 import os
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 import psycopg
 from flask import jsonify, request
+
+_UTC = ZoneInfo("UTC")
+_PT = ZoneInfo("America/Los_Angeles")
 
 from packages.shared.day_features import (
     FEATURE_NAMES,
@@ -166,17 +170,19 @@ def _fetch_labeled_signals(conn, trade_date_iso: str) -> list[dict]:
 def _fetch_session_outcomes(conn, trade_date_iso: str) -> dict:
     """EOD outcomes from ironbeam_es_1m_bars for the trade_date.
 
-    Session = 06:30→13:00 PT (matches monies coverage). Returns empty
-    dict if no bars for the date.
+    The bars table stores `datetime` as naive UTC; this filter converts
+    to PT before comparing the calendar date so a single PT session
+    (~390 bars, 06:30→13:00 PT) doesn't span two UTC days. Returns
+    empty dict if no bars for the date.
     """
     trade_date = dt.date.fromisoformat(trade_date_iso)
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT ts_pt, open, high, low, close
+            SELECT datetime, open, high, low, close
             FROM ironbeam_es_1m_bars
-            WHERE (ts_pt AT TIME ZONE 'America/Los_Angeles')::date = %s
-            ORDER BY ts_pt ASC
+            WHERE (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date = %s
+            ORDER BY datetime ASC
             """,
             (trade_date,),
         )
@@ -189,9 +195,15 @@ def _fetch_session_outcomes(conn, trade_date_iso: str) -> dict:
     lows = [float(r[3]) for r in rows if r[3] is not None]
     hi = max(highs) if highs else None
     lo = min(lows) if lows else None
+
+    def _utc_naive_to_pt_iso(d):
+        if d is None:
+            return None
+        return d.replace(tzinfo=_UTC).astimezone(_PT).isoformat()
+
     out: dict[str, Any] = {
-        "session_start": rows[0][0].isoformat() if rows[0][0] else None,
-        "session_end": rows[-1][0].isoformat() if rows[-1][0] else None,
+        "session_start": _utc_naive_to_pt_iso(rows[0][0]),
+        "session_end": _utc_naive_to_pt_iso(rows[-1][0]),
     }
     if open_px is not None and close_px is not None:
         out["eod_return_pts"] = close_px - open_px
