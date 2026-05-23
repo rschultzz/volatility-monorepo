@@ -2,8 +2,12 @@ import { useState, useEffect, useCallback } from 'react';
 import ContextStrip from './components/ContextStrip';
 import ProposalCard from './components/ProposalCard';
 
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+function mostRecentTradingDay() {
+  const d = new Date();
+  const day = d.getDay(); // 0=Sun, 6=Sat
+  if (day === 6) d.setDate(d.getDate() - 1); // Sat → Fri
+  if (day === 0) d.setDate(d.getDate() - 2); // Sun → Fri
+  return d.toISOString().slice(0, 10);
 }
 
 // In production the app is served at /today-setup/ by Flask; in dev
@@ -14,6 +18,10 @@ const API_BASE = import.meta.env.VITE_API_BASE || '';
 async function fetchProposals(date, spot, impliedMove, ticker = 'SPX') {
   const params = new URLSearchParams({ date, spot, implied_move: impliedMove, ticker });
   const r = await fetch(`${API_BASE}/api/setup/proposals?${params}`);
+  if (r.status === 404) {
+    const body = await r.json().catch(() => ({}));
+    throw Object.assign(new Error(body.error || `No data for ${date}`), { is404: true });
+  }
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
@@ -22,7 +30,7 @@ async function fetchProposals(date, spot, impliedMove, ticker = 'SPX') {
 function parseQS() {
   const q = new URLSearchParams(window.location.search);
   return {
-    date: q.get('date') || todayISO(),
+    date: q.get('date') || mostRecentTradingDay(),
     spot: q.get('spot') ? Number(q.get('spot')) : null,
     impliedMove: q.get('implied_move') ? Number(q.get('implied_move')) : null,
     ticker: q.get('ticker') || 'SPX',
@@ -104,7 +112,13 @@ export default function App() {
 
       {/* ── Status ── */}
       {loading && <div className="loading-msg">Loading proposals…</div>}
-      {error && <div className="error-msg">Error: {error}</div>}
+      {error && (
+        <div className="error-msg">
+          {error.startsWith('No data for') || error.includes('landscape')
+            ? `No data for ${date} — pick a different trade date.`
+            : `Error: ${error}`}
+        </div>
+      )}
 
       {/* ── Proposals ── */}
       {!loading && !error && proposals.length > 0 && (
