@@ -115,6 +115,7 @@ export default function DayView({
                 spotMode="OPEN"
                 onSpotModeChange={() => {}}
                 visiblePriceRange={priceRange}
+                onRangeChange={setPriceRange}
               />
             ) : (
               <div style={emptyBox}>No landscape data</div>

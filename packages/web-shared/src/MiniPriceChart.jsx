@@ -34,6 +34,13 @@ export default function MiniPriceChart({
   // Track the last range we emitted so we don't react to our own emission
   // when externalRange echoes back through DayView state.
   const lastEmittedRef = useRef(null)
+  // Current visible range — kept as a ref so the wheel handler can read it
+  // without a stale closure. Updated whenever we call setVisibleRange.
+  const currentRangeRef = useRef(null)
+  // Keep onPriceRangeChange stable in the wheel handler without listing it
+  // as a useEffect dep (it can change reference on every render).
+  const onRangeChangeRef = useRef(onPriceRangeChange)
+  useEffect(() => { onRangeChangeRef.current = onPriceRangeChange }, [onPriceRangeChange])
   const [status, setStatus] = useState('idle')  // idle | loading | empty | ok | error
 
   // Initialise lightweight-charts once on mount.
@@ -168,6 +175,7 @@ export default function MiniPriceChart({
     chartRef.current?.priceScale('right').setVisibleRange({ from: priceBot, to: priceTop })
     const range = { priceBot, priceTop }
     lastEmittedRef.current = range
+    currentRangeRef.current = range
     onPriceRangeChange?.(range)
   }, [clusters, status, onPriceRangeChange])
 
@@ -186,6 +194,36 @@ export default function MiniPriceChart({
       to: externalRange.priceTop,
     })
   }, [externalRange])
+
+  // Wheel-zoom handler on the chart container — zooms the shared Y axis.
+  // Registered as non-passive so we can call preventDefault() and prevent
+  // the page from scrolling while the user zooms the chart.
+  const outerRef = useRef(null)
+  useEffect(() => {
+    const el = outerRef.current
+    if (!el) return
+    function onWheel(e) {
+      const range = currentRangeRef.current
+      if (!range || !chartRef.current) return
+      e.preventDefault()
+      const { priceBot, priceTop } = range
+      const span = priceTop - priceBot
+      const MIN_SPAN = 5
+      // deltaY > 0 → scroll down → zoom out; < 0 → zoom in
+      const factor = e.deltaY > 0 ? 1.06 : 1 / 1.06
+      const newSpan = Math.max(MIN_SPAN, span * factor)
+      const mid = (priceBot + priceTop) / 2
+      const newBot = mid - newSpan / 2
+      const newTop = mid + newSpan / 2
+      chartRef.current.priceScale('right').setVisibleRange({ from: newBot, to: newTop })
+      const newRange = { priceBot: newBot, priceTop: newTop }
+      lastEmittedRef.current = newRange
+      currentRangeRef.current = newRange
+      onRangeChangeRef.current?.(newRange)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
 
   // Price lines for cluster centers — recreated whenever clusters or status change.
   const priceLineRefs = useRef([])
@@ -211,7 +249,7 @@ export default function MiniPriceChart({
   }, [clusters, status])
 
   return (
-    <div style={{ position: 'relative', width: '100%', height }}>
+    <div ref={outerRef} style={{ position: 'relative', width: '100%', height }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
       {status === 'loading' && <div style={overlay}>Loading chart…</div>}
       {status === 'empty' && <div style={overlay}>No bar data for {date}</div>}
