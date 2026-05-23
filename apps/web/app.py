@@ -495,9 +495,26 @@ def serve_layout():
                             dcc.Tab(label="Price Chart", value=TAB_PRICE_CHART, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                             dcc.Tab(label="Backtests", value=TAB_BACKTESTS, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                         ],
-                    )
+                    ),
+                    html.A(
+                        "Today's Setup ↗",
+                        href="/today-setup",
+                        target="_blank",
+                        style={
+                            "marginLeft": "12px",
+                            "alignSelf": "center",
+                            "color": "#60a5fa",
+                            "fontSize": "12px",
+                            "fontWeight": "700",
+                            "textDecoration": "none",
+                            "whiteSpace": "nowrap",
+                            "padding": "6px 10px",
+                            "borderRadius": "8px",
+                            "border": "1px solid #1f2937",
+                        },
+                    ),
                 ],
-                style=TABS_WRAP_STYLE,
+                style={**TABS_WRAP_STYLE, "display": "flex", "alignItems": "stretch"},
             ),
             html.Div(
                 id="dashboard-container",
