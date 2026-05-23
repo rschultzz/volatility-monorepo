@@ -261,12 +261,13 @@ def compute_feature_config_hash(version: str = FEATURE_VERSION) -> str:
 _UPSERT_SQL = """
     INSERT INTO bt_daily_features
         (ticker, trade_date, feature_vector, feature_version,
-         feature_config_hash)
-    VALUES (%s, %s, %s, %s, %s)
+         feature_config_hash, regime_at_classification)
+    VALUES (%s, %s, %s, %s, %s, %s)
     ON CONFLICT (ticker, trade_date, feature_version) DO UPDATE SET
-        feature_vector      = EXCLUDED.feature_vector,
-        feature_config_hash = EXCLUDED.feature_config_hash,
-        computed_at         = NOW()
+        feature_vector           = EXCLUDED.feature_vector,
+        feature_config_hash      = EXCLUDED.feature_config_hash,
+        regime_at_classification = EXCLUDED.regime_at_classification,
+        computed_at              = NOW()
 """
 
 _LANDSCAPE_ROW_SQL = """
@@ -406,10 +407,13 @@ def compute_and_upsert_daily_features(
     features = extract_features(payload, spot, implied_move)
     config_hash = compute_feature_config_hash(version)
 
+    regime_at_classification = (payload.get("regime") or {}).get("regime") or None
+
     with conn.cursor() as cur:
         cur.execute(_UPSERT_SQL, (
             ticker, trade_date,
             Jsonb(features), version, config_hash,
+            regime_at_classification,
         ))
 
     return {
@@ -420,4 +424,5 @@ def compute_and_upsert_daily_features(
         "spot": spot,
         "implied_move": implied_move,
         "n_features": len(features),
+        "regime_at_classification": regime_at_classification,
     }
