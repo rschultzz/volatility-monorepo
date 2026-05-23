@@ -1,8 +1,9 @@
 // DayView — renders the GEX landscape + mini price chart for one day,
 // with flag controls (regime_wrong, not_a_true_analogue).
 import { useState } from 'react'
-import { GexLandscape } from 'web-shared'
-import { MiniPriceChart } from 'web-shared'
+import { GexLandscape, MiniPriceChart, PANEL_WIDTH as LANDSCAPE_WIDTH } from 'web-shared'
+
+const ROW_HEIGHT = 480
 
 const REGIME_COLORS = {
   'magnetic-pin': '#10b981',
@@ -88,30 +89,32 @@ export default function DayView({
         )}
       </div>
 
-      {/* Landscape */}
-      <div style={{ height: 320, position: 'relative', flexShrink: 0 }}>
-        {landscapeData ? (
-          <GexLandscape
-            data={landscapeData}
-            spotMode="OPEN"
-            onSpotModeChange={() => {}}
-          />
-        ) : (
-          <div style={emptyBox}>
-            {date ? 'No landscape data' : 'Select a day'}
-          </div>
-        )}
-      </div>
-
-      {/* Mini price chart */}
+      {/* Chart + landscape side-by-side row */}
       {date && (
-        <MiniPriceChart
-          date={date}
-          ticker={ticker}
-          apiBase={apiBase}
-          clusters={clusters}
-          height={160}
-        />
+        <div style={{ display: 'flex', gap: 8, height: ROW_HEIGHT, alignItems: 'stretch' }}>
+          {/* Mini price chart — fills remaining width on the left */}
+          <div style={{ flex: 1, minWidth: 0, height: '100%' }}>
+            <MiniPriceChart
+              date={date}
+              ticker={ticker}
+              apiBase={apiBase}
+              clusters={clusters}
+              height={ROW_HEIGHT}
+            />
+          </div>
+          {/* GEX landscape — fixed width on the right */}
+          <div style={{ width: LANDSCAPE_WIDTH, flexShrink: 0, height: '100%', position: 'relative' }}>
+            {landscapeData ? (
+              <GexLandscape
+                data={landscapeData}
+                spotMode="OPEN"
+                onSpotModeChange={() => {}}
+              />
+            ) : (
+              <div style={emptyBox}>No landscape data</div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Flag controls */}
