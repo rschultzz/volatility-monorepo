@@ -104,6 +104,7 @@ export default function DayView({
               clusters={clusters}
               height={ROW_HEIGHT}
               onPriceRangeChange={setPriceRange}
+              externalRange={priceRange}
             />
           </div>
           {/* GEX landscape — fixed width on the right */}
@@ -113,11 +114,7 @@ export default function DayView({
                 data={landscapeData}
                 spotMode="OPEN"
                 onSpotModeChange={() => {}}
-                visiblePriceRange={priceRange ? {
-                  priceTop: priceRange.priceTop,
-                  priceBot: priceRange.priceBot,
-                  paneHeight: ROW_HEIGHT,
-                } : null}
+                visiblePriceRange={priceRange}
               />
             ) : (
               <div style={emptyBox}>No landscape data</div>

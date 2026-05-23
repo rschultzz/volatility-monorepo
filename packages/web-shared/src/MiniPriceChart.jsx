@@ -9,6 +9,8 @@
 //   onPriceRangeChange  fn      ({ priceBot, priceTop }) => void — fires after bars + clusters
 //                               both contribute to the union range; lets DayView sync
 //                               GexLandscape's visiblePriceRange to the same Y window.
+//   externalRange       { priceBot, priceTop } | null — when non-null, the chart's visible
+//                               price scale is set to this range (used for landscape→chart zoom).
 import { useEffect, useRef, useState } from 'react'
 import { createChart, CandlestickSeries, LineSeries, LineStyle, ColorType } from 'lightweight-charts'
 import { utcEpochShowingZoneTime } from './timezone.js'
@@ -18,7 +20,7 @@ const CLUSTER_NEG_COLOR = '#06b6d4'  // teal — negative GEX
 
 export default function MiniPriceChart({
   date, ticker = 'SPX', apiBase = '', clusters = [], height = 200,
-  onPriceRangeChange,
+  onPriceRangeChange, externalRange = null,
 }) {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
@@ -29,6 +31,9 @@ export default function MiniPriceChart({
   // Latest loaded bars (stored after setData so the union-range effect can
   // read them when clusters change independently of a bars re-fetch).
   const barsRef = useRef([])
+  // Track the last range we emitted so we don't react to our own emission
+  // when externalRange echoes back through DayView state.
+  const lastEmittedRef = useRef(null)
   const [status, setStatus] = useState('idle')  // idle | loading | empty | ok | error
 
   // Initialise lightweight-charts once on mount.
@@ -137,7 +142,8 @@ export default function MiniPriceChart({
 
   // Compute union Y range (bars high/low + cluster centers) whenever either changes.
   // Runs after status→'ok' (new bars loaded) and whenever clusters update.
-  // Fires onPriceRangeChange so DayView can sync GexLandscape's visiblePriceRange.
+  // Pins the chart's price scale to exactly this range (no auto-scale padding)
+  // and fires onPriceRangeChange so DayView can sync GexLandscape.
   useEffect(() => {
     const bars = barsRef.current
     if (!bars.length || status !== 'ok') return
@@ -157,8 +163,29 @@ export default function MiniPriceChart({
         { time: bars[bars.length - 1].time, value: priceTop },
       ])
     }
-    onPriceRangeChange?.({ priceBot, priceTop })
+    // Pin the chart to exactly priceBot..priceTop so the displayed range
+    // matches what we emit (no additional lightweight-charts scale margin).
+    chartRef.current?.priceScale('right').setVisibleRange({ from: priceBot, to: priceTop })
+    const range = { priceBot, priceTop }
+    lastEmittedRef.current = range
+    onPriceRangeChange?.(range)
   }, [clusters, status, onPriceRangeChange])
+
+  // Apply externalRange to the chart when the landscape (or DayView) drives a zoom.
+  // Skip if we just emitted this range ourselves to avoid feedback loops.
+  useEffect(() => {
+    if (!externalRange || !chartRef.current) return
+    const last = lastEmittedRef.current
+    if (
+      last &&
+      Math.abs(last.priceBot - externalRange.priceBot) < 0.01 &&
+      Math.abs(last.priceTop - externalRange.priceTop) < 0.01
+    ) return
+    chartRef.current.priceScale('right').setVisibleRange({
+      from: externalRange.priceBot,
+      to: externalRange.priceTop,
+    })
+  }, [externalRange])
 
   // Price lines for cluster centers — recreated whenever clusters or status change.
   const priceLineRefs = useRef([])

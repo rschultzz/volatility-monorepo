@@ -141,29 +141,24 @@ export default function GexLandscape({
     gMax += gPad
     const gexSpan = gMax - gMin || 1
 
-    // CR-009 item 1 — when the chart publishes its visible price window,
-    // adopt the chart's exact affine price→pixel transform so a price X
-    // lands at the same screen pixel on the panel and the chart. The chart
-    // pane's y=0 is the chart-stage top; the panel SVG sits `offsetTop`
-    // pixels below that (the header), so subtract it. Off-range features
-    // map outside [0, size.height] and are clipped by the SVG viewport.
+    // CR-017 — when the chart publishes its visible price window, use the same
+    // price range in the landscape but map it to the landscape's own SVG
+    // coordinate system (PAD.top..PAD.top+plotH). This keeps labels aligned
+    // without depending on absolute pixel positions across two different DOM trees.
     const synced =
       visiblePriceRange &&
       Number.isFinite(visiblePriceRange.priceTop) &&
       Number.isFinite(visiblePriceRange.priceBot) &&
-      Number.isFinite(visiblePriceRange.paneHeight) &&
       visiblePriceRange.priceTop !== visiblePriceRange.priceBot
 
     let pLo
     let pHi
     let yOf
     if (synced) {
-      const { priceTop, priceBot, paneHeight } = visiblePriceRange
+      const { priceTop, priceBot } = visiblePriceRange
       pLo = Math.min(priceTop, priceBot)
       pHi = Math.max(priceTop, priceBot)
-      const offset = size.offsetTop || 0
-      yOf = (price) =>
-        ((priceTop - price) / (priceTop - priceBot)) * paneHeight - offset
+      yOf = (price) => PAD.top + ((pHi - price) / (pHi - pLo)) * plotH
     } else {
       pLo = pMin
       pHi = pMax
