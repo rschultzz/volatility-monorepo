@@ -12,6 +12,9 @@ import SignalPanel from './SignalPanel'
 import ChartToggleBar from './ChartToggleBar'
 import TradeAnnotationPanel from './TradeAnnotationPanel'
 import CondorPricingPanel from './CondorPricingPanel'
+import AnaloguesPanel, {
+  PANEL_WIDTH as ANALOGUES_PANEL_WIDTH,
+} from './AnaloguesPanel'
 import GexLandscapePanel, {
   PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH,
   CONFLUENCE_COLORS,
@@ -690,6 +693,16 @@ export default function PriceChart({
   landscapeData = null,
   landscapeSpotMode = 'LIVE',
   onLandscapeSpotModeChange = null,
+  // Day Analogue Comparison panel (CR-013). State + fetch lifecycle live
+  // in App.jsx; PriceChart only owns the ANALOGUES pill and renders the
+  // docked panel.
+  analoguesOpen = false,
+  onToggleAnalogues = null,
+  analoguesData = null,
+  analoguesLoading = false,
+  analoguesError = null,
+  analoguesK = 5,
+  onAnaloguesKChange = null,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -2881,6 +2894,7 @@ export default function PriceChart({
                 ? [{ key: 'gex', label: 'GEX', isOpen: gexPanelOpen, onToggle: () => setGexPanelOpen(o => !o), title: 'Show GEX legend' }]
                 : []),
               { key: 'landscape', label: 'LANDSCAPE', isOpen: landscapeOpen, onToggle: onToggleLandscape || (() => {}), title: 'Show GEX landscape panel' },
+              { key: 'analogues', label: 'ANALOGUES', isOpen: analoguesOpen, onToggle: onToggleAnalogues || (() => {}), title: 'Show day analogue comparison panel' },
             ]}
           />
 
@@ -2898,6 +2912,18 @@ export default function PriceChart({
               onSpotModeChange={onLandscapeSpotModeChange}
               onClose={onToggleLandscape || undefined}
               visiblePriceRange={visiblePriceRange}
+            />
+          )}
+
+          {analoguesOpen && (
+            <AnaloguesPanel
+              data={analoguesData}
+              loading={analoguesLoading}
+              error={analoguesError}
+              k={analoguesK}
+              onKChange={onAnaloguesKChange || undefined}
+              onClose={onToggleAnalogues || undefined}
+              rightOffset={landscapeOpen ? LANDSCAPE_PANEL_WIDTH : 0}
             />
           )}
 
