@@ -26,6 +26,8 @@ _SQL = """
         open, high, low, close
     FROM ironbeam_es_1m_bars
     WHERE (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date = %s
+      AND (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::time
+          BETWEEN '06:30:00' AND '13:00:00'
     ORDER BY datetime ASC
 """
 
@@ -33,6 +35,8 @@ _OPEN_SQL = """
     SELECT open
     FROM ironbeam_es_1m_bars
     WHERE (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date = %s
+      AND (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::time
+          BETWEEN '06:30:00' AND '13:00:00'
     ORDER BY datetime ASC
     LIMIT 1
 """

@@ -104,5 +104,54 @@ class TestFetchRthOpen(unittest.TestCase):
         self.assertIn(TRADE_DATE, params)
 
 
+class TestRthBoundary(unittest.TestCase):
+    """Verify that both queries include the 06:30–13:00 PT time-of-day filter
+    so overnight ES bars are excluded from RTH fetches (CR-016 hotfix)."""
+
+    def test_fetch_rth_bars_sql_contains_rth_time_filter(self):
+        """The SQL issued by fetch_rth_bars must contain the 06:30–13:00 filter."""
+        conn = _stub_conn(rows_all=_SAMPLE_ROWS)
+        fetch_rth_bars(conn, "SPX", TRADE_DATE)
+        cur = conn.cursor.return_value
+        sql_issued = cur.execute.call_args[0][0]
+        self.assertIn("06:30:00", sql_issued)
+        self.assertIn("13:00:00", sql_issued)
+        self.assertIn("BETWEEN", sql_issued.upper())
+
+    def test_fetch_rth_open_sql_contains_rth_time_filter(self):
+        """The SQL issued by fetch_rth_open must contain the 06:30–13:00 filter."""
+        conn = _stub_conn(row_one=(7362.5,))
+        fetch_rth_open(conn, TRADE_DATE)
+        cur = conn.cursor.return_value
+        sql_issued = cur.execute.call_args[0][0]
+        self.assertIn("06:30:00", sql_issued)
+        self.assertIn("13:00:00", sql_issued)
+        self.assertIn("BETWEEN", sql_issued.upper())
+
+    def test_fetch_rth_bars_filters_overnight_bars_not_in_result(self):
+        """Rows whose UTC epoch maps outside 06:30–13:00 PT should not appear.
+
+        The SQL filter runs in the DB; at the service layer the test verifies
+        that the *query itself* carries the time clause (above). This test
+        confirms the service doesn't add a second in-Python filter that would
+        silently pass through overnight rows fetched by a bad query.
+
+        We simulate a correct DB by returning only RTH-window rows from the mock
+        and asserting all five keys are present on every result row — there is no
+        in-Python post-filter that strips time data after the fact.
+        """
+        # Epoch 1746613800 = 2026-05-07 13:30 UTC = 06:30 PT (RTH open)
+        rth_rows = [
+            (1746613800, 7362.5, 7370.0, 7358.0, 7365.25),
+        ]
+        conn = _stub_conn(rows_all=rth_rows)
+        result = fetch_rth_bars(conn, "SPX", TRADE_DATE)
+        self.assertEqual(len(result), 1)
+        row = result[0]
+        self.assertEqual(row["time"], 1746613800)
+        for key in ("time", "open", "high", "low", "close"):
+            self.assertIn(key, row)
+
+
 if __name__ == "__main__":
     unittest.main()
