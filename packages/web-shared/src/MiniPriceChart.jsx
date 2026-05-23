@@ -60,7 +60,10 @@ export default function MiniPriceChart({
         timeVisible: true,
         secondsVisible: false,
       },
-      rightPriceScale: { borderColor: 'rgba(148, 163, 184, 0.18)' },
+      rightPriceScale: {
+        borderColor: 'rgba(148, 163, 184, 0.18)',
+        scaleMargins: { top: 0, bottom: 0 },
+      },
       crosshair: { mode: 1 },
       handleScroll: false,
       handleScale: false,

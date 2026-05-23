@@ -44,6 +44,42 @@ When I say "wrap up", "log this session", or run `/log-session`:
 6. If we made an architectural decision, write a short note in `decisions/` (one decision per file, ADR-style: context · decision · consequences).
 7. Print the absolute path to the new session note when done.
 
+## CR Workflow
+
+Every CR starts on a fresh branch off the current `origin/Main-Live` tip. The branch step is *the first action of every CR*, before any file reads, any spec freeze, any diagnostic work, any code change.
+
+### Branch discipline
+
+1. **Create the branch first.** `git checkout -b feat/CR-NNN-<kebab-case-slug>` off the current `origin/Main-Live` tip.
+2. **Verify before any commit.** Run `git branch -v` and confirm the current branch is the CR branch, not `Main-Live`. Repeat any time you've been away from the terminal for more than a few minutes.
+3. **If you find yourself on Main-Live mid-CR, stop.**
+   - Save the work: `git branch cr-NNN-save-<n>` (n = 1, 2, 3...).
+   - Restore Main-Live: `git reset --hard origin/Main-Live`.
+   - Re-create the proper branch: `git checkout -b feat/CR-NNN-<slug>`.
+   - Cherry-pick the saved commits: `git cherry-pick <sha>...`.
+4. **Branch naming.** `feat/CR-NNN-<kebab-case-slug>` — matches PR #18 precedent (e.g., `feat/CR-016-day-setup-audit-browse-rebuild`).
+
+"Verify you are on a branch" is a check, not a substitute for the create-branch step. If a kickoff prompt doesn't explicitly include `git checkout -b`, add it — don't infer that an earlier commit's branch carries forward.
+
+### Commit structure
+
+Every CR follows the same commit pattern:
+
+1. **Spec freeze** (first commit): copy the spec body from the vault session note into `specs/CR-NNN-<slug>.md`.
+2. **Step-0 diagnosis findings** (second commit): append diagnostic findings to the spec file. If the CR has a diagnosis gate in its kickoff prompt, all gate questions must be answered in this commit before any implementation code lands.
+3. **One commit per implementation step.** No squashing. Step boundaries are defined in the kickoff prompt's "Implementation order" section.
+4. **Smoke + wrap** (last commit before PR): document deltas, decisions, and any deferred follow-ups in the session note's `## What changed`, `## Decisions`, `## Open questions` sections.
+
+### Visible-change discipline
+
+If a CR is scoped as "axis fix" or "data flow fix" or anything that doesn't explicitly mention layout, do *not* change layout, colors, sizing, spacing, or any other visible-to-the-user property as a side effect. Visible changes require explicit spec language.
+
+If you find yourself editing an `App.jsx` flex/grid rule, a CSS file, or a JSX wrapper element during a non-layout CR, stop. Either the spec is missing a layout requirement (amend it before continuing) or you're introducing scope creep (revert it).
+
+### Spec amendments mid-CR
+
+If Step 0 surfaces a requirement the spec didn't anticipate (a missing layout decision, an unexpected dependency, a wrong assumption about an upstream component), amend the spec *and* the session note before writing implementation code. Never "fix it during impl" — the diff stops being reviewable and the session note stops being accurate.
+
 ## Conventions
 
 - Postgres tables and views are snake_case. Reference them as inline code (e.g. `es_minutes_with_features_bt`).
