@@ -630,6 +630,13 @@ export default function App() {
   // CondorPricingPanel overlay.
   const [condorPricing, setCondorPricing] = useState(null)
 
+  // ── Day analogues panel (CR-013) ──────────────────────────────────
+  const [analoguesOpen, setAnaloguesOpen] = useState(false)
+  const [analoguesData, setAnaloguesData] = useState(null)
+  const [analoguesLoading, setAnaloguesLoading] = useState(false)
+  const [analoguesError, setAnaloguesError] = useState(null)
+  const [analoguesK, setAnaloguesK] = useState(5)
+
   // ── GEX landscape panel (CR-008) ──────────────────────────────────
   const [landscapeOpen, setLandscapeOpen] = useState(false)
   const [landscapeData, setLandscapeData] = useState(null)
@@ -855,6 +862,65 @@ export default function App() {
       }
     }
   }, [landscapeOpen, tradeDate, apiBase, landscapeSpotMode, liveEsSpot, landscapeIv])
+
+  // ── Day analogues fetch (CR-013) ──────────────────────────────────────
+  // Pulls from /api/analogues whenever the panel is open and the
+  // (date, spot, implied_move, k) tuple changes. Debounced to avoid
+  // hammering during shift+drag spot adjustments.
+  useEffect(() => {
+    if (!analoguesOpen || !tradeDate || !apiBase) return undefined
+    if (liveEsSpot == null || landscapeIv == null) return undefined
+
+    const spot = liveEsSpot
+    // 1-sigma implied move from the ATM IV passed via the same hook the
+    // landscape panel uses. iv is decimal (e.g. 0.107); 1-day move ≈
+    // spot * iv * sqrt(1/252).
+    const implied_move = spot * landscapeIv * Math.sqrt(1 / 252)
+
+    const controller = new AbortController()
+    let disposed = false
+    setAnaloguesLoading(true)
+    setAnaloguesError(null)
+
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const url = new URL(`${apiBase}/api/analogues`)
+        url.searchParams.set('ticker', 'SPX')
+        url.searchParams.set('date', tradeDate)
+        url.searchParams.set('spot', String(spot))
+        url.searchParams.set('implied_move', String(implied_move))
+        url.searchParams.set('k', String(analoguesK))
+
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          credentials: 'include',
+          signal: controller.signal,
+          cache: 'no-store',
+        })
+        if (disposed) return
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}))
+          throw new Error(body?.error || `Analogues fetch failed: ${response.status}`)
+        }
+        const data = await response.json()
+        if (disposed) return
+        if (!data.ok) throw new Error(data.error || 'Analogues endpoint returned ok=false')
+        setAnaloguesData(data)
+      } catch (e) {
+        if (disposed || e.name === 'AbortError') return
+        setAnaloguesError(String(e.message || e))
+        setAnaloguesData(null)
+      } finally {
+        if (!disposed) setAnaloguesLoading(false)
+      }
+    }, 300)
+
+    return () => {
+      disposed = true
+      controller.abort()
+      window.clearTimeout(timeoutId)
+    }
+  }, [analoguesOpen, tradeDate, apiBase, liveEsSpot, landscapeIv, analoguesK])
 
   // Compute the band levels in ES coordinates from:
   //  - the active SPX anchor (stock_price)
@@ -1823,6 +1889,13 @@ export default function App() {
                 landscapeData={landscapeData}
                 landscapeSpotMode={landscapeSpotMode}
                 onLandscapeSpotModeChange={setLandscapeSpotMode}
+                analoguesOpen={analoguesOpen}
+                onToggleAnalogues={() => setAnaloguesOpen((o) => !o)}
+                analoguesData={analoguesData}
+                analoguesLoading={analoguesLoading}
+                analoguesError={analoguesError}
+                analoguesK={analoguesK}
+                onAnaloguesKChange={setAnaloguesK}
               />
             </div>
 
