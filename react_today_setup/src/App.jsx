@@ -422,12 +422,12 @@ export default function App() {
             )}
           </div>
 
-          {/* Right: dual view */}
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+          {/* Right: dual view — anchor on top, selected beneath (vertical stack) */}
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
 
             {/* Anchor view (analogue mode) */}
             {mode === 'analogue' && (
-              <div style={{ flex: '1 1 380px', minWidth: 320 }}>
+              <div style={{ width: '100%' }}>
                 <DayView
                   label="Anchor"
                   date={date}
@@ -447,7 +447,7 @@ export default function App() {
             )}
 
             {/* Selected-day view */}
-            <div style={{ flex: '1 1 380px', minWidth: 320 }}>
+            <div style={{ width: '100%' }}>
               <DayView
                 label="Selected"
                 date={selectedDate}

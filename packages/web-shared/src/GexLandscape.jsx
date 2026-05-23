@@ -80,13 +80,21 @@ export default function GexLandscape({
   spotMode = 'LIVE',
   onSpotModeChange,
   onClose,
-  // CR-009 item 1 — the chart's visible price window, { priceTop, priceBot,
-  // paneHeight }. When present, the panel's Y-axis follows the chart's
-  // exactly. null before the chart's first sample → fall back to the full
-  // stored landscape range.
+  // The chart's visible price window { priceTop, priceBot }. When present,
+  // the landscape Y-axis follows the chart's range exactly.
+  // null before the chart's first sample → fall back to the full stored range.
   visiblePriceRange = null,
+  // Called with { priceBot, priceTop } when the user wheel-zooms the landscape.
+  // DayView uses this to push the new range back to MiniPriceChart.
+  onRangeChange = null,
 }) {
   const bodyRef = useRef(null)
+  const rootRef = useRef(null)
+  // Refs so the wheel handler can read the latest geometry without stale closures.
+  const geomRef = useRef(null)
+  const onRangeChangeRef = useRef(onRangeChange)
+  useEffect(() => { onRangeChangeRef.current = onRangeChange }, [onRangeChange])
+
   const [size, setSize] = useState({ width: PANEL_WIDTH, height: 360, offsetTop: 0 })
 
   useEffect(() => {
@@ -98,15 +106,36 @@ export default function GexLandscape({
         setSize({
           width: Math.max(120, width),
           height: Math.max(120, height),
-          // Distance from the panel root's top to the plot body — the header
-          // height. The plot SVG sits this far below the chart-stage top;
-          // CR-009 item 1's synced Y-transform subtracts it.
           offsetTop: el.offsetTop,
         })
       }
     })
     ro.observe(el)
     return () => ro.disconnect()
+  }, [])
+
+  // Non-passive wheel listener for Y-axis zoom. Must be registered imperatively
+  // so we can call preventDefault() and suppress page scrolling.
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return undefined
+    function onWheel(e) {
+      if (!onRangeChangeRef.current || !geomRef.current) {
+        e.stopPropagation()
+        return
+      }
+      e.preventDefault()
+      e.stopPropagation()
+      const { pMin, pMax } = geomRef.current
+      const span = pMax - pMin
+      const MIN_SPAN = 5
+      const factor = e.deltaY > 0 ? 1.06 : 1 / 1.06
+      const newSpan = Math.max(MIN_SPAN, span * factor)
+      const mid = (pMin + pMax) / 2
+      onRangeChangeRef.current({ priceBot: mid - newSpan / 2, priceTop: mid + newSpan / 2 })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
   }, [])
 
   const regimeTag = data?.regime?.regime || null
@@ -141,29 +170,24 @@ export default function GexLandscape({
     gMax += gPad
     const gexSpan = gMax - gMin || 1
 
-    // CR-009 item 1 — when the chart publishes its visible price window,
-    // adopt the chart's exact affine price→pixel transform so a price X
-    // lands at the same screen pixel on the panel and the chart. The chart
-    // pane's y=0 is the chart-stage top; the panel SVG sits `offsetTop`
-    // pixels below that (the header), so subtract it. Off-range features
-    // map outside [0, size.height] and are clipped by the SVG viewport.
+    // CR-017 — when the chart publishes its visible price window, use the same
+    // price range in the landscape but map it to the landscape's own SVG
+    // coordinate system (PAD.top..PAD.top+plotH). This keeps labels aligned
+    // without depending on absolute pixel positions across two different DOM trees.
     const synced =
       visiblePriceRange &&
       Number.isFinite(visiblePriceRange.priceTop) &&
       Number.isFinite(visiblePriceRange.priceBot) &&
-      Number.isFinite(visiblePriceRange.paneHeight) &&
       visiblePriceRange.priceTop !== visiblePriceRange.priceBot
 
     let pLo
     let pHi
     let yOf
     if (synced) {
-      const { priceTop, priceBot, paneHeight } = visiblePriceRange
+      const { priceTop, priceBot } = visiblePriceRange
       pLo = Math.min(priceTop, priceBot)
       pHi = Math.max(priceTop, priceBot)
-      const offset = size.offsetTop || 0
-      yOf = (price) =>
-        ((priceTop - price) / (priceTop - priceBot)) * paneHeight - offset
+      yOf = (price) => PAD.top + ((pHi - price) / (pHi - pLo)) * plotH
     } else {
       pLo = pMin
       pHi = pMax
@@ -199,8 +223,13 @@ export default function GexLandscape({
     }
   }
 
+  // Keep geomRef in sync with current render so the wheel handler sees
+  // the latest pMin/pMax without stale closure.
+  geomRef.current = geom
+
   return (
     <div
+      ref={rootRef}
       style={{
         position: 'absolute',
         top: 0,
@@ -217,7 +246,6 @@ export default function GexLandscape({
         fontFamily: 'inherit',
       }}
       onMouseDown={(e) => e.stopPropagation()}
-      onWheel={(e) => e.stopPropagation()}
     >
       {/* Header */}
       <div

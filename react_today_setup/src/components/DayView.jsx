@@ -1,6 +1,6 @@
 // DayView — renders the GEX landscape + mini price chart for one day,
 // with flag controls (regime_wrong, not_a_true_analogue).
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { GexLandscape, MiniPriceChart, PANEL_WIDTH as LANDSCAPE_WIDTH } from 'web-shared'
 
 const ROW_HEIGHT = 480
@@ -42,6 +42,12 @@ export default function DayView({
   // Shared Y range from MiniPriceChart — forwarded to GexLandscape so both
   // panels show the same price window (clusters visible even outside bar range).
   const [priceRange, setPriceRange] = useState(null)
+
+  // Reset shared range when the date changes so a newly selected day
+  // starts at its own natural price extent (AC #6: zoom doesn't carry over).
+  useEffect(() => {
+    setPriceRange(null)
+  }, [date])
 
   const regimeColor = REGIME_COLORS[regime] || '#94a3b8'
   const isFlagged = flag != null
@@ -104,6 +110,7 @@ export default function DayView({
               clusters={clusters}
               height={ROW_HEIGHT}
               onPriceRangeChange={setPriceRange}
+              externalRange={priceRange}
             />
           </div>
           {/* GEX landscape — fixed width on the right */}
@@ -113,11 +120,8 @@ export default function DayView({
                 data={landscapeData}
                 spotMode="OPEN"
                 onSpotModeChange={() => {}}
-                visiblePriceRange={priceRange ? {
-                  priceTop: priceRange.priceTop,
-                  priceBot: priceRange.priceBot,
-                  paneHeight: ROW_HEIGHT,
-                } : null}
+                visiblePriceRange={priceRange}
+                onRangeChange={setPriceRange}
               />
             ) : (
               <div style={emptyBox}>No landscape data</div>
