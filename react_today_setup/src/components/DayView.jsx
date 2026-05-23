@@ -39,6 +39,9 @@ export default function DayView({
 }) {
   const [showRegimePicker, setShowRegimePicker] = useState(false)
   const [selectedCorrection, setSelectedCorrection] = useState('')
+  // Shared Y range from MiniPriceChart — forwarded to GexLandscape so both
+  // panels show the same price window (clusters visible even outside bar range).
+  const [priceRange, setPriceRange] = useState(null)
 
   const regimeColor = REGIME_COLORS[regime] || '#94a3b8'
   const isFlagged = flag != null
@@ -100,6 +103,7 @@ export default function DayView({
               apiBase={apiBase}
               clusters={clusters}
               height={ROW_HEIGHT}
+              onPriceRangeChange={setPriceRange}
             />
           </div>
           {/* GEX landscape — fixed width on the right */}
@@ -109,6 +113,11 @@ export default function DayView({
                 data={landscapeData}
                 spotMode="OPEN"
                 onSpotModeChange={() => {}}
+                visiblePriceRange={priceRange ? {
+                  priceTop: priceRange.priceTop,
+                  priceBot: priceRange.priceBot,
+                  paneHeight: ROW_HEIGHT,
+                } : null}
               />
             ) : (
               <div style={emptyBox}>No landscape data</div>
