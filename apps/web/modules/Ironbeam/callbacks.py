@@ -30,6 +30,7 @@ from packages.shared.surface_compare import k_for_abs_delta
 from packages.shared.options_orats import pt_minute_to_et
 from packages.shared.options_cache.pricing import build_condor_pricing_payload
 from packages.shared.gex_landscape_api import build_gex_landscape_response
+from modules.Ironbeam.routes import register_gex_landscape_route
 
 # Import skew helpers for the React API
 from modules.Skew.callbacks import (
@@ -2918,45 +2919,8 @@ def register_ironbeam_callbacks(app):
                 return resp, status
             app.server._ironbeam_react_condor_pricing_route_registered = True
 
-        if not getattr(app.server, "_ironbeam_react_gex_landscape_route_registered", False):
-            @app.server.route("/api/gex-landscape", methods=["GET"])
-            def ironbeam_react_gex_landscape_api():
-                ticker = (request.args.get("ticker") or "").strip()
-                date_str = (request.args.get("date") or "").strip()
-                if not ticker or not date_str:
-                    return jsonify({"error": "ticker and date are required"}), 400
-
-                spot_raw = request.args.get("spot")
-                if spot_raw is None or spot_raw == "":
-                    return jsonify({"error": "spot is required"}), 400
-
-                # iv and implied_move are optional; pass through as-is so the
-                # builder owns the numeric parsing + mutual-exclusion check.
-                iv_raw = request.args.get("iv")
-                move_raw = request.args.get("implied_move")
-                iv_arg = iv_raw if (iv_raw is not None and iv_raw != "") else None
-                move_arg = move_raw if (move_raw is not None and move_raw != "") else None
-
-                # accuracy is optional; pass through as-is so the builder owns
-                # validation (case-insensitive low/high, 400 on anything else).
-                accuracy_arg = request.args.get("accuracy")
-
-                with engine.connect() as conn:
-                    payload, status = build_gex_landscape_response(
-                        conn, ticker, date_str, spot_raw,
-                        iv=iv_arg, implied_move=move_arg,
-                        accuracy=accuracy_arg,
-                    )
-
-                resp = jsonify(payload)
-                origin = request.headers.get("Origin")
-                allowed = {"http://localhost:5173", "http://127.0.0.1:5173", "http://0.0.0.0:5173"}
-                if origin in allowed:
-                    resp.headers["Access-Control-Allow-Origin"] = origin
-                    resp.headers["Access-Control-Allow-Credentials"] = "true"
-                    resp.headers["Vary"] = "Origin"
-                return resp, status
-            app.server._ironbeam_react_gex_landscape_route_registered = True
+        # Route extracted to modules/Ironbeam/routes.py for testability (CR-016 hotfix 5).
+        register_gex_landscape_route(app.server, engine)
 
     # ---- Clientside Sync: Crosshair & Zoom ----
     app.clientside_callback(
