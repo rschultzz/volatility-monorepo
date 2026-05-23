@@ -11,6 +11,7 @@
 //                               GexLandscape's visiblePriceRange to the same Y window.
 import { useEffect, useRef, useState } from 'react'
 import { createChart, CandlestickSeries, LineSeries, LineStyle, ColorType } from 'lightweight-charts'
+import { utcEpochShowingZoneTime } from './timezone.js'
 
 const CLUSTER_POS_COLOR = '#d946ef'  // magenta — positive GEX
 const CLUSTER_NEG_COLOR = '#06b6d4'  // teal — negative GEX
@@ -110,16 +111,20 @@ export default function MiniPriceChart({
           setStatus('empty')
           return
         }
-        seriesRef.current?.setData(bars)
-        barsRef.current = bars
+        // Shift bar epochs so the X axis shows PT wall-clock times
+        // (06:30–13:00) instead of UTC (13:30–20:00).
+        const ptBars = bars.map(b => ({
+          ...b,
+          time: utcEpochShowingZoneTime(b.time, 'America/Los_Angeles'),
+        }))
+        seriesRef.current?.setData(ptBars)
+        barsRef.current = ptBars
         // Add 10 minutes of left-pad before the first bar so the opening
         // candle isn't crammed against the left axis.
         const LEFT_PAD_SECONDS = 600
-        const firstTime = bars[0].time
-        const lastTime = bars[bars.length - 1].time
         chartRef.current?.timeScale().setVisibleRange({
-          from: firstTime - LEFT_PAD_SECONDS,
-          to: lastTime,
+          from: ptBars[0].time - LEFT_PAD_SECONDS,
+          to: ptBars[ptBars.length - 1].time,
         })
         setStatus('ok')
       })
