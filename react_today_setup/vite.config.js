@@ -11,6 +11,8 @@ export default defineConfig({
   resolve: {
     alias: {
       'web-shared': path.resolve(__dirname, '../packages/web-shared/src/index.js'),
+      // Force shared-package deps to resolve from this app's node_modules.
+      'lightweight-charts': path.resolve(__dirname, 'node_modules/lightweight-charts'),
     },
   },
 });
