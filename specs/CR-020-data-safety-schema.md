@@ -174,6 +174,8 @@ Decide: rename references to use the view, OR add `WHERE active = TRUE` to each 
 
 **Verification:** for each updated query, run it and verify result counts match prior behavior (no inactive rows exist yet, so counts should be identical).
 
+**Execution note (2026-05-24):** `audit_overrides.py` discovered during implementation — contains 2 additional SELECT queries (`_AUTO_REGIME_SQL`, `_AUTO_REGIME_BATCH_SQL`) not listed in the spec's target files. Both rerouted. Final scope: 7 queries across 4 files (Analogues/routes.py ×3, DayBrowser/service.py ×1, AuditFlags/service.py ×1, packages/shared/audit_overrides.py ×2).
+
 ## Step 6 — Add `BACKFILL_DATABASE_URL` env var and safety helper
 
 **Commit:** `cr-0/step-6: add BACKFILL_DATABASE_URL env var and backfill_safety module`

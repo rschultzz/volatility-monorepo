@@ -27,7 +27,7 @@ _DAYS_SQL = """
         bdf.regime_at_classification,
         ogl.landscape,
         ogl.table_spot
-    FROM bt_daily_features bdf
+    FROM bt_daily_features_active bdf
     LEFT JOIN orats_gex_landscape ogl
         ON ogl.ticker = bdf.ticker AND ogl.trade_date = bdf.trade_date
     WHERE bdf.ticker = %s

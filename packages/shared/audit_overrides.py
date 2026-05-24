@@ -29,7 +29,7 @@ _PROMOTED_FLAG_SQL = """
 
 _AUTO_REGIME_SQL = """
     SELECT regime_at_classification
-    FROM bt_daily_features
+    FROM bt_daily_features_active
     WHERE ticker = %s AND trade_date = %s
     ORDER BY computed_at DESC
     LIMIT 1
@@ -46,7 +46,7 @@ _PROMOTED_BATCH_SQL = """
 
 _AUTO_REGIME_BATCH_SQL = """
     SELECT trade_date, regime_at_classification
-    FROM bt_daily_features
+    FROM bt_daily_features_active
     WHERE ticker = %s
       AND trade_date = ANY(%s)
       AND regime_at_classification IS NOT NULL
