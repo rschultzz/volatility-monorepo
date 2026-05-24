@@ -71,6 +71,7 @@ MAIN_TABS_ID = "main-tabs"
 TAB_DASHBOARD = "tab-dashboard"
 TAB_PRICE_CHART = "tab-price-chart"
 TAB_BACKTESTS = "tab-backtests"
+TAB_TODAY_SETUP = "tab-today-setup"
 
 # ---- Tabs styling ----
 TABS_WRAP_STYLE = {
@@ -506,26 +507,11 @@ def serve_layout():
                             dcc.Tab(label="Dashboard", value=TAB_DASHBOARD, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                             dcc.Tab(label="Price Chart", value=TAB_PRICE_CHART, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                             dcc.Tab(label="Backtests", value=TAB_BACKTESTS, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
+                            dcc.Tab(label="Today's Setup", value=TAB_TODAY_SETUP, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                         ],
                     ),
-                    html.A(
-                        "Today's Setup",
-                        href="/today-setup",
-                        style={
-                            "marginLeft": "12px",
-                            "alignSelf": "center",
-                            "padding": "10px 16px",
-                            "borderRadius": "12px",
-                            "fontSize": "13px",
-                            "fontWeight": "700",
-                            "color": "#93c5fd",
-                            "textDecoration": "none",
-                            "whiteSpace": "nowrap",
-                            "border": "0px",
-                        },
-                    ),
                 ],
-                style={**TABS_WRAP_STYLE, "display": "flex", "alignItems": "stretch"},
+                style=TABS_WRAP_STYLE,
             ),
             html.Div(
                 id="dashboard-container",
