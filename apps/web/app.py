@@ -454,7 +454,7 @@ def serve_layout():
 
     return html.Div(
         [
-            dcc.Location(id="page-url", refresh=False),
+            dcc.Location(id="page-url", refresh=True),
             dcc.Store(id=LIVE_DATA_STORE_ID),
             html.Div(id=LIVE_DATA_MIRROR_ID, style={"display": "none"}),
             dcc.Interval(id=LIVE_UPDATE_TIMER_ID, interval=15 * 1000, n_intervals=0),

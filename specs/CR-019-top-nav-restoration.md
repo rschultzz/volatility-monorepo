@@ -69,9 +69,14 @@ Three deliverables:
   (~lines 511–526).
 - Revert the wrap `style` to `TABS_WRAP_STYLE` only — drop the
   `"display": "flex", "alignItems": "stretch"` overrides (~line 528).
-- Add `dcc.Location(id="page-url", refresh=False)` to the layout
+- Add `dcc.Location(id="page-url", refresh=True)` to the layout
   top-level (alongside the existing `dcc.Store` / `dcc.Interval`
   components ~line 456).
+  Note: `refresh=True` (not `False`) is required because `/today-setup`
+  is a separate Vite app served by Flask, not a Dash route. With
+  `refresh=False`, `dcc.Location` updates the URL via pushState only —
+  no page reload — so the browser stays on the Dash shell. `refresh=True`
+  triggers a real navigation to `/today-setup`.
 - Add a callback:
   ```python
   @app.callback(
