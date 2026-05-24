@@ -586,6 +586,27 @@ def _redirect_to_today_setup(tab_value):
 
 
 @app.callback(
+    Output(MAIN_TABS_ID, "value", allow_duplicate=True),
+    Input("page-url", "search"),
+    prevent_initial_call="initial_duplicate",
+)
+def _tab_from_url(search):
+    if not search:
+        return no_update
+    params = dict(
+        p.split("=", 1)
+        for p in search.lstrip("?").split("&")
+        if "=" in p
+    )
+    mapping = {
+        "dashboard": TAB_DASHBOARD,
+        "price-chart": TAB_PRICE_CHART,
+        "backtests": TAB_BACKTESTS,
+    }
+    return mapping.get(params.get("tab", ""), no_update)
+
+
+@app.callback(
     Output(BT2_SELECTION_SEQ_ID, "data"),
     Output(TRADE_DATE_PICK, "date"),
     Output(SMILE_TIME_INPUT, "value", allow_duplicate=True),
