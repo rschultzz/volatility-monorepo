@@ -454,6 +454,7 @@ def serve_layout():
 
     return html.Div(
         [
+            dcc.Location(id="page-url", refresh=False),
             dcc.Store(id=LIVE_DATA_STORE_ID),
             html.Div(id=LIVE_DATA_MIRROR_ID, style={"display": "none"}),
             dcc.Interval(id=LIVE_UPDATE_TIMER_ID, interval=15 * 1000, n_intervals=0),
@@ -571,6 +572,17 @@ def _switch_main_tab(tab_value):
     if tab_value == TAB_PRICE_CHART:
         return hidden, price_chart, hidden
     return scrollable, hidden, hidden
+
+
+@app.callback(
+    Output("page-url", "pathname"),
+    Input(MAIN_TABS_ID, "value"),
+    prevent_initial_call=True,
+)
+def _redirect_to_today_setup(tab_value):
+    if tab_value == TAB_TODAY_SETUP:
+        return "/today-setup"
+    return no_update
 
 
 @app.callback(
