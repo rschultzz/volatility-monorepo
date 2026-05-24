@@ -47,7 +47,7 @@ Run as superuser:
 
 ```sql
 CREATE ROLE dash_backfill_writer LOGIN PASSWORD '<from env>';
-GRANT CONNECT ON DATABASE dash TO dash_backfill_writer;
+GRANT CONNECT ON DATABASE curve_trading TO dash_backfill_writer;
 GRANT USAGE ON SCHEMA public TO dash_backfill_writer;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO dash_backfill_writer;
 GRANT INSERT ON ALL TABLES IN SCHEMA public TO dash_backfill_writer;
@@ -88,10 +88,6 @@ CREATE INDEX idx_features_run_id ON bt_daily_features (backfill_run_id);
 GRANT UPDATE (active, deactivated_at, deactivated_reason, backfill_run_id)
   ON bt_daily_features TO dash_backfill_writer;
 
--- ALSO grant UPDATE on the vol surface NULL columns so CR-D can fill them
-GRANT UPDATE (atm_iv_percentile, skew_percentile, term_structure_slope,
-              smile_convexity, vol_risk_premium)
-  ON bt_daily_features TO dash_backfill_writer;
 ```
 
 Note: only specific columns get UPDATE permission. Structural feature columns (regime_kind, drift_target, expected_move, etc.) remain unwriteable post-INSERT by this role.
@@ -103,9 +99,11 @@ Note: only specific columns get UPDATE permission. Structural feature columns (r
 ```sql
 \d bt_daily_features  -- confirm new columns visible
 
--- As dash_backfill_writer:
-UPDATE bt_daily_features SET active = FALSE WHERE id = X;          -- should work
-UPDATE bt_daily_features SET regime_kind = 'changed' WHERE id = X; -- should FAIL
+-- As dash_backfill_writer (substitute a real row's PK values):
+UPDATE bt_daily_features SET active = FALSE
+  WHERE ticker = 'SPX' AND trade_date = '2026-01-02' AND feature_version = 'v0.5.0';  -- should work
+UPDATE bt_daily_features SET regime_at_classification = 'changed'
+  WHERE ticker = 'SPX' AND trade_date = '2026-01-02' AND feature_version = 'v0.5.0'; -- should FAIL
 ```
 
 ## Step 3 — Create `bt_backfill_runs` table
@@ -244,8 +242,40 @@ CR-0 activated as CR-020. Branch `cr-0-data-safety-schema` created off `origin/m
 
 ### 2026-05-24 — Step 0 diagnosis
 
-(filling in during execution)
+See `## Diagnosis findings (Step 0)` below.
 
 ## Open questions
 
 (none at draft time)
+
+## Diagnosis findings (Step 0)
+
+Collected 2026-05-24 before any implementation commits.
+
+### Environment confirmed
+
+- **Postgres 17.9** — `gen_random_uuid()` works natively; no `pgcrypto` extension needed.
+- **`dash_backfill_writer`** — does not exist; clean slate.
+- **Role chain** — login user is `new_db_cred` (has LOGIN, no CREATEROLE); it is a member of `rschultz`, which has CREATEROLE and owns both the `curve_trading` database and the `bt_daily_features` table. The current connection runs with `current_user = rschultz`, so all Step 1 `CREATE ROLE` and `GRANT` statements execute under the owning role without needing a separate superuser connection.
+- **`FEATURE_VERSION` constant** — canonical location: `packages/shared/day_features.py:59` (`FEATURE_VERSION = "v0.5.0"`).
+- **`BACKFILL_DATABASE_URL`** — does not exist yet; will be added in Step 6. Same Render host/DB as `DATABASE_URL`, different user (`dash_backfill_writer`).
+
+### Application read locations (Step 5 targets)
+
+All four locations query `bt_daily_features` by name and must be rerouted to `bt_daily_features_active` in Step 5:
+
+| File | Lines | Nature |
+|------|-------|--------|
+| `apps/web/modules/Analogues/routes.py` | 92, 136, 299 | SELECT (feature vector, candidates, anchor) |
+| `apps/web/modules/DayBrowser/service.py` | 30 | SELECT (browse rows) |
+| `apps/web/modules/AuditFlags/service.py` | 33, 119 | SELECT (all rows, auto_regime lookup) |
+
+**Not rerouted:** `apps/cron/job_orats_eod.py:280` — this is the nightly UPSERT writer; it targets the base table directly and must stay there.
+
+### Spec amendments applied in this commit
+
+| Issue | Original spec text | Resolution |
+|-------|--------------------|------------|
+| **A — DB name** | `GRANT CONNECT ON DATABASE dash` | Fixed to `curve_trading` (actual Render DB name) |
+| **B — vol-surface GRANT** | `GRANT UPDATE (atm_iv_percentile, skew_percentile, …)` in Step 2 | Removed entirely — those columns don't exist in `bt_daily_features` yet (stored in `feature_vector` JSONB). CR-D will add the dedicated columns and own the corresponding GRANT. |
+| **C — verification SQL** | `WHERE id = X` in Step 2 verification | Fixed to use real composite PK `(ticker, trade_date, feature_version)`; also corrected column name from `regime_kind` (doesn't exist) to `regime_at_classification`. |
