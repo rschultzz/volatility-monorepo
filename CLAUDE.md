@@ -46,15 +46,15 @@ When I say "wrap up", "log this session", or run `/log-session`:
 
 ## CR Workflow
 
-Every CR starts on a fresh branch off the current `origin/Main-Live` tip. The branch step is *the first action of every CR*, before any file reads, any spec freeze, any diagnostic work, any code change.
+Every CR starts on a fresh branch off the current `origin/main` tip. The branch step is *the first action of every CR*, before any file reads, any spec freeze, any diagnostic work, any code change.
 
 ### Branch discipline
 
-1. **Create the branch first.** `git checkout -b feat/CR-NNN-<kebab-case-slug>` off the current `origin/Main-Live` tip.
-2. **Verify before any commit.** Run `git branch -v` and confirm the current branch is the CR branch, not `Main-Live`. Repeat any time you've been away from the terminal for more than a few minutes.
-3. **If you find yourself on Main-Live mid-CR, stop.**
+1. **Create the branch first.** `git checkout -b feat/CR-NNN-<kebab-case-slug>` off the current `origin/main` tip.
+2. **Verify before any commit.** Run `git branch -v` and confirm the current branch is the CR branch, not `main`. Repeat any time you've been away from the terminal for more than a few minutes.
+3. **If you find yourself on main mid-CR, stop.**
    - Save the work: `git branch cr-NNN-save-<n>` (n = 1, 2, 3...).
-   - Restore Main-Live: `git reset --hard origin/Main-Live`.
+   - Restore main: `git reset --hard origin/main`.
    - Re-create the proper branch: `git checkout -b feat/CR-NNN-<slug>`.
    - Cherry-pick the saved commits: `git cherry-pick <sha>...`.
 4. **Branch naming.** `feat/CR-NNN-<kebab-case-slug>` — matches PR #18 precedent (e.g., `feat/CR-016-day-setup-audit-browse-rebuild`).
