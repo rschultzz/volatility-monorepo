@@ -26,9 +26,9 @@ function parseQS() {
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 
-async function fetchProposals(date, ticker) {
+async function fetchProposals(date, ticker, signal) {
   const params = new URLSearchParams({ date, ticker });
-  const r = await fetch(`${API_BASE}/api/setup/proposals?${params}`);
+  const r = await fetch(`${API_BASE}/api/setup/proposals?${params}`, { signal });
   if (r.status === 404) {
     const body = await r.json().catch(() => ({}));
     throw Object.assign(new Error(body.error || `No data for ${date}`), { is404: true });
@@ -37,23 +37,23 @@ async function fetchProposals(date, ticker) {
   return r.json();
 }
 
-async function fetchAnalogues(date, ticker, k = 5) {
+async function fetchAnalogues(date, ticker, signal, k = 5) {
   const params = new URLSearchParams({ date, ticker, k });
-  const r = await fetch(`${API_BASE}/api/analogues?${params}`);
+  const r = await fetch(`${API_BASE}/api/analogues?${params}`, { signal });
   if (!r.ok) return null;
   return r.json();
 }
 
-async function fetchLandscape(date, ticker) {
+async function fetchLandscape(date, ticker, signal) {
   const params = new URLSearchParams({ date, ticker });
-  const r = await fetch(`${API_BASE}/api/gex-landscape?${params}`);
+  const r = await fetch(`${API_BASE}/api/gex-landscape?${params}`, { signal });
   if (!r.ok) return null;
   return r.json();
 }
 
-async function fetchFlags(date, ticker) {
+async function fetchFlags(date, ticker, signal) {
   const params = new URLSearchParams({ date, ticker });
-  const r = await fetch(`${API_BASE}/api/audit-flags?${params}`);
+  const r = await fetch(`${API_BASE}/api/audit-flags?${params}`, { signal });
   if (!r.ok) return { flags: [] };
   return r.json();
 }
@@ -119,10 +119,18 @@ export default function App() {
   const [error, setError] = useState(null);
 
   const listRef = useRef(null);
+  const anchorAbortRef = useRef(null);
 
   // ── Anchor / proposals fetch ─────────────────────────────────────────────
   const loadAnchor = useCallback(async () => {
     if (!date) return;
+
+    // Cancel any in-flight request from a prior date change.
+    anchorAbortRef.current?.abort();
+    const controller = new AbortController();
+    anchorAbortRef.current = controller;
+    const { signal } = controller;
+
     setLoading(true);
     setError(null);
     setProposals(null);
@@ -134,16 +142,21 @@ export default function App() {
 
     try {
       const results = await Promise.allSettled([
-        fetchProposals(date, ticker),
-        fetchAnalogues(date, ticker),
-        fetchLandscape(date, ticker),
-        fetchFlags(date, ticker),
+        fetchProposals(date, ticker, signal),
+        fetchAnalogues(date, ticker, signal),
+        fetchLandscape(date, ticker, signal),
+        fetchFlags(date, ticker, signal),
       ]);
+
+      // This request was superseded — discard results.
+      if (signal.aborted) return;
+
       const [propR, analogR, landscapeR, flagsR] = results;
 
       // Proposals — surface error but don't block the other panels.
       if (propR.status === 'fulfilled' && propR.value?.ok) {
         setProposals(propR.value);
+        setError(null);  // clear any stale error from a prior slow request
       } else {
         const msg = propR.status === 'rejected'
           ? propR.reason?.message || 'Proposals error'
@@ -156,7 +169,7 @@ export default function App() {
       if (landscapeR.status === 'fulfilled' && landscapeR.value?.ok !== false) setAnchorLandscape(landscapeR.value);
       if (flagsR.status === 'fulfilled' && flagsR.value?.flags) setFlags(flagsR.value.flags);
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
   }, [date, ticker]);
 
@@ -307,6 +320,20 @@ export default function App() {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="page">
+      {/* ── Top bar Row 1: title + Home link ── */}
+      <div className="top-bar">
+        <span className="top-bar-title">Surface Dynamics</span>
+        <a href="https://blog.surfacedynamics.io" className="top-bar-home">Home</a>
+      </div>
+
+      {/* ── Top bar Row 2: four-pill nav ── */}
+      <div className="top-nav">
+        <a href="/" className="top-nav-pill">Dashboard</a>
+        <a href="/?tab=price-chart" className="top-nav-pill">Price Chart</a>
+        <a href="/?tab=backtests" className="top-nav-pill">Backtests</a>
+        <a href="/today-setup" className="top-nav-pill selected">Today's Setup</a>
+      </div>
+
       {/* ── Header ── */}
       <div className="header">
         <h1>Day Setup</h1>
@@ -389,9 +416,6 @@ export default function App() {
           <span style={{ fontSize: 11, color: '#64748b' }}>{browseDays.length} days</span>
         )}
 
-        <a href="/" style={{ marginLeft: 'auto', color: '#60a5fa', fontSize: 12, textDecoration: 'none' }}>
-          ← Dashboard
-        </a>
       </div>
 
       {/* ── Context strip (analogue mode only) ── */}

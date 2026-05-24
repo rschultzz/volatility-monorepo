@@ -71,6 +71,7 @@ MAIN_TABS_ID = "main-tabs"
 TAB_DASHBOARD = "tab-dashboard"
 TAB_PRICE_CHART = "tab-price-chart"
 TAB_BACKTESTS = "tab-backtests"
+TAB_TODAY_SETUP = "tab-today-setup"
 
 # ---- Tabs styling ----
 TABS_WRAP_STYLE = {
@@ -453,6 +454,7 @@ def serve_layout():
 
     return html.Div(
         [
+            dcc.Location(id="page-url", refresh=True),
             dcc.Store(id=LIVE_DATA_STORE_ID),
             html.Div(id=LIVE_DATA_MIRROR_ID, style={"display": "none"}),
             dcc.Interval(id=LIVE_UPDATE_TIMER_ID, interval=15 * 1000, n_intervals=0),
@@ -506,26 +508,11 @@ def serve_layout():
                             dcc.Tab(label="Dashboard", value=TAB_DASHBOARD, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                             dcc.Tab(label="Price Chart", value=TAB_PRICE_CHART, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                             dcc.Tab(label="Backtests", value=TAB_BACKTESTS, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
+                            dcc.Tab(label="Today's Setup", value=TAB_TODAY_SETUP, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                         ],
                     ),
-                    html.A(
-                        "Today's Setup",
-                        href="/today-setup",
-                        style={
-                            "marginLeft": "12px",
-                            "alignSelf": "center",
-                            "padding": "10px 16px",
-                            "borderRadius": "12px",
-                            "fontSize": "13px",
-                            "fontWeight": "700",
-                            "color": "#93c5fd",
-                            "textDecoration": "none",
-                            "whiteSpace": "nowrap",
-                            "border": "0px",
-                        },
-                    ),
                 ],
-                style={**TABS_WRAP_STYLE, "display": "flex", "alignItems": "stretch"},
+                style=TABS_WRAP_STYLE,
             ),
             html.Div(
                 id="dashboard-container",
@@ -585,6 +572,38 @@ def _switch_main_tab(tab_value):
     if tab_value == TAB_PRICE_CHART:
         return hidden, price_chart, hidden
     return scrollable, hidden, hidden
+
+
+@app.callback(
+    Output("page-url", "pathname"),
+    Input(MAIN_TABS_ID, "value"),
+    prevent_initial_call=True,
+)
+def _redirect_to_today_setup(tab_value):
+    if tab_value == TAB_TODAY_SETUP:
+        return "/today-setup"
+    return no_update
+
+
+@app.callback(
+    Output(MAIN_TABS_ID, "value", allow_duplicate=True),
+    Input("page-url", "search"),
+    prevent_initial_call="initial_duplicate",
+)
+def _tab_from_url(search):
+    if not search:
+        return no_update
+    params = dict(
+        p.split("=", 1)
+        for p in search.lstrip("?").split("&")
+        if "=" in p
+    )
+    mapping = {
+        "dashboard": TAB_DASHBOARD,
+        "price-chart": TAB_PRICE_CHART,
+        "backtests": TAB_BACKTESTS,
+    }
+    return mapping.get(params.get("tab", ""), no_update)
 
 
 @app.callback(

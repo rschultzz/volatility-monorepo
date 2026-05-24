@@ -32,6 +32,78 @@ textarea {
   padding: 24px 20px 48px;
 }
 
+/* ── Top bar Row 1: title + Home link ── */
+.top-bar {
+  position: relative;
+  padding: 8px 16px;
+  border-bottom: 1px solid #1f2937;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.top-bar-title {
+  font-weight: 600;
+  font-size: 20px;
+  color: #e5e7eb;
+  text-align: center;
+  width: 100%;
+}
+
+.top-bar-home {
+  color: #93c5fd;
+  text-decoration: none;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #1f2937;
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 13px;
+}
+
+.top-bar-home:hover {
+  border-color: #374151;
+}
+
+/* ── Top bar Row 2: four-pill nav ── */
+.top-nav {
+  display: flex;
+  background-color: #0b1220;
+  border: 1px solid #1f2937;
+  border-radius: 14px;
+  padding: 6px;
+  margin-bottom: 12px;
+}
+
+.top-nav-pill {
+  flex: 1;
+  text-align: center;
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #93c5fd;
+  text-decoration: none;
+  background: transparent;
+  border: 0;
+  white-space: nowrap;
+}
+
+.top-nav-pill:hover {
+  background: #111827;
+}
+
+.top-nav-pill.selected {
+  background: #111827;
+  border: 1px solid #60a5fa;
+  color: #bfdbfe;
+  font-weight: 800;
+}
+
 /* ── Header ── */
 .header {
   display: flex;
