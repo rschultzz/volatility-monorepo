@@ -92,6 +92,7 @@ class TestLoadCandidates(unittest.TestCase):
         self.assertNotIn("bt_signals", sql.lower())
         self.assertNotIn("label", sql.lower())
         # Sanity: still queries the right table on the right filters
+        # TODO: tighten substring match when refactor lands (currently passes because 'bt_daily_features_active' contains 'bt_daily_features')
         self.assertIn("bt_daily_features", sql.lower())
         self.assertIn("feature_version", sql.lower())
 

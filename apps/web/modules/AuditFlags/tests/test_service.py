@@ -109,6 +109,7 @@ class TestCreateFlag(unittest.TestCase):
         cur = conn.cursor.return_value
         # First execute call is the auto_regime lookup
         first_call_sql = cur.execute.call_args_list[0][0][0]
+        # TODO: tighten substring match when refactor lands (currently passes because 'bt_daily_features_active' contains 'bt_daily_features')
         self.assertIn("bt_daily_features", first_call_sql)
 
     def test_auto_regime_none_when_feature_row_missing(self):

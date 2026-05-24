@@ -80,6 +80,34 @@ If you find yourself editing an `App.jsx` flex/grid rule, a CSS file, or a JSX w
 
 If Step 0 surfaces a requirement the spec didn't anticipate (a missing layout decision, an unexpected dependency, a wrong assumption about an upstream component), amend the spec *and* the session note before writing implementation code. Never "fix it during impl" — the diff stops being reviewable and the session note stops being accurate.
 
+## Unattended backfill protocol
+
+All unattended CR scripts (overnight backfills, data rebuilds) must follow this
+pattern — no exceptions:
+
+```python
+from packages.shared.backfill_safety import (
+    get_backfill_db_conn, assert_role_or_die, backfill_run, update_run_smoke,
+)
+
+conn = get_backfill_db_conn()   # uses BACKFILL_DATABASE_URL, not DATABASE_URL
+assert_role_or_die(conn)        # hard-fail if role != dash_backfill_writer
+
+with backfill_run(conn, "CR-X") as run_id:
+    # ... backfill logic ...
+    update_run_smoke(conn, run_id, smoke_results_dict, "one-line self-assessment")
+```
+
+Why this matters:
+- `dash_backfill_writer` has no DELETE / TRUNCATE / DROP — accidental destructive
+  operations fail at the DB layer regardless of code bugs.
+- Every run is recorded in `bt_backfill_runs` (queryable for morning review).
+- `assert_role_or_die` catches misconfigured env before any data is touched.
+
+Set `BACKFILL_DATABASE_URL` in `.env` locally. Also set as a Render env var on
+whichever service will execute backfills — skip Render if backfills run only
+from your laptop.
+
 ## Conventions
 
 - Postgres tables and views are snake_case. Reference them as inline code (e.g. `es_minutes_with_features_bt`).

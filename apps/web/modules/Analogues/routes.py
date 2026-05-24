@@ -89,7 +89,7 @@ def _load_feature_row(conn, ticker: str, trade_date: dt.date, version: str
         cur.execute(
             """
             SELECT feature_vector
-            FROM bt_daily_features
+            FROM bt_daily_features_active
             WHERE ticker=%s AND trade_date=%s AND feature_version=%s
             """,
             (ticker, trade_date, version),
@@ -133,7 +133,7 @@ def _load_candidates(conn, ticker: str, version: str) -> list[tuple]:
         cur.execute(
             """
             SELECT f.trade_date, f.feature_vector
-            FROM bt_daily_features f
+            FROM bt_daily_features_active f
             WHERE f.ticker = %s
               AND f.feature_version = %s
             """,
@@ -296,7 +296,7 @@ def _latest_feature_version(conn, ticker: str) -> str:
         cur.execute(
             """
             SELECT feature_version
-            FROM bt_daily_features
+            FROM bt_daily_features_active
             WHERE ticker = %s
             ORDER BY computed_at DESC
             LIMIT 1

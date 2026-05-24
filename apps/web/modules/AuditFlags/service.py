@@ -30,7 +30,7 @@ _INSERT_SQL = """
 
 _AUTO_REGIME_SQL = """
     SELECT regime_at_classification
-    FROM bt_daily_features
+    FROM bt_daily_features_active
     WHERE ticker = %s AND trade_date = %s
     ORDER BY computed_at DESC
     LIMIT 1
