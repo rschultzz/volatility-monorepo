@@ -307,6 +307,20 @@ export default function App() {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="page">
+      {/* ── Top bar Row 1: title + Home link ── */}
+      <div className="top-bar">
+        <span className="top-bar-title">Surface Dynamics</span>
+        <a href="https://blog.surfacedynamics.io" className="top-bar-home">Home</a>
+      </div>
+
+      {/* ── Top bar Row 2: four-pill nav ── */}
+      <div className="top-nav">
+        <a href="/" className="top-nav-pill">Dashboard</a>
+        <a href="/?tab=price-chart" className="top-nav-pill">Price Chart</a>
+        <a href="/?tab=backtests" className="top-nav-pill">Backtests</a>
+        <a href="/today-setup" className="top-nav-pill selected">Today's Setup</a>
+      </div>
+
       {/* ── Header ── */}
       <div className="header">
         <h1>Day Setup</h1>
@@ -389,9 +403,6 @@ export default function App() {
           <span style={{ fontSize: 11, color: '#64748b' }}>{browseDays.length} days</span>
         )}
 
-        <a href="/" style={{ marginLeft: 'auto', color: '#60a5fa', fontSize: 12, textDecoration: 'none' }}>
-          ← Dashboard
-        </a>
       </div>
 
       {/* ── Context strip (analogue mode only) ── */}
