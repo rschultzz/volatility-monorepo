@@ -51,9 +51,9 @@ This step is read-only; outputs decisions for the rest of the CR.
 
 ## Step 1 — Decouple app reads from `computed_at`-based version selection
 
-**Commit:** `cr-a/step-1: replace _latest_feature_version with canonical-version constant`
+**Commit:** `cr-a/step-1: pin all dynamic version selection to canonical constant`
 
-**Why this is Step 1, not later:** per Data Safety Protocol, promotion of a new `feature_version` to canonical must be a manual deliberate step. The existing `_latest_feature_version` function (Analogues/routes.py:297) selects whichever version was most recently written via `ORDER BY computed_at DESC LIMIT 1`. The moment Step 4's backfill writes the first `v0.5.0-rebuilt` row, app reads would silently switch to it — auto-promotion mid-backfill, mixing versions in KNN candidate sets. Step 1 closes that hole before any writes happen.
+**Why this is Step 1, not later:** per Data Safety Protocol, promotion of a new `feature_version` to canonical must be a manual deliberate step. The existing `_latest_feature_version` function (`Analogues/routes.py:294`) selects whichever version was most recently written via `ORDER BY computed_at DESC LIMIT 1`. Step 0 diagnosis also found 3 additional inline `ORDER BY computed_at DESC LIMIT 1` patterns in `audit_overrides.py` and `AuditFlags/service.py` doing the same thing. The moment Step 4's backfill writes the first `v0.5.0-rebuilt` row (newer `computed_at`), all four sites would silently switch to it — auto-promotion mid-backfill, mixing versions in KNN candidate sets and corrupting auto-regime lookups. Step 1 closes all four holes before any writes happen.
 
 Sub-steps:
 
@@ -81,9 +81,24 @@ Sub-steps:
 
 3. **Delete `_latest_feature_version` itself.** No callers remain; the function's whole purpose was the now-replaced lookup. Keeping a vestigial copy invites accidental future use.
 
-4. **Verification:**
+4. **Pin inline `ORDER BY computed_at DESC LIMIT 1` patterns to canonical.** Three sites do dynamic-latest version selection inline without going through `_latest_feature_version`:
+
+   - `packages/shared/audit_overrides.py` — `_AUTO_REGIME_SQL` (line ~34): used by `get_effective_regime()`
+   - `packages/shared/audit_overrides.py` — `_AUTO_REGIME_BATCH_SQL` (line ~53): used by `get_effective_regimes()`
+   - `apps/web/modules/AuditFlags/service.py` — `_AUTO_REGIME_SQL` (line ~35): used by `create_flag()`
+
+   For each: add `AND feature_version = %s` to the WHERE clause (passing `CANONICAL_FEATURE_VERSION`), and remove the now-redundant `ORDER BY computed_at DESC LIMIT 1` — once version is pinned, the PK `(ticker, trade_date, feature_version)` guarantees at most one row, so the sort and limit are dead weight.
+
+   Import pattern:
+   ```python
+   from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
+   # then pass CANONICAL_FEATURE_VERSION as a query param alongside ticker / trade_date
+   ```
+
+5. **Verification:**
    - `grep -r "_latest_feature_version" .` returns zero matches in source code (only mentions in this spec or other vault notes are OK)
-   - App endpoints that depended on it still return correct data: smoke-test the KNN candidate-load path, the day-browse path, and the audit-flag auto-regime path. Each must return non-empty results identical to pre-Step-1 behavior, since `CANONICAL_FEATURE_VERSION = 'v0.5.0'` matches what the dynamic lookup currently resolves to.
+   - `grep -r "ORDER BY computed_at DESC" .` returns zero matches in source code
+   - App endpoints that depended on all four sites still return correct data: smoke-test the KNN candidate-load path, the day-browse path, and the audit-flag auto-regime path. Each must return non-empty results identical to pre-Step-1 behavior, since `CANONICAL_FEATURE_VERSION = 'v0.5.0'` matches what the dynamic lookup currently resolves to.
    - Confirm `CANONICAL_FEATURE_VERSION` matches the production version exactly. If unsure, query: `SELECT DISTINCT feature_version FROM bt_daily_features_active;` — should currently return only `'v0.5.0'`.
 
 **Deliverable:** app reads use a constant for feature_version selection. Promotion of a new version is now a one-line edit to `canonical_version.py`.
@@ -183,25 +198,48 @@ Tests:
 
 3. **App-read isolation.** With `CANONICAL_FEATURE_VERSION` still pointing at `'v0.5.0'`, confirm the KNN candidate-load path returns only `v0.5.0` rows (the new `v0.5.0-rebuilt` rows must be invisible to app reads pre-promotion).
 
-4. **Regime distribution sensible.**
+4. **Regime distribution sensible.** (`regime_kind` is stored as `regime_at_classification` — a top-level column, not inside `feature_vector`.)
    ```sql
-   SELECT regime_kind, COUNT(*)
+   SELECT regime_at_classification, COUNT(*)
    FROM bt_daily_features
    WHERE feature_version = 'v0.5.0-rebuilt'
-   GROUP BY regime_kind ORDER BY 2 DESC;
+   GROUP BY regime_at_classification ORDER BY 2 DESC;
    ```
-   Expect: all known regime_kinds present; no single regime >70% of rows (sanity check against extraction bug producing constant output).
+   Expect: all known regime values present; no single value >70% of rows (sanity check against extraction bug producing constant output).
 
 5. **Spot-check known event days.**
-   - Pick 2-3 FOMC days from the corpus. Verify regime_kind / drift_target look reasonable given known market behavior.
-   - Pick 2-3 expected-quiet days (mid-summer). Verify lower expected_move.
+   - Pick 2-3 FOMC days from the corpus. Verify `regime_at_classification` and `feature_vector->>'implied_move_1d'` look reasonable given known market behavior.
+   - Pick 2-3 expected-quiet days (mid-summer). Verify lower `implied_move_1d`.
 
-6. **Bucket dominance distribution.**
+6. **Bucket dominance distribution.** (`dominant_bucket` is not stored — derive inline from the four `dominance_*` JSONB keys.)
    ```sql
-   SELECT dominant_bucket, COUNT(*)
-   FROM bt_daily_features
-   WHERE feature_version = 'v0.5.0-rebuilt'
-   GROUP BY dominant_bucket;
+   WITH dom AS (
+     SELECT
+       CASE
+         WHEN GREATEST(
+                (feature_vector->>'dominance_0DTE')::float,
+                (feature_vector->>'dominance_1_7')::float,
+                (feature_vector->>'dominance_8_30')::float,
+                (feature_vector->>'dominance_30plus')::float
+              ) = (feature_vector->>'dominance_0DTE')::float  THEN '0DTE-near-spot'
+         WHEN GREATEST(
+                (feature_vector->>'dominance_0DTE')::float,
+                (feature_vector->>'dominance_1_7')::float,
+                (feature_vector->>'dominance_8_30')::float,
+                (feature_vector->>'dominance_30plus')::float
+              ) = (feature_vector->>'dominance_1_7')::float   THEN '1-7DTE'
+         WHEN GREATEST(
+                (feature_vector->>'dominance_0DTE')::float,
+                (feature_vector->>'dominance_1_7')::float,
+                (feature_vector->>'dominance_8_30')::float,
+                (feature_vector->>'dominance_30plus')::float
+              ) = (feature_vector->>'dominance_8_30')::float  THEN '8-30DTE'
+         ELSE '30plus'
+       END AS dominant_bucket
+     FROM bt_daily_features
+     WHERE feature_version = 'v0.5.0-rebuilt'
+   )
+   SELECT dominant_bucket, COUNT(*) FROM dom GROUP BY 1 ORDER BY 2 DESC;
    ```
    Expect: `0DTE-near-spot` dominant on a meaningful fraction; `1-7DTE` and `8-30DTE` also represented.
 
@@ -242,4 +280,43 @@ Promotion is its own deliberate decision moment, not a side effect of CR-A.
 
 ## Diagnosis findings (Step 0)
 
-*To be appended after Step 0 queries run.*
+Completed 2026-05-24.
+
+**Sub-step 1 — Input coverage:**
+
+| Table | Min date | Max date | Distinct dates |
+|---|---|---|---|
+| `ironbeam_es_1m_bars` | 2023-01-02 | 2026-05-24 | 1059 |
+| `orats_oi_gamma` | 2023-01-02 | 2026-05-22 | 850 |
+| `orats_monies_minute` | 2023-05-01 | 2026-05-22 | 769 |
+
+Note: `ironbeam_es_1m_bars` uses `datetime` (timestamp), not `trade_date`; dates derived via `datetime::date`.
+
+**Eligible backfill window: 2023-05-01 → 2026-05-22 — 738 dates.** Limiting factor: `orats_monies_minute` starts 2023-05-01.
+
+**Sub-step 2 — Determinism check date:** 2026-05-01 (midpoint of current 37-day v0.5.0 corpus; range is 2026-04-01 → 2026-05-22, all SPX, all within overlap window).
+
+**Sub-step 3 — Batch size:** 30 dates per batch (~25 batches for 738 dates).
+
+**Sub-step 4 — Idempotency:** PK confirmed as `PRIMARY KEY (ticker, trade_date, feature_version)`. `INSERT ON CONFLICT DO NOTHING` will work as specified.
+
+**Sub-step 5 — Callsite inventory (AMENDED — expanded scope):**
+- `_latest_feature_version`: 1 definition (`Analogues/routes.py:294`) + 1 callsite (`Analogues/routes.py:372`)
+- 3 additional inline `ORDER BY computed_at DESC LIMIT 1` patterns NOT through `_latest_feature_version`:
+  - `packages/shared/audit_overrides.py:34` — `_AUTO_REGIME_SQL` (used by `get_effective_regime`)
+  - `packages/shared/audit_overrides.py:53` — `_AUTO_REGIME_BATCH_SQL` (used by `get_effective_regimes`)
+  - `apps/web/modules/AuditFlags/service.py:35` — `_AUTO_REGIME_SQL` (used by `create_flag`)
+- All 4 sites fixed in Step 1 (see expanded sub-step 4 above).
+
+**Sub-step 6 — dash_backfill_writer:** PASS — `current_user = dash_backfill_writer`.
+
+**Sub-step 7 — bt_backfill_runs:** EXISTS.
+
+**Schema findings (affect Step 5 smoke queries):**
+- `regime_kind` column does NOT exist. Regime is stored in `regime_at_classification` (top-level column). Step 5 query corrected accordingly.
+- `dominant_bucket` column does NOT exist. Dominance is stored in `feature_vector` JSONB as `dominance_0DTE`, `dominance_1_7`, `dominance_8_30`, `dominance_30plus`. Step 5 query now derives dominant bucket inline via CASE expression. No new key added to JSONB.
+- Vol surface features (`atm_iv_percentile`, `skew_percentile`, `smile_convexity`, `term_structure_slope`, `vol_risk_premium`) are NULL in current v0.5.0 rows — these are CR-D's scope. CR-A backfill will produce the same NULLs for historical rows.
+
+**FEATURE_VERSION vs CANONICAL_FEATURE_VERSION clarification:**
+- `FEATURE_VERSION = "v0.5.0"` in `packages/shared/day_features.py` is the **write-side** constant — stamped on rows during live computation by the ingest job. Not changed by CR-A.
+- `CANONICAL_FEATURE_VERSION = "v0.5.0"` in the new `packages/shared/canonical_version.py` is the **read-side** constant — controls what feature_version the app queries. Both are currently `v0.5.0`; they stay synchronized until promotion (which is a read-side constant edit only, never a write-side side effect).
