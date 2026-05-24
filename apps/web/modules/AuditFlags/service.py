@@ -16,6 +16,8 @@ from __future__ import annotations
 import datetime as dt
 from typing import Optional
 
+from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
+
 
 # ─── SQL ──────────────────────────────────────────────────────────────────────
 
@@ -32,8 +34,7 @@ _AUTO_REGIME_SQL = """
     SELECT regime_at_classification
     FROM bt_daily_features_active
     WHERE ticker = %s AND trade_date = %s
-    ORDER BY computed_at DESC
-    LIMIT 1
+      AND feature_version = %s
 """
 
 _DELETE_SQL = "DELETE FROM bt_audit_flags WHERE flag_id = %s RETURNING flag_id"
@@ -99,7 +100,7 @@ def _row_to_dict(row) -> dict:
 def _lookup_auto_regime(conn, ticker: str, trade_date: dt.date) -> Optional[str]:
     """Read regime_at_classification from bt_daily_features, or None."""
     with conn.cursor() as cur:
-        cur.execute(_AUTO_REGIME_SQL, (ticker, trade_date))
+        cur.execute(_AUTO_REGIME_SQL, (ticker, trade_date, CANONICAL_FEATURE_VERSION))
         row = cur.fetchone()
     return row[0] if row and row[0] is not None else None
 

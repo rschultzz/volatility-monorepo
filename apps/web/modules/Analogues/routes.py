@@ -30,10 +30,10 @@ _PT = ZoneInfo("America/Los_Angeles")
 
 from packages.shared.day_features import (
     FEATURE_NAMES,
-    FEATURE_VERSION,
     _materialize_payload,
     extract_features,
 )
+from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
 from packages.shared.gex_landscape import compute_implied_move
 from packages.shared.audit_overrides import get_effective_regime
 
@@ -291,22 +291,6 @@ def _fetch_excluded_analogues(conn, ticker: str, anchor_date: dt.date) -> set[st
     return {r[0].isoformat() if hasattr(r[0], "isoformat") else str(r[0]) for r in rows if r[0]}
 
 
-def _latest_feature_version(conn, ticker: str) -> str:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT feature_version
-            FROM bt_daily_features_active
-            WHERE ticker = %s
-            ORDER BY computed_at DESC
-            LIMIT 1
-            """,
-            (ticker,),
-        )
-        row = cur.fetchone()
-    return row[0] if row else FEATURE_VERSION
-
-
 def register_analogues_routes(server) -> None:
     """Wire /api/analogues onto the Flask server."""
     if "analogues_get" in server.view_functions:
@@ -369,7 +353,7 @@ def register_analogues_routes(server) -> None:
 
             version = (request.args.get("feature_version") or "").strip()
             if not version:
-                version = _latest_feature_version(conn, ticker)
+                version = CANONICAL_FEATURE_VERSION
 
             # ── anchor vector ─────────────────────────────────────────────
             anchor_vec = _load_feature_row(conn, ticker, anchor_date, version)
