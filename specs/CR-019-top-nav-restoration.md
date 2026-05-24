@@ -198,6 +198,39 @@ Three deliverables:
 
 9. **`vite build` clean** for `react_today_setup/`.
 
+10. **Switching dates clears any stale error from the previous load.**
+    Verify: load `/today-setup` with date defaulted to a no-landscape day
+    (today), confirm red error renders, pick an analogue-data date (e.g.
+    5/21), confirm error disappears and the chart fills the freed vertical
+    space.
+
+## Amendment — stale-error race condition (discovered during smoke)
+
+**Root cause:** In `loadAnchor`, `setError(null)` is called at the top of
+the function, but the success branch (`propR.value?.ok` true) did not
+re-clear it. If a prior in-flight request (for the old date) resolved
+*after* the new request started and cleared the error at the top, the old
+request's `setError(msg)` would overwrite the cleared state. The new
+request's success path had no subsequent `setError(null)` to fix it.
+
+**Fix (`react_today_setup/src/App.jsx`):**
+- Added `anchorAbortRef = useRef(null)` to hold the current
+  `AbortController`.
+- At the start of `loadAnchor`: abort the previous controller, create a
+  new one, store it, extract `signal`.
+- Pass `signal` to all four `fetch*` helpers (`fetchProposals`,
+  `fetchAnalogues`, `fetchLandscape`, `fetchFlags`) as a new optional
+  third parameter.
+- After `Promise.allSettled`, guard with `if (signal.aborted) return` to
+  discard results from superseded requests.
+- In the success branch: add `setError(null)` to clear any stale error
+  that slipped through before the guard fires.
+- In `finally`: guard `setLoading(false)` with `if (!signal.aborted)`.
+
+**AbortController pattern** borrowed from
+`react_price_preview/src/App.jsx`'s analogues fetch effect
+(`controller.abort()` + `disposed` flag pattern).
+
 ## Step-0 Diagnosis Findings
 
 **(a) `dcc.Tabs` + `html.A` + flex override location in `apps/web/app.py`:**
