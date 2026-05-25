@@ -4,6 +4,7 @@ import ProposalCard from './components/ProposalCard';
 import DayView from './components/DayView';
 import DayListAnalogue from './components/DayListAnalogue';
 import DayListBrowse from './components/DayListBrowse';
+import StructuralProbabilityBlock from './components/StructuralProbabilityBlock';
 
 function mostRecentTradingDay() {
   const d = new Date();
@@ -310,6 +311,7 @@ export default function App() {
 
   // ── Derived values ────────────────────────────────────────────────────────
   const context = proposals?.context;
+  const structuralProb = proposals?.structural_probability;
   const anchorRegime = context?.regime || null;
   const anchorFlag = regimeFlagForDate(date);
   const selectedFlag = selectedDate ? regimeFlagForDate(selectedDate) : null;
@@ -491,6 +493,11 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Structural probability (analogue mode only) ── */}
+      {!loading && mode === 'analogue' && proposals && (
+        <StructuralProbabilityBlock sp={structuralProb} />
       )}
 
       {/* ── Proposals (analogue mode only) ── */}

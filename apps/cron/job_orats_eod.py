@@ -18,10 +18,8 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packages.shared.gex_landscape import compute_and_upsert_landscape  # noqa: E402
-from packages.shared.day_features import (  # noqa: E402
-    compute_and_upsert_daily_features,
-    FEATURE_VERSION as DAY_FEATURES_VERSION,
-)
+from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION as DAY_FEATURES_VERSION  # noqa: E402
+from packages.shared.day_features import compute_and_upsert_daily_features  # noqa: E402
 
 # ------------ Version & logging ------------------------------------------------
 VERSION = "eod-shift-hard-upsert-2025-10-31d"
