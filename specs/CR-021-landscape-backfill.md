@@ -320,3 +320,28 @@ Note: `ironbeam_es_1m_bars` uses `datetime` (timestamp), not `trade_date`; dates
 **FEATURE_VERSION vs CANONICAL_FEATURE_VERSION clarification:**
 - `FEATURE_VERSION = "v0.5.0"` in `packages/shared/day_features.py` is the **write-side** constant — stamped on rows during live computation by the ingest job. Not changed by CR-A.
 - `CANONICAL_FEATURE_VERSION = "v0.5.0"` in the new `packages/shared/canonical_version.py` is the **read-side** constant — controls what feature_version the app queries. Both are currently `v0.5.0`; they stay synchronized until promotion (which is a read-side constant edit only, never a write-side side effect).
+
+## Step 4 — Execution results
+
+**Attempt 1 (run_id: `e922b82c`):** 34 inserted, 813 failed. Root cause: `compute_and_upsert_landscape` uses `ON CONFLICT DO UPDATE` which requires UPDATE privilege regardless of conflict; `dash_backfill_writer` lacks UPDATE on `orats_gex_landscape`. Three additional bugs surfaced: wrong `range_pts` default (200 vs 300), target-date pool including 109 pre-filter dates (no `orats_monies_minute` data), and silent `implied_move=0.0` fallback.
+
+**Fixes committed at step-3.5 (SHA bc35e61):**
+- `compute_and_insert_landscape` (DO NOTHING) extracted from `_compute_landscape_data` pure-compute layer
+- `_TARGET_DATES_SQL` tightened to `orats_oi_gamma ∩ orats_monies_minute` — 738 eligible dates (drops 109 pre-2023-05-01)
+- `LANDSCAPE_RANGE_PTS = 300.0` explicit constant to match EOD cron
+- Silent fallback replaced with hard SKIP (belt-and-suspenders; SQL filter is primary guard)
+
+**Attempt 2 (run_id: `2ed97683`):** 702/702 inserted, 0 skipped, 0 failed. Exit code 0.
+
+| Metric | Value |
+|---|---|
+| Total v0.5.0-rebuilt rows after Attempt 2 | 739 |
+| Date range | 2023-05-01 → 2026-05-22 |
+| Null feature_vectors | 0 |
+| v0.5.0 row count (unchanged) | 37 |
+
+**Regime distribution (739 rows):** magnet-above 374, amplification 173, magnetic-pin 94, untethered 78, bounded 20. Distribution shift vs 37-day sample is sample bias — confirmed by Gate 2 determinism spot-check (older dates produce same result on recompute: 30 EXACT + 5 NULL_MATCH, MISMATCH=0 for 2023-05-15, 2024-06-12, 2025-06-11).
+
+**Gate 1 — Corrupt row soft-delete:** 4 rows with `implied_move_1d=0.0` identified and soft-deleted. Root cause: `orats_monies_minute` has `atmiv=0` for 0DTE options on half-day/holiday dates (2024-12-24, 2025-07-03, 2025-12-24 from Attempt 2; 2026-04-03 from Attempt 1). The SQL filter (`EXISTS orats_monies_minute`) catches missing-data dates but not zero-IV dates. 4 rows soft-deleted via `active=FALSE`. Active corpus: **735 rows**.
+
+**Gate 3 — backfill_run_id audit:** All 739 rows have non-null `backfill_run_id`. Three run_ids: test subset (57771209, 3 rows), Attempt 1 (e922b82c, 34 rows), Attempt 2 (2ed97683, 702 rows). v0.5.0 rows: 1 has `implied_move_1d=0` (pre-existing cron issue; will be replaced by promotion).
