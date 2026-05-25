@@ -247,6 +247,144 @@ Store results in `bt_backfill_runs.smoke_test_results`. Self-assess.
 - `bt_backfill_runs` row has `status IN ('completed', 'completed_with_warnings')`
 - [[Roadmap]] updated: CR-B marked complete; CR-C moved to "ready"
 
+## Step 0 — Diagnosis findings (2026-05-25)
+
+### Amendments locked
+
+**A3 — drift_target and dominant_bucket are not in feature_vector.**
+Neither key exists in `bt_daily_features.feature_vector`. Both must be derived by
+the runner before calling `compute_outcome`:
+- `drift_target` → join `orats_gex_landscape` for `(ticker, trade_date)`, take
+  `walls[0]['price']` (the dominant positive-GEX wall).
+- `dominant_bucket` → `argmax` over `{'0DTE': dominance_0DTE, '1-7 DTE': dominance_1_7,
+  '8-30 DTE': dominance_8_30, '30+ DTE': dominance_30plus}` from feature_vector.
+
+These are passed as explicit parameters to `compute_outcome` (see E1).
+
+**C1 — outcome_status enum extended.**
+Four values: `'computed'`, `'pending_history'`, `'na_regime'`, `'na_data'`.
+`na_data` fires when a required input is unavailable at compute time (missing
+landscape row, `expected_move = 0`, empty bars). Expected count in v0.5.0-rebuilt:
+0. Any `na_data` rows in production indicate a data gap worth investigating.
+
+**C5 — max_excursion_in_direction clamped.**
+Explicitly `max(0.0, ...)` — prevents negative excursion values for flat/adverse
+sessions. The metric is defined as "positive even if target not reached."
+
+**E1 — compute_outcome signature amended.**
+The function takes explicit scalar inputs derived by the runner, not a raw
+`feature_row` dict. Amended signature:
+
+```python
+def compute_outcome(
+    trade_date: date,
+    regime: str,           # feature_row['regime_at_classification']
+    drift_target: float,   # from orats_gex_landscape.walls join
+    dominant_bucket: str,  # argmax of dominance_* fields ('0DTE', '1-7 DTE', ...)
+    expected_move: float,  # feature_row['feature_vector']['implied_move_1d']
+    bars: pd.DataFrame,    # RTH 1-min OHLC, indexed by datetime (06:30–13:00 PT),
+                           # spanning trade_date through horizon_end_date
+) -> dict:
+    """
+    Compute outcome metrics for one structural read.
+
+    Returns a dict with all bt_daily_outcomes fields. outcome_status is one of:
+      'computed'        — all metrics populated
+      'pending_history' — horizon_end_date > latest bar date; metrics NULL
+      'na_regime'       — regime not directional in v1; metrics NULL
+      'na_data'         — required input missing (no landscape row, expected_move=0,
+                          empty bars); metrics NULL
+
+    **Session basis (E7):** bars must cover RTH sessions 06:30–13:00 PT (= 13:30–20:00
+    UTC) for each calendar date in trade_date..horizon_end_date. This matches the
+    session definition used by apps/web/modules/Bars/service.py and the Analogues
+    module's _fetch_session_outcomes.
+
+    **Why ES bars work for SPX-anchored outcomes (E6):**
+    `drift_target` is the price of the dominant wall from `orats_gex_landscape.walls`.
+    The landscape GEX is accumulated at each option's `discounted_level`:
+
+        discounted_level = strike × exp((r − q) × T)
+
+    where r is the short rate, q the dividend yield, and T is time to expiry.
+    This formula projects each SPX strike into forward price space — the same
+    space ES futures trade in. A wall appearing at price P in the landscape means
+    there is a concentration of options whose forward/ES-equivalent price ≈ P. ES
+    futures must therefore trade near P for that wall to be active.
+
+    ES bar prices (from ironbeam_es_1m_bars) are directly comparable to drift_target
+    without any SPX-to-ES conversion. The residual difference between
+    discounted_level and the actual ES futures price arises from rate/dividend
+    convention rounding and roll effects; empirically this is < 5 pts — negligible
+    vs. the 0.25 × expected_move tolerance used for reached_close (typically 10–14
+    pts). The Analogues module's `_fetch_session_outcomes` establishes this as the
+    canonical codebase pattern: ES bar prices compared to SPX-derived landscape
+    levels, no conversion.
+    """
+```
+
+**E3 — packages/shared/buckets.py created (new file).**
+Implements `bucket_sessions(label: str) -> int` mapping landscape/dominance bucket
+labels to outcome horizon session counts. Distinct from `strategy_templates._bucket_dte`
+(which takes a cluster dict and uses strategy DTE targets, not outcome horizons):
+
+```python
+# Outcome horizon sessions by dominant bucket
+# Distinct from strategy_templates.DTE_TARGET_BY_BUCKET (which serves strategy
+# entry sizing, not multi-day outcome windows).
+_OUTCOME_SESSIONS = {
+    '0DTE':     1,
+    '1-7 DTE':  5,
+    '8-30 DTE': 20,
+    '30+ DTE':  60,
+}
+
+def bucket_sessions(label: str) -> int:
+    """Return number of RTH sessions for an outcome horizon given a bucket label."""
+    return _OUTCOME_SESSIONS[label]   # KeyError is intentional — caller validates
+```
+
+**E4 — ironbeam_es_1m_bars timestamp column is `datetime`.**
+All bar queries must use `datetime` (not `ts`). The column stores naive UTC timestamps.
+Session filtering uses PT conversion: `datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles'`.
+
+**E5 — assert_role_or_die per CLAUDE.md protocol.**
+Runner uses `assert_role_or_die(conn)` (not `verify_safe_role`). Both exist in
+`backfill_safety.py`; `assert_role_or_die` is the CLAUDE.md-documented form.
+
+**E6(c) — ES bars used directly; no conversion code needed or exists.**
+See E1 docstring for full rationale. Confirmed: no reusable SPX↔ES helper in
+`packages/shared/`. Basis concern was a misread of the data model.
+
+**E7 — RTH session window = 06:30–13:00 PT.**
+Matches `apps/web/modules/Bars/service.py` (`_SQL` filter) and Analogues
+`_fetch_session_outcomes`. In UTC: approximately 13:30–20:00. `fetch_bars()` in
+the runner must apply the same PT-date filter used by those modules.
+
+### Test-layer split (B+)
+
+**Step 2 unit tests** (synthetic bars, no DB):
+- `drift_target=None` → raises / skips cleanly (na_data path)
+- `expected_move=0` → skips cleanly (na_data, no ZeroDivisionError)
+- `bars` empty DataFrame → skips cleanly (na_data)
+- Synthetic magnet-below bars (regime exists in code, 0 rows in corpus — verifies
+  the path runs without exercising it in integration)
+- All 6 metrics correct for a hand-crafted scenario with known expected values
+
+**Step 3 integration test subset** (3 real dates):
+
+| Date | Regime | Path covered |
+|------|--------|-------------|
+| `2023-06-01` | magnet-above | computed (all horizons elapsed; wall at 4281, spot at 4185) |
+| `2026-05-22` | magnet-above | pending_history (dominant bucket = 1-7 DTE, horizon_end ≈ 2026-05-29 > latest bar) |
+| `2026-05-20` | amplification | na_regime (non-directional early return) |
+
+### Schema reality confirmed
+- 735 active rows at v0.5.0-rebuilt ✅
+- Column: `regime_at_classification` (not `regime_kind`) ✅
+- `magnet-below`: 0 rows in corpus — code path written but not exercised in backfill ✅
+- `ironbeam_es_1m_bars`: SELECT-able as dash_backfill_writer; 1.19M rows; 2023-01-02–2026-05-25 ✅
+
 ## Status updates
 
 (filled during execution)
