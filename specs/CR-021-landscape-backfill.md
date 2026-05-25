@@ -9,7 +9,7 @@ sequence_number: 021
 branch: feat/CR-021-landscape-backfill
 status: completed
 completed: 2026-05-25
-last_commit_sha: see step-5 commit
+last_commit_sha: e7bdee6
 ---
 
 ## Goal
