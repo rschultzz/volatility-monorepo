@@ -7,6 +7,9 @@
 cr_id: CR-A
 sequence_number: 021
 branch: feat/CR-021-landscape-backfill
+status: completed
+completed: 2026-05-25
+last_commit_sha: see step-5 commit
 ---
 
 ## Goal
@@ -345,3 +348,13 @@ Note: `ironbeam_es_1m_bars` uses `datetime` (timestamp), not `trade_date`; dates
 **Gate 1 — Corrupt row soft-delete:** 4 rows with `implied_move_1d=0.0` identified and soft-deleted. Root cause: `orats_monies_minute` has `atmiv=0` for 0DTE options on half-day/holiday dates (2024-12-24, 2025-07-03, 2025-12-24 from Attempt 2; 2026-04-03 from Attempt 1). The SQL filter (`EXISTS orats_monies_minute`) catches missing-data dates but not zero-IV dates. 4 rows soft-deleted via `active=FALSE`. Active corpus: **735 rows**.
 
 **Gate 3 — backfill_run_id audit:** All 739 rows have non-null `backfill_run_id`. Three run_ids: test subset (57771209, 3 rows), Attempt 1 (e922b82c, 34 rows), Attempt 2 (2ed97683, 702 rows). v0.5.0 rows: 1 has `implied_move_1d=0` (pre-existing cron issue; will be replaced by promotion).
+
+## Step 5 — Completion
+
+CR-021 complete 2026-05-25. All smoke tests pass. Corpus of **735 active v0.5.0-rebuilt rows** (2023-05-01 → 2026-05-22) is ready for promotion review.
+
+**Architectural fix:** `compute_and_insert_landscape` extracted as a separate DO NOTHING INSERT path, keeping `compute_and_upsert_landscape` unchanged for the EOD cron. This preserves the DB-role safety architecture (`dash_backfill_writer` has no UPDATE on `orats_gex_landscape`) and avoids eroding the role toward full power.
+
+**Known follow-up for a future CR:** The zero-IV holiday issue (4 rows soft-deleted) can be addressed by adding `AND atmiv > 0` to `_IMPLIED_MOVE_SQL` in `day_features.py`, or by falling through to the next-lowest DTE when 0DTE IV is zero. Also, `orats_gex_landscape` lacks per-row `backfill_run_id` — landscape rows written by this backfill are tracked only via `bt_backfill_runs.smoke_test_results` (not individually deactivatable by run_id).
+
+**Promotion remains a separate decision moment** (see Promotion section above). `CANONICAL_FEATURE_VERSION` is still `"v0.5.0"`; promotion = one-line edit to `canonical_version.py`.
