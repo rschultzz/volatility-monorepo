@@ -18,6 +18,7 @@ Promoted regime_wrong audit overrides are applied for template selection.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import os
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -25,15 +26,18 @@ from zoneinfo import ZoneInfo
 import psycopg
 from flask import jsonify, request
 
-from packages.shared.day_features import _materialize_payload
+from packages.shared.day_features import _materialize_payload, extract_features
 from packages.shared.gex_landscape import compute_implied_move
 from packages.shared.audit_overrides import get_effective_regime
+
+from packages.shared.probability import compute_structural_probability
 
 from apps.web.modules.Bars.service import fetch_rth_open
 from .service import build_proposals_response
 
 
 _PT = ZoneInfo("America/Los_Angeles")
+log = logging.getLogger(__name__)
 
 
 def _normalize_db_url(url: str) -> str:
@@ -217,9 +221,28 @@ def register_today_setup_routes(server) -> None:
 
             context = _build_context(trade_date, ticker, spot, implied_move, payload)
             context["spot_source"] = spot_source
+
+            today_features = extract_features(payload, spot, implied_move)
+            try:
+                structural_probability = compute_structural_probability(
+                    today_features,
+                    conn,
+                    k=20,
+                    ticker=ticker,
+                    exclude_date=trade_date.isoformat(),
+                    regime_kind=effective_regime,
+                )
+            except Exception as e:
+                log.warning(
+                    "structural_probability failed for (%s, %s): %s",
+                    ticker, trade_date, e,
+                )
+                structural_probability = None
+
             response = build_proposals_response(
                 payload, spot, implied_move, context, anchor_strategy
             )
+            response["structural_probability"] = structural_probability
             return jsonify(response)
 
         except Exception as e:
