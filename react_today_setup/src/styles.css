@@ -332,6 +332,100 @@ textarea {
   color: #fca5a5;
 }
 
+/* ── Structural probability block ── */
+.sp-block {
+  background: #0d1527;
+  border: 1px solid #1f2937;
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sp-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sp-kline {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.sp-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.sp-stat-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.sp-stat-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #6b7280;
+  min-width: 82px;
+}
+
+.sp-stat-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #e5e7eb;
+  font-variant-numeric: tabular-nums;
+  min-width: 56px;
+}
+
+.sp-ci {
+  font-size: 11px;
+  color: #9ca3af;
+  font-variant-numeric: tabular-nums;
+}
+
+.sp-divergence-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fbbf24;
+  background: #3b2000;
+  border: 1px solid #d97706;
+  border-radius: 4px;
+  padding: 2px 6px;
+  letter-spacing: 0.3px;
+}
+
+.sp-secondary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sp-meta {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.sp-meta strong {
+  color: #d1d5db;
+  font-weight: 600;
+}
+
+.sp-note {
+  font-size: 11px;
+  color: #6b7280;
+  font-style: italic;
+  line-height: 1.55;
+  margin: 0;
+}
+
 /* ── Wing recipe tag ── */
 .recipe-tag {
   font-size: 9px;
