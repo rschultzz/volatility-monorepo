@@ -1108,6 +1108,14 @@ _UPSERT_SQL = """
         computed_at     = NOW()
 """
 
+_INSERT_ONLY_SQL = """
+    INSERT INTO orats_gex_landscape
+        (ticker, trade_date, landscape, walls, peaks_by_bucket,
+         spread_coef, range_pts, step_pts, table_spot, version)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (ticker, trade_date) DO NOTHING
+"""
+
 
 def _landscape_records(landscape: pd.DataFrame) -> list:
     """Serialize the landscape DataFrame to JSONB-ready dicts (native floats)."""
@@ -1153,6 +1161,59 @@ def _peaks_records(peaks_by_bucket: dict) -> dict:
     }
 
 
+def _compute_landscape_data(
+    conn,
+    ticker: str,
+    trade_date: dt.date,
+    *,
+    spread_coef: float = 8.0,
+    range_pts: float = 200.0,
+    step_pts: float = 1.0,
+) -> dict:
+    """Query orats_oi_gamma and compute the landscape, walls, and peaks.
+
+    Pure compute — no DB writes. Returns a dict with keys:
+        landscape_json, walls_json, peaks_json, table_spot.
+
+    Raises ValueError if no orats_oi_gamma rows exist for (ticker, trade_date)
+    or if their stock_price is NULL.
+    """
+    with conn.cursor() as cur:
+        cur.execute(_LANDSCAPE_QUERY, (ticker, trade_date, trade_date))
+        rows = cur.fetchall()
+        cols = [d.name for d in cur.description]
+
+    if not rows:
+        raise ValueError(
+            f"_compute_landscape_data: no orats_oi_gamma rows for "
+            f"({ticker!r}, {trade_date})"
+        )
+
+    df = pd.DataFrame(rows, columns=cols)
+
+    raw_spot = df["stock_price"].iloc[0]
+    if raw_spot is None or pd.isna(raw_spot):
+        raise ValueError(
+            f"_compute_landscape_data: stock_price is NULL for "
+            f"({ticker!r}, {trade_date})"
+        )
+    table_spot = float(raw_spot)
+
+    landscape = compute_landscape(
+        df, table_spot,
+        range_pts=range_pts, step_pts=step_pts, spread_coef=spread_coef,
+    )
+    walls = find_walls(landscape)
+    peaks_by_bucket = find_peaks_per_bucket(landscape)
+
+    return {
+        "landscape_json": _landscape_records(landscape),
+        "walls_json":     _walls_records(walls),
+        "peaks_json":     _peaks_records(peaks_by_bucket),
+        "table_spot":     table_spot,
+    }
+
+
 def compute_and_upsert_landscape(
     conn,
     ticker: str,
@@ -1190,37 +1251,14 @@ def compute_and_upsert_landscape(
     """
     from psycopg.types.json import Jsonb
 
-    with conn.cursor() as cur:
-        cur.execute(_LANDSCAPE_QUERY, (ticker, trade_date, trade_date))
-        rows = cur.fetchall()
-        cols = [d.name for d in cur.description]
-
-    if not rows:
-        raise ValueError(
-            f"compute_and_upsert_landscape: no orats_oi_gamma rows for "
-            f"({ticker!r}, {trade_date})"
-        )
-
-    df = pd.DataFrame(rows, columns=cols)
-
-    raw_spot = df["stock_price"].iloc[0]
-    if raw_spot is None or pd.isna(raw_spot):
-        raise ValueError(
-            f"compute_and_upsert_landscape: stock_price is NULL for "
-            f"({ticker!r}, {trade_date})"
-        )
-    table_spot = float(raw_spot)
-
-    landscape = compute_landscape(
-        df, table_spot,
-        range_pts=range_pts, step_pts=step_pts, spread_coef=spread_coef,
+    data = _compute_landscape_data(
+        conn, ticker, trade_date,
+        spread_coef=spread_coef, range_pts=range_pts, step_pts=step_pts,
     )
-    walls = find_walls(landscape)
-    peaks_by_bucket = find_peaks_per_bucket(landscape)
-
-    landscape_json = _landscape_records(landscape)
-    walls_json = _walls_records(walls)
-    peaks_json = _peaks_records(peaks_by_bucket)
+    landscape_json = data["landscape_json"]
+    walls_json     = data["walls_json"]
+    peaks_json     = data["peaks_json"]
+    table_spot     = data["table_spot"]
 
     with conn.cursor() as cur:
         cur.execute(_UPSERT_SQL, (
@@ -1237,4 +1275,58 @@ def compute_and_upsert_landscape(
         "n_peaks_by_bucket": {k: len(v) for k, v in peaks_json.items()},
         "table_spot":        table_spot,
         "version":           version,
+    }
+
+
+def compute_and_insert_landscape(
+    conn,
+    ticker: str,
+    trade_date: dt.date,
+    *,
+    spread_coef: float = 8.0,
+    range_pts: float = 200.0,
+    step_pts: float = 1.0,
+    version: str,
+) -> dict:
+    """Compute and INSERT (not UPSERT) the GEX landscape for (ticker, trade_date).
+
+    Identical to compute_and_upsert_landscape except it uses
+    ON CONFLICT (ticker, trade_date) DO NOTHING instead of DO UPDATE.
+    Required for callers whose DB role has INSERT but not UPDATE on
+    orats_gex_landscape — Postgres requires UPDATE privilege for any
+    ON CONFLICT DO UPDATE statement, even when no conflict occurs.
+
+    Runs entirely on the caller's connection — issues no COMMIT.
+
+    Returns the same summary dict as compute_and_upsert_landscape, plus
+    'inserted': True if a new row was written, False if DO NOTHING fired.
+    """
+    from psycopg.types.json import Jsonb
+
+    data = _compute_landscape_data(
+        conn, ticker, trade_date,
+        spread_coef=spread_coef, range_pts=range_pts, step_pts=step_pts,
+    )
+    landscape_json = data["landscape_json"]
+    walls_json     = data["walls_json"]
+    peaks_json     = data["peaks_json"]
+    table_spot     = data["table_spot"]
+
+    with conn.cursor() as cur:
+        cur.execute(_INSERT_ONLY_SQL, (
+            ticker, trade_date,
+            Jsonb(landscape_json), Jsonb(walls_json), Jsonb(peaks_json),
+            spread_coef, range_pts, step_pts, table_spot, version,
+        ))
+        inserted = cur.rowcount == 1
+
+    return {
+        "ticker":            ticker,
+        "trade_date":        trade_date,
+        "n_landscape":       len(landscape_json),
+        "n_walls":           len(walls_json),
+        "n_peaks_by_bucket": {k: len(v) for k, v in peaks_json.items()},
+        "table_spot":        table_spot,
+        "version":           version,
+        "inserted":          inserted,
     }

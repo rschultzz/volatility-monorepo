@@ -4,7 +4,7 @@
 For each target date:
   Step A: ensure orats_gex_landscape row exists.
           If already present → skip (no UPDATE permission on this role).
-          If absent → compute from orats_oi_gamma via compute_and_upsert_landscape.
+          If absent → compute from orats_oi_gamma via compute_and_insert_landscape.
   Step B: compute features from the stored landscape and INSERT into
           bt_daily_features at feature_version='v0.5.0-rebuilt' with
           ON CONFLICT DO NOTHING (no UPDATE permission; safe on re-run).
@@ -56,10 +56,15 @@ from packages.shared.day_features import (
     compute_feature_config_hash,
     extract_features,
 )
-from packages.shared.gex_landscape import compute_and_upsert_landscape, compute_implied_move
+from packages.shared.gex_landscape import compute_and_insert_landscape, compute_implied_move
 
 FEATURE_VERSION = "v0.5.0-rebuilt"
 LANDSCAPE_BACKFILL_VERSION = "cr-021-backfill"
+
+# Match the EOD cron parameters exactly (apps/cron/job_orats_eod.py lines 251-257).
+LANDSCAPE_SPREAD_COEF = 8.0
+LANDSCAPE_RANGE_PTS   = 300.0
+LANDSCAPE_STEP_PTS    = 1.0
 
 # Custom INSERT — DO NOTHING because dash_backfill_writer has no UPDATE permission.
 # Includes backfill_run_id so runs can be deactivated with a single query by run_id.
@@ -71,16 +76,20 @@ _INSERT_FEATURES_SQL = """
     ON CONFLICT (ticker, trade_date, feature_version) DO NOTHING
 """
 
-# Target dates = all dates with oi_gamma data OR existing landscape rows,
+# Target dates = dates with oi_gamma data AND orats_monies_minute data
+# (both sources required; orats_monies_minute is needed for implied_move),
 # minus dates already written at v0.5.0-rebuilt.
 _TARGET_DATES_SQL = """
     SELECT DISTINCT d
     FROM (
-        SELECT trade_date::date AS d FROM orats_oi_gamma    WHERE ticker = %s
-        UNION
-        SELECT trade_date       AS d FROM orats_gex_landscape WHERE ticker = %s
-    ) t
-    WHERE d NOT IN (
+        SELECT trade_date::date AS d FROM orats_oi_gamma WHERE ticker = %s
+    ) g
+    WHERE EXISTS (
+        SELECT 1 FROM orats_monies_minute m
+        WHERE m.ticker = %s
+          AND m.trade_date::date = g.d
+    )
+    AND d NOT IN (
         SELECT trade_date FROM bt_daily_features
         WHERE ticker = %s AND feature_version = %s
     )
@@ -135,8 +144,12 @@ def _ensure_landscape(conn, ticker: str, trade_date: dt.date, dry_run: bool) -> 
         return True
 
     try:
-        compute_and_upsert_landscape(
-            conn, ticker, trade_date, version=LANDSCAPE_BACKFILL_VERSION
+        compute_and_insert_landscape(
+            conn, ticker, trade_date,
+            spread_coef=LANDSCAPE_SPREAD_COEF,
+            range_pts=LANDSCAPE_RANGE_PTS,
+            step_pts=LANDSCAPE_STEP_PTS,
+            version=LANDSCAPE_BACKFILL_VERSION,
         )
         return True
     except (ValueError, Exception) as exc:
@@ -167,10 +180,12 @@ def _compute_and_insert_features(
     if iv_row and iv_row[0] is not None:
         try:
             implied_move = compute_implied_move(spot, float(iv_row[0]), dte=1.0)
-        except (TypeError, ValueError):
-            implied_move = 0.0
+        except (TypeError, ValueError) as exc:
+            print(f"  [features SKIP] {trade_date}: implied_move computation failed: {exc}")
+            return False
     else:
-        implied_move = 0.0
+        print(f"  [features SKIP] {trade_date}: no implied_move data in orats_monies_minute")
+        return False
 
     payload = _materialize_payload(landscape_rows, spot, implied_move)
     features = extract_features(payload, spot, implied_move)
