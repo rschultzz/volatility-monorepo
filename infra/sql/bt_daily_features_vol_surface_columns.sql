@@ -23,10 +23,11 @@ ALTER TABLE bt_daily_features
   ADD COLUMN IF NOT EXISTS smile_convexity       DOUBLE PRECISION,
   ADD COLUMN IF NOT EXISTS vol_risk_premium      DOUBLE PRECISION;
 
--- Column-scoped grant: dash_backfill_writer may read + write vol surface
--- columns only. Structural columns (feature_vector, feature_config_hash, etc.)
--- remain unwriteable post-INSERT by this role.
-GRANT SELECT, INSERT, UPDATE (
+-- Column-scoped UPDATE grant only. Table-level SELECT and INSERT were already
+-- granted in CR-0 (dash_backfill_writer_role.sql); column-scoped versions
+-- would be redundant. Structural columns (feature_vector, feature_config_hash,
+-- etc.) remain unwriteable post-INSERT by this role.
+GRANT UPDATE (
   atm_iv_percentile,
   skew_percentile,
   term_structure_slope,
