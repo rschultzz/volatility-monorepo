@@ -107,6 +107,18 @@ def backfill_run(
         )
 
 
+def update_run_progress(
+    conn: psycopg.Connection,
+    run_id: str,
+    rows_inserted: int,
+) -> None:
+    """Update rows_inserted on an in-progress backfill run (progress heartbeat)."""
+    conn.execute(
+        "UPDATE bt_backfill_runs SET rows_inserted = %s WHERE run_id = %s",
+        (rows_inserted, run_id),
+    )
+
+
 def update_run_smoke(
     conn: psycopg.Connection,
     run_id: str,

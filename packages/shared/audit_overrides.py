@@ -15,6 +15,8 @@ from __future__ import annotations
 import datetime as dt
 from typing import Optional
 
+from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
+
 # ─── SQL ──────────────────────────────────────────────────────────────────────
 
 _PROMOTED_FLAG_SQL = """
@@ -31,8 +33,7 @@ _AUTO_REGIME_SQL = """
     SELECT regime_at_classification
     FROM bt_daily_features_active
     WHERE ticker = %s AND trade_date = %s
-    ORDER BY computed_at DESC
-    LIMIT 1
+      AND feature_version = %s
 """
 
 _PROMOTED_BATCH_SQL = """
@@ -49,8 +50,8 @@ _AUTO_REGIME_BATCH_SQL = """
     FROM bt_daily_features_active
     WHERE ticker = %s
       AND trade_date = ANY(%s)
+      AND feature_version = %s
       AND regime_at_classification IS NOT NULL
-    ORDER BY computed_at DESC
 """
 
 _LANDSCAPE_REGIME_SQL = """
@@ -105,7 +106,7 @@ def get_effective_regime(conn, ticker: str, trade_date: dt.date) -> Optional[str
 
     # 2. Stored auto-regime
     with conn.cursor() as cur:
-        cur.execute(_AUTO_REGIME_SQL, (ticker, trade_date))
+        cur.execute(_AUTO_REGIME_SQL, (ticker, trade_date, CANONICAL_FEATURE_VERSION))
         row = cur.fetchone()
     if row and row[0]:
         return row[0]
@@ -141,7 +142,7 @@ def get_effective_regimes(
     missing = [d for d, v in result.items() if v is None]
     if missing:
         with conn.cursor() as cur:
-            cur.execute(_AUTO_REGIME_BATCH_SQL, (ticker, missing))
+            cur.execute(_AUTO_REGIME_BATCH_SQL, (ticker, missing, CANONICAL_FEATURE_VERSION))
             for row in cur.fetchall():
                 td, regime = row[0], row[1]
                 if result.get(td) is None and regime:
