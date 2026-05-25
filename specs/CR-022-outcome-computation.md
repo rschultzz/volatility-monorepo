@@ -17,7 +17,7 @@ new_table: bt_daily_outcomes
 dependencies: [CR-0, CR-A]
 depended_on_by: [CR-C]
 branch_name: cr-b-outcome-computation
-last_commit_sha: pending-step-5
+last_commit_sha: 34cb833
 stop_conditions:
   - "pre-flight check: current_user != 'dash_backfill_writer'"
   - "any backfill batch produces zero outcomes (likely a bug)"
