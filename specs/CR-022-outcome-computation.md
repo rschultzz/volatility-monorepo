@@ -3,8 +3,9 @@ type: cr
 cr_id: CR-B
 title: Outcome Computation
 aliases: ["CR-B — Outcome Computation", "CR-B"]
-status: active
+status: completed
 started: 2026-05-25
+completed: 2026-05-25
 sequence_number: 22
 run_mode: unattended
 phase: 1
@@ -16,6 +17,7 @@ new_table: bt_daily_outcomes
 dependencies: [CR-0, CR-A]
 depended_on_by: [CR-C]
 branch_name: cr-b-outcome-computation
+last_commit_sha: pending-step-5
 stop_conditions:
   - "pre-flight check: current_user != 'dash_backfill_writer'"
   - "any backfill batch produces zero outcomes (likely a bug)"
