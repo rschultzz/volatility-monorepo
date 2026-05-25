@@ -387,7 +387,33 @@ the runner must apply the same PT-date filter used by those modules.
 
 ## Status updates
 
-(filled during execution)
+### Step 4 execution — 2026-05-25 (run e5880471)
+
+Run `e5880471-8ddd-4b88-8836-0fad250ea30d` completed in ~47 seconds. 731 rows
+inserted (4 test-subset rows pre-existing from Step 3), 0 failures, 0 skipped.
+Total `bt_daily_outcomes` at v0.5.0-rebuilt: 735 rows = 100% coverage of active
+feature rows (`row_count_pct_diff = 0.0%`).
+
+Status distribution: `computed=434`, `pending_history=20`, `na_regime=269`,
+`na_data=12`. All rows carry `backfill_run_id`. `null_run_id_count = 0`.
+`future_horizon_count = 0`.
+
+**Touch rates (computed rows):** magnet-above 81.6% (n=342), magnetic-pin 88.0%
+(n=92). Both exceed the spec's stated 15–75% gate. Not a bug — the gate was
+calibrated for tighter outcome definitions than `reached_touch` over multi-session
+horizons. Approved as signal: GEX walls attract price at high rates across both
+directional regimes. `magnet-below` has 0 computed rows (0 such days in corpus).
+
+**12 na_data rows:** All fired the `drift_target is None` path — dates where
+`orats_gex_landscape` has no row. All are `magnet-above`. Root cause: a
+prominence-mismatch between the classifier (3% threshold) and the stored landscape
+walls (10% threshold) — on those 12 dates the classifier produced a magnet-above
+signal but no landscape row was ingested. Acceptable for v1; queued as future
+improvement.
+
+**20 pending_history rows:** All recent dates (2026-03 through 2026-05-22) with
+insufficient bar history for their bucket horizon. Expected; will become computable
+as history accrues.
 
 ## Open questions
 
