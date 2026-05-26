@@ -33,7 +33,7 @@ from packages.shared.audit_overrides import get_effective_regime
 from packages.shared.probability import compute_structural_probability
 
 from apps.web.modules.Bars.service import fetch_rth_open
-from .service import build_proposals_response
+from .service import apply_direction_qualification, build_proposals_response
 
 
 _PT = ZoneInfo("America/Los_Angeles")
@@ -243,6 +243,14 @@ def register_today_setup_routes(server) -> None:
                 payload, spot, implied_move, context, anchor_strategy
             )
             response["structural_probability"] = structural_probability
+
+            # Apply post-touch direction qualification to magnet-regime proposals.
+            # Must run after structural_probability is available (computed above).
+            if structural_probability:
+                response["proposals"] = apply_direction_qualification(
+                    response["proposals"], structural_probability
+                )
+
             return jsonify(response)
 
         except Exception as e:

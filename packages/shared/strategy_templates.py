@@ -239,6 +239,96 @@ class _DirectionalSpreadTemplate:
         )
 
 
+# ── Debit spread to target ────────────────────────────────────────────────────
+
+class _DebitToTargetTemplate:
+    """Debit spread toward the drift target.
+
+    For magnet-above (calls):  long call 10pt inside target, short call at target.
+    For magnet-below (puts):   long put 10pt inside target, short put at target.
+
+    Emitted alongside _DirectionalSpreadTemplate (credit) for every magnet-regime
+    payload; post-touch direction qualification in service.py filters which survives.
+    CR-F will later add capped/uncapped/hedged debit variants selected by pattern_label.
+    """
+    template_id = "debit_spread_to_target"
+    template_kind = "spread"
+    _WIDTH_PTS = 10.0
+
+    def applies_to(
+        self,
+        regime_block: dict,
+        cluster: dict | None,
+        clusters_all: list[dict],
+        spot: float,
+        implied_move: float,
+    ) -> bool:
+        if cluster is not None:
+            return False
+        regime = regime_block.get("regime", "")
+        return regime in _MAGNET_REGIMES and "drift_target" in regime_block
+
+    def propose(
+        self,
+        regime_block: dict,
+        cluster: dict | None,
+        clusters_all: list[dict],
+        spot: float,
+        implied_move: float,
+        anchor_strategy: str = "cluster_centered",
+    ) -> TradeProposal:
+        drift_target = float(regime_block["drift_target"])
+        regime = regime_block.get("regime")
+        dom_gex = (regime_block.get("dominant_wall") or {}).get("gex", 0.0)
+        dom_gex_b = dom_gex / 1e9 if dom_gex else 0.0
+
+        drift_cluster = next(
+            (
+                c for c in clusters_all
+                if abs(c.get("center_price", 0.0) - drift_target) < 30
+            ),
+            None,
+        )
+        bucket, dte_target = (
+            _bucket_dte(drift_cluster) if drift_cluster else ("8-30", 15)
+        )
+
+        if regime == "magnet-above":
+            direction = "call"
+            long_strike  = drift_target - self._WIDTH_PTS  # 10pt inside target (toward spot)
+            short_strike = drift_target
+        else:  # magnet-below
+            direction = "put"
+            long_strike  = drift_target + self._WIDTH_PTS  # 10pt inside target (toward spot)
+            short_strike = drift_target
+
+        return TradeProposal(
+            template_id=self.template_id,
+            template_kind="spread",
+            anchor_strategy=anchor_strategy,
+            rationale=(
+                f"Debit {direction} spread to {drift_target:.0f} "
+                f"({drift_target - spot:+.0f}pt from spot {spot:.0f}). "
+                f"Long {direction} {self._WIDTH_PTS:.0f}pt inside target; "
+                f"short {direction} at target. Pays if price reaches "
+                f"{drift_target:.0f}. Dominant wall: {dom_gex_b:.0f}B."
+            ),
+            legs=[
+                Leg(side="long",  type=direction, strike=long_strike),
+                Leg(side="short", type=direction, strike=short_strike),
+            ],
+            expiry_dte_target=dte_target,
+            expiry_dte_bucket=bucket,
+            source={
+                "type": "regime_target",
+                "drift_target": drift_target,
+                "drift_direction": regime_block.get("drift_direction"),
+                "regime": regime,
+                "dominant_wall_gex_b": round(dom_gex_b, 1),
+            },
+        )
+
+
 # ── Bounded iron condor ───────────────────────────────────────────────────────
 
 class _BoundedCondorTemplate:
@@ -365,6 +455,7 @@ TEMPLATES: list[Template] = [
         "pin_butterfly_wide", "sigma_1x", "wide (1σ)"
     ),
     _DirectionalSpreadTemplate(),
+    _DebitToTargetTemplate(),
     _BoundedCondorTemplate(),
     _FeatureNoTradeTemplate(),
 ]

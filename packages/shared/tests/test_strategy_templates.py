@@ -200,28 +200,29 @@ class TestPinButterflyTemplates(unittest.TestCase):
 
 class TestDirectionalSpreadTemplate(unittest.TestCase):
     def test_magnet_above_fires_call_spread(self):
+        # CR-I: both credit (directional_spread_to_target) and debit (debit_spread_to_target)
+        # are emitted for magnet regimes; qualification filters them at the service layer.
         payload = _magnet_above_payload(spot=7444.0, drift_target=7524.0)
         proposals = generate_proposals(payload, 7444.0, 50.0)
         spreads = [p for p in proposals if p.template_kind == "spread"]
-        self.assertEqual(len(spreads), 1)
-        spread = spreads[0]
-        # Short strike at drift_target
-        short_leg = next(l for l in spread.legs if l.side == "short")
+        self.assertEqual(len(spreads), 2)
+        # Credit spread: short at drift_target, long further OTM
+        credit = next(p for p in spreads if p.template_id == "directional_spread_to_target")
+        short_leg = next(l for l in credit.legs if l.side == "short")
         self.assertAlmostEqual(short_leg.strike, 7524.0)
         self.assertEqual(short_leg.type, "call")
-        # Long is 10pt above short
-        long_leg = next(l for l in spread.legs if l.side == "long")
+        long_leg = next(l for l in credit.legs if l.side == "long")
         self.assertAlmostEqual(long_leg.strike, 7534.0)
 
     def test_magnet_below_fires_put_spread(self):
         payload = _magnet_below_payload(spot=7500.0, drift_target=7380.0)
         proposals = generate_proposals(payload, 7500.0, 50.0)
         spreads = [p for p in proposals if p.template_kind == "spread"]
-        self.assertEqual(len(spreads), 1)
-        spread = spreads[0]
-        short_leg = next(l for l in spread.legs if l.side == "short")
+        self.assertEqual(len(spreads), 2)
+        credit = next(p for p in spreads if p.template_id == "directional_spread_to_target")
+        short_leg = next(l for l in credit.legs if l.side == "short")
         self.assertEqual(short_leg.type, "put")
-        long_leg = next(l for l in spread.legs if l.side == "long")
+        long_leg = next(l for l in credit.legs if l.side == "long")
         self.assertLess(long_leg.strike, short_leg.strike)
 
     def test_no_spread_on_pin_day(self):
@@ -256,6 +257,54 @@ class TestDirectionalSpreadTemplate(unittest.TestCase):
         proposals = generate_proposals(payload, 7444.0, 50.0)
         spreads = [p for p in proposals if p.template_kind == "spread"]
         self.assertEqual(len(spreads), 0)
+
+
+# ── Debit spread to target template (CR-025 / CR-I) ──────────────────────────
+
+class TestDebitToTargetTemplate(unittest.TestCase):
+    def test_magnet_above_emits_debit_call_spread(self):
+        payload = _magnet_above_payload(spot=7444.0, drift_target=7524.0)
+        proposals = generate_proposals(payload, 7444.0, 50.0)
+        debit = next(
+            (p for p in proposals if p.template_id == "debit_spread_to_target"), None
+        )
+        self.assertIsNotNone(debit)
+        self.assertEqual(debit.template_kind, "spread")
+        # Long call 10pt inside target (toward spot)
+        long_leg = next(l for l in debit.legs if l.side == "long")
+        self.assertAlmostEqual(long_leg.strike, 7514.0)
+        self.assertEqual(long_leg.type, "call")
+        # Short call at drift_target
+        short_leg = next(l for l in debit.legs if l.side == "short")
+        self.assertAlmostEqual(short_leg.strike, 7524.0)
+        self.assertEqual(short_leg.type, "call")
+
+    def test_magnet_below_emits_debit_put_spread(self):
+        payload = _magnet_below_payload(spot=7500.0, drift_target=7380.0)
+        proposals = generate_proposals(payload, 7500.0, 50.0)
+        debit = next(
+            (p for p in proposals if p.template_id == "debit_spread_to_target"), None
+        )
+        self.assertIsNotNone(debit)
+        # Long put 10pt inside target (toward spot, so higher strike for puts)
+        long_leg = next(l for l in debit.legs if l.side == "long")
+        self.assertAlmostEqual(long_leg.strike, 7390.0)
+        self.assertEqual(long_leg.type, "put")
+        short_leg = next(l for l in debit.legs if l.side == "short")
+        self.assertAlmostEqual(short_leg.strike, 7380.0)
+        self.assertEqual(short_leg.type, "put")
+
+    def test_no_debit_spread_on_pin_day(self):
+        payload = _pin_payload()
+        proposals = generate_proposals(payload, 7362.0, 50.0)
+        debit_spreads = [p for p in proposals if p.template_id == "debit_spread_to_target"]
+        self.assertEqual(len(debit_spreads), 0)
+
+    def test_no_debit_spread_without_drift_target(self):
+        payload = {"regime": {"regime": "magnet-above"}, "confluences": []}
+        proposals = generate_proposals(payload, 7444.0, 50.0)
+        debit_spreads = [p for p in proposals if p.template_id == "debit_spread_to_target"]
+        self.assertEqual(len(debit_spreads), 0)
 
 
 # ── Bounded iron condor template ──────────────────────────────────────────────
