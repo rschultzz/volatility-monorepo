@@ -498,11 +498,10 @@ def _rank_analogues_with_outcomes(
     dominant_bucket_at_classification,
     position_t1_post_touch, position_t5_post_touch, position_t15_post_touch.
 
-    Note on position_tN_post_touch: these columns are added to bt_daily_outcomes
-    in CR-I Step 2. Before the schema migration runs, these keys are absent from
-    outcome rows (treated as None by aggregate_post_touch_distribution via .get()).
-    After Step 2 DDL + backfill, they carry -1/0/+1 or None per analogue.
-    The Step 2 implementation updates this query to SELECT those columns.
+    position_tN_post_touch: SMALLINT -1/0/+1 or NULL. NULL before CR-I Step 2b
+    backfill runs (aggregate_post_touch_distribution treats None as missing via
+    .get(), producing fractions=None / pattern_label=None gracefully).
+    After Step 2b backfill: carries the classified post-touch close position.
     """
     # 1. Load corpus feature vectors
     with conn.cursor() as cur:
@@ -543,7 +542,10 @@ def _rank_analogues_with_outcomes(
             SELECT trade_date, outcome_status,
                    reached_touch, reached_close, days_to_reach,
                    max_excursion_in_direction,
-                   dominant_bucket_at_classification
+                   dominant_bucket_at_classification,
+                   position_t1_post_touch,
+                   position_t5_post_touch,
+                   position_t15_post_touch
             FROM bt_daily_outcomes_active
             WHERE ticker = %s AND feature_version = %s
               AND trade_date = ANY(%s)
@@ -560,13 +562,14 @@ def _rank_analogues_with_outcomes(
             "days_to_reach":                     row[4],
             "max_excursion_in_direction": float(row[5]) if row[5] is not None else None,
             "dominant_bucket_at_classification": row[6],
+            "position_t1_post_touch":            row[7],   # SMALLINT -1/0/+1 or NULL
+            "position_t5_post_touch":            row[8],   # populated by CR-I Step 2b backfill
+            "position_t15_post_touch":           row[9],
         }
         for row in outcome_rows
     }
 
     # 4. Assemble; implied_move_1d comes from the feature vector already in memory.
-    #    position_tN_post_touch columns are added by CR-I Step 2 schema migration;
-    #    they are absent here (pre-Step-2) and will be added to this query in Step 2.
     result = []
     for trade_date_iso, distance in ranked:
         outcome = outcomes_by_date.get(trade_date_iso, {})
@@ -587,7 +590,9 @@ def _rank_analogues_with_outcomes(
             "max_excursion_in_direction":        outcome.get("max_excursion_in_direction"),
             "implied_move_1d":                   implied_move_1d,
             "dominant_bucket_at_classification": outcome.get("dominant_bucket_at_classification"),
-            # position_tN columns added in Step 2; absent = None via .get() in aggregation
+            "position_t1_post_touch":            outcome.get("position_t1_post_touch"),
+            "position_t5_post_touch":            outcome.get("position_t5_post_touch"),
+            "position_t15_post_touch":           outcome.get("position_t15_post_touch"),
         })
     return result
 
