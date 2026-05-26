@@ -312,6 +312,8 @@ export default function App() {
   // ── Derived values ────────────────────────────────────────────────────────
   const context = proposals?.context;
   const structuralProb = proposals?.structural_probability;
+  // DTE from the first proposal — used for the post-touch row marker.
+  const proposalDte = proposals?.proposals?.[0]?.expiry_dte_target ?? null;
   const anchorRegime = context?.regime || null;
   const anchorFlag = regimeFlagForDate(date);
   const selectedFlag = selectedDate ? regimeFlagForDate(selectedDate) : null;
@@ -497,7 +499,7 @@ export default function App() {
 
       {/* ── Structural probability (analogue mode only) ── */}
       {!loading && mode === 'analogue' && proposals && (
-        <StructuralProbabilityBlock sp={structuralProb} />
+        <StructuralProbabilityBlock sp={structuralProb} dte={proposalDte} />
       )}
 
       {/* ── Proposals (analogue mode only) ── */}
