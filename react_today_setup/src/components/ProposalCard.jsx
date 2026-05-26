@@ -5,6 +5,7 @@ const TEMPLATE_LABELS = {
   pin_butterfly_medium:        'Pin Butterfly — Medium Wings',
   pin_butterfly_wide:          'Pin Butterfly — Wide Wings',
   directional_spread_to_target:'Directional Spread to Target',
+  debit_spread_to_target:      'Debit Spread to Target',
   bounded_iron_condor:         'Bounded Iron Condor',
   feature_no_trade:            'No Trade',
 };

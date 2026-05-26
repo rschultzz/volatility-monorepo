@@ -2,9 +2,10 @@
 
 Public API:
     compute_outcome(...) -> dict   — pure computation, no DB I/O.
+    pick_drift_target(walls) -> float | None  — dominant positive-GEX wall price.
 
 The runner (scripts/cr_b_backfill_outcomes.py) is responsible for:
-  - joining drift_target from orats_gex_landscape.walls
+  - joining drift_target from orats_gex_landscape.walls (via pick_drift_target)
   - deriving dominant_bucket via argmax of dominance_* feature fields
   - fetching and aggregating RTH bars to daily OHLC
   - persisting the returned dict to bt_daily_outcomes
@@ -23,6 +24,27 @@ from packages.shared.buckets import bucket_sessions
 log = logging.getLogger(__name__)
 
 _DIRECTIONAL_REGIMES = frozenset({"magnet-above", "magnet-below", "magnetic-pin"})
+
+
+def pick_drift_target(walls: list) -> Optional[float]:
+    """Return the dominant positive-GEX wall price from orats_gex_landscape.walls.
+
+    Args:
+        walls: List of wall dicts from the JSONB `walls` column.
+               Each dict has keys: "price" (float), "gex" (float), "sign" (int ±1).
+
+    Returns:
+        Float price of the highest-GEX positive-sign wall, or None if no
+        positive-sign walls exist (e.g. bearish GEX environment).
+
+    This is the canonical wall-selection implementation. Import it from here
+    rather than reimplementing — drift between two copies silently corrupts
+    outcome/backfill output.
+    """
+    positive = [w for w in walls if w.get("sign") == 1]
+    if not positive:
+        return None
+    return float(max(positive, key=lambda w: w["gex"])["price"])
 
 
 def compute_outcome(
