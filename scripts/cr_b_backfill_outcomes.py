@@ -44,7 +44,7 @@ from packages.shared.backfill_safety import (
     update_run_progress,
     update_run_smoke,
 )
-from packages.shared.outcomes import compute_outcome
+from packages.shared.outcomes import compute_outcome, pick_drift_target
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -160,12 +160,9 @@ def _derive_dominant_bucket(feature_vector: dict) -> Optional[str]:
     return max(candidates, key=candidates.__getitem__)
 
 
-def _pick_drift_target(walls: list) -> Optional[float]:
-    """Dominant positive-GEX wall price. None if no positive-sign walls."""
-    positive = [w for w in walls if w.get("sign") == 1]
-    if not positive:
-        return None
-    return float(max(positive, key=lambda w: w["gex"])["price"])
+# _pick_drift_target moved to packages/shared/outcomes.pick_drift_target (CR-I Step 2b).
+# Imported above; this alias keeps existing call sites in this file unchanged.
+_pick_drift_target = pick_drift_target
 
 
 # Distance threshold for magnetic-pin sanity check.
