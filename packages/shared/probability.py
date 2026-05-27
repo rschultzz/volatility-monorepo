@@ -554,6 +554,7 @@ def _rank_analogues_with_outcomes(
                    position_t1_post_touch,
                    position_t5_post_touch,
                    position_t15_post_touch,
+                   session_open_t0,
                    session_open_t1,  session_high_t1,  session_low_t1,  session_close_t1,
                    session_open_t5,  session_high_t5,  session_low_t5,  session_close_t5,
                    session_open_t15, session_high_t15, session_low_t15, session_close_t15
@@ -579,19 +580,21 @@ def _rank_analogues_with_outcomes(
             "position_t1_post_touch":            row[7],   # SMALLINT -1/0/+1 or NULL
             "position_t5_post_touch":            row[8],   # populated by CR-I Step 2b backfill
             "position_t15_post_touch":           row[9],
+            # CR-G Step 2.5a: T+0 anchor (normalization-fix prerequisite)
+            "session_open_t0":                   _f(row[10]),
             # CR-G Step 0-A: session OHLC at T+1, T+5, T+15 sessions after trade_date
-            "session_open_t1":                   _f(row[10]),
-            "session_high_t1":                   _f(row[11]),
-            "session_low_t1":                    _f(row[12]),
-            "session_close_t1":                  _f(row[13]),
-            "session_open_t5":                   _f(row[14]),
-            "session_high_t5":                   _f(row[15]),
-            "session_low_t5":                    _f(row[16]),
-            "session_close_t5":                  _f(row[17]),
-            "session_open_t15":                  _f(row[18]),
-            "session_high_t15":                  _f(row[19]),
-            "session_low_t15":                   _f(row[20]),
-            "session_close_t15":                 _f(row[21]),
+            "session_open_t1":                   _f(row[11]),
+            "session_high_t1":                   _f(row[12]),
+            "session_low_t1":                    _f(row[13]),
+            "session_close_t1":                  _f(row[14]),
+            "session_open_t5":                   _f(row[15]),
+            "session_high_t5":                   _f(row[16]),
+            "session_low_t5":                    _f(row[17]),
+            "session_close_t5":                  _f(row[18]),
+            "session_open_t15":                  _f(row[19]),
+            "session_high_t15":                  _f(row[20]),
+            "session_low_t15":                   _f(row[21]),
+            "session_close_t15":                 _f(row[22]),
         }
         for row in outcome_rows
     }
@@ -620,6 +623,8 @@ def _rank_analogues_with_outcomes(
             "position_t1_post_touch":            outcome.get("position_t1_post_touch"),
             "position_t5_post_touch":            outcome.get("position_t5_post_touch"),
             "position_t15_post_touch":           outcome.get("position_t15_post_touch"),
+            # CR-G Step 2.5a: T+0 anchor for normalization-fix projection
+            "session_open_t0":                   outcome.get("session_open_t0"),
             # CR-G Step 0-A OHLC (None when bars unavailable)
             "session_open_t1":                   outcome.get("session_open_t1"),
             "session_high_t1":                   outcome.get("session_high_t1"),
