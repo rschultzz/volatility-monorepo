@@ -21,9 +21,24 @@ def _bsm_chain(spot, strikes, sigma=0.20, T=5.0/252, r=0.05):
     return [{"strike": float(k), "call_price": black_scholes_price(spot, float(k), T, r, sigma, "c")}
             for k in strikes if k > 0]
 
-def _analogues(close_vals, timeframe="t5"):
+def _analogues(close_vals, timeframe="t5", spot=4200.0, im=25.0):
+    """Build analogue dicts for compute_edge_zones fixtures.
+
+    Sets anchor_spot = spot and implied_move_1d = im so that the normalization
+    projection is the identity (projected_close = close), preserving all
+    existing test expectations.  For the integration-style tests, both values
+    are set to today's reference so projection is trivially correct.
+    """
     key = f"session_close_{timeframe}"
-    return [{key: v, "reached_touch": True} for v in close_vals]
+    return [
+        {
+            key:                 v,
+            "session_open_t0":   spot,   # anchor == today → identity projection
+            "implied_move_1d":   im,
+            "reached_touch":     True,
+        }
+        for v in close_vals
+    ]
 
 def _regime_above(drift_target):
     return {"regime": "magnet-above", "drift_target": float(drift_target)}
@@ -319,7 +334,9 @@ class TestComputeEdgeZones:
         rb = _regime_above(self.SPOT + 60)
         # Use bin_size=5 explicitly; sigma=0.40 spreads implied_pdf widely
         chain = self._dense_chain(sigma=0.40)
-        analogues = _analogues([self.SPOT] * 20)
+        # Pass spot=self.SPOT, im=self.IM so anchor == today → identity projection;
+        # all closes land exactly at self.SPOT.
+        analogues = _analogues([self.SPOT] * 20, spot=self.SPOT, im=self.IM)
         result = compute_edge_zones(
             self.SPOT, self.IM, chain, analogues, "t5", rb,
             bin_size=5.0,
@@ -407,7 +424,16 @@ class TestComputeEdgeZones:
     def test_t1_uses_correct_key(self):
         rb = _regime_above(self.SPOT + 50)
         chain = self._dense_chain()
-        analogues = [{"session_close_t1": self.SPOT, "session_close_t5": None}] * 10
+        # Must include session_open_t0 + implied_move_1d (new normalization fields).
+        # anchor == today → identity projection; session_close_t5=None is ignored.
+        analogues = [
+            {
+                "session_close_t1":  self.SPOT,
+                "session_close_t5":  None,
+                "session_open_t0":   self.SPOT,
+                "implied_move_1d":   self.IM,
+            }
+        ] * 10
         result = compute_edge_zones(
             self.SPOT, self.IM, chain, analogues, "t1", rb
         )
@@ -417,7 +443,15 @@ class TestComputeEdgeZones:
     def test_t15_uses_correct_key(self):
         rb = _regime_above(self.SPOT + 50)
         chain = self._dense_chain()
-        analogues = [{"session_close_t15": self.SPOT, "session_close_t5": None}] * 10
+        # Must include session_open_t0 + implied_move_1d (new normalization fields).
+        analogues = [
+            {
+                "session_close_t15": self.SPOT,
+                "session_close_t5":  None,
+                "session_open_t0":   self.SPOT,
+                "implied_move_1d":   self.IM,
+            }
+        ] * 10
         result = compute_edge_zones(
             self.SPOT, self.IM, chain, analogues, "t15", rb
         )

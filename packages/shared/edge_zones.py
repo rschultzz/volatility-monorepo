@@ -223,10 +223,14 @@ def compute_edge_zones(
     Notes:
         - min_structural_n tracks the thinnest denominator in each zone; the chart
           should dim or annotate zones where min_structural_n < 5 (sparse data).
-        - structural_prob = None (not 0.0) when all analogues had NULL close values for
-          the timeframe; those bins get classification='unknown'.
-        - structural_prob = 0.0 (zero analogues in bin) is a legitimate signal → 0/implied
-          = 0.0 → 'strong-negative'. This is intentional.
+        - Each analogue's close is projected to today's price scale before range check:
+          normalized_return = (close_tN - session_open_t0) / implied_move_1d;
+          projected_close = spot + normalized_return * implied_move.
+          Analogues with NULL session_open_t0 or implied_move_1d are excluded.
+        - structural_prob = None (not 0.0) when all analogues had NULL close/anchor
+          values; those bins get classification='unknown'.
+        - structural_prob = 0.0 (zero projected closes in bin) is a legitimate signal →
+          0/implied = 0.0 → 'strong-negative'. This is intentional.
         - implied_prob is suppressed to None when < 1e-10 (PDF gap); bin → 'unknown'.
     """
     # 1. Trade-thesis range (regime guard)
@@ -255,14 +259,27 @@ def compute_edge_zones(
         warnings.simplefilter("ignore", RuntimeWarning)
         implied_pdf = compute_implied_pdf(option_chain, spot, risk_free_rate, tte)
 
-    # 5. Close values for the requested timeframe
+    # 5. Build analogue dicts for the requested timeframe (once; reused for all bins).
+    #    Normalization-fix (CR-G Step 2.5b): each analogue's close is projected to
+    #    today's scale via (close - anchor_spot) / anchor_im * today_im + today_spot.
+    #    anchor_spot = session_open_t0 (analogue's own RTH open on trade_date).
+    #    anchor_implied_move = implied_move_1d (from the analogue's feature vector).
     close_key = f"session_close_{timeframe}"
-    close_vals = [a.get(close_key) for a in analogues_ohlc]
+    analogue_records = [
+        {
+            "close":               a.get(close_key),
+            "anchor_spot":         a.get("session_open_t0"),
+            "anchor_implied_move": a.get("implied_move_1d"),
+        }
+        for a in analogues_ohlc
+    ]
 
     # 6. Per-bin computation
     bin_results: list[dict] = []
     for b_lo, b_hi in bin_boundaries:
-        struct_result = compute_terminal_prob_in_range(close_vals, b_lo, b_hi)
+        struct_result = compute_terminal_prob_in_range(
+            analogue_records, spot, implied_move, b_lo, b_hi
+        )
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
