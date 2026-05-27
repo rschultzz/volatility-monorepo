@@ -2,8 +2,41 @@
 
 Computes terminal and path-dependent probabilities from the K=20 historical
 analogue set. All probabilities are TERMINAL (held-to-checkpoint assumption):
-  - compute_terminal_prob_in_range: P(session_close_tN lands in [lower, upper])
+  - compute_terminal_prob_in_range: P(projected_session_close_tN lands in [lower, upper])
   - compute_session_excursion_metrics: DIAGNOSTIC path metrics (NOT edge math)
+
+Normalization / projection (CR-G Step 2.5b fix):
+  Analogues are from different price epochs (e.g. 2024-2025 SPX at 5000+ vs
+  a 2023 anchor at 4200). Comparing absolute close prices to today's price
+  bounds is semantically broken — the ranges are in different coordinate systems.
+
+  Fix: project each analogue's normalized return onto today's price scale:
+    normalized_return = (close_tN - session_open_t0) / implied_move_1d
+    projected_close   = today_spot + normalized_return * today_implied_move
+
+  where:
+    close_tN         — the analogue's close at the requested timeframe
+    session_open_t0  — the analogue's own RTH open on its trade_date
+                       (first bar open; matches compute_outcome's first_open reference)
+    implied_move_1d  — the analogue's own implied move on its trade_date
+    today_spot       — current underlying price (caller's reference)
+    today_implied_move — today's implied move (caller's reference)
+
+  Analogues with NULL close, NULL session_open_t0, NULL implied_move_1d, or
+  implied_move_1d <= 0 are excluded from BOTH numerator and denominator.
+
+Input dict shape for compute_terminal_prob_in_range:
+  Each analogue dict must have:
+    'close'              — session close at the timeframe (caller selects t1/t5/t15)
+    'anchor_spot'        — analogue's session_open_t0
+    'anchor_implied_move' — analogue's implied_move_1d
+
+Input dict shape for compute_session_excursion_metrics:
+  Each analogue dict must have:
+    'session_high'       — analogue's session high (in analogue's price scale)
+    'session_low'        — analogue's session low  (in analogue's price scale)
+    'anchor_spot'        — analogue's session_open_t0
+    'anchor_implied_move' — analogue's implied_move_1d
 
 Regime → range mapping from Step 0-A registry (locked):
   magnet-above:  [current_price, drift_target]
@@ -24,30 +57,67 @@ from typing import Optional
 from packages.shared.stats import wilson_ci
 
 
+def _project_close(
+    close: float,
+    anchor_spot: float,
+    anchor_implied_move: float,
+    today_spot: float,
+    today_implied_move: float,
+) -> float:
+    """Project an analogue's close price to today's price scale.
+
+    normalized_return = (close - anchor_spot) / anchor_implied_move
+    projected_close   = today_spot + normalized_return * today_implied_move
+    """
+    normalized_return = (close - anchor_spot) / anchor_implied_move
+    return today_spot + normalized_return * today_implied_move
+
+
 def compute_terminal_prob_in_range(
-    close_values: list[Optional[float]],
+    analogues: list[dict],
+    today_spot: float,
+    today_implied_move: float,
     lower: Optional[float],
     upper: Optional[float],
 ) -> Optional[dict]:
-    """Fraction of close_values landing in [lower, upper].
+    """Fraction of analogues whose projected close lands in [lower, upper].
+
+    Each analogue dict must have: 'close', 'anchor_spot', 'anchor_implied_move'.
+    Analogues with any of those fields None or anchor_implied_move <= 0 are
+    excluded from both numerator and denominator (treated as missing data).
+
+    The close is projected to today's scale via:
+      normalized_return = (close - anchor_spot) / anchor_implied_move
+      projected_close   = today_spot + normalized_return * today_implied_move
 
     Intervals are closed on both sides. One-sided ranges are supported:
-      lower=None  → P(close <= upper)   (all values -inf..upper)
-      upper=None  → P(close >= lower)   (all values lower..+inf)
+      lower=None  → P(projected_close <= upper)
+      upper=None  → P(projected_close >= lower)
       both=None   → returns None (no meaningful range)
-
-    NULL (None) close values are excluded from both numerator and denominator —
-    they represent missing corpus data, not out-of-range observations.
 
     Returns:
         {"prob": float, "wilson_ci": (lo, hi), "n": int}
-        None if both bounds are None or no valid close values.
+        None if both bounds are None or no valid analogues.
     """
     if lower is None and upper is None:
         return None
 
-    valid = [v for v in close_values if v is not None]
-    n = len(valid)
+    valid_projected: list[float] = []
+    for a in analogues:
+        c   = a.get("close")
+        asp = a.get("anchor_spot")
+        aim = a.get("anchor_implied_move")
+        if c is None or asp is None or aim is None:
+            continue
+        try:
+            c_f, asp_f, aim_f = float(c), float(asp), float(aim)
+        except (TypeError, ValueError):
+            continue
+        if aim_f <= 0:
+            continue
+        valid_projected.append(_project_close(c_f, asp_f, aim_f, today_spot, today_implied_move))
+
+    n = len(valid_projected)
     if n == 0:
         return None
 
@@ -56,7 +126,7 @@ def compute_terminal_prob_in_range(
         in_hi = (upper is None) or (v <= upper)
         return in_lo and in_hi
 
-    k = sum(1 for v in valid if _in_range(v))
+    k = sum(1 for v in valid_projected if _in_range(v))
     ci_lo, ci_hi = wilson_ci(k, n)
     return {
         "prob": k / n,
@@ -66,30 +136,26 @@ def compute_terminal_prob_in_range(
 
 
 def compute_session_excursion_metrics(
-    ohlc_values: list[dict],
+    analogues: list[dict],
+    today_spot: float,
+    today_implied_move: float,
     lower: Optional[float],
     upper: Optional[float],
 ) -> Optional[dict]:
     """DIAGNOSTIC path-dependent metrics — NOT used for edge ratio math.
 
     Returns P(session intersects range) and P(session stayed entirely in range)
-    across the analogue set. These expose path-dependency not captured by the
-    terminal probability used in edge math.
+    across the analogue set. Both session_high and session_low are projected to
+    today's price scale before the intersection/containment check.
 
-    Session-level definitions:
-      intersected: session_low <= upper  AND  session_high >= lower
-        (the session's price range overlapped the trade-thesis zone at any point)
-      stayed_in:   session_low >= lower  AND  session_high <= upper
-        (the session remained entirely within the zone)
+    Each analogue dict must have: 'session_high', 'session_low',
+    'anchor_spot', 'anchor_implied_move'.
+    Analogues with any required field None or anchor_implied_move <= 0 are excluded.
+
+    Session-level definitions (checked on projected values):
+      intersected: proj_low <= upper  AND  proj_high >= lower
+      stayed_in:   proj_low >= lower  AND  proj_high <= upper
     One-sided ranges treated as −∞ / +∞ on the open end.
-
-    OHLC dicts with any None value are excluded from the denominator —
-    they represent corpus-end rows without complete bar data.
-
-    Args:
-        ohlc_values: list of dicts with keys session_high, session_low
-                     (session_open/close also accepted but not used here)
-        lower, upper: range bounds (same convention as compute_terminal_prob_in_range)
 
     Returns:
         {intersected_prob, intersected_ci, stayed_in_prob, stayed_in_ci, n}
@@ -98,38 +164,45 @@ def compute_session_excursion_metrics(
     if lower is None and upper is None:
         return None
 
-    valid = [
-        d for d in ohlc_values
-        if d.get("session_high") is not None and d.get("session_low") is not None
-    ]
-    n = len(valid)
-    if n == 0:
-        return None
-
     n_intersected = 0
     n_stayed = 0
-    for d in valid:
-        lo_s = d["session_low"]
-        hi_s = d["session_high"]
+    n = 0
+
+    for a in analogues:
+        hi_s = a.get("session_high")
+        lo_s = a.get("session_low")
+        asp  = a.get("anchor_spot")
+        aim  = a.get("anchor_implied_move")
+        if hi_s is None or lo_s is None or asp is None or aim is None:
+            continue
+        try:
+            hi_f, lo_f, asp_f, aim_f = float(hi_s), float(lo_s), float(asp), float(aim)
+        except (TypeError, ValueError):
+            continue
+        if aim_f <= 0:
+            continue
+
+        proj_hi = _project_close(hi_f, asp_f, aim_f, today_spot, today_implied_move)
+        proj_lo = _project_close(lo_f, asp_f, aim_f, today_spot, today_implied_move)
+        n += 1
 
         if lower is None:
-            intersected = hi_s >= float("-inf") and lo_s <= (upper or float("inf"))
+            intersected = True  # open lower end — any price to the left intersects
+            stayed = proj_hi <= (upper if upper is not None else float("inf"))
         elif upper is None:
-            intersected = hi_s >= lower
+            intersected = proj_hi >= lower
+            stayed = proj_lo >= lower
         else:
-            intersected = lo_s <= upper and hi_s >= lower
-
-        if lower is None:
-            stayed = hi_s <= (upper or float("inf"))
-        elif upper is None:
-            stayed = lo_s >= lower
-        else:
-            stayed = lo_s >= lower and hi_s <= upper
+            intersected = proj_lo <= upper and proj_hi >= lower
+            stayed = proj_lo >= lower and proj_hi <= upper
 
         if intersected:
             n_intersected += 1
         if stayed:
             n_stayed += 1
+
+    if n == 0:
+        return None
 
     ci_int_lo, ci_int_hi = wilson_ci(n_intersected, n)
     ci_stay_lo, ci_stay_hi = wilson_ci(n_stayed, n)
