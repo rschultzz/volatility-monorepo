@@ -51,6 +51,7 @@ from modules.TodaySetup.routes import register_today_setup_routes
 from modules.Bars.routes import register_bars_routes
 from modules.AuditFlags.routes import register_audit_flags_routes
 from modules.DayBrowser.routes import register_day_browser_routes
+from modules.Proposals.routes import register_proposals_routes
 
 # ===== IDs =====
 CLOCK_ID = "CLOCK"
@@ -208,6 +209,9 @@ register_audit_flags_routes(server)
 
 # Mount the Day Browser API (CR-016)
 register_day_browser_routes(server)
+
+# Mount the Proposals P/L data API (CR-G Step 4)
+register_proposals_routes(server)
 
 # Mount the React Price Chart preview
 REACT_PREVIEW_DIST_DIR = (REPO_ROOT / "react_price_preview" / "dist").resolve()

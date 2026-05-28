@@ -1,0 +1,514 @@
+"""Proposals routes — POST /api/proposals/pl-data (CR-G Step 4).
+
+Composes BSM pricing, structural KNN probability, market-implied probability,
+and edge zone classification into a single JSON response for frontend chart
+rendering.
+
+POST /api/proposals/pl-data
+    Body (JSON):
+        trade_date   — "YYYY-MM-DD" (required)
+        ticker       — e.g. "SPX" (optional, default "SPX")
+        legs         — non-empty list of leg objects (required):
+                         {strike, expiration, flag ('c'/'p'),
+                          side ('long'/'short'), qty (int, default 1)}
+        regime_block — GEX landscape regime dict with at least {regime} key (required)
+        timeframe    — "t1", "t5", or "t15" (required)
+
+    Response 200:
+        {ok, trade_date, ticker, evaluation_time, current_spot, implied_move,
+         legs, pl_curve, iv_curve, trade_thesis, edge_zones, greeks,
+         key_levels, warnings}
+
+    Response 400: validation failure → {ok: false, errors: [...]}
+    Response 503: DB connect failed → {ok: false, error: "..."}
+    Response 500: unexpected error  → {ok: false, error: "..."}
+"""
+from __future__ import annotations
+
+import datetime as dt
+import logging
+import os
+import warnings
+from typing import Optional
+from zoneinfo import ZoneInfo
+
+import psycopg
+from flask import jsonify, request
+
+from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
+from packages.shared.edge_zones import compute_edge_zones
+from packages.shared.implied_distribution import (
+    compute_implied_pdf,
+    compute_implied_prob_in_range,
+)
+from packages.shared.pricing.engine import compute_position_greeks
+from packages.shared.probability import _rank_analogues_with_outcomes
+from packages.shared.structural_distribution import (
+    compute_terminal_prob_in_range,
+    get_trade_thesis_range,
+)
+
+from .service import (
+    build_bsm_chain,
+    build_evaluation_time,
+    compute_initial_cost,
+    compute_key_levels,
+    compute_pl_curve,
+)
+
+_VALID_TIMEFRAMES = {"t1", "t5", "t15"}
+_VALID_FLAGS      = {"c", "p"}
+_VALID_SIDES      = {"long", "short"}
+
+# TTE in years for each timeframe (used for implied PDF + edge zones)
+_TTE_BY_TIMEFRAME: dict[str, float] = {
+    "t1":  1.0 / 252,
+    "t5":  5.0 / 252,
+    "t15": 15.0 / 252,
+}
+
+log = logging.getLogger(__name__)
+
+
+# ── DB helpers ────────────────────────────────────────────────────────────────
+
+def _normalize_db_url(url: str) -> str:
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql+"):
+        url = "postgresql://" + url.split("://", 1)[1]
+    if "sslmode=" not in url:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}sslmode=require"
+    return url
+
+
+def _conn():
+    raw = os.getenv("DATABASE_URL", "").strip()
+    if not raw:
+        raise RuntimeError("DATABASE_URL is not set")
+    return psycopg.connect(_normalize_db_url(raw))
+
+
+def _fetch_anchor_data(
+    conn,
+    ticker: str,
+    trade_date: dt.date,
+    feature_version: str,
+) -> tuple[float, float, dict]:
+    """Load (spot, implied_move, feature_vector) for ticker/trade_date.
+
+    spot         — session_open_t0 from bt_daily_outcomes_active
+    implied_move — feature_vector['implied_move_1d']
+    feature_vector — full dict from bt_daily_features_active
+
+    Raises ValueError if data is missing (caller returns 400).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT feature_vector FROM bt_daily_features_active
+            WHERE ticker = %s AND trade_date = %s AND feature_version = %s
+            """,
+            (ticker, trade_date, feature_version),
+        )
+        fv_row = cur.fetchone()
+
+    if not fv_row:
+        raise ValueError(
+            f"no feature vector for ({ticker}, {trade_date}, {feature_version!r}); "
+            "ensure the daily feature backfill has run for this date"
+        )
+    fv: dict = fv_row[0]
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT session_open_t0 FROM bt_daily_outcomes_active
+            WHERE ticker = %s AND trade_date = %s AND feature_version = %s
+            """,
+            (ticker, trade_date, feature_version),
+        )
+        out_row = cur.fetchone()
+
+    if not out_row or out_row[0] is None:
+        raise ValueError(
+            f"no session_open_t0 for ({ticker}, {trade_date}); "
+            "CR-G Step 2.5a backfill (session_open_t0 column) is required"
+        )
+
+    spot = float(out_row[0])
+    raw_im = fv.get("implied_move_1d") if isinstance(fv, dict) else None
+    try:
+        implied_move = float(raw_im) if raw_im is not None else 0.0
+    except (TypeError, ValueError):
+        implied_move = 0.0
+
+    return spot, implied_move, fv
+
+
+def _fetch_smile_row(
+    conn,
+    ticker: str,
+    trade_date: dt.date,
+    expir_date: dt.date,
+) -> tuple[Optional[float], Optional[float]]:
+    """Return (atmiv, risk_free_rate) closest to expir_date's DTE.
+
+    Queries orats_monies_minute for the latest snapshot on trade_date,
+    ranking by |dte - target_dte| to select the nearest available expiration.
+    Returns (None, None) if no data exists for this date.
+    """
+    dte_target = (expir_date - trade_date).days
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT atmiv, risk_free_rate
+            FROM orats_monies_minute
+            WHERE ticker = %s
+              AND trade_date = %s
+              AND atmiv IS NOT NULL
+              AND dte > 0
+            ORDER BY ABS(dte - %s) ASC, snapshot_pt DESC
+            LIMIT 1
+            """,
+            (ticker, trade_date.isoformat(), dte_target),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return None, None
+    atmiv = float(row[0]) if row[0] is not None else None
+    rfr   = float(row[1]) if row[1] is not None else 0.05
+    return atmiv, rfr
+
+
+# ── Validation ────────────────────────────────────────────────────────────────
+
+def _parse_date(s) -> Optional[dt.date]:
+    try:
+        return dt.date.fromisoformat(str(s))
+    except (TypeError, ValueError):
+        return None
+
+
+def _validate_body(body: dict) -> tuple[list[str], dict]:
+    """Validate POST body. Returns (errors, normalized).
+
+    errors  — list of human-readable strings; empty means body is valid.
+    normalized — cleaned fields ready for use (only meaningful when errors empty).
+    """
+    errors: list[str] = []
+
+    # trade_date
+    trade_date = _parse_date(body.get("trade_date"))
+    if trade_date is None:
+        errors.append("trade_date is required (YYYY-MM-DD)")
+
+    # ticker
+    ticker = str(body.get("ticker") or "SPX").strip() or "SPX"
+
+    # timeframe
+    timeframe = body.get("timeframe")
+    if timeframe not in _VALID_TIMEFRAMES:
+        errors.append(
+            f"timeframe must be one of {sorted(_VALID_TIMEFRAMES)}, got {timeframe!r}"
+        )
+
+    # regime_block
+    regime_block = body.get("regime_block")
+    if not isinstance(regime_block, dict):
+        errors.append("regime_block is required and must be an object")
+    elif not regime_block.get("regime"):
+        errors.append("regime_block.regime is required and must be a non-empty string")
+
+    # legs
+    raw_legs = body.get("legs")
+    if not isinstance(raw_legs, list) or len(raw_legs) == 0:
+        errors.append("legs is required and must be a non-empty list")
+        raw_legs = []
+
+    norm_legs: list[dict] = []
+    for i, leg in enumerate(raw_legs):
+        if not isinstance(leg, dict):
+            errors.append(f"legs[{i}] must be an object")
+            continue
+        leg_errs: list[str] = []
+
+        try:
+            strike = float(leg["strike"])
+        except (KeyError, TypeError, ValueError):
+            leg_errs.append("strike (number)")
+            strike = 0.0
+
+        expir = _parse_date(leg.get("expiration"))
+        if expir is None:
+            leg_errs.append("expiration (YYYY-MM-DD)")
+
+        flag = leg.get("flag")
+        if flag not in _VALID_FLAGS:
+            leg_errs.append(f"flag (one of {sorted(_VALID_FLAGS)})")
+
+        side = leg.get("side")
+        if side not in _VALID_SIDES:
+            leg_errs.append(f"side (one of {sorted(_VALID_SIDES)})")
+
+        qty = leg.get("qty", 1)
+        try:
+            qty = int(qty)
+            if qty <= 0:
+                raise ValueError("qty must be positive")
+        except (TypeError, ValueError):
+            leg_errs.append("qty (positive integer)")
+            qty = 1
+
+        if leg_errs:
+            errors.append(f"legs[{i}] invalid field(s): {', '.join(leg_errs)}")
+        else:
+            norm_legs.append({
+                "strike":     strike,
+                "expiration": expir,
+                "flag":       flag,
+                "side":       side,
+                "qty":        qty,
+            })
+
+    return errors, {
+        "trade_date":   trade_date,
+        "ticker":       ticker,
+        "timeframe":    timeframe,
+        "regime_block": regime_block,
+        "legs":         norm_legs,
+    }
+
+
+# ── Route registration ────────────────────────────────────────────────────────
+
+def register_proposals_routes(server) -> None:
+    """Wire POST /api/proposals/pl-data onto the Flask server."""
+    if "proposals_pl_data" in server.view_functions:
+        return
+
+    def proposals_pl_data():  # noqa: C901 (complex but linear pipeline)
+        body = request.get_json(silent=True) or {}
+
+        # ── 1. Validation ─────────────────────────────────────────────────
+        errors, norm = _validate_body(body)
+        if errors:
+            return jsonify({"ok": False, "errors": errors}), 400
+
+        trade_date:   dt.date = norm["trade_date"]
+        ticker:       str     = norm["ticker"]
+        timeframe:    str     = norm["timeframe"]
+        regime_block: dict    = norm["regime_block"]
+        raw_legs:     list    = norm["legs"]
+
+        # Shortest expiration drives evaluation_time
+        expir_dates    = sorted(leg["expiration"] for leg in raw_legs)
+        shortest_expir = expir_dates[0]
+        evaluation_time = build_evaluation_time(shortest_expir)
+
+        # ── 2. DB connect ─────────────────────────────────────────────────
+        try:
+            conn = _conn()
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"db connect failed: {e}"}), 503
+
+        warn_msgs: list[str] = []
+
+        try:
+            # ── 3. Anchor data (spot, implied_move, feature_vector) ───────
+            try:
+                spot, implied_move, feature_vector = _fetch_anchor_data(
+                    conn, ticker, trade_date, CANONICAL_FEATURE_VERSION
+                )
+            except ValueError as e:
+                return jsonify({"ok": False, "error": str(e)}), 400
+
+            # ── 4. Smile (atmiv + risk-free rate) ─────────────────────────
+            atmiv, risk_free_rate = _fetch_smile_row(
+                conn, ticker, trade_date, shortest_expir
+            )
+            if atmiv is None:
+                warn_msgs.append(
+                    f"no ORATS smile data for ({ticker}, {trade_date}); "
+                    "using fallback atmiv=0.15"
+                )
+                atmiv = 0.15
+            if risk_free_rate is None:
+                risk_free_rate = 0.05
+
+            market_state = {"risk_free_rate": risk_free_rate}
+
+            # ── 5. Build legs with IV + expiration datetime ────────────────
+            # Expiration date → 16:00 ET datetime for pricing engine.
+            # MVP: same atmiv for all legs (per-leg skew = future work).
+            legs_with_iv: list[dict] = [
+                {
+                    **leg,
+                    "expiration": build_evaluation_time(leg["expiration"]),
+                    "iv":         atmiv,
+                }
+                for leg in raw_legs
+            ]
+            if len(legs_with_iv) > 1:
+                warn_msgs.append(
+                    "using atmiv for all legs (per-leg smile interpolation not yet implemented)"
+                )
+
+            # ── 6. Initial cost at spot ────────────────────────────────────
+            initial_cost = compute_initial_cost(
+                legs_with_iv, spot, evaluation_time, market_state
+            )
+
+            # ── 7. P/L curve ──────────────────────────────────────────────
+            pl_curve = compute_pl_curve(
+                legs_with_iv, spot, implied_move,
+                evaluation_time, market_state, initial_cost,
+            )
+
+            # ── 8. IV curve (flat atmiv across price grid) ─────────────────
+            iv_curve = {
+                "prices": pl_curve["prices"],
+                "iv":     [atmiv] * len(pl_curve["prices"]),
+            }
+
+            # ── 9. BSM option chain for implied PDF ───────────────────────
+            tte = _TTE_BY_TIMEFRAME[timeframe]
+            option_chain = build_bsm_chain(spot, atmiv, risk_free_rate, tte)
+
+            # ── 10. Analogues (K=20 KNN) ───────────────────────────────────
+            analogues = _rank_analogues_with_outcomes(
+                feature_vector, conn, 20, CANONICAL_FEATURE_VERSION,
+                ticker=ticker,
+                exclude_date=trade_date.isoformat(),
+            )
+
+            # ── 11. Trade thesis range ─────────────────────────────────────
+            pin_tolerance = 0.25 * implied_move if implied_move > 0 else None
+            try:
+                trade_range = get_trade_thesis_range(
+                    regime_block, spot, tolerance=pin_tolerance
+                )
+            except ValueError as e:
+                warn_msgs.append(f"trade thesis range: {e}")
+                trade_range = {
+                    "lower":       None,
+                    "upper":       None,
+                    "regime_kind": regime_block.get("regime", ""),
+                }
+
+            # ── 12. Structural probability in range ────────────────────────
+            close_key = f"session_close_{timeframe}"
+            analogue_records = [
+                {
+                    "close":               a.get(close_key),
+                    "anchor_spot":         a.get("session_open_t0"),
+                    "anchor_implied_move": a.get("implied_move_1d"),
+                }
+                for a in analogues
+            ]
+            struct_result = compute_terminal_prob_in_range(
+                analogue_records, spot, implied_move,
+                trade_range["lower"], trade_range["upper"],
+            )
+
+            # ── 13. Implied probability in range ───────────────────────────
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                impl_pdf = compute_implied_pdf(option_chain, spot, risk_free_rate, tte)
+                impl_p = compute_implied_prob_in_range(
+                    impl_pdf, trade_range["lower"], trade_range["upper"]
+                )
+            impl_prob = impl_p if impl_p is not None and impl_p > 1e-10 else None
+
+            # ── 14. Edge zones ─────────────────────────────────────────────
+            edge_zones = compute_edge_zones(
+                spot, implied_move, option_chain, analogues,
+                timeframe, regime_block,
+                risk_free_rate=risk_free_rate,
+                time_to_expiration=tte,
+                tolerance=pin_tolerance,
+            )
+
+            # ── 15. Greeks at spot ─────────────────────────────────────────
+            greeks = compute_position_greeks(
+                legs_with_iv, spot, evaluation_time, market_state
+            )
+
+            # ── 16. Key levels ─────────────────────────────────────────────
+            key_levels = compute_key_levels(pl_curve["pnl"], pl_curve["prices"])
+
+            # ── 17. Assemble trade thesis block ────────────────────────────
+            struct_prob = struct_result["prob"] if struct_result else None
+            edge_ratio = (
+                struct_prob / impl_prob
+                if struct_prob is not None and impl_prob and impl_prob > 0
+                else None
+            )
+            trade_thesis = {
+                "lower":          trade_range["lower"],
+                "upper":          trade_range["upper"],
+                "regime_kind":    trade_range["regime_kind"],
+                "structural_prob": struct_prob,
+                "structural_ci":   (
+                    list(struct_result["wilson_ci"]) if struct_result else None
+                ),
+                "structural_n":    struct_result["n"] if struct_result else 0,
+                "implied_prob":    impl_prob,
+                "edge_ratio":      edge_ratio,
+            }
+
+            # ── 18. Per-leg response (echo + IV + initial_value) ───────────
+            legs_out = [
+                {
+                    "strike":        leg["strike"],
+                    "expiration":    raw["expiration"].isoformat(),
+                    "flag":          leg["flag"],
+                    "side":          leg["side"],
+                    "qty":           leg["qty"],
+                    "iv":            atmiv,
+                    "initial_value": round(
+                        compute_initial_cost(
+                            [leg], spot, evaluation_time, market_state
+                        ),
+                        4,
+                    ),
+                }
+                for leg, raw in zip(legs_with_iv, raw_legs)
+            ]
+
+            return jsonify({
+                "ok":             True,
+                "trade_date":     trade_date.isoformat(),
+                "ticker":         ticker,
+                "evaluation_time": evaluation_time.isoformat(),
+                "current_spot":   spot,
+                "implied_move":   implied_move,
+                "legs":           legs_out,
+                "pl_curve":       pl_curve,
+                "iv_curve":       iv_curve,
+                "trade_thesis":   trade_thesis,
+                "edge_zones":     edge_zones,
+                "greeks":         greeks,
+                "key_levels":     key_levels,
+                "warnings":       warn_msgs,
+            })
+
+        except Exception as e:
+            log.exception(
+                "proposals_pl_data unhandled error for (%s, %s)", ticker, trade_date
+            )
+            return jsonify({"ok": False, "error": str(e)}), 500
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    server.add_url_rule(
+        "/api/proposals/pl-data",
+        endpoint="proposals_pl_data",
+        view_func=proposals_pl_data,
+        methods=["POST"],
+    )
