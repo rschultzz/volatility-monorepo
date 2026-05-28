@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import LegTable from './LegTable';
-import { ProposalEdgeChart } from 'web-shared';
+import { ProposalEdgeChart, GreeksDisplay } from 'web-shared';
 
 const TEMPLATE_LABELS = {
   pin_butterfly_tight:         'Pin Butterfly — Tight Wings',
@@ -204,6 +204,12 @@ function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime, context
           height={340}
         />
       </div>
+
+      {/* Greeks row — shown once chartData is loaded (greeks is null while loading) */}
+      <GreeksDisplay
+        greeks={chartData?.greeks ?? null}
+        evaluationTime={chartData?.evaluation_time ?? null}
+      />
     </div>
   );
 }
