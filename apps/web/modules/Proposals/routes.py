@@ -52,6 +52,7 @@ from packages.shared.structural_distribution import (
 from .service import (
     build_bsm_chain,
     build_evaluation_time,
+    build_grid_bounds,
     compute_initial_cost,
     compute_key_levels,
     compute_pl_curve,
@@ -365,10 +366,15 @@ def register_proposals_routes(server) -> None:
                 legs_with_iv, spot, evaluation_time, market_state
             )
 
-            # ── 7. P/L curve ──────────────────────────────────────────────
+            # ── 7. Price grid bounds (shared by P/L curve + edge zones) ───
+            # Computed once so both consumers cover the same asymmetric range.
+            grid_lo, grid_hi = build_grid_bounds(spot, implied_move, regime_block)
+
+            # ── 8. P/L curve ──────────────────────────────────────────────
             pl_curve = compute_pl_curve(
                 legs_with_iv, spot, implied_move,
                 evaluation_time, market_state, initial_cost,
+                regime_block=regime_block,
             )
 
             # ── 8. IV curve (flat atmiv across price grid) ─────────────────
@@ -432,6 +438,7 @@ def register_proposals_routes(server) -> None:
                 timeframe, regime_block,
                 risk_free_rate=risk_free_rate,
                 time_to_expiration=tte,
+                price_bounds=(grid_lo, grid_hi),
                 tolerance=pin_tolerance,
             )
 

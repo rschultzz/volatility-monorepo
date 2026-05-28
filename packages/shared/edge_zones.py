@@ -126,10 +126,18 @@ def _price_axis_bins(
     implied_move: float,
     price_range_sigma: float,
     bin_size: float,
+    *,
+    lower_bound: Optional[float] = None,
+    upper_bound: Optional[float] = None,
 ) -> list[tuple[float, float]]:
-    """Generate bin boundaries covering spot ± price_range_sigma * implied_move."""
-    lower_raw = spot - price_range_sigma * implied_move
-    upper_raw = spot + price_range_sigma * implied_move
+    """Generate bin boundaries covering the price axis.
+
+    By default covers spot ± price_range_sigma × implied_move (symmetric).
+    When lower_bound / upper_bound are provided they override the sigma-derived
+    endpoints, enabling asymmetric axes (e.g. magnet-above extension).
+    """
+    lower_raw = lower_bound if lower_bound is not None else spot - price_range_sigma * implied_move
+    upper_raw = upper_bound if upper_bound is not None else spot + price_range_sigma * implied_move
 
     # Snap to bin_size boundaries (floor/ceil)
     lower_axis = math.floor(lower_raw / bin_size) * bin_size
@@ -190,6 +198,7 @@ def compute_edge_zones(
     bin_size: Optional[float] = None,
     price_range_sigma: float = 1.5,
     *,
+    price_bounds: Optional[tuple[float, float]] = None,
     tolerance: Optional[float] = None,
 ) -> list[dict]:
     """Compute classified edge zones across the price axis.
@@ -217,6 +226,11 @@ def compute_edge_zones(
         bin_size:           Price-axis bin width in points. If None, auto-chosen from
                             min(strike_spacing, 0.25*implied_move), floored at 1.0.
         price_range_sigma:  Axis coverage in implied_move units (default 1.5×).
+                            Ignored when price_bounds is provided.
+        price_bounds:       Optional (lo, hi) tuple that overrides the sigma-based axis.
+                            Pass the same bounds used by compute_pl_curve so that edge
+                            zones cover the same asymmetric price range as the P/L curve.
+                            When None (default) the symmetric price_range_sigma axis is used.
         tolerance:          Required for magnetic-pin regime (0.25 * implied_move typically).
                             Forwarded to get_trade_thesis_range.
 
@@ -245,8 +259,16 @@ def compute_edge_zones(
     # 2. Bin size
     effective_bin_size = bin_size if bin_size is not None else _auto_bin_size(option_chain, implied_move)
 
-    # 3. Price axis
-    bin_boundaries = _price_axis_bins(spot, implied_move, price_range_sigma, effective_bin_size)
+    # 3. Price axis — use explicit bounds when provided (e.g. asymmetric regime extension),
+    #    otherwise fall back to the symmetric sigma-based default.
+    if price_bounds is not None:
+        lo_override, hi_override = price_bounds
+        bin_boundaries = _price_axis_bins(
+            spot, implied_move, price_range_sigma, effective_bin_size,
+            lower_bound=lo_override, upper_bound=hi_override,
+        )
+    else:
+        bin_boundaries = _price_axis_bins(spot, implied_move, price_range_sigma, effective_bin_size)
     if not bin_boundaries:
         return []
 

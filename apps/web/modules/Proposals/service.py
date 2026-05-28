@@ -5,13 +5,15 @@ No DB I/O in this module. All DB access is in routes.py.
 Functions:
     build_evaluation_time   — expiration date → 16:00 ET → UTC datetime
     build_bsm_chain         — BSM call prices across spot ± range_pts
+    build_grid_bounds       — regime-aware (lo, hi) for the price grid
     compute_initial_cost    — net premium at entry from BSM pricing
-    compute_pl_curve        — P/L array across ±2σ price grid
+    compute_pl_curve        — P/L array across asymmetric regime-aware price grid
     compute_key_levels      — max profit, max loss, breakeven crossings
 """
 from __future__ import annotations
 
 import datetime as dt
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -24,6 +26,9 @@ from packages.shared.pricing.engine import (
 
 _ET  = ZoneInfo("America/New_York")
 _UTC = ZoneInfo("UTC")
+
+# Regimes that get a symmetric spot-centred grid (no magnet/pin extension).
+_SYMMETRIC_REGIMES = {"amplification", "untethered", "broken-magnet"}
 
 
 def build_evaluation_time(expir_date: dt.date) -> dt.datetime:
@@ -78,6 +83,77 @@ def compute_initial_cost(
     )
 
 
+def build_grid_bounds(
+    spot: float,
+    implied_move: float,
+    regime_block: Optional[dict],
+    *,
+    half_sigma: float = 1.5,
+    max_sigma: float = 3.0,
+) -> tuple[float, float]:
+    """Compute asymmetric price-grid bounds based on regime.
+
+    Returns (lo, hi) — the price range to cover in the P/L curve and edge-zone
+    price axis.  Each side is capped at max_sigma × implied_move from spot so
+    that an unusually distant magnet never produces an absurdly wide grid.
+
+    Regime mapping:
+        magnet-above   → [spot − half×IM,  max(spot + half×IM, drift_target + half×IM)]
+        magnet-below   → [min(spot − half×IM, drift_target − half×IM), spot + half×IM]
+        magnetic-pin   → [drift_target − half×IM, drift_target + half×IM]
+        bounded        → [cz.lower_price − 0.5×IM, cz.upper_price + 0.5×IM]
+        everything else → spot ± half×IM  (symmetric default)
+
+    Cap: each bound is clamped to [spot − max_sigma×IM, spot + max_sigma×IM].
+
+    Falls back to the symmetric default on any missing key or type error.
+    """
+    half = half_sigma * implied_move if implied_move > 0 else 50.0
+    fallback_lo = spot - half
+    fallback_hi = spot + half
+    cap_lo = spot - (max_sigma * implied_move if implied_move > 0 else 150.0)
+    cap_hi = spot + (max_sigma * implied_move if implied_move > 0 else 150.0)
+
+    if not regime_block or not isinstance(regime_block, dict):
+        return fallback_lo, fallback_hi
+
+    regime = regime_block.get("regime", "")
+    if not regime or regime in _SYMMETRIC_REGIMES:
+        return fallback_lo, fallback_hi
+
+    try:
+        if regime == "magnet-above":
+            drift = float(regime_block["drift_target"])
+            hi = min(max(fallback_hi, drift + half), cap_hi)
+            return fallback_lo, hi
+
+        if regime == "magnet-below":
+            drift = float(regime_block["drift_target"])
+            lo = max(min(fallback_lo, drift - half), cap_lo)
+            return lo, fallback_hi
+
+        if regime == "magnetic-pin":
+            drift = float(regime_block["drift_target"])
+            lo = max(drift - half, cap_lo)
+            hi = min(drift + half, cap_hi)
+            return lo, hi
+
+        if regime == "bounded":
+            cz = regime_block["containment_zone"]
+            lower_price = float(cz["lower_price"])
+            upper_price = float(cz["upper_price"])
+            buffer = 0.5 * implied_move if implied_move > 0 else 25.0
+            lo = max(lower_price - buffer, cap_lo)
+            hi = min(upper_price + buffer, cap_hi)
+            return lo, hi
+
+    except (KeyError, TypeError, ValueError):
+        pass
+
+    # Unrecognised regime or missing keys — symmetric fallback
+    return fallback_lo, fallback_hi
+
+
 def compute_pl_curve(
     legs: list[dict],
     spot: float,
@@ -86,17 +162,22 @@ def compute_pl_curve(
     market_state: dict,
     initial_cost: float,
     *,
-    range_sigma: float = 2.0,
-    n_points: int = 200,
+    regime_block: Optional[dict] = None,
 ) -> dict:
-    """P/L across spot ± range_sigma * implied_move at evaluation_time.
+    """P/L across a regime-aware price grid at evaluation_time.
+
+    When regime_block is provided, the grid is extended asymmetrically toward
+    the regime's directional side via build_grid_bounds (see that function for
+    the per-regime mapping).  Falls back to a symmetric spot ± 1.5×IM grid when
+    regime_block is None or unrecognised.
+
+    Step size is 1 pt (n_points = round(hi − lo) + 1).
+    Falls back to spot ± 50 if implied_move == 0.
 
     Returns {"prices": [float], "pnl": [float]}.
-    Falls back to spot ± 50 if implied_move == 0.
     """
-    half = range_sigma * implied_move if implied_move > 0 else 50.0
-    lo = spot - half
-    hi = spot + half
+    lo, hi = build_grid_bounds(spot, implied_move, regime_block)
+    n_points = max(50, round(hi - lo) + 1)
     price_grid = np.linspace(lo, hi, n_points)
     pnl = compute_position_pl(legs, price_grid, evaluation_time, market_state, initial_cost)
     return {
