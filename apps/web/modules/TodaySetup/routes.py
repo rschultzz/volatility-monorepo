@@ -111,6 +111,35 @@ def _resolve_implied_move(conn, ticker: str, trade_date: dt.date, spot: float) -
         return 0.0
 
 
+def _fetch_carry_rates(
+    conn, ticker: str, trade_date: dt.date, dte_target: int = 15
+) -> tuple[float, float]:
+    """Return (risk_free_rate, yield_rate) from orats_monies_minute.
+
+    Selects the row closest to dte_target (calendar days), using the latest
+    snapshot on trade_date.  Used to populate strike_spx on proposal legs.
+
+    Fallback: (0.05, 0.0) if no data is available for the date.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT risk_free_rate, yield_rate
+            FROM orats_monies_minute
+            WHERE trade_date = %s AND ticker = %s AND dte > 0
+            ORDER BY ABS(dte - %s) ASC, snapshot_pt DESC
+            LIMIT 1
+            """,
+            (trade_date.isoformat(), ticker, dte_target),
+        )
+        row = cur.fetchone()
+    if not row:
+        return 0.05, 0.0
+    rfr     = float(row[0]) if row[0] is not None else 0.05
+    yield_r = float(row[1]) if row[1] is not None else 0.0
+    return rfr, yield_r
+
+
 def _build_context(
     trade_date: dt.date,
     ticker: str,
@@ -209,6 +238,11 @@ def register_today_setup_routes(server) -> None:
             if not implied_move:
                 implied_move = _resolve_implied_move(conn, ticker, trade_date, spot)
 
+            # Carry rates for strike_spx computation (Step 8).
+            # Use DTE=15 as representative target; each proposal applies its
+            # own expiry_dte_target in the ES→SPX conversion math.
+            risk_free_rate, yield_rate = _fetch_carry_rates(conn, ticker, trade_date)
+
             payload = _materialize_payload(landscape_rows, spot, implied_move)
 
             # ── Effective-regime override (CR-016) ────────────────────────
@@ -240,7 +274,9 @@ def register_today_setup_routes(server) -> None:
                 structural_probability = None
 
             response = build_proposals_response(
-                payload, spot, implied_move, context, anchor_strategy
+                payload, spot, implied_move, context, anchor_strategy,
+                risk_free_rate=risk_free_rate,
+                yield_rate=yield_rate,
             )
             response["structural_probability"] = structural_probability
 

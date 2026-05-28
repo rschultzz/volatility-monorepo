@@ -12,7 +12,9 @@ Public entry points:
 from __future__ import annotations
 
 from dataclasses import asdict
+from typing import Optional
 
+from packages.shared.forward_math import compute_spx_strike
 from packages.shared.post_touch_qualification import (
     credit_direction_qualifies,
     debit_direction_qualifies,
@@ -107,22 +109,45 @@ def apply_direction_qualification(
     return other_props + direction_props
 
 
-def _leg_to_dict(leg: Leg) -> dict:
-    return {
+def _leg_to_dict(leg: Leg, *, strike_spx: Optional[int] = None) -> dict:
+    d = {
         "side": leg.side,
         "type": leg.type,
         "strike": leg.strike,
         "quantity": leg.quantity,
     }
+    if strike_spx is not None:
+        d["strike_spx"] = strike_spx
+    return d
 
 
-def _proposal_to_dict(p: TradeProposal) -> dict:
+def _proposal_to_dict(
+    p: TradeProposal,
+    *,
+    risk_free_rate: Optional[float] = None,
+    yield_rate: Optional[float] = None,
+) -> dict:
+    """Serialise a TradeProposal to a JSON-ready dict.
+
+    When risk_free_rate and yield_rate are provided, each leg gains a
+    strike_spx field: the ES-space strike converted to the nearest
+    SPX 5-point chain increment via compute_spx_strike.
+    """
+    legs_out = []
+    for leg in p.legs:
+        spx = None
+        if risk_free_rate is not None and yield_rate is not None:
+            spx = compute_spx_strike(
+                leg.strike, p.expiry_dte_target, risk_free_rate, yield_rate
+            )
+        legs_out.append(_leg_to_dict(leg, strike_spx=spx))
+
     d = {
         "template_id": p.template_id,
         "template_kind": p.template_kind,
         "anchor_strategy": p.anchor_strategy,
         "rationale": p.rationale,
-        "legs": [_leg_to_dict(leg) for leg in p.legs],
+        "legs": legs_out,
         "expiry_dte_target": p.expiry_dte_target,
         "expiry_dte_bucket": p.expiry_dte_bucket,
         "source": p.source,
@@ -138,6 +163,9 @@ def build_proposals_response(
     implied_move: float,
     context: dict,
     anchor_strategy: str = "cluster_centered",
+    *,
+    risk_free_rate: Optional[float] = None,
+    yield_rate: Optional[float] = None,
 ) -> dict:
     """Build the full /api/setup/proposals response dict.
 
@@ -147,6 +175,9 @@ def build_proposals_response(
         implied_move: 1-day 1σ implied move in points.
         context: Pre-built context block (date, ticker, regime, etc.).
         anchor_strategy: Key into ANCHOR_STRATEGIES registry.
+        risk_free_rate: Annualised risk-free rate from orats_monies_minute;
+            used to populate strike_spx on each leg. None → omit strike_spx.
+        yield_rate: Annualised continuous dividend yield; same source/usage.
 
     Returns:
         JSON-serialisable dict with "ok", "context", and "proposals" keys.
@@ -157,5 +188,8 @@ def build_proposals_response(
     return {
         "ok": True,
         "context": context,
-        "proposals": [_proposal_to_dict(p) for p in proposals],
+        "proposals": [
+            _proposal_to_dict(p, risk_free_rate=risk_free_rate, yield_rate=yield_rate)
+            for p in proposals
+        ],
     }

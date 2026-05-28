@@ -37,6 +37,7 @@ from flask import jsonify, request
 
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
 from packages.shared.edge_zones import compute_edge_zones
+from packages.shared.forward_math import compute_spx_strike
 from packages.shared.implied_distribution import (
     compute_implied_pdf,
     compute_implied_prob_in_range,
@@ -152,18 +153,18 @@ def _fetch_smile_row(
     ticker: str,
     trade_date: dt.date,
     expir_date: dt.date,
-) -> tuple[Optional[float], Optional[float]]:
-    """Return (atmiv, risk_free_rate) closest to expir_date's DTE.
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Return (atmiv, risk_free_rate, yield_rate) closest to expir_date's DTE.
 
     Queries orats_monies_minute for the latest snapshot on trade_date,
     ranking by |dte - target_dte| to select the nearest available expiration.
-    Returns (None, None) if no data exists for this date.
+    Returns (None, None, None) if no data exists for this date.
     """
     dte_target = (expir_date - trade_date).days
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT atmiv, risk_free_rate
+            SELECT atmiv, risk_free_rate, yield_rate
             FROM orats_monies_minute
             WHERE ticker = %s
               AND trade_date = %s
@@ -177,10 +178,11 @@ def _fetch_smile_row(
         row = cur.fetchone()
 
     if not row:
-        return None, None
-    atmiv = float(row[0]) if row[0] is not None else None
-    rfr   = float(row[1]) if row[1] is not None else 0.05
-    return atmiv, rfr
+        return None, None, None
+    atmiv   = float(row[0]) if row[0] is not None else None
+    rfr     = float(row[1]) if row[1] is not None else 0.05
+    yield_r = float(row[2]) if row[2] is not None else 0.0
+    return atmiv, rfr, yield_r
 
 
 # ── Validation ────────────────────────────────────────────────────────────────
@@ -325,8 +327,8 @@ def register_proposals_routes(server) -> None:
             except ValueError as e:
                 return jsonify({"ok": False, "error": str(e)}), 400
 
-            # ── 4. Smile (atmiv + risk-free rate) ─────────────────────────
-            atmiv, risk_free_rate = _fetch_smile_row(
+            # ── 4. Smile (atmiv + risk-free rate + yield rate) ────────────
+            atmiv, risk_free_rate, yield_rate = _fetch_smile_row(
                 conn, ticker, trade_date, shortest_expir
             )
             if atmiv is None:
@@ -337,6 +339,8 @@ def register_proposals_routes(server) -> None:
                 atmiv = 0.15
             if risk_free_rate is None:
                 risk_free_rate = 0.05
+            if yield_rate is None:
+                yield_rate = 0.0
 
             market_state = {"risk_free_rate": risk_free_rate}
 
@@ -459,10 +463,16 @@ def register_proposals_routes(server) -> None:
                 "edge_ratio":      edge_ratio,
             }
 
-            # ── 18. Per-leg response (echo + IV + initial_value) ───────────
+            # ── 18. Per-leg response (echo + IV + initial_value + strike_spx) ─
             legs_out = [
                 {
                     "strike":        leg["strike"],
+                    "strike_spx":    compute_spx_strike(
+                                         leg["strike"],
+                                         (raw["expiration"] - trade_date).days,
+                                         risk_free_rate,
+                                         yield_rate,
+                                     ),
                     "expiration":    raw["expiration"].isoformat(),
                     "flag":          leg["flag"],
                     "side":          leg["side"],

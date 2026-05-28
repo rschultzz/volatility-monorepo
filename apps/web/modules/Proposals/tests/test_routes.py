@@ -22,7 +22,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from flask import Flask
-from apps.web.modules.Proposals.routes import register_proposals_routes
+from apps.web.modules.Proposals.routes import register_proposals_routes, _fetch_smile_row
 
 _MODULE = "apps.web.modules.Proposals.routes"
 
@@ -77,6 +77,56 @@ def _post(app: Flask, body: dict) -> tuple:
             content_type="application/json",
         )
         return resp.status_code, resp.get_json()
+
+
+# ── _fetch_smile_row unit tests ───────────────────────────────────────────────
+
+class TestFetchSmileRow(unittest.TestCase):
+    """_fetch_smile_row must return a 3-tuple: (atmiv, risk_free_rate, yield_rate)."""
+
+    import datetime as _dt
+
+    def _make_conn(self, db_row):
+        """Build a minimal mock connection that returns db_row from cursor.fetchone."""
+        cursor = MagicMock()
+        cursor.__enter__ = lambda s: cursor
+        cursor.__exit__  = MagicMock(return_value=False)
+        cursor.fetchone.return_value = db_row
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+        return conn
+
+    def test_returns_three_tuple_on_hit(self):
+        import datetime as dt
+        conn = self._make_conn((0.18, 0.05, 0.015))
+        result = _fetch_smile_row(conn, "SPX", dt.date(2023, 5, 1), dt.date(2023, 5, 19))
+        self.assertEqual(len(result), 3)
+        atmiv, rfr, yr = result
+        self.assertAlmostEqual(atmiv, 0.18)
+        self.assertAlmostEqual(rfr, 0.05)
+        self.assertAlmostEqual(yr, 0.015)
+
+    def test_returns_none_triple_on_miss(self):
+        import datetime as dt
+        conn = self._make_conn(None)
+        result = _fetch_smile_row(conn, "SPX", dt.date(2023, 5, 1), dt.date(2023, 5, 19))
+        self.assertEqual(result, (None, None, None))
+
+    def test_yield_rate_defaults_to_zero_when_db_null(self):
+        import datetime as dt
+        conn = self._make_conn((0.18, 0.05, None))  # yield_rate is NULL in DB
+        _, _, yield_r = _fetch_smile_row(
+            conn, "SPX", dt.date(2023, 5, 1), dt.date(2023, 5, 19)
+        )
+        self.assertEqual(yield_r, 0.0)
+
+    def test_rfr_defaults_to_fallback_when_db_null(self):
+        import datetime as dt
+        conn = self._make_conn((0.18, None, 0.015))  # risk_free_rate is NULL
+        _, rfr, _ = _fetch_smile_row(
+            conn, "SPX", dt.date(2023, 5, 1), dt.date(2023, 5, 19)
+        )
+        self.assertEqual(rfr, 0.05)  # fallback default
 
 
 # ── 400 Validation tests ──────────────────────────────────────────────────────
@@ -228,7 +278,7 @@ class TestHappyPath(unittest.TestCase):
 
         smile_cursor.__enter__ = lambda s: smile_cursor
         smile_cursor.__exit__  = MagicMock(return_value=False)
-        smile_cursor.fetchone.return_value = (0.15, 0.05)  # atmiv, rfr
+        smile_cursor.fetchone.return_value = (0.15, 0.05, 0.015)  # atmiv, rfr, yield_rate
 
         # conn.cursor() returns cursors in order: fv, out, smile
         mock_conn.cursor.side_effect = [fv_cursor, out_cursor, smile_cursor]
@@ -289,6 +339,14 @@ class TestHappyPath(unittest.TestCase):
         for leg in data["legs"]:
             self.assertIn("iv",            leg)
             self.assertIn("initial_value", leg)
+
+    def test_200_legs_have_strike_spx(self):
+        """Each leg in the response must carry strike_spx as a multiple of 5."""
+        _, data = self._run()
+        for leg in data["legs"]:
+            self.assertIn("strike_spx", leg)
+            self.assertIsInstance(leg["strike_spx"], int)
+            self.assertEqual(leg["strike_spx"] % 5, 0)
 
     def test_200_trade_thesis_has_required_fields(self):
         _, data = self._run()
