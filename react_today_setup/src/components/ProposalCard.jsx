@@ -42,14 +42,27 @@ function adaptLeg(leg, expiration) {
 }
 
 /** Build the POST /api/proposals/pl-data request body. */
-function buildPlDataBody(proposal, date, ticker, timeframe, contextRegime) {
+function buildPlDataBody(proposal, date, ticker, timeframe, contextRegime, contextDriftTarget) {
   const expiration = addCalendarDays(date, proposal.expiry_dte_target ?? 0);
   const regime = proposal.source?.regime || contextRegime || 'amplification';
+  // Build regime_block with all available keys so get_trade_thesis_range
+  // can compute one-sided ranges for magnet-above/below (needs drift_target).
+  const regime_block = { regime };
+  const src = proposal.source || {};
+  if (src.drift_target != null)    regime_block.drift_target    = src.drift_target;
+  if (src.tolerance != null)       regime_block.tolerance       = src.tolerance;
+  if (src.lower_price != null)     regime_block.lower_price     = src.lower_price;
+  if (src.upper_price != null)     regime_block.upper_price     = src.upper_price;
+  // Also forward context-level drift_target if not already set (e.g. for
+  // regime_target proposals whose source.type isn't 'regime_target').
+  if (regime_block.drift_target == null && contextDriftTarget != null) {
+    regime_block.drift_target = contextDriftTarget;
+  }
   return {
     trade_date:   date,
     ticker,
     timeframe,
-    regime_block: { regime },
+    regime_block,
     legs:         (proposal.legs || []).map(leg => adaptLeg(leg, expiration)),
   };
 }
@@ -85,7 +98,7 @@ function SourceLine({ source, wingRecipe }) {
 
 // ── Expanded chart panel ───────────────────────────────────────────────────────
 
-function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime }) {
+function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime, contextDriftTarget }) {
   const [timeframe, setTimeframe]   = useState(DEFAULT_TIMEFRAME);
   const [chartData, setChartData]   = useState(undefined); // undefined = not yet fetched
   const cacheRef = useRef({});   // timeframe → resolved data (or error shape)
@@ -113,7 +126,7 @@ function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime }) {
     }
     // Loading state while request is in-flight.
     setChartData(undefined);
-    const body = buildPlDataBody(proposal, date, ticker, tf, contextRegime);
+    const body = buildPlDataBody(proposal, date, ticker, tf, contextRegime, contextDriftTarget);
     try {
       const resp = await fetch(`${apiBase}/api/proposals/pl-data`, {
         method:  'POST',
@@ -128,7 +141,7 @@ function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime }) {
       cacheRef.current[tf] = errShape;
       setChartData(errShape);
     }
-  }, [proposal, date, ticker, apiBase, contextRegime]);
+  }, [proposal, date, ticker, apiBase, contextRegime, contextDriftTarget]);
 
   useEffect(() => {
     fetchPlData(timeframe);
@@ -216,10 +229,13 @@ export default function ProposalCard({
     wing_distance_recipe,
   } = proposal;
 
-  const isNoTrade    = template_kind === 'no_trade';
-  const canExpand    = !isNoTrade && Array.isArray(legs) && legs.length > 0 && !!date;
-  const label        = TEMPLATE_LABELS[template_id] || template_id;
-  const contextRegime = context?.regime;
+  const isNoTrade         = template_kind === 'no_trade';
+  const canExpand         = !isNoTrade && Array.isArray(legs) && legs.length > 0 && !!date;
+  const label             = TEMPLATE_LABELS[template_id] || template_id;
+  const contextRegime     = context?.regime;
+  // drift_target: prefer the proposal's own source, fall back to context's top_cluster
+  // or clusters (not currently stored in context, but future-proof).
+  const contextDriftTarget = source?.drift_target ?? context?.top_cluster?.center_price ?? null;
 
   const [expanded, setExpanded] = useState(false);
 
@@ -284,6 +300,7 @@ export default function ProposalCard({
           ticker={ticker}
           apiBase={apiBase}
           contextRegime={contextRegime}
+          contextDriftTarget={contextDriftTarget}
         />
       )}
     </div>
