@@ -124,12 +124,13 @@ _INSERT_OUTCOME_SQL = """
         max_excursion_in_direction,
         final_close_distance_from_target,
         actual_realized_em_pct,
+        session_open_t0,
         backfill_run_id
     ) VALUES (
         %s, %s, %s,
         %s, %s, %s, %s, %s,
         %s, %s, %s, %s, %s, %s,
-        %s
+        %s, %s
     )
     ON CONFLICT (ticker, trade_date, feature_version) DO NOTHING
 """
@@ -407,6 +408,16 @@ def main() -> None:
                 if drift_target is not None and table_spot is not None:
                     sanity_ok = _direction_sanity(regime, drift_target, table_spot, trade_date)
 
+                # session_open_t0: FIRST RTH bar open on trade_date.
+                # Computable from daily_bars regardless of outcome_status —
+                # must be populated for all new rows so the pl-data endpoint
+                # can normalise analogue returns without a separate backfill step.
+                session_open_t0 = (
+                    float(daily_bars.loc[trade_date, "open"])
+                    if trade_date in daily_bars.index
+                    else None
+                )
+
                 if not sanity_ok:
                     outcome = {
                         "regime_kind_at_classification":    regime,
@@ -447,6 +458,7 @@ def main() -> None:
                         outcome["max_excursion_in_direction"],
                         outcome["final_close_distance_from_target"],
                         outcome["actual_realized_em_pct"],
+                        session_open_t0,
                         run_id,
                     ))
                     if cur.rowcount == 1:
