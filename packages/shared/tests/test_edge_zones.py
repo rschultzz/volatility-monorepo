@@ -490,3 +490,37 @@ class TestComputeEdgeZones:
         for zone in result:
             assert isinstance(zone["min_structural_n"], int)
             assert zone["min_structural_n"] >= 0
+
+    # ── Step 3.6: one-sided magnet range semantics ──
+
+    def test_structural_prob_above_magnet_when_closes_overshoot(self):
+        """Step 3.6: magnet-above trade thesis is P(close ≥ magnet).
+
+        Projected closes all landing above drift_target → bins above drift_target
+        should have positive structural_prob in their representative.  This verifies
+        that the one-sided range (lower=drift_target, upper=None) flows through
+        get_trade_thesis_range correctly and that the bin-level structural_prob
+        computation picks up analogues whose projected close exceeds the magnet.
+        """
+        drift_target = self.SPOT + 20.0  # magnet 20pts above spot (= 4200)
+        rb = _regime_above(drift_target)
+        chain = self._dense_chain()
+        # All closes 30 pts above SPOT → all land above drift_target (+20) after
+        # identity projection (anchor == today → no scaling).
+        above_vals = [self.SPOT + 30.0] * 20
+        analogues = _analogues(above_vals, spot=self.SPOT, im=self.IM)
+        result = compute_edge_zones(
+            self.SPOT, self.IM, chain, analogues, "t5", rb, bin_size=5.0
+        )
+        assert len(result) > 0
+        # At least one zone above drift_target must show positive structural_prob
+        above_magnet = [z for z in result if z["lower"] >= drift_target]
+        assert len(above_magnet) > 0, "Expected zones above drift_target in price axis"
+        any_positive_sp = any(
+            z["representative"].get("structural_prob", 0) > 0
+            for z in above_magnet
+        )
+        assert any_positive_sp, (
+            f"Expected structural_prob > 0 in bins above drift_target={drift_target}; "
+            f"got: {[(z['lower'], z['representative'].get('structural_prob')) for z in above_magnet]}"
+        )

@@ -342,17 +342,19 @@ class TestProjectionAcrossPriceEpochs:
 
 class TestGetTradeThesisRange:
     def test_magnet_above(self):
+        # Step 3.6: one-sided upper-tail → P(close ≥ magnet)
         rb = {"regime": "magnet-above", "drift_target": 4200.0}
         r = get_trade_thesis_range(rb, 4100.0)
-        assert r["lower"] == pytest.approx(4100.0)
-        assert r["upper"] == pytest.approx(4200.0)
+        assert r["lower"] == pytest.approx(4200.0)
+        assert r["upper"] is None
         assert r["regime_kind"] == "magnet-above"
 
     def test_magnet_below(self):
+        # Step 3.6: one-sided lower-tail → P(close ≤ magnet)
         rb = {"regime": "magnet-below", "drift_target": 4000.0}
         r = get_trade_thesis_range(rb, 4100.0)
-        assert r["lower"] == pytest.approx(4000.0)
-        assert r["upper"] == pytest.approx(4100.0)
+        assert r["lower"] is None
+        assert r["upper"] == pytest.approx(4000.0)
         assert r["regime_kind"] == "magnet-below"
 
     def test_magnetic_pin_from_tolerance_kwarg(self):

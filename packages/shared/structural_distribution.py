@@ -39,8 +39,8 @@ Input dict shape for compute_session_excursion_metrics:
     'anchor_implied_move' — analogue's implied_move_1d
 
 Regime → range mapping from Step 0-A registry (locked):
-  magnet-above:  [current_price, drift_target]
-  magnet-below:  [drift_target, current_price]
+  magnet-above:  [drift_target, None]   — P(close ≥ magnet); one-sided upper tail
+  magnet-below:  [None, drift_target]   — P(close ≤ magnet); one-sided lower tail
   magnetic-pin:  [drift_target − tolerance, drift_target + tolerance]
     → tolerance not in regime_block; callers pass it explicitly as 0.25 * implied_move
   bounded:       [containment_zone.lower_price, containment_zone.upper_price]
@@ -226,12 +226,18 @@ def get_trade_thesis_range(
 
     Output: {lower: Optional[float], upper: Optional[float], regime_kind: str}
 
-    Range mappings (locked):
-      magnet-above:  lower=current_price,  upper=drift_target
-      magnet-below:  lower=drift_target,   upper=current_price
+    Range mappings (Step 3.6 semantics — one-sided for magnets):
+      magnet-above:  lower=drift_target,  upper=None   # P(close ≥ magnet)
+      magnet-below:  lower=None,          upper=drift_target  # P(close ≤ magnet)
       magnetic-pin:  lower=drift_target-tolerance,  upper=drift_target+tolerance
       bounded:       lower=containment_zone.lower_price,  upper=containment_zone.upper_price
       amplification / untethered / broken-magnet: lower=None, upper=None
+
+    Magnet semantics: the trade thesis for a magnet regime is "did price reach (or
+    pass) the magnet?" — a one-sided question. lower=drift_target, upper=None means
+    P(projected_close ≥ drift_target); lower=None, upper=drift_target means
+    P(projected_close ≤ drift_target). Both compute_terminal_prob_in_range and
+    compute_implied_prob_in_range support one-sided ranges natively.
 
     magnetic-pin tolerance: not stored in regime_block (gex_landscape.py doesn't set it).
     Pass via the tolerance= keyword argument — typically 0.25 * implied_move at the
@@ -258,8 +264,8 @@ def get_trade_thesis_range(
             )
         dt_ = float(regime_block["drift_target"])
         if regime_kind == "magnet-above":
-            return {"lower": current_price, "upper": dt_, "regime_kind": regime_kind}
-        return {"lower": dt_, "upper": current_price, "regime_kind": regime_kind}
+            return {"lower": dt_, "upper": None, "regime_kind": regime_kind}
+        return {"lower": None, "upper": dt_, "regime_kind": regime_kind}
 
     if regime_kind == "magnetic-pin":
         if "drift_target" not in regime_block:
