@@ -19,9 +19,21 @@ const CLUSTER_POS_COLOR = '#d946ef'  // magenta — positive GEX
 const CLUSTER_NEG_COLOR = '#06b6d4'  // teal — negative GEX
 const TIME_AXIS_HEIGHT = 24           // lightweight-charts time-axis strip height (px)
 
+// Pure helper — filters cluster list by GEX sign flags.
+// Exported for unit testing; not part of the public component API.
+export function filterClusters(clusters, showPosGex, showNegGex) {
+  return (clusters || []).filter(c => {
+    const isPos = Number(c.max_gex) >= 0
+    return isPos ? showPosGex : showNegGex
+  })
+}
+
 const MiniPriceChart = forwardRef(function MiniPriceChart({
   date, ticker = 'SPX', apiBase = '', clusters = [], height = 200,
   onPriceRangeChange,
+  // GEX layer visibility — both default true so existing behaviour is unchanged.
+  showPosGex = true,
+  showNegGex = true,
 }, ref) {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
@@ -255,7 +267,7 @@ const MiniPriceChart = forwardRef(function MiniPriceChart({
     }
   }, [clusters, status])
 
-  // Price lines for cluster centers — recreated whenever clusters or status change.
+  // Price lines for cluster centers — recreated whenever clusters, visibility, or status change.
   const priceLineRefs = useRef([])
   useEffect(() => {
     if (!seriesRef.current) return
@@ -264,7 +276,8 @@ const MiniPriceChart = forwardRef(function MiniPriceChart({
     })
     priceLineRefs.current = []
     if (status !== 'ok') return
-    const lines = (clusters || []).map((c) => {
+    const visibleClusters = filterClusters(clusters, showPosGex, showNegGex)
+    const lines = visibleClusters.map((c) => {
       const isPos = Number(c.max_gex) >= 0
       return seriesRef.current?.createPriceLine({
         price: Number(c.center_price),
@@ -276,7 +289,7 @@ const MiniPriceChart = forwardRef(function MiniPriceChart({
       })
     }).filter(Boolean)
     priceLineRefs.current = lines
-  }, [clusters, status])
+  }, [clusters, status, showPosGex, showNegGex])
 
   return (
     <div style={{ position: 'relative', width: '100%', height }}>
