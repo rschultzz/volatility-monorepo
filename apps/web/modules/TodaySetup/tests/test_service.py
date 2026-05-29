@@ -81,6 +81,18 @@ class TestLegToDict(unittest.TestCase):
         self.assertEqual(d["strike"], 7380.0)
         self.assertEqual(d["quantity"], 2)
 
+    def test_strike_spx_omitted_by_default(self):
+        """Without strike_spx kwarg, the key must not appear in the dict."""
+        leg = _make_leg()
+        d = _leg_to_dict(leg)
+        self.assertNotIn("strike_spx", d)
+
+    def test_strike_spx_included_when_provided(self):
+        """Explicit strike_spx=5200 must appear as-is."""
+        leg = _make_leg(strike=5207.5)
+        d = _leg_to_dict(leg, strike_spx=5205)
+        self.assertEqual(d["strike_spx"], 5205)
+
 
 class TestProposalToDict(unittest.TestCase):
     def test_required_fields(self):
@@ -98,6 +110,30 @@ class TestProposalToDict(unittest.TestCase):
         self.assertEqual(len(d["legs"]), 3)
         for leg in d["legs"]:
             self.assertIn("strike", leg)
+
+    def test_strike_spx_absent_without_carry_rates(self):
+        """Without r/q kwargs, strike_spx must not appear on any leg."""
+        p = _make_proposal()
+        d = _proposal_to_dict(p)
+        for leg in d["legs"]:
+            self.assertNotIn("strike_spx", leg)
+
+    def test_strike_spx_present_with_carry_rates(self):
+        """With r=5%, q=1.5%, each leg gains a strike_spx that is a multiple of 5."""
+        p = _make_proposal()
+        d = _proposal_to_dict(p, risk_free_rate=0.05, yield_rate=0.015)
+        for leg in d["legs"]:
+            self.assertIn("strike_spx", leg)
+            self.assertIsInstance(leg["strike_spx"], int)
+            self.assertEqual(leg["strike_spx"] % 5, 0)
+
+    def test_strike_spx_direction(self):
+        """r > q → ES level > SPX level (carry discounts SPX above ES)."""
+        p = _make_proposal(legs=[_make_leg(strike=7400.0)])
+        d = _proposal_to_dict(p, risk_free_rate=0.05, yield_rate=0.015)
+        strike_spx = d["legs"][0]["strike_spx"]
+        # SPX should be less than ES level when net carry is positive
+        self.assertLess(strike_spx, 7400)
 
     def test_wing_distance_recipe_included_for_butterfly(self):
         p = _make_proposal(template_kind="butterfly", wing_distance_recipe="half_fwhm")
@@ -158,6 +194,24 @@ class TestBuildProposalsResponse(unittest.TestCase):
         for p in resp["proposals"]:
             for key in required:
                 self.assertIn(key, p, f"missing key {key!r} in proposal {p['template_id']!r}")
+
+    def test_strike_spx_in_proposals_when_carry_rates_provided(self):
+        """build_proposals_response with r/q propagates strike_spx to all legs."""
+        resp = build_proposals_response(
+            _pin_payload(), 7362.0, 50.0, self.context,
+            risk_free_rate=0.05, yield_rate=0.015,
+        )
+        for p in resp["proposals"]:
+            for leg in p["legs"]:
+                self.assertIn("strike_spx", leg)
+                self.assertEqual(leg["strike_spx"] % 5, 0)
+
+    def test_strike_spx_absent_when_carry_rates_omitted(self):
+        """build_proposals_response without r/q must not emit strike_spx."""
+        resp = build_proposals_response(_pin_payload(), 7362.0, 50.0, self.context)
+        for p in resp["proposals"]:
+            for leg in p["legs"]:
+                self.assertNotIn("strike_spx", leg)
 
 
 if __name__ == "__main__":

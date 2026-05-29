@@ -508,7 +508,14 @@ export default function App() {
           <p className="section-heading" style={{ marginTop: 24 }}>Proposals</p>
           <div className="proposals-grid">
             {(proposals.proposals || []).map((p, i) => (
-              <ProposalCard key={`${p.template_id}-${i}`} proposal={p} />
+              <ProposalCard
+                key={`${p.template_id}-${i}`}
+                proposal={p}
+                date={date}
+                ticker={ticker}
+                apiBase={API_BASE}
+                context={context}
+              />
             ))}
           </div>
         </>

@@ -6,7 +6,8 @@ export default function LegTable({ legs }) {
         <tr>
           <th>Side</th>
           <th>Type</th>
-          <th>Strike</th>
+          <th>ES Level</th>
+          <th>SPX Strike</th>
           <th>Qty</th>
         </tr>
       </thead>
@@ -18,6 +19,7 @@ export default function LegTable({ legs }) {
             </td>
             <td>{leg.type}</td>
             <td>{Number(leg.strike).toFixed(1)}</td>
+            <td>{leg.strike_spx != null ? leg.strike_spx : '—'}</td>
             <td>{leg.quantity}</td>
           </tr>
         ))}

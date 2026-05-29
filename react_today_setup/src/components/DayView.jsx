@@ -1,7 +1,7 @@
 // DayView — renders the GEX landscape + mini price chart for one day,
 // with flag controls (regime_wrong, not_a_true_analogue).
 import { useState, useEffect, useRef } from 'react'
-import { GexLandscape, MiniPriceChart, PANEL_WIDTH as LANDSCAPE_WIDTH } from 'web-shared'
+import { GexLandscape, MiniPriceChart, LayerToggleChips, PANEL_WIDTH as LANDSCAPE_WIDTH } from 'web-shared'
 
 const ROW_HEIGHT = 480
 // GexLandscape's header height (measured: 35px). Padding the chart wrapper by
@@ -24,6 +24,13 @@ const REGIME_COLORS = {
 const VALID_REGIMES = [
   'magnetic-pin', 'magnet-above', 'magnet-below',
   'bounded', 'amplification', 'untethered', 'broken-magnet',
+]
+
+// GEX overlay layer chip definitions for LayerToggleChips.
+// Both default ON — preserves current chart behaviour; user can toggle off to declutter.
+const GEX_LAYERS = [
+  { id: 'pos_gex', label: 'Pos GEX', defaultVisible: true },
+  { id: 'neg_gex', label: 'Neg GEX', defaultVisible: true },
 ]
 
 export default function DayView({
@@ -51,6 +58,8 @@ export default function DayView({
   // so landscape-initiated wheel zoom can call chart.priceScale('right').setVisibleRange()
   // directly without a React state round-trip.
   const miniChartRef = useRef(null)
+  // GEX layer visibility state — local, driven by LayerToggleChips.
+  const [gexLayers, setGexLayers] = useState({ pos_gex: true, neg_gex: true })
 
   // Reset shared range when the date changes so a newly selected day
   // starts at its own natural price extent (AC #6: zoom doesn't carry over).
@@ -107,6 +116,24 @@ export default function DayView({
         )}
       </div>
 
+      {/* GEX layer toggle chips — shown when a date is selected */}
+      {date && (
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
+          data-testid="gex-layer-chips"
+        >
+          <span style={{ fontSize: 9, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700, flexShrink: 0 }}>
+            GEX
+          </span>
+          <LayerToggleChips
+            layers={GEX_LAYERS}
+            value={gexLayers}
+            onChange={setGexLayers}
+            size="sm"
+          />
+        </div>
+      )}
+
       {/* Chart + landscape side-by-side row */}
       {date && (
         <div style={{ display: 'flex', gap: 8, height: ROW_HEIGHT, alignItems: 'stretch' }}>
@@ -123,6 +150,8 @@ export default function DayView({
               clusters={clusters}
               height={ROW_HEIGHT - LANDSCAPE_HEADER_PX}
               onPriceRangeChange={setPriceRange}
+              showPosGex={gexLayers.pos_gex}
+              showNegGex={gexLayers.neg_gex}
             />
           </div>
           {/* GEX landscape — fixed width on the right */}

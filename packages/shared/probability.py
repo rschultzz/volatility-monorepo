@@ -496,12 +496,20 @@ def _rank_analogues_with_outcomes(
     reached_touch, reached_close, days_to_reach,
     max_excursion_in_direction, implied_move_1d,
     dominant_bucket_at_classification,
-    position_t1_post_touch, position_t5_post_touch, position_t15_post_touch.
+    position_t1_post_touch, position_t5_post_touch, position_t15_post_touch,
+    session_open_t1,  session_high_t1,  session_low_t1,  session_close_t1,
+    session_open_t5,  session_high_t5,  session_low_t5,  session_close_t5,
+    session_open_t15, session_high_t15, session_low_t15, session_close_t15.
 
     position_tN_post_touch: SMALLINT -1/0/+1 or NULL. NULL before CR-I Step 2b
     backfill runs (aggregate_post_touch_distribution treats None as missing via
     .get(), producing fractions=None / pattern_label=None gracefully).
     After Step 2b backfill: carries the classified post-touch close position.
+
+    session_*_tN: REAL or NULL. Populated by CR-G Step 0-A backfill for
+    outcome_status IN ('computed', 'na_regime'). NULL for corpus-end rows
+    (T+15 near end of bars) and quarterly-expiry Fridays (no RTH bars).
+    Existing callers continue to work — new keys are accessed via .get().
     """
     # 1. Load corpus feature vectors
     with conn.cursor() as cur:
@@ -534,7 +542,7 @@ def _rank_analogues_with_outcomes(
     if not ranked:
         return []
 
-    # 3. Fetch outcomes for the top-K dates
+    # 3. Fetch outcomes for the top-K dates (includes CR-G OHLC columns)
     top_dates = [dt.date.fromisoformat(d) for (d, _) in ranked]
     with conn.cursor() as cur:
         cur.execute(
@@ -545,7 +553,11 @@ def _rank_analogues_with_outcomes(
                    dominant_bucket_at_classification,
                    position_t1_post_touch,
                    position_t5_post_touch,
-                   position_t15_post_touch
+                   position_t15_post_touch,
+                   session_open_t0,
+                   session_open_t1,  session_high_t1,  session_low_t1,  session_close_t1,
+                   session_open_t5,  session_high_t5,  session_low_t5,  session_close_t5,
+                   session_open_t15, session_high_t15, session_low_t15, session_close_t15
             FROM bt_daily_outcomes_active
             WHERE ticker = %s AND feature_version = %s
               AND trade_date = ANY(%s)
@@ -554,17 +566,35 @@ def _rank_analogues_with_outcomes(
         )
         outcome_rows = cur.fetchall()
 
+    def _f(v) -> Optional[float]:
+        return float(v) if v is not None else None
+
     outcomes_by_date = {
         row[0].isoformat(): {
             "outcome_status":                    row[1],
             "reached_touch":                     row[2],
             "reached_close":                     row[3],
             "days_to_reach":                     row[4],
-            "max_excursion_in_direction": float(row[5]) if row[5] is not None else None,
+            "max_excursion_in_direction":        _f(row[5]),
             "dominant_bucket_at_classification": row[6],
             "position_t1_post_touch":            row[7],   # SMALLINT -1/0/+1 or NULL
             "position_t5_post_touch":            row[8],   # populated by CR-I Step 2b backfill
             "position_t15_post_touch":           row[9],
+            # CR-G Step 2.5a: T+0 anchor (normalization-fix prerequisite)
+            "session_open_t0":                   _f(row[10]),
+            # CR-G Step 0-A: session OHLC at T+1, T+5, T+15 sessions after trade_date
+            "session_open_t1":                   _f(row[11]),
+            "session_high_t1":                   _f(row[12]),
+            "session_low_t1":                    _f(row[13]),
+            "session_close_t1":                  _f(row[14]),
+            "session_open_t5":                   _f(row[15]),
+            "session_high_t5":                   _f(row[16]),
+            "session_low_t5":                    _f(row[17]),
+            "session_close_t5":                  _f(row[18]),
+            "session_open_t15":                  _f(row[19]),
+            "session_high_t15":                  _f(row[20]),
+            "session_low_t15":                   _f(row[21]),
+            "session_close_t15":                 _f(row[22]),
         }
         for row in outcome_rows
     }
@@ -593,6 +623,21 @@ def _rank_analogues_with_outcomes(
             "position_t1_post_touch":            outcome.get("position_t1_post_touch"),
             "position_t5_post_touch":            outcome.get("position_t5_post_touch"),
             "position_t15_post_touch":           outcome.get("position_t15_post_touch"),
+            # CR-G Step 2.5a: T+0 anchor for normalization-fix projection
+            "session_open_t0":                   outcome.get("session_open_t0"),
+            # CR-G Step 0-A OHLC (None when bars unavailable)
+            "session_open_t1":                   outcome.get("session_open_t1"),
+            "session_high_t1":                   outcome.get("session_high_t1"),
+            "session_low_t1":                    outcome.get("session_low_t1"),
+            "session_close_t1":                  outcome.get("session_close_t1"),
+            "session_open_t5":                   outcome.get("session_open_t5"),
+            "session_high_t5":                   outcome.get("session_high_t5"),
+            "session_low_t5":                    outcome.get("session_low_t5"),
+            "session_close_t5":                  outcome.get("session_close_t5"),
+            "session_open_t15":                  outcome.get("session_open_t15"),
+            "session_high_t15":                  outcome.get("session_high_t15"),
+            "session_low_t15":                   outcome.get("session_low_t15"),
+            "session_close_t15":                 outcome.get("session_close_t15"),
         })
     return result
 
