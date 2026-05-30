@@ -23,6 +23,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from flask import Flask
 from apps.web.modules.Proposals.routes import register_proposals_routes, _fetch_smile_row
+from apps.web.modules.Proposals.service import build_entry_time, build_evaluation_time
 
 _MODULE = "apps.web.modules.Proposals.routes"
 
@@ -77,6 +78,46 @@ def _post(app: Flask, body: dict) -> tuple:
             content_type="application/json",
         )
         return resp.status_code, resp.get_json()
+
+
+# ── build_entry_time unit tests ───────────────────────────────────────────────
+
+class TestBuildEntryTime(unittest.TestCase):
+    """build_entry_time must produce 07:00 PT (10:00 ET) on trade_date, in UTC."""
+
+    def test_returns_utc_aware_datetime(self):
+        import datetime as dt
+        from zoneinfo import ZoneInfo
+        result = build_entry_time(dt.date(2023, 5, 1))
+        self.assertIsNotNone(result.tzinfo, "build_entry_time must return tz-aware datetime")
+        self.assertEqual(str(result.tzinfo), "UTC")
+
+    def test_is_1000_et_on_trade_date(self):
+        """07:00 PT = 10:00 ET — confirm the UTC offset is correct."""
+        import datetime as dt
+        from zoneinfo import ZoneInfo
+        result = build_entry_time(dt.date(2023, 5, 1))
+        et = result.astimezone(ZoneInfo("America/New_York"))
+        self.assertEqual(et.hour, 10)
+        self.assertEqual(et.minute, 0)
+        self.assertEqual(et.date(), dt.date(2023, 5, 1))
+
+    def test_entry_time_before_evaluation_time_same_expiry_date(self):
+        """entry_time on trade_date must be < evaluation_time on expiry_date."""
+        import datetime as dt
+        trade_date  = dt.date(2023, 5, 1)
+        expiry_date = dt.date(2023, 5, 5)
+        entry  = build_entry_time(trade_date)
+        expiry = build_evaluation_time(expiry_date)
+        self.assertLess(entry, expiry)
+
+    def test_entry_time_even_before_same_day_expiry(self):
+        """07:00 PT on a day < 16:00 ET on the same day (0DTE check)."""
+        import datetime as dt
+        same_day = dt.date(2023, 5, 1)
+        entry  = build_entry_time(same_day)
+        expiry = build_evaluation_time(same_day)
+        self.assertLess(entry, expiry)
 
 
 # ── _fetch_smile_row unit tests ───────────────────────────────────────────────
@@ -288,14 +329,37 @@ class TestHappyPath(unittest.TestCase):
         # available in the local Python 3.9 test environment (NumPy 1.20).
         # Production runs NumPy 2.2.6 from requirements.txt; that layer is
         # tested via packages/shared/tests. Here we just verify the pipeline wires up.
+        # price_proposal_legs and build_real_strike_band are patched so the
+        # happy-path tests don't hit the options cache (DB / ORATS network).
+        _REAL_PRICING_RESULT = {
+            "legs": [
+                {"flag": "c", "side": "long",  "qty": 1, "strike_es": 4225,
+                 "spx_strike": 4225, "opra": "SPX230505C04225000",
+                 "expiration": __import__("datetime").date(2023, 5, 5),
+                 "bid": 5.10, "ask": 5.30, "mid": 5.20},
+                {"flag": "c", "side": "short", "qty": 1, "strike_es": 4250,
+                 "spx_strike": 4250, "opra": "SPX230505C04250000",
+                 "expiration": __import__("datetime").date(2023, 5, 5),
+                 "bid": 3.00, "ask": 3.20, "mid": 3.10},
+            ],
+            "net_debit": round(5.20 - 3.10, 4),
+            "warnings": [],
+        }
+        _MOCK_CHAIN = [
+            {"strike": k, "call_price": max(0.01, (4210.0 - k) * 0.1)}
+            for k in range(4000, 4400, 5)
+        ]
         patches = [
             patch(f"{_MODULE}._conn",                    return_value=mock_conn),
             patch(f"{_MODULE}._rank_analogues_with_outcomes", return_value=_MOCK_ANALOGUES),
             patch(f"{_MODULE}.compute_edge_zones",       return_value=[]),
             patch(f"{_MODULE}.compute_implied_pdf",      return_value={4000.0: 0.01, 4400.0: 0.01}),
             patch(f"{_MODULE}.compute_implied_prob_in_range", return_value=0.37),
+            patch(f"{_MODULE}.price_proposal_legs",      return_value=_REAL_PRICING_RESULT),
+            patch(f"{_MODULE}.build_real_strike_band",   return_value=_MOCK_CHAIN),
         ]
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6]:
             return _post(self.app, _VALID_BODY)
 
     def test_200_response_ok(self):
@@ -306,9 +370,9 @@ class TestHappyPath(unittest.TestCase):
     def test_200_top_level_keys_present(self):
         _, data = self._run()
         required = {
-            "ok", "trade_date", "ticker", "evaluation_time",
-            "current_spot", "implied_move", "legs",
-            "pl_curve", "iv_curve",
+            "ok", "trade_date", "ticker", "evaluation_time", "entry_time",
+            "current_spot", "implied_move", "legs", "net_cost",
+            "pl_curve", "pl_curves", "iv_curve",
             "trade_thesis", "edge_zones", "greeks", "key_levels", "warnings",
         }
         self.assertTrue(required.issubset(data.keys()), f"Missing keys: {required - data.keys()}")
@@ -326,6 +390,29 @@ class TestHappyPath(unittest.TestCase):
         # Should end in +00:00 (UTC)
         self.assertIn("+00:00", data["evaluation_time"])
 
+    def test_200_entry_time_before_evaluation_time(self):
+        """entry_time must be before evaluation_time (trade_date before expiry)."""
+        import datetime as dt
+        _, data = self._run()
+        self.assertIn("+00:00", data["entry_time"])
+        et = dt.datetime.fromisoformat(data["entry_time"])
+        ev = dt.datetime.fromisoformat(data["evaluation_time"])
+        self.assertLess(et, ev, "entry_time must be before evaluation_time (expiry)")
+
+    def test_200_legs_initial_value_nonzero_for_otm_spread(self):
+        """OTM vertical spread at entry must have non-zero initial_value per leg.
+
+        The zero-debit bug priced at T=0 → intrinsic only → OTM legs = 0.
+        With entry_time (T>0), BSM produces positive time value even for OTM.
+        """
+        _, data = self._run()
+        # _VALID_BODY is a call debit spread (long 4225C / short 4250C) with spot 4184.25
+        # At entry T > 0, both OTM legs should have positive BSM time value.
+        for leg in data["legs"]:
+            # initial_value is signed by side; just check it's non-zero
+            self.assertNotEqual(leg["initial_value"], 0.0,
+                f"Leg {leg['flag']} @ {leg['strike']} has initial_value 0.0 (zero-debit bug)")
+
     def test_200_pl_curve_has_prices_and_pnl(self):
         _, data = self._run()
         self.assertIn("prices", data["pl_curve"])
@@ -339,6 +426,10 @@ class TestHappyPath(unittest.TestCase):
         for leg in data["legs"]:
             self.assertIn("iv",            leg)
             self.assertIn("initial_value", leg)
+            self.assertIn("bid",           leg)
+            self.assertIn("ask",           leg)
+            self.assertIn("mid",           leg)
+            self.assertIn("opra",          leg)
 
     def test_200_legs_have_strike_spx(self):
         """Each leg in the response must carry strike_spx as a multiple of 5."""
@@ -363,10 +454,33 @@ class TestHappyPath(unittest.TestCase):
         self.assertAlmostEqual(tt["lower"], 4187.0, places=1)
         self.assertIsNone(tt["upper"])
 
+    def test_200_net_cost_present_and_positive_for_debit_spread(self):
+        """A long-call / short-call debit spread (long lower strike) has net_cost > 0."""
+        _, data = self._run()
+        self.assertIn("net_cost", data)
+        # The mock returns long mid=5.20, short mid=3.10 → net_debit = 2.10 > 0
+        self.assertIsNotNone(data["net_cost"])
+        self.assertGreater(data["net_cost"], 0,
+            "Debit spread must have positive net_cost (debit > 0)")
+
     def test_200_greeks_has_all_keys(self):
         _, data = self._run()
         for k in ("delta", "gamma", "theta", "vega", "rho"):
             self.assertIn(k, data["greeks"])
+
+    def test_200_greeks_nonzero_at_horizon(self):
+        """Greeks must be non-zero for a 4-day DTE call spread at t5 horizon.
+
+        _VALID_BODY has legs expiring 2023-05-05, trade_date 2023-05-01 (DTE=4).
+        t5 horizon = entry + 5 days > expiry → caps back to entry_time, so T > 0
+        and BSM greeks are finite and non-zero for a spread with position around ATM.
+        """
+        _, data = self._run()
+        g = data["greeks"]
+        # At least delta and vega should be non-trivially non-zero for a call spread
+        # (even if individually small for an OTM spread, they're not all exactly 0)
+        all_zero = all(abs(v or 0.0) < 1e-12 for v in g.values())
+        self.assertFalse(all_zero, "All greeks are ≈0; horizon-tracking may not be working")
 
     def test_200_key_levels_has_required_fields(self):
         _, data = self._run()

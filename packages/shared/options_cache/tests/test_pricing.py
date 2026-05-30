@@ -209,5 +209,251 @@ class TestBuildCondorPricingPayload(unittest.TestCase):
         self.assertTrue(payload["eval"]["is_live"])
 
 
+# ── price_proposal_legs (CR-T Step 1) ────────────────────────────────────────
+
+def _proposal_bar(opra: str, snapshot_pt: datetime, bid: float, ask: float) -> OptionMinuteBar:
+    """Minimal OptionMinuteBar for proposal pricing tests."""
+    exp_date = date(2023, 8, 11)
+    return OptionMinuteBar(
+        opra_symbol=opra,
+        ticker="SPX",
+        expir_date=exp_date.isoformat(),
+        expir_date_d=exp_date,
+        strike=float(opra[-8:]) / 1000.0,
+        option_type="C" if "C" in opra else "P",
+        trade_date="2023-07-28",
+        trade_date_d=date(2023, 7, 28),
+        quote_date="2023-07-28",
+        snapshot_pt=snapshot_pt,
+        snapshot_utc=snapshot_pt,
+        bid_price=bid,
+        ask_price=ask,
+        delta=0.0,
+    )
+
+
+_ENTRY_PT = datetime(2023, 7, 28, 7, 0)   # 07:00 PT naive
+_EXPIR_D  = date(2023, 8, 11)
+_TRADE_D  = date(2023, 7, 28)
+
+_PROPOSAL_LEGS = [
+    # Long call at SPX 4580 (ES ~4589 after carry)
+    {"flag": "c", "strike": 4589.0, "expiration": _EXPIR_D, "qty": 1, "side": "long"},
+    # Short call at SPX 4625 (ES ~4634 after carry)
+    {"flag": "c", "strike": 4634.0, "expiration": _EXPIR_D, "qty": 1, "side": "short"},
+]
+
+
+def _mock_bars_for(opra: str) -> list:
+    bid_map = {
+        "SPX230811C04580000": (5.20, 5.40),
+        "SPX230811C04625000": (2.10, 2.20),
+    }
+    if opra in bid_map:
+        bid, ask = bid_map[opra]
+        return [_proposal_bar(opra, _ENTRY_PT, bid, ask)]
+    return []
+
+
+class TestPriceProposalLegs(unittest.TestCase):
+    """price_proposal_legs — mock-based unit tests (no DB, no network)."""
+
+    def _run(self, legs, bars_fn=None):
+        if bars_fn is None:
+            bars_fn = _mock_bars_for
+        with patch("packages.shared.options_cache.pricing.fetch_option_bars",
+                   return_value=_summary()), \
+             patch("packages.shared.options_cache.pricing.repo.get_bars_for_contract",
+                   side_effect=lambda opra, *_: bars_fn(opra)):
+            return pricing.price_proposal_legs(
+                legs,
+                trade_date=_TRADE_D,
+                entry_pt=_ENTRY_PT,
+                r=0.053,
+                q=0.015,
+            )
+
+    # ── cache-hit path ────────────────────────────────────────────────────
+
+    def test_cache_hit_returns_mids(self):
+        result = self._run(_PROPOSAL_LEGS)
+        self.assertEqual(len(result["legs"]), 2)
+        long_leg  = result["legs"][0]
+        short_leg = result["legs"][1]
+        self.assertAlmostEqual(long_leg["mid"],  5.30, places=2)
+        self.assertAlmostEqual(short_leg["mid"], 2.15, places=2)
+
+    def test_cache_hit_net_debit_sign_convention(self):
+        """Long mid − short mid = net debit (positive for a debit spread)."""
+        result = self._run(_PROPOSAL_LEGS)
+        expected = 1 * 5.30 - 1 * 2.15
+        self.assertAlmostEqual(result["net_debit"], expected, places=2)
+
+    def test_cache_hit_no_warnings(self):
+        result = self._run(_PROPOSAL_LEGS)
+        self.assertEqual(result["warnings"], [])
+
+    def test_spx_strike_conversion(self):
+        """ES strikes are converted to SPX strikes via compute_spx_strike."""
+        result = self._run(_PROPOSAL_LEGS)
+        # With dte=14, r=0.053, q=0.015 the conversion shifts ~0.9 points
+        # (well within the 5pt rounding). Check strikes are multiples of 5.
+        for leg in result["legs"]:
+            self.assertEqual(leg["spx_strike"] % 5, 0)
+
+    def test_opra_format_is_spx_root(self):
+        """OPRAs must use SPX root for all SPX expirations."""
+        result = self._run(_PROPOSAL_LEGS)
+        for leg in result["legs"]:
+            self.assertTrue(leg["opra"].startswith("SPX"), f"OPRA {leg['opra']} must use SPX root")
+
+    # ── fetch-on-miss path ────────────────────────────────────────────────
+
+    def test_fetch_called_on_miss(self):
+        """fetch_option_bars is called even when cache is initially empty."""
+        with patch("packages.shared.options_cache.pricing.fetch_option_bars",
+                   return_value=_summary()) as mock_fetch, \
+             patch("packages.shared.options_cache.pricing.repo.get_bars_for_contract",
+                   side_effect=lambda opra, *_: _mock_bars_for(opra)):
+            result = pricing.price_proposal_legs(
+                _PROPOSAL_LEGS, trade_date=_TRADE_D, entry_pt=_ENTRY_PT,
+            )
+        mock_fetch.assert_called_once()
+        # Batched: one call for all unique OPRAs
+        call_args = mock_fetch.call_args
+        self.assertIsInstance(call_args[0][0], list)
+
+    # ── partial-404 path ──────────────────────────────────────────────────
+
+    def test_partial_miss_produces_none_net_debit_and_warning(self):
+        """One leg missing mid → net_debit = None, warning present."""
+        def bars_one_miss(opra):
+            # Only the long leg has data; short leg returns nothing
+            if "C04580000" in opra:
+                return [_proposal_bar(opra, _ENTRY_PT, 5.20, 5.40)]
+            return []
+
+        result = self._run(_PROPOSAL_LEGS, bars_fn=bars_one_miss)
+        self.assertIsNone(result["net_debit"])
+        self.assertTrue(len(result["warnings"]) > 0, "Missing leg must produce a warning")
+
+    def test_partial_miss_still_returns_available_mids(self):
+        """Available legs still have their mids even when one is missing."""
+        def bars_one_miss(opra):
+            if "C04580000" in opra:
+                return [_proposal_bar(opra, _ENTRY_PT, 5.20, 5.40)]
+            return []
+
+        result = self._run(_PROPOSAL_LEGS, bars_fn=bars_one_miss)
+        long_leg  = result["legs"][0]
+        short_leg = result["legs"][1]
+        self.assertAlmostEqual(long_leg["mid"],  5.30, places=2)
+        self.assertIsNone(short_leg["mid"])
+
+    def test_permanent_error_during_fetch_produces_warning(self):
+        with patch("packages.shared.options_cache.pricing.fetch_option_bars",
+                   side_effect=OratsPermanentError("404 illiquid")), \
+             patch("packages.shared.options_cache.pricing.repo.get_bars_for_contract",
+                   return_value=[]):
+            result = pricing.price_proposal_legs(
+                _PROPOSAL_LEGS, trade_date=_TRADE_D, entry_pt=_ENTRY_PT,
+            )
+        self.assertTrue(any("permanent error" in w for w in result["warnings"]))
+        self.assertIsNone(result["net_debit"])
+
+    def test_empty_legs_returns_empty(self):
+        result = pricing.price_proposal_legs([], trade_date=_TRADE_D, entry_pt=_ENTRY_PT)
+        self.assertEqual(result["legs"], [])
+        self.assertIsNone(result["net_debit"])
+
+
+# ── build_real_strike_band (CR-T Step 2) ─────────────────────────────────────
+
+class TestBuildRealStrikeBand(unittest.TestCase):
+    """build_real_strike_band — mock-based unit tests (no DB, no network)."""
+
+    _SPOT = 4582.0
+    _IM   = 50.0
+    _TD   = date(2023, 7, 28)
+    _EXPD = date(2023, 8, 11)
+    _EP   = datetime(2023, 7, 28, 7, 0)
+
+    def _run(self, bars_fn=None):
+        def default_bars(opra, *_):
+            # Return a tight quote for every call OPRA in the band
+            if "C" in opra:
+                strike_int = int(opra[-8:])
+                mid = max(0.1, (self._SPOT + 10 - strike_int / 1000.0) * 0.1)
+                bid = round(mid * 0.98, 2)
+                ask = round(mid * 1.02, 2)
+                exp_d = self._EXPD
+                return [OptionMinuteBar(
+                    opra_symbol=opra, ticker="SPX",
+                    expir_date=exp_d.isoformat(), expir_date_d=exp_d,
+                    strike=strike_int / 1000.0, option_type="C",
+                    trade_date=str(self._TD), trade_date_d=self._TD,
+                    quote_date=str(self._TD), snapshot_pt=self._EP,
+                    snapshot_utc=self._EP, bid_price=bid, ask_price=ask, delta=0.0,
+                )]
+            return []
+
+        fn = bars_fn or default_bars
+        with patch("packages.shared.options_cache.pricing.fetch_option_bars",
+                   return_value=_summary()), \
+             patch("packages.shared.options_cache.pricing.repo.get_bars_for_contract",
+                   side_effect=fn):
+            return pricing.build_real_strike_band(
+                self._SPOT, self._IM,
+                expiration_date=self._EXPD,
+                entry_pt=self._EP,
+            )
+
+    def test_band_covers_spot_plus_minus_1p5_im(self):
+        """Band must span at least spot ± 1.5×IM."""
+        chain = self._run()
+        self.assertTrue(len(chain) > 0, "Band must return at least one strike")
+        lo = min(d["strike"] for d in chain)
+        hi = max(d["strike"] for d in chain)
+        self.assertLessEqual(lo, self._SPOT - 1.5 * self._IM + 5)
+        self.assertGreaterEqual(hi, self._SPOT + 1.5 * self._IM - 5)
+
+    def test_band_strikes_in_5pt_increments(self):
+        chain = self._run()
+        for d in chain:
+            self.assertEqual(d["strike"] % 5, 0, f"Strike {d['strike']} not a 5pt multiple")
+
+    def test_returns_call_prices_as_mids(self):
+        chain = self._run()
+        for d in chain:
+            self.assertIn("strike", d)
+            self.assertIn("call_price", d)
+            self.assertGreater(d["call_price"], 0)
+
+    def test_partial_miss_omits_strike(self):
+        """Strikes with no bar data are omitted from the result."""
+        def sparse(opra, *_):
+            # Only return bars for 4 strikes to trigger sparse-path scenario
+            if opra.endswith(("C04580000", "C04585000", "C04590000", "C04595000")):
+                exp_d = self._EXPD
+                s = float(opra[-8:]) / 1000.0
+                return [OptionMinuteBar(
+                    opra_symbol=opra, ticker="SPX",
+                    expir_date=exp_d.isoformat(), expir_date_d=exp_d,
+                    strike=s, option_type="C",
+                    trade_date=str(self._TD), trade_date_d=self._TD,
+                    quote_date=str(self._TD), snapshot_pt=self._EP,
+                    snapshot_utc=self._EP, bid_price=5.0, ask_price=5.2, delta=0.0,
+                )]
+            return []
+
+        chain = self._run(bars_fn=sparse)
+        # Should only contain the 4 matched strikes, not the full band
+        self.assertLessEqual(len(chain), 4)
+
+    def test_total_miss_returns_empty_list(self):
+        chain = self._run(bars_fn=lambda opra, *_: [])
+        self.assertEqual(chain, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -42,6 +42,10 @@ from packages.shared.implied_distribution import (
     compute_implied_pdf,
     compute_implied_prob_in_range,
 )
+from packages.shared.options_cache.pricing import (
+    build_real_strike_band,
+    price_proposal_legs,
+)
 from packages.shared.pricing.engine import compute_position_greeks
 from packages.shared.probability import _rank_analogues_with_outcomes
 from packages.shared.structural_distribution import (
@@ -51,11 +55,14 @@ from packages.shared.structural_distribution import (
 
 from .service import (
     build_bsm_chain,
+    build_entry_time,
     build_evaluation_time,
     build_grid_bounds,
+    calibrate_leg_iv,
     compute_initial_cost,
     compute_key_levels,
     compute_pl_curve,
+    compute_pl_curves,
 )
 
 _VALID_TIMEFRAMES = {"t1", "t5", "t15"}
@@ -68,6 +75,9 @@ _TTE_BY_TIMEFRAME: dict[str, float] = {
     "t5":  5.0 / 252,
     "t15": 15.0 / 252,
 }
+
+# Calendar-day offset for each timeframe (horizon for P/L curves + greeks)
+_HORIZON_DAYS: dict[str, int] = {"t1": 1, "t5": 5, "t15": 15}
 
 log = logging.getLogger(__name__)
 
@@ -306,10 +316,16 @@ def register_proposals_routes(server) -> None:
         regime_block: dict    = norm["regime_block"]
         raw_legs:     list    = norm["legs"]
 
-        # Shortest expiration drives evaluation_time
+        # Shortest expiration drives evaluation_time (at-expiry payoff curve).
+        # entry_time is the pricing moment: 07:00 PT (10:00 ET) on trade_date.
+        # entry_pt_naive is the same instant as a naive PT datetime, required by
+        # fetch_option_bars which rejects tz-aware inputs.
         expir_dates    = sorted(leg["expiration"] for leg in raw_legs)
         shortest_expir = expir_dates[0]
         evaluation_time = build_evaluation_time(shortest_expir)
+        entry_time      = build_entry_time(trade_date)
+        _PT_TZ = ZoneInfo("America/Los_Angeles")
+        entry_pt_naive  = entry_time.astimezone(_PT_TZ).replace(tzinfo=None)
 
         # ── 2. DB connect ─────────────────────────────────────────────────
         try:
@@ -347,7 +363,7 @@ def register_proposals_routes(server) -> None:
 
             # ── 5. Build legs with IV + expiration datetime ────────────────
             # Expiration date → 16:00 ET datetime for pricing engine.
-            # MVP: same atmiv for all legs (per-leg skew = future work).
+            # IVs start as atmiv; calibrated per-leg in step 6b if real mids.
             legs_with_iv: list[dict] = [
                 {
                     **leg,
@@ -356,36 +372,99 @@ def register_proposals_routes(server) -> None:
                 }
                 for leg in raw_legs
             ]
-            if len(legs_with_iv) > 1:
-                warn_msgs.append(
-                    "using atmiv for all legs (per-leg smile interpolation not yet implemented)"
-                )
 
-            # ── 6. Initial cost at spot ────────────────────────────────────
-            initial_cost = compute_initial_cost(
-                legs_with_iv, spot, evaluation_time, market_state
+            # ── 6. Real entry cost via ORATS mids ─────────────────────────
+            # price_proposal_legs fetches real bid/ask mids from the options
+            # cache (writing through on miss).  Falls back to BSM at entry_time
+            # if all legs are unavailable so the route never hard-fails.
+            real_pricing = price_proposal_legs(
+                raw_legs,
+                trade_date=trade_date,
+                entry_pt=entry_pt_naive,
+                r=risk_free_rate,
+                q=yield_rate,
             )
+            warn_msgs.extend(real_pricing["warnings"])
+
+            if real_pricing["net_debit"] is not None:
+                initial_cost = real_pricing["net_debit"]
+            else:
+                # BSM fallback at entry_time ensures T > 0 (zero-debit fix).
+                initial_cost = compute_initial_cost(
+                    legs_with_iv, spot, entry_time, market_state
+                )
+                if real_pricing["warnings"]:
+                    warn_msgs.append(
+                        "real entry pricing unavailable; using BSM fallback"
+                    )
+
+            # ── 6b. Calibrate per-leg BSM vol to reproduce real entry mid ─
+            # Replaces atmiv with the per-leg implied vol anchored to the real
+            # mid so that the P/L curve passes through the real entry price.
+            real_legs_idx = {
+                i: rleg for i, rleg in enumerate(real_pricing.get("legs", []))
+            }
+            for i, leg in enumerate(legs_with_iv):
+                rleg = real_legs_idx.get(i, {})
+                real_mid = rleg.get("mid")
+                if real_mid is None or real_mid <= 0:
+                    continue
+                T_entry = max(
+                    0.0,
+                    (leg["expiration"] - entry_time).total_seconds() / (365.25 * 24 * 3600),
+                )
+                calib_iv = calibrate_leg_iv(
+                    spot=spot,
+                    strike=float(leg["strike"]),
+                    T=T_entry,
+                    r=risk_free_rate,
+                    flag=leg["flag"],
+                    real_mid=abs(real_mid),   # use abs — calibrate on the price, sign via side
+                    iv_guess=atmiv,
+                )
+                leg["iv"] = calib_iv
 
             # ── 7. Price grid bounds (shared by P/L curve + edge zones) ───
             # Computed once so both consumers cover the same asymmetric range.
             grid_lo, grid_hi = build_grid_bounds(spot, implied_move, regime_block)
 
-            # ── 8. P/L curve ──────────────────────────────────────────────
-            pl_curve = compute_pl_curve(
+            # ── 8. Multi-horizon P/L curves (expiry + t1/t5/t15) ─────────
+            # BSM P/L curves calibrated to real entry mids.  The at-expiry
+            # curve is intrinsic − real_debit; horizon curves are smooth BSM
+            # surfaces that pass near the real entry debit at spot.
+            pl_curves = compute_pl_curves(
                 legs_with_iv, spot, implied_move,
-                evaluation_time, market_state, initial_cost,
+                evaluation_time, entry_time, market_state, initial_cost,
                 regime_block=regime_block,
             )
+            # pl_curve (singular) = the at-expiry curve for backwards compat.
+            pl_curve = next(
+                (c for c in pl_curves if c["label"] == "expiry"),
+                pl_curves[0] if pl_curves else {"prices": [], "pnl": []},
+            )
 
-            # ── 8. IV curve (flat atmiv across price grid) ─────────────────
+            # ── 8b. IV curve (flat atmiv across price grid) ────────────────
             iv_curve = {
                 "prices": pl_curve["prices"],
                 "iv":     [atmiv] * len(pl_curve["prices"]),
             }
 
-            # ── 9. BSM option chain for implied PDF ───────────────────────
+            # ── 9. Real strike band for implied PDF (Breeden-Litzenberger) ──
+            # Fetches real per-strike call mids around the thesis range from
+            # the options cache. Falls back to a synthetic BSM chain if the
+            # band returns fewer than 2 strikes (total cache miss scenario).
             tte = _TTE_BY_TIMEFRAME[timeframe]
-            option_chain = build_bsm_chain(spot, atmiv, risk_free_rate, tte)
+            option_chain = build_real_strike_band(
+                spot, implied_move,
+                expiration_date=shortest_expir,
+                entry_pt=entry_pt_naive,
+            )
+            if len(option_chain) < 2:
+                warn_msgs.append(
+                    "real strike band unavailable (< 2 strikes fetched); "
+                    "falling back to BSM chain (no skew)"
+                )
+                option_chain = build_bsm_chain(spot, atmiv, risk_free_rate, tte)
 
             # ── 10. Analogues (K=20 KNN) ───────────────────────────────────
             analogues = _rank_analogues_with_outcomes(
@@ -442,9 +521,16 @@ def register_proposals_routes(server) -> None:
                 tolerance=pin_tolerance,
             )
 
-            # ── 15. Greeks at spot ─────────────────────────────────────────
+            # ── 15. Greeks at the selected horizon (tracks t1/t5/t15 selector)
+            # Compute at entry_time + N days (same horizon as the P/L curve),
+            # NOT at evaluation_time (expiry where T≈0 → greeks ≈ 0).
+            # Cap at evaluation_time so we never evaluate past expiry.
+            _horizon_days = _HORIZON_DAYS.get(timeframe, 5)
+            greeks_time = entry_time + dt.timedelta(days=_horizon_days)
+            if greeks_time >= evaluation_time:
+                greeks_time = entry_time   # very short DTE: fall back to entry
             greeks = compute_position_greeks(
-                legs_with_iv, spot, evaluation_time, market_state
+                legs_with_iv, spot, greeks_time, market_state
             )
 
             # ── 16. Key levels ─────────────────────────────────────────────
@@ -470,40 +556,61 @@ def register_proposals_routes(server) -> None:
                 "edge_ratio":      edge_ratio,
             }
 
-            # ── 18. Per-leg response (echo + IV + initial_value + strike_spx) ─
-            legs_out = [
-                {
-                    "strike":        leg["strike"],
-                    "strike_spx":    compute_spx_strike(
-                                         leg["strike"],
-                                         (raw["expiration"] - trade_date).days,
-                                         risk_free_rate,
-                                         yield_rate,
-                                     ),
-                    "expiration":    raw["expiration"].isoformat(),
-                    "flag":          leg["flag"],
-                    "side":          leg["side"],
-                    "qty":           leg["qty"],
-                    "iv":            atmiv,
-                    "initial_value": round(
-                        compute_initial_cost(
-                            [leg], spot, evaluation_time, market_state
-                        ),
+            # ── 18. Per-leg response (echo + IV + real prices + strike_spx) ─
+            # Merge real pricing from price_proposal_legs into the leg output.
+            # Index-aligned: real_pricing["legs"] has the same order as raw_legs.
+            real_legs_by_idx = {
+                i: rleg for i, rleg in enumerate(real_pricing.get("legs", []))
+            }
+            legs_out = []
+            for i, (leg, raw) in enumerate(zip(legs_with_iv, raw_legs)):
+                rleg = real_legs_by_idx.get(i, {})
+                dte_i = (raw["expiration"] - trade_date).days
+                spx_strike_i = rleg.get("spx_strike") or compute_spx_strike(
+                    raw["strike"], dte_i, risk_free_rate, yield_rate
+                )
+                real_mid = rleg.get("mid")
+                if real_mid is not None:
+                    initial_val = round(
+                        (1.0 if raw["side"] == "long" else -1.0) * raw.get("qty", 1) * real_mid,
                         4,
-                    ),
-                }
-                for leg, raw in zip(legs_with_iv, raw_legs)
-            ]
+                    )
+                else:
+                    initial_val = round(
+                        compute_initial_cost([leg], spot, entry_time, market_state), 4
+                    )
+                legs_out.append({
+                    "strike":        raw["strike"],
+                    "strike_spx":    spx_strike_i,
+                    "opra":          rleg.get("opra"),
+                    "expiration":    raw["expiration"].isoformat(),
+                    "flag":          raw["flag"],
+                    "side":          raw["side"],
+                    "qty":           raw.get("qty", 1),
+                    "iv":            atmiv,
+                    "bid":           rleg.get("bid"),
+                    "ask":           rleg.get("ask"),
+                    "mid":           real_mid,
+                    "initial_value": initial_val,
+                })
 
             return jsonify({
                 "ok":             True,
                 "trade_date":     trade_date.isoformat(),
                 "ticker":         ticker,
                 "evaluation_time": evaluation_time.isoformat(),
+                "entry_time":     entry_time.isoformat(),
                 "current_spot":   spot,
                 "implied_move":   implied_move,
                 "legs":           legs_out,
+                # net_cost uses real mids (None if any leg unavailable, not BSM estimate)
+                "net_cost":       (
+                    round(real_pricing["net_debit"], 4)
+                    if real_pricing.get("net_debit") is not None
+                    else None
+                ),
                 "pl_curve":       pl_curve,
+                "pl_curves":      pl_curves,
                 "iv_curve":       iv_curve,
                 "trade_thesis":   trade_thesis,
                 "edge_zones":     edge_zones,

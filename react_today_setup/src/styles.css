@@ -235,6 +235,15 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* Prevent overflow-clipping of the expanded chart */
+  overflow: visible;
+  min-width: 0;
+}
+
+/* When the edge chart is expanded, the card spans the full grid row so
+   the chart gets all available width (card grows to fit the chart). */
+.proposal-card--expanded {
+  grid-column: 1 / -1;
 }
 
 .proposal-card.no-trade {

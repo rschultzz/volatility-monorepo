@@ -45,16 +45,12 @@ function adaptLeg(leg, expiration) {
 function buildPlDataBody(proposal, date, ticker, timeframe, contextRegime, contextDriftTarget) {
   const expiration = addCalendarDays(date, proposal.expiry_dte_target ?? 0);
   const regime = proposal.source?.regime || contextRegime || 'amplification';
-  // Build regime_block with all available keys so get_trade_thesis_range
-  // can compute one-sided ranges for magnet-above/below (needs drift_target).
   const regime_block = { regime };
   const src = proposal.source || {};
   if (src.drift_target != null)    regime_block.drift_target    = src.drift_target;
   if (src.tolerance != null)       regime_block.tolerance       = src.tolerance;
   if (src.lower_price != null)     regime_block.lower_price     = src.lower_price;
   if (src.upper_price != null)     regime_block.upper_price     = src.upper_price;
-  // Also forward context-level drift_target if not already set (e.g. for
-  // regime_target proposals whose source.type isn't 'regime_target').
   if (regime_block.drift_target == null && contextDriftTarget != null) {
     regime_block.drift_target = contextDriftTarget;
   }
@@ -96,64 +92,135 @@ function SourceLine({ source, wingRecipe }) {
   return <div className="source-line">{parts.join(' · ')}</div>;
 }
 
-// ── Expanded chart panel ───────────────────────────────────────────────────────
+/** Small inline badge for data-quality warnings. */
+function WarningsBadge({ warnings }) {
+  if (!warnings || warnings.length === 0) return null;
+  return (
+    <div
+      title={warnings.join('\n')}
+      style={{
+        display:      'inline-flex',
+        alignItems:   'center',
+        gap:          4,
+        fontSize:     9,
+        fontWeight:   700,
+        color:        '#f59e0b',
+        background:   '#292524',
+        border:       '1px solid #78350f',
+        borderRadius: 4,
+        padding:      '1px 5px',
+        cursor:       'help',
+      }}
+    >
+      ⚠ {warnings.length === 1 ? warnings[0].slice(0, 40) : `${warnings.length} data warnings`}
+    </div>
+  );
+}
 
-function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime, contextDriftTarget }) {
-  const [timeframe, setTimeframe]   = useState(DEFAULT_TIMEFRAME);
-  const [chartData, setChartData]   = useState(undefined); // undefined = not yet fetched
-  const cacheRef = useRef({});   // timeframe → resolved data (or error shape)
-  const containerRef = useRef(null);
-  const [chartWidth, setChartWidth] = useState(640);
+/** Show expiry date(s) from priced legs.
+ *
+ * Single-expiry (common): one "Expiry: YYYY-MM-DD" line.
+ * Mixed-expiry: one line per unique date grouped with leg roles.
+ */
+function ExpiryLine({ pricedLegs }) {
+  if (!pricedLegs || pricedLegs.length === 0) return null;
 
-  // ResizeObserver — tracks panel width for chart sizing.
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(entries => {
-      const w = entries[0]?.contentRect?.width;
-      if (w > 0) setChartWidth(Math.floor(w));
-    });
-    ro.observe(el);
-    setChartWidth(Math.floor(el.clientWidth) || 640);
-    return () => ro.disconnect();
-  }, []);
+  const dates = [...new Set(pricedLegs.map(l => l.expiration).filter(Boolean))];
+  if (dates.length === 0) return null;
 
-  // Fetch pl-data when timeframe changes (or on first mount).
-  const fetchPlData = useCallback(async (tf) => {
-    if (cacheRef.current[tf] !== undefined) {
-      setChartData(cacheRef.current[tf]);
-      return;
-    }
-    // Loading state while request is in-flight.
-    setChartData(undefined);
-    const body = buildPlDataBody(proposal, date, ticker, tf, contextRegime, contextDriftTarget);
-    try {
-      const resp = await fetch(`${apiBase}/api/proposals/pl-data`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(body),
-      });
-      const json = await resp.json();
-      cacheRef.current[tf] = json;
-      setChartData(json);
-    } catch (err) {
-      const errShape = { ok: false, error: String(err) };
-      cacheRef.current[tf] = errShape;
-      setChartData(errShape);
-    }
-  }, [proposal, date, ticker, apiBase, contextRegime, contextDriftTarget]);
-
-  useEffect(() => {
-    fetchPlData(timeframe);
-  }, [timeframe, fetchPlData]);
-
-  function handleTimeframeChange(tf) {
-    if (tf === timeframe) return;
-    // Invalidate cache for the new timeframe so a fresh fetch is made.
-    delete cacheRef.current[tf];
-    setTimeframe(tf);
+  if (dates.length === 1) {
+    return (
+      <div style={{ fontSize: 10, color: '#94a3b8' }}>
+        Expiry: <strong style={{ color: '#cbd5e1' }}>{dates[0]}</strong>
+      </div>
+    );
   }
 
+  // Mixed-expiry: show per-leg
+  return (
+    <div style={{ fontSize: 10, color: '#94a3b8', display: 'flex', flexDirection: 'column', gap: 1 }}>
+      {pricedLegs.filter(l => l.expiration).map((l, i) => (
+        <span key={i}>
+          {l.side === 'long' ? '+' : '−'}{l.flag?.toUpperCase()} {l.strike_spx}
+          {' '}→ <strong style={{ color: '#cbd5e1' }}>{l.expiration}</strong>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Render net debit or net credit from the pl-data response. */
+function NetCostLine({ netCost }) {
+  if (netCost === undefined) return null;   // not yet loaded
+
+  const label = netCost === null
+    ? '—'
+    : netCost >= 0
+      ? `Net debit  $${netCost.toFixed(2)}`
+      : `Net credit $${Math.abs(netCost).toFixed(2)}`;
+
+  return (
+    <div
+      style={{
+        fontSize:   10,
+        fontWeight: 700,
+        color:      netCost === null ? '#475569' : netCost >= 0 ? '#f87171' : '#4ade80',
+        fontVariantNumeric: 'tabular-nums',
+      }}
+    >
+      {label}
+    </div>
+  );
+}
+
+/** Render struct/implied/edge-ratio from trade_thesis.
+ *
+ * Color convention (consistent with edge-zone chart overlay):
+ *   edge_ratio > 1  → struct > implied → green
+ *   edge_ratio < 1  → struct < implied → red
+ *   edge_ratio null → implied unavailable → neutral
+ */
+function EdgeBlock({ tradeTthesis }) {
+  if (!tradeTthesis) return null;
+  const { structural_prob, implied_prob, edge_ratio } = tradeTthesis;
+  if (structural_prob == null) return null;
+
+  const structPct  = (structural_prob * 100).toFixed(1) + '%';
+  const impliedTxt = implied_prob != null
+    ? (implied_prob * 100).toFixed(1) + '%'
+    : 'unavailable';
+  const edgeTxt    = edge_ratio != null
+    ? edge_ratio.toFixed(2) + '×'
+    : '—';
+
+  // Edge color: green when struct > implied (edge_ratio > 1), red otherwise
+  const hasEdge = edge_ratio != null && edge_ratio > 1;
+  const noEdge  = edge_ratio != null && edge_ratio <= 1;
+  const edgeColor = hasEdge ? '#4ade80' : noEdge ? '#f87171' : '#94a3b8';
+
+  return (
+    <div style={{
+      fontSize: 10,
+      color: '#64748b',
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      alignItems: 'center',
+    }}>
+      <span>Struct <strong style={{ color: '#94a3b8' }}>{structPct}</strong></span>
+      <span style={{ color: '#334155' }}>·</span>
+      <span>Implied <strong style={{ color: implied_prob != null ? '#94a3b8' : '#475569' }}>{impliedTxt}</strong></span>
+      <span style={{ color: '#334155' }}>·</span>
+      <span>Edge <strong style={{ color: edgeColor }}>{edgeTxt}</strong></span>
+    </div>
+  );
+}
+
+// ── Expanded chart panel ───────────────────────────────────────────────────────
+
+function ExpandedPanel({
+  timeframe, setTimeframe, chartData, containerRef, chartWidth,
+}) {
   return (
     <div
       data-testid="proposal-expanded-panel"
@@ -174,7 +241,7 @@ function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime, context
               key={tf}
               type="button"
               aria-pressed={tf === timeframe}
-              onClick={() => handleTimeframeChange(tf)}
+              onClick={() => setTimeframe(tf)}
               style={{
                 padding:     '2px 9px',
                 fontSize:    10,
@@ -197,7 +264,6 @@ function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime, context
 
       {/* Chart area — full card width */}
       <div ref={containerRef} style={{ width: '100%' }}>
-        {/* null data → ProposalEdgeChart renders its own skeleton */}
         <ProposalEdgeChart
           data={chartData === undefined ? null : chartData}
           width={chartWidth}
@@ -205,7 +271,7 @@ function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime, context
         />
       </div>
 
-      {/* Greeks row — shown once chartData is loaded (greeks is null while loading) */}
+      {/* Greeks row */}
       <GreeksDisplay
         greeks={chartData?.greeks ?? null}
         evaluationTime={chartData?.evaluation_time ?? null}
@@ -218,7 +284,6 @@ function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime, context
 
 export default function ProposalCard({
   proposal,
-  // New props for pl-data fetch (optional — gracefully absent for no-trade cards)
   date,
   ticker,
   apiBase,
@@ -239,15 +304,88 @@ export default function ProposalCard({
   const canExpand         = !isNoTrade && Array.isArray(legs) && legs.length > 0 && !!date;
   const label             = TEMPLATE_LABELS[template_id] || template_id;
   const contextRegime     = context?.regime;
-  // drift_target: prefer the proposal's own source, fall back to context's top_cluster
-  // or clusters (not currently stored in context, but future-proof).
   const contextDriftTarget = source?.drift_target ?? context?.top_cluster?.center_price ?? null;
 
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded]     = useState(false);
+  const [timeframe, setTimeframe]   = useState(DEFAULT_TIMEFRAME);
+  const [chartWidth, setChartWidth] = useState(640);
+  const containerRef = useRef(null);
+
+  // Per-timeframe result cache (timeframe → data|error).
+  // Lifted to card level so the prefetch and the expanded chart share state.
+  const cacheRef = useRef({});
+  const [chartData, setChartData] = useState(undefined);
+
+  // ResizeObserver
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect?.width;
+      if (w > 0) setChartWidth(Math.floor(w));
+    });
+    ro.observe(el);
+    setChartWidth(Math.floor(el.clientWidth) || 640);
+    return () => ro.disconnect();
+  }, []);
+
+  // ── Fetch helper (shared by prefetch and expand) ────────────────────────
+  const fetchPlData = useCallback(async (tf) => {
+    if (cacheRef.current[tf] !== undefined) {
+      setChartData(cacheRef.current[tf]);
+      return;
+    }
+    setChartData(undefined);
+    const body = buildPlDataBody(proposal, date, ticker, tf, contextRegime, contextDriftTarget);
+    try {
+      const resp = await fetch(`${apiBase}/api/proposals/pl-data`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+      const json = await resp.json();
+      cacheRef.current[tf] = json;
+      setChartData(json);
+    } catch (err) {
+      const errShape = { ok: false, error: String(err) };
+      cacheRef.current[tf] = errShape;
+      setChartData(errShape);
+    }
+  }, [proposal, date, ticker, apiBase, contextRegime, contextDriftTarget]);
+
+  // ── Step 5-A + timeframe handling ─────────────────────────────────────
+  // On mount (timeframe = DEFAULT_TIMEFRAME), this acts as a non-blocking
+  // day-load prefetch: fires before expand, populates cacheRef, and fills
+  // the LegTable mid column progressively.  Re-loading an already-seen day
+  // (cacheRef hit) fires zero ORATS calls.  On timeframe change it re-fetches
+  // the new timeframe.  One effect covers both cases to avoid double-fetching.
+  useEffect(() => {
+    if (!canExpand) return;
+    fetchPlData(timeframe);
+  }, [timeframe, canExpand, fetchPlData]);
+
+  // ── Pricing data for the LegTable (default timeframe) ──────────────────
+  // Use the default-timeframe cached data so the header LegTable shows mids
+  // even before the card is expanded.
+  const defaultData  = cacheRef.current[DEFAULT_TIMEFRAME] || chartData;
+  const pricedLegs   = defaultData?.ok ? (defaultData.legs ?? null) : null;
+  const pricingWarns = defaultData?.ok ? (defaultData.warnings ?? []) : [];
+  // net_cost: undefined = not yet fetched, null = unavailable (leg missing mid)
+  const netCost    = defaultData?.ok ? defaultData.net_cost    : undefined;
+  const tradeTthesis = defaultData?.ok ? defaultData.trade_thesis : null;
+
+  function handleTimeframeChange(tf) {
+    if (tf === timeframe) return;
+    setTimeframe(tf);
+  }
 
   return (
     <div
-      className={`proposal-card${isNoTrade ? ' no-trade' : ''}`}
+      className={[
+        'proposal-card',
+        isNoTrade ? 'no-trade' : '',
+        expanded ? 'proposal-card--expanded' : '',
+      ].filter(Boolean).join(' ')}
       data-testid="proposal-card"
     >
       <div className="proposal-label">
@@ -260,19 +398,32 @@ export default function ProposalCard({
       {isNoTrade ? (
         <div className="no-trade-headline">NO TRADE</div>
       ) : (
-        <LegTable legs={legs} />
+        <LegTable legs={legs} pricedLegs={pricedLegs} />
       )}
 
-      {expiry_dte_bucket && (
-        <div className="expiry-line">
-          Target DTE: <strong>{expiry_dte_target}d</strong>
-          {' '}({expiry_dte_bucket} bucket)
-        </div>
-      )}
+      {/* Expiry: real calendar date from payload (Step 9) + DTE/bucket context */}
+      {pricedLegs
+        ? <ExpiryLine pricedLegs={pricedLegs} />
+        : expiry_dte_bucket && (
+          <div className="expiry-line">
+            Target DTE: <strong>{expiry_dte_target}d</strong>
+            {' '}({expiry_dte_bucket} bucket)
+          </div>
+        )
+      }
 
       <div className="rationale">{rationale}</div>
 
       <SourceLine source={source} wingRecipe={wing_distance_recipe} />
+
+      {/* Net debit/credit (Step 8) */}
+      {canExpand && <NetCostLine netCost={netCost} />}
+
+      {/* Edge block: struct / implied / edge-ratio (Step 10) */}
+      {canExpand && tradeTthesis && <EdgeBlock tradeTthesis={tradeTthesis} />}
+
+      {/* Data-quality warnings badge */}
+      {pricingWarns.length > 0 && <WarningsBadge warnings={pricingWarns} />}
 
       {/* Expand / collapse affordance */}
       {canExpand && (
@@ -301,12 +452,11 @@ export default function ProposalCard({
       {/* Expanded chart panel */}
       {expanded && canExpand && (
         <ExpandedPanel
-          proposal={proposal}
-          date={date}
-          ticker={ticker}
-          apiBase={apiBase}
-          contextRegime={contextRegime}
-          contextDriftTarget={contextDriftTarget}
+          timeframe={timeframe}
+          setTimeframe={handleTimeframeChange}
+          chartData={chartData}
+          containerRef={containerRef}
+          chartWidth={chartWidth}
         />
       )}
     </div>

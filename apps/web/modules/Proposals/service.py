@@ -4,27 +4,36 @@ No DB I/O in this module. All DB access is in routes.py.
 
 Functions:
     build_evaluation_time   — expiration date → 16:00 ET → UTC datetime
+    build_entry_time        — trade date → 07:00 PT (10:00 ET) → UTC datetime
     build_bsm_chain         — BSM call prices across spot ± range_pts
     build_grid_bounds       — regime-aware (lo, hi) for the price grid
+    calibrate_leg_iv        — find BSM vol that reproduces a real mid-price
     compute_initial_cost    — net premium at entry from BSM pricing
     compute_pl_curve        — P/L array across asymmetric regime-aware price grid
+    compute_pl_curves       — multi-horizon P/L curves (expiry + t1/t5/t15)
     compute_key_levels      — max profit, max loss, breakeven crossings
 """
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from typing import Optional
 from zoneinfo import ZoneInfo
 
 import numpy as np
+from scipy.optimize import brentq
 
 from packages.shared.pricing.engine import (
+    SECONDS_PER_YEAR,
     black_scholes_price,
     compute_leg_value,
     compute_position_pl,
 )
 
+log = logging.getLogger(__name__)
+
 _ET  = ZoneInfo("America/New_York")
+_PT  = ZoneInfo("America/Los_Angeles")
 _UTC = ZoneInfo("UTC")
 
 # Regimes that get a symmetric spot-centred grid (no magnet/pin extension).
@@ -39,6 +48,18 @@ def build_evaluation_time(expir_date: dt.date) -> dt.datetime:
     """
     naive = dt.datetime(expir_date.year, expir_date.month, expir_date.day, 16, 0)
     return naive.replace(tzinfo=_ET).astimezone(_UTC)
+
+
+def build_entry_time(trade_date: dt.date) -> dt.datetime:
+    """Return 07:00 PT (10:00 ET) on trade_date, converted to UTC.
+
+    This is the entry pricing time for proposals — 30 min after open,
+    market settled, ORATS has intraday data from this minute onward.
+    Used to compute entry debit with T > 0 (fixes the zero-debit bug
+    that arose from pricing at expiry where T = 0).
+    """
+    naive = dt.datetime(trade_date.year, trade_date.month, trade_date.day, 7, 0)
+    return naive.replace(tzinfo=_PT).astimezone(_UTC)
 
 
 def build_bsm_chain(
@@ -81,6 +102,40 @@ def compute_initial_cost(
         compute_leg_value(leg, spot, evaluation_time, market_state)
         for leg in legs
     )
+
+
+def calibrate_leg_iv(
+    spot: float,
+    strike: float,
+    T: float,
+    r: float,
+    flag: str,
+    real_mid: float,
+    iv_guess: float = 0.20,
+) -> float:
+    """Find the BSM implied vol that reproduces real_mid for the given contract.
+
+    Uses Brent's method on [1e-4, 5.0].  Falls back to iv_guess on any
+    convergence failure (e.g. real_mid is below intrinsic or above the
+    risk-neutral upper bound).
+
+    flag must be 'c' or 'p' (lowercase, matching the engine convention).
+    """
+    if T <= 0 or real_mid <= 0:
+        return iv_guess
+    try:
+        lo_val = black_scholes_price(spot, strike, T, r, 1e-4, flag) - real_mid
+        hi_val = black_scholes_price(spot, strike, T, r, 5.0,  flag) - real_mid
+        if lo_val * hi_val > 0:
+            # real_mid is outside the BSM range for these bounds — use guess
+            return iv_guess
+        return brentq(
+            lambda sigma: black_scholes_price(spot, strike, T, r, sigma, flag) - real_mid,
+            1e-4, 5.0,
+            xtol=1e-6, maxiter=150,
+        )
+    except (ValueError, RuntimeError):
+        return iv_guess
 
 
 def build_grid_bounds(
@@ -184,6 +239,64 @@ def compute_pl_curve(
         "prices": price_grid.tolist(),
         "pnl":    pnl.tolist(),
     }
+
+
+_HORIZON_DAYS: dict[str, int] = {"t1": 1, "t5": 5, "t15": 15}
+
+
+def compute_pl_curves(
+    legs: list[dict],
+    spot: float,
+    implied_move: float,
+    evaluation_time: dt.datetime,
+    entry_time: dt.datetime,
+    market_state: dict,
+    initial_cost: float,
+    *,
+    regime_block: Optional[dict] = None,
+) -> list[dict]:
+    """Compute P/L curves at expiry and at each trading-day horizon.
+
+    Returns a list of curve dicts:
+        [
+          {"label": "expiry", "prices": [...], "pnl": [...]},
+          {"label": "t1",     "prices": [...], "pnl": [...]},
+          {"label": "t5",     "prices": [...], "pnl": [...]},
+          {"label": "t15",    "prices": [...], "pnl": [...]},
+        ]
+
+    The at-expiry curve uses BSM at evaluation_time (T=0 at expiry → intrinsic
+    payoff).  Horizon curves use BSM at entry_time + N calendar days, so the
+    curve is smooth (time value present) and anchored to the real entry cost.
+
+    Curves that would require evaluation_time > expiry are silently omitted
+    (e.g. a t5 curve for a 3-DTE option).
+    """
+    lo, hi    = build_grid_bounds(spot, implied_move, regime_block)
+    n_points  = max(50, round(hi - lo) + 1)
+    price_grid = np.linspace(lo, hi, n_points)
+    prices_lst = price_grid.tolist()
+
+    curves: list[dict] = []
+
+    # ── At-expiry curve ────────────────────────────────────────────────────
+    pnl_expiry = compute_position_pl(
+        legs, price_grid, evaluation_time, market_state, initial_cost
+    )
+    curves.append({"label": "expiry", "prices": prices_lst, "pnl": pnl_expiry.tolist()})
+
+    # ── Horizon curves ─────────────────────────────────────────────────────
+    for label, days in _HORIZON_DAYS.items():
+        horizon_time = entry_time + dt.timedelta(days=days)
+        if horizon_time >= evaluation_time:
+            # Horizon is at or past expiry — skip (would produce T ≤ 0)
+            continue
+        pnl_h = compute_position_pl(
+            legs, price_grid, horizon_time, market_state, initial_cost
+        )
+        curves.append({"label": label, "prices": prices_lst, "pnl": pnl_h.tolist()})
+
+    return curves
 
 
 def compute_key_levels(pnl: list[float], prices: list[float]) -> dict:

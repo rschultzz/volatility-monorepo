@@ -19,6 +19,7 @@ from .fetcher import fetch_option_bars
 from .http_client import OratsError, OratsPermanentError
 from .opra import format_opra
 from . import repository as repo
+from packages.shared.forward_math import compute_spx_strike
 
 logger = logging.getLogger(__name__)
 
@@ -229,3 +230,184 @@ def build_condor_pricing_payload(
         "warnings": warnings,
     }
     return (payload, 200)
+
+
+# ── Proposal leg pricing (CR-T Step 1) ───────────────────────────────────────
+
+def price_proposal_legs(
+    legs: list[dict],
+    *,
+    trade_date: date,
+    entry_pt: datetime,
+    r: float = 0.05,
+    q: float = 0.0,
+) -> dict:
+    """Price proposal legs at entry using real ORATS mids via the options cache.
+
+    Each leg dict must have:
+        flag        — 'c' or 'p'
+        strike      — strike in ES discounted-forward space
+        expiration  — expiration date (date object)
+        qty         — quantity
+        side        — 'long' or 'short'
+
+    entry_pt must be a **naive PT datetime** (e.g. datetime(2023,7,28,7,0)).
+
+    Returns:
+        {
+          legs: [{ flag, side, qty, strike_es, spx_strike, opra,
+                   bid, ask, mid, expiration }],
+          net_debit: float|None,  # positive = debit; negative = credit; None if any leg missing
+          warnings: [str],
+        }
+
+    This is a reusable, UI-free unit: pure with respect to (date, entry, legs)
+    inputs — no HTTP, no Flask.  A future headless backfill can call this in a
+    loop without a separate pricing path.
+    """
+    warnings_out: list[str] = []
+    priced_legs: list[dict] = []
+
+    if not legs:
+        return {"legs": [], "net_debit": None, "warnings": []}
+
+    # ── 1. ES→SPX conversion + OPRA construction ──────────────────────────
+    opra_list: list[str] = []
+    leg_meta: list[dict] = []
+    for leg in legs:
+        expir_d: date = leg["expiration"]
+        dte = (expir_d - trade_date).days
+        spx_strike = compute_spx_strike(leg["strike"], dte, r, q)
+        flag_upper = leg["flag"].upper()   # 'C' or 'P'
+        opra = format_opra("SPX", expir_d, flag_upper, spx_strike)
+        opra_list.append(opra)
+        leg_meta.append({
+            "flag":       leg["flag"],
+            "side":       leg["side"],
+            "qty":        leg.get("qty", 1),
+            "strike_es":  leg["strike"],
+            "spx_strike": spx_strike,
+            "opra":       opra,
+            "expiration": expir_d,
+        })
+
+    # ── 2. Batched fetch (writes to cache; idempotent on cache hit) ────────
+    unique_opras = list(dict.fromkeys(opra_list))   # dedup, preserve order
+    try:
+        fetch_option_bars(unique_opras, entry_pt, entry_pt)
+    except OratsPermanentError as e:
+        warnings_out.append(f"permanent error fetching OPRAs at {entry_pt.strftime('%H:%M')}: {e}")
+    except OratsError as e:
+        warnings_out.append(f"transient error fetching OPRAs at {entry_pt.strftime('%H:%M')}: {e}")
+
+    # ── 3. Read per-leg mids from cache ────────────────────────────────────
+    net_debit: Optional[float] = 0.0
+    for meta in leg_meta:
+        bars = repo.get_bars_for_contract(meta["opra"], entry_pt, entry_pt)
+        if not bars:
+            warnings_out.append(
+                f"no quote data for {meta['opra']} at {entry_pt.strftime('%H:%M')} PT"
+            )
+            priced_legs.append({**meta, "bid": None, "ask": None, "mid": None})
+            net_debit = None
+            continue
+
+        bar = bars[0]
+        bid = bar.bid_price
+        ask = bar.ask_price
+        mid = round((float(bid) + float(ask)) / 2.0, 4) if (bid is not None and ask is not None) else None
+
+        priced_legs.append({**meta, "bid": bid, "ask": ask, "mid": mid})
+
+        if net_debit is not None and mid is not None:
+            sign = 1.0 if meta["side"] == "long" else -1.0
+            net_debit += sign * meta["qty"] * mid
+        else:
+            net_debit = None
+
+    if net_debit is not None:
+        net_debit = round(net_debit, 4)
+
+    return {
+        "legs":      priced_legs,
+        "net_debit": net_debit,
+        "warnings":  warnings_out,
+    }
+
+
+# ── Real implied-distribution strike band (CR-T Step 2) ──────────────────────
+
+def build_real_strike_band(
+    spot: float,
+    implied_move: float,
+    *,
+    expiration_date: date,
+    entry_pt: datetime,
+    spacing: float = 5.0,
+    half_sigma: float = 1.5,
+) -> list[dict]:
+    """Fetch a dense band of real ORATS call mids for Breeden-Litzenberger.
+
+    Builds the strike band [spot - half_sigma*IM, spot + half_sigma*IM] at
+    `spacing`-point increments, fetches call OPRAs for each strike in one
+    batched call, and returns [{"strike": float, "call_price": float}]
+    (the input contract for compute_implied_pdf).
+
+    spot is the SPX cash price — NO ES→SPX conversion applied (band strikes
+    are already in SPX cash space).
+
+    entry_pt must be a **naive PT datetime**.
+
+    Missing strikes (404, no bar) are omitted from the output — the caller's
+    implied_distribution.py sparse-path triggers automatically when < 8 strikes
+    or > 25pt spacing survive.
+
+    Returns the list of {strike, call_price} dicts (may be empty on total miss).
+    """
+    half = half_sigma * implied_move if implied_move > 0 else 50.0
+    lo_raw = spot - half
+    hi_raw = spot + half
+
+    # Align to the nearest 5-point SPX grid.  spot is already SPX cash —
+    # NO ES→SPX conversion here (that conversion only applies to proposal leg
+    # strikes, which live in discounted-forward space).
+    lo = round(lo_raw / spacing) * spacing
+    hi = round(hi_raw / spacing) * spacing
+
+    # Build a call OPRA for each SPX strike in the band
+    unique_strikes: list[int] = []
+    seen_k: set = set()
+    k = lo
+    while k <= hi + 1e-9:
+        spx_k = round(k / spacing) * spacing   # idempotent; ensures 5pt grid
+        if spx_k not in seen_k:
+            seen_k.add(spx_k)
+            unique_strikes.append(int(spx_k))
+        k += spacing
+
+    if not unique_strikes:
+        return []
+
+    call_opras = [format_opra("SPX", expiration_date, "C", s) for s in unique_strikes]
+
+    # Batched fetch — writes to cache, idempotent
+    try:
+        fetch_option_bars(call_opras, entry_pt, entry_pt)
+    except (OratsPermanentError, OratsError) as e:
+        logger.warning("build_real_strike_band: fetch error for %s: %s", entry_pt, e)
+        # Continue: return whatever is in cache from prior fetches
+
+    # Read mids
+    chain: list[dict] = []
+    for spx_strike, opra in zip(unique_strikes, call_opras):
+        bars = repo.get_bars_for_contract(opra, entry_pt, entry_pt)
+        if not bars:
+            continue
+        bar = bars[0]
+        if bar.bid_price is None or bar.ask_price is None:
+            continue
+        mid = (float(bar.bid_price) + float(bar.ask_price)) / 2.0
+        if mid > 0:
+            chain.append({"strike": float(spx_strike), "call_price": round(mid, 4)})
+
+    return chain
