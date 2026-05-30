@@ -76,6 +76,9 @@ _TTE_BY_TIMEFRAME: dict[str, float] = {
     "t15": 15.0 / 252,
 }
 
+# Calendar-day offset for each timeframe (horizon for P/L curves + greeks)
+_HORIZON_DAYS: dict[str, int] = {"t1": 1, "t5": 5, "t15": 15}
+
 log = logging.getLogger(__name__)
 
 
@@ -518,9 +521,16 @@ def register_proposals_routes(server) -> None:
                 tolerance=pin_tolerance,
             )
 
-            # ── 15. Greeks at spot ─────────────────────────────────────────
+            # ── 15. Greeks at the selected horizon (tracks t1/t5/t15 selector)
+            # Compute at entry_time + N days (same horizon as the P/L curve),
+            # NOT at evaluation_time (expiry where T≈0 → greeks ≈ 0).
+            # Cap at evaluation_time so we never evaluate past expiry.
+            _horizon_days = _HORIZON_DAYS.get(timeframe, 5)
+            greeks_time = entry_time + dt.timedelta(days=_horizon_days)
+            if greeks_time >= evaluation_time:
+                greeks_time = entry_time   # very short DTE: fall back to entry
             greeks = compute_position_greeks(
-                legs_with_iv, spot, evaluation_time, market_state
+                legs_with_iv, spot, greeks_time, market_state
             )
 
             # ── 16. Key levels ─────────────────────────────────────────────

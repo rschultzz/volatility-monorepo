@@ -459,6 +459,20 @@ class TestHappyPath(unittest.TestCase):
         for k in ("delta", "gamma", "theta", "vega", "rho"):
             self.assertIn(k, data["greeks"])
 
+    def test_200_greeks_nonzero_at_horizon(self):
+        """Greeks must be non-zero for a 4-day DTE call spread at t5 horizon.
+
+        _VALID_BODY has legs expiring 2023-05-05, trade_date 2023-05-01 (DTE=4).
+        t5 horizon = entry + 5 days > expiry → caps back to entry_time, so T > 0
+        and BSM greeks are finite and non-zero for a spread with position around ATM.
+        """
+        _, data = self._run()
+        g = data["greeks"]
+        # At least delta and vega should be non-trivially non-zero for a call spread
+        # (even if individually small for an OTM spread, they're not all exactly 0)
+        all_zero = all(abs(v or 0.0) < 1e-12 for v in g.values())
+        self.assertFalse(all_zero, "All greeks are ≈0; horizon-tracking may not be working")
+
     def test_200_key_levels_has_required_fields(self):
         _, data = self._run()
         kl = data["key_levels"]
