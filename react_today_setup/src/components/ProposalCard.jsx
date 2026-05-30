@@ -381,7 +381,11 @@ export default function ProposalCard({
 
   return (
     <div
-      className={`proposal-card${isNoTrade ? ' no-trade' : ''}`}
+      className={[
+        'proposal-card',
+        isNoTrade ? 'no-trade' : '',
+        expanded ? 'proposal-card--expanded' : '',
+      ].filter(Boolean).join(' ')}
       data-testid="proposal-card"
     >
       <div className="proposal-label">
