@@ -45,16 +45,12 @@ function adaptLeg(leg, expiration) {
 function buildPlDataBody(proposal, date, ticker, timeframe, contextRegime, contextDriftTarget) {
   const expiration = addCalendarDays(date, proposal.expiry_dte_target ?? 0);
   const regime = proposal.source?.regime || contextRegime || 'amplification';
-  // Build regime_block with all available keys so get_trade_thesis_range
-  // can compute one-sided ranges for magnet-above/below (needs drift_target).
   const regime_block = { regime };
   const src = proposal.source || {};
   if (src.drift_target != null)    regime_block.drift_target    = src.drift_target;
   if (src.tolerance != null)       regime_block.tolerance       = src.tolerance;
   if (src.lower_price != null)     regime_block.lower_price     = src.lower_price;
   if (src.upper_price != null)     regime_block.upper_price     = src.upper_price;
-  // Also forward context-level drift_target if not already set (e.g. for
-  // regime_target proposals whose source.type isn't 'regime_target').
   if (regime_block.drift_target == null && contextDriftTarget != null) {
     regime_block.drift_target = contextDriftTarget;
   }
@@ -96,64 +92,36 @@ function SourceLine({ source, wingRecipe }) {
   return <div className="source-line">{parts.join(' · ')}</div>;
 }
 
+/** Small inline badge for data-quality warnings. */
+function WarningsBadge({ warnings }) {
+  if (!warnings || warnings.length === 0) return null;
+  return (
+    <div
+      title={warnings.join('\n')}
+      style={{
+        display:      'inline-flex',
+        alignItems:   'center',
+        gap:          4,
+        fontSize:     9,
+        fontWeight:   700,
+        color:        '#f59e0b',
+        background:   '#292524',
+        border:       '1px solid #78350f',
+        borderRadius: 4,
+        padding:      '1px 5px',
+        cursor:       'help',
+      }}
+    >
+      ⚠ {warnings.length === 1 ? warnings[0].slice(0, 40) : `${warnings.length} data warnings`}
+    </div>
+  );
+}
+
 // ── Expanded chart panel ───────────────────────────────────────────────────────
 
-function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime, contextDriftTarget }) {
-  const [timeframe, setTimeframe]   = useState(DEFAULT_TIMEFRAME);
-  const [chartData, setChartData]   = useState(undefined); // undefined = not yet fetched
-  const cacheRef = useRef({});   // timeframe → resolved data (or error shape)
-  const containerRef = useRef(null);
-  const [chartWidth, setChartWidth] = useState(640);
-
-  // ResizeObserver — tracks panel width for chart sizing.
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(entries => {
-      const w = entries[0]?.contentRect?.width;
-      if (w > 0) setChartWidth(Math.floor(w));
-    });
-    ro.observe(el);
-    setChartWidth(Math.floor(el.clientWidth) || 640);
-    return () => ro.disconnect();
-  }, []);
-
-  // Fetch pl-data when timeframe changes (or on first mount).
-  const fetchPlData = useCallback(async (tf) => {
-    if (cacheRef.current[tf] !== undefined) {
-      setChartData(cacheRef.current[tf]);
-      return;
-    }
-    // Loading state while request is in-flight.
-    setChartData(undefined);
-    const body = buildPlDataBody(proposal, date, ticker, tf, contextRegime, contextDriftTarget);
-    try {
-      const resp = await fetch(`${apiBase}/api/proposals/pl-data`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(body),
-      });
-      const json = await resp.json();
-      cacheRef.current[tf] = json;
-      setChartData(json);
-    } catch (err) {
-      const errShape = { ok: false, error: String(err) };
-      cacheRef.current[tf] = errShape;
-      setChartData(errShape);
-    }
-  }, [proposal, date, ticker, apiBase, contextRegime, contextDriftTarget]);
-
-  useEffect(() => {
-    fetchPlData(timeframe);
-  }, [timeframe, fetchPlData]);
-
-  function handleTimeframeChange(tf) {
-    if (tf === timeframe) return;
-    // Invalidate cache for the new timeframe so a fresh fetch is made.
-    delete cacheRef.current[tf];
-    setTimeframe(tf);
-  }
-
+function ExpandedPanel({
+  timeframe, setTimeframe, chartData, containerRef, chartWidth,
+}) {
   return (
     <div
       data-testid="proposal-expanded-panel"
@@ -174,7 +142,7 @@ function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime, context
               key={tf}
               type="button"
               aria-pressed={tf === timeframe}
-              onClick={() => handleTimeframeChange(tf)}
+              onClick={() => setTimeframe(tf)}
               style={{
                 padding:     '2px 9px',
                 fontSize:    10,
@@ -197,7 +165,6 @@ function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime, context
 
       {/* Chart area — full card width */}
       <div ref={containerRef} style={{ width: '100%' }}>
-        {/* null data → ProposalEdgeChart renders its own skeleton */}
         <ProposalEdgeChart
           data={chartData === undefined ? null : chartData}
           width={chartWidth}
@@ -205,7 +172,7 @@ function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime, context
         />
       </div>
 
-      {/* Greeks row — shown once chartData is loaded (greeks is null while loading) */}
+      {/* Greeks row */}
       <GreeksDisplay
         greeks={chartData?.greeks ?? null}
         evaluationTime={chartData?.evaluation_time ?? null}
@@ -218,7 +185,6 @@ function ExpandedPanel({ proposal, date, ticker, apiBase, contextRegime, context
 
 export default function ProposalCard({
   proposal,
-  // New props for pl-data fetch (optional — gracefully absent for no-trade cards)
   date,
   ticker,
   apiBase,
@@ -239,11 +205,77 @@ export default function ProposalCard({
   const canExpand         = !isNoTrade && Array.isArray(legs) && legs.length > 0 && !!date;
   const label             = TEMPLATE_LABELS[template_id] || template_id;
   const contextRegime     = context?.regime;
-  // drift_target: prefer the proposal's own source, fall back to context's top_cluster
-  // or clusters (not currently stored in context, but future-proof).
   const contextDriftTarget = source?.drift_target ?? context?.top_cluster?.center_price ?? null;
 
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded]     = useState(false);
+  const [timeframe, setTimeframe]   = useState(DEFAULT_TIMEFRAME);
+  const [chartWidth, setChartWidth] = useState(640);
+  const containerRef = useRef(null);
+
+  // Per-timeframe result cache (timeframe → data|error).
+  // Lifted to card level so the prefetch and the expanded chart share state.
+  const cacheRef = useRef({});
+  const [chartData, setChartData] = useState(undefined);
+
+  // ResizeObserver
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect?.width;
+      if (w > 0) setChartWidth(Math.floor(w));
+    });
+    ro.observe(el);
+    setChartWidth(Math.floor(el.clientWidth) || 640);
+    return () => ro.disconnect();
+  }, []);
+
+  // ── Fetch helper (shared by prefetch and expand) ────────────────────────
+  const fetchPlData = useCallback(async (tf) => {
+    if (cacheRef.current[tf] !== undefined) {
+      setChartData(cacheRef.current[tf]);
+      return;
+    }
+    setChartData(undefined);
+    const body = buildPlDataBody(proposal, date, ticker, tf, contextRegime, contextDriftTarget);
+    try {
+      const resp = await fetch(`${apiBase}/api/proposals/pl-data`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+      const json = await resp.json();
+      cacheRef.current[tf] = json;
+      setChartData(json);
+    } catch (err) {
+      const errShape = { ok: false, error: String(err) };
+      cacheRef.current[tf] = errShape;
+      setChartData(errShape);
+    }
+  }, [proposal, date, ticker, apiBase, contextRegime, contextDriftTarget]);
+
+  // ── Step 5-A + timeframe handling ─────────────────────────────────────
+  // On mount (timeframe = DEFAULT_TIMEFRAME), this acts as a non-blocking
+  // day-load prefetch: fires before expand, populates cacheRef, and fills
+  // the LegTable mid column progressively.  Re-loading an already-seen day
+  // (cacheRef hit) fires zero ORATS calls.  On timeframe change it re-fetches
+  // the new timeframe.  One effect covers both cases to avoid double-fetching.
+  useEffect(() => {
+    if (!canExpand) return;
+    fetchPlData(timeframe);
+  }, [timeframe, canExpand, fetchPlData]);
+
+  // ── Pricing data for the LegTable (default timeframe) ──────────────────
+  // Use the default-timeframe cached data so the header LegTable shows mids
+  // even before the card is expanded.
+  const defaultData  = cacheRef.current[DEFAULT_TIMEFRAME] || chartData;
+  const pricedLegs   = defaultData?.ok ? (defaultData.legs ?? null) : null;
+  const pricingWarns = defaultData?.ok ? (defaultData.warnings ?? []) : [];
+
+  function handleTimeframeChange(tf) {
+    if (tf === timeframe) return;
+    setTimeframe(tf);
+  }
 
   return (
     <div
@@ -260,7 +292,7 @@ export default function ProposalCard({
       {isNoTrade ? (
         <div className="no-trade-headline">NO TRADE</div>
       ) : (
-        <LegTable legs={legs} />
+        <LegTable legs={legs} pricedLegs={pricedLegs} />
       )}
 
       {expiry_dte_bucket && (
@@ -273,6 +305,9 @@ export default function ProposalCard({
       <div className="rationale">{rationale}</div>
 
       <SourceLine source={source} wingRecipe={wing_distance_recipe} />
+
+      {/* Data-quality warnings badge */}
+      {pricingWarns.length > 0 && <WarningsBadge warnings={pricingWarns} />}
 
       {/* Expand / collapse affordance */}
       {canExpand && (
@@ -301,12 +336,11 @@ export default function ProposalCard({
       {/* Expanded chart panel */}
       {expanded && canExpand && (
         <ExpandedPanel
-          proposal={proposal}
-          date={date}
-          ticker={ticker}
-          apiBase={apiBase}
-          contextRegime={contextRegime}
-          contextDriftTarget={contextDriftTarget}
+          timeframe={timeframe}
+          setTimeframe={handleTimeframeChange}
+          chartData={chartData}
+          containerRef={containerRef}
+          chartWidth={chartWidth}
         />
       )}
     </div>
