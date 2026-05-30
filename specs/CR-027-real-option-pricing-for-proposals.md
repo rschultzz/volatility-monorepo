@@ -154,6 +154,75 @@ def price_proposal_legs(
 
 Real skewed implied will shift every `edge_ratio`. Capture a note (in status updates + a follow-up open-question) to re-tune the 1.3/2.0 zone thresholds against real values after a few days of observation.
 
+---
+
+# Order-entry surfacing (Steps 7–11 — added 2026-05-29, pre-merge)
+
+> Steps 0-A–5-A shipped the real-pricing substrate but the card was not yet order-ready: greeks ≈0 (computed at expiry T=0), edge ratio/implied prob not rendered as text, no net debit/credit shown, no calendar expiry date, expanded chart overhanging the card. These five steps add surface only — no pricing, edge-engine, or curve changes.
+
+## Scope decision (locked 2026-05-29)
+
+**The P/L chart stays in ES space.** `spot` = `session_open_t0` (ES), `build_grid_bounds` + `drift_target` are ES, legs carry `raw["strike"]` (ES). The chart kink at the ES strike is correct. The apparent "offset" was a reading artifact: eye anchored on the SPX STRIKE column while the chart is ES. Ryan's call: keep chart ES — consistent with the rest of the app. No axis work in this CR.
+
+## Step 7 — Greeks at entry (not expiry)
+
+**Commit:** `cr-t/step-7: compute position greeks at entry time, not expiry`
+
+`routes.py` step 15 calls `compute_position_greeks(legs_with_iv, spot, evaluation_time, market_state)` — `evaluation_time` is expiry (T≈0), so all greeks collapse to ≈0.
+
+- **Greeks track the t1/t5/t15 horizon selector** — compute at the selected horizon (`entry_time + N days`, same horizon as the P/L curve). The selected `timeframe` is already a request param and drives `_TTE_BY_TIMEFRAME` + the P/L curves.
+- Pass that horizon datetime (not `evaluation_time`) to `compute_position_greeks`.
+- `legs_with_iv` already carry calibrated per-leg IVs (step 6b), so greeks reflect real-mid-anchored vols.
+
+**Pre-step grep:** confirm proposals route is the only consumer of `compute_position_greeks` affected. Stop + surface on contradiction.
+
+**Deliverable:** Δ/Γ/Θ/V/ρ show non-zero, sensible values for a 15-DTE call spread AND change when t1/t5/t15 selector is toggled. Test: non-zero and finite at each horizon, differ across horizons.
+
+## Step 8 — Surface net debit/credit
+
+**Commit:** `cr-t/step-8: echo net debit/credit into response and render on card`
+
+`price_proposal_legs` returns `net_debit` (positive = debit, negative = credit, `None` if any leg mid missing); it becomes `initial_cost` in the route but is NOT echoed as its own response field.
+
+- **Backend:** echo `net_cost` (= `initial_cost` or real `net_debit`) into the response, preserving the sign convention. One field, no new computation.
+- **Frontend:** render on the card labeled by sign — "Net debit $X.XX" / "Net credit $X.XX". If `None`, show "—" with the existing data-quality warning, not a misleading 0.
+
+**Deliverable:** card shows net debit/credit, correctly labeled by sign, matching per-leg mids by hand.
+
+## Step 9 — Surface expiry calendar date
+
+**Commit:** `cr-t/step-9: show expiry calendar date on card`
+
+`legs_out[].expiration` is already an ISO date string in the payload; the card shows only "Target DTE: 15d (8-30 bucket)".
+
+- **Frontend only:** show the actual expiration date ("Expiry: 2026-06-13") alongside or in place of the DTE/bucket. Keep DTE context. Calendar date a human punches into a ticket must be visible.
+- Mixed-expiry structures: show per-leg expiry; single-expiry (common case) one date line suffices.
+
+**Deliverable:** card shows calendar expiry date(s); user can read strike + expiry + side + qty + net cost without leaving the card.
+
+## Step 10 — Render the edge block
+
+**Commit:** `cr-t/step-10: render structural/implied/edge-ratio on card`
+
+`trade_thesis` with `structural_prob`, `implied_prob`, `edge_ratio` is already in the response; not rendered as text.
+
+- **Frontend only:** render as a small text block ("Struct 15.8% · Implied 11.2% · Edge 1.41×"), color-consistent with edge-zone semantics (green = struct > implied).
+- If `implied_prob` is `None` (sparse band / fallback), show structural prob + "implied unavailable" rather than blank or divide-by-zero.
+- **Display only** — do NOT recompute or re-threshold. Threshold recalibration is the separate observational follow-up (Step 6).
+
+**Deliverable:** edge ratio + both probabilities visible as text, sign/color-consistent with the chart.
+
+## Step 11 — Card fits chart width
+
+**Commit:** `cr-t/step-11: proposal card grows to fit expanded edge chart`
+
+- **CSS only:** when the edge chart is expanded, the card container grows to contain the chart (make the card fit the chart, not the reverse).
+- Verify both collapsed (no chart) and expanded states render cleanly, and the two-card row (Directional / Debit side by side) doesn't break when one card is expanded.
+
+**Deliverable:** expanded card has no floating chart overhang; collapsed and expanded states both look intentional.
+
+---
+
 ## Smoke tests
 
 1. **Zero-debit fix:** OTM debit spread → `initial_cost > 0`, `min(pnl) < 0`, one breakeven at long-strike + debit.
@@ -165,12 +234,19 @@ Real skewed implied will shift every `edge_ratio`. Capture a note (in status upd
 7. **Horizon vs expiry:** expiry curve has sharp kinks at strikes; t5/t15 curves are smooth and pass near the real entry debit at spot.
 8. **No regression:** structural side (`structural_prob`, KNN) unchanged vs CR-G for the same anchor.
 9. **Day-load prefetch:** loading a day fires background pricing for all proposals without blocking render; cards fill progressively; re-loading the same day fires zero ORATS calls; the implied band is fetched once for the day, not per proposal.
+10. **Greeks non-zero + horizon-tracking (Step 7):** the magnet-above debit spread shows non-zero, sensible Δ/Γ/Θ/V/ρ; values change across t1/t5/t15 (theta/vega shift with horizon). Not all ≈0, not static across the selector.
+11. **Net cost correct + signed (Step 8):** card net debit/credit equals hand-summed per-leg mids with the long/short sign convention; credit structure labels "credit," debit labels "debit."
+12. **Expiry date visible (Step 9):** card shows the calendar expiry matching `legs_out[].expiration`; mixed-expiry shows per-leg dates.
+13. **Edge block visible (Step 10):** struct/implied/edge-ratio render as text, color-consistent with chart zones; `implied_prob = None` degrades gracefully (no NaN/∞, no blank).
+14. **Card fits chart (Step 11):** expanding the chart grows the card to fit; no overhang; side-by-side row intact.
+15. **No pricing/chart regression:** curve, edge zones, per-leg mids, and SPX strikes unchanged from Steps 0-A–5-A; chart stays ES.
 
 ## Wrap criteria
 
-- Steps 0-A through 5-A committed on the branch; Step 0-B coverage table + Step 6 recalibration note in status updates.
-- All smoke tests pass.
+- Steps 0-A through 5-A **and Steps 7–11** committed on the branch; Step 0-B coverage table + Step 6 recalibration note in status updates.
+- All smoke tests pass (1–9 pricing/substrate; 10–15 order-entry surfacing).
 - A real anchor shows: real entry debit, real skewed `implied_prob`, meaningful `edge_ratio`, correct loss region, both horizon and expiry curves.
+- The card reads as **order-ready**: SPX strikes, calendar expiry, net debit/credit, non-zero greeks, and the edge block all visible; chart unchanged (ES).
 - Roadmap updated: CR-T complete; CR-F / CR-H confirmed unblocked to build on real numbers.
 - ADR (2026-05-29 - Proposal Pricing Sources from Real ORATS Mids) status moved open → closed.
 - Follow-up open-question filed for edge-threshold recalibration.
