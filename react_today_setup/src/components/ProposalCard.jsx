@@ -117,6 +117,38 @@ function WarningsBadge({ warnings }) {
   );
 }
 
+/** Show expiry date(s) from priced legs.
+ *
+ * Single-expiry (common): one "Expiry: YYYY-MM-DD" line.
+ * Mixed-expiry: one line per unique date grouped with leg roles.
+ */
+function ExpiryLine({ pricedLegs }) {
+  if (!pricedLegs || pricedLegs.length === 0) return null;
+
+  const dates = [...new Set(pricedLegs.map(l => l.expiration).filter(Boolean))];
+  if (dates.length === 0) return null;
+
+  if (dates.length === 1) {
+    return (
+      <div style={{ fontSize: 10, color: '#94a3b8' }}>
+        Expiry: <strong style={{ color: '#cbd5e1' }}>{dates[0]}</strong>
+      </div>
+    );
+  }
+
+  // Mixed-expiry: show per-leg
+  return (
+    <div style={{ fontSize: 10, color: '#94a3b8', display: 'flex', flexDirection: 'column', gap: 1 }}>
+      {pricedLegs.filter(l => l.expiration).map((l, i) => (
+        <span key={i}>
+          {l.side === 'long' ? '+' : '−'}{l.flag?.toUpperCase()} {l.strike_spx}
+          {' '}→ <strong style={{ color: '#cbd5e1' }}>{l.expiration}</strong>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /** Render net debit or net credit from the pl-data response. */
 function NetCostLine({ netCost }) {
   if (netCost === undefined) return null;   // not yet loaded
@@ -321,12 +353,16 @@ export default function ProposalCard({
         <LegTable legs={legs} pricedLegs={pricedLegs} />
       )}
 
-      {expiry_dte_bucket && (
-        <div className="expiry-line">
-          Target DTE: <strong>{expiry_dte_target}d</strong>
-          {' '}({expiry_dte_bucket} bucket)
-        </div>
-      )}
+      {/* Expiry: real calendar date from payload (Step 9) + DTE/bucket context */}
+      {pricedLegs
+        ? <ExpiryLine pricedLegs={pricedLegs} />
+        : expiry_dte_bucket && (
+          <div className="expiry-line">
+            Target DTE: <strong>{expiry_dte_target}d</strong>
+            {' '}({expiry_dte_bucket} bucket)
+          </div>
+        )
+      }
 
       <div className="rationale">{rationale}</div>
 
