@@ -58,9 +58,11 @@ from .service import (
     build_entry_time,
     build_evaluation_time,
     build_grid_bounds,
+    calibrate_leg_iv,
     compute_initial_cost,
     compute_key_levels,
     compute_pl_curve,
+    compute_pl_curves,
 )
 
 _VALID_TIMEFRAMES = {"t1", "t5", "t15"}
@@ -358,7 +360,7 @@ def register_proposals_routes(server) -> None:
 
             # ── 5. Build legs with IV + expiration datetime ────────────────
             # Expiration date → 16:00 ET datetime for pricing engine.
-            # MVP: same atmiv for all legs (per-leg skew = future work).
+            # IVs start as atmiv; calibrated per-leg in step 6b if real mids.
             legs_with_iv: list[dict] = [
                 {
                     **leg,
@@ -367,10 +369,6 @@ def register_proposals_routes(server) -> None:
                 }
                 for leg in raw_legs
             ]
-            if len(legs_with_iv) > 1:
-                warn_msgs.append(
-                    "using atmiv for all legs (per-leg smile interpolation not yet implemented)"
-                )
 
             # ── 6. Real entry cost via ORATS mids ─────────────────────────
             # price_proposal_legs fetches real bid/ask mids from the options
@@ -397,18 +395,52 @@ def register_proposals_routes(server) -> None:
                         "real entry pricing unavailable; using BSM fallback"
                     )
 
+            # ── 6b. Calibrate per-leg BSM vol to reproduce real entry mid ─
+            # Replaces atmiv with the per-leg implied vol anchored to the real
+            # mid so that the P/L curve passes through the real entry price.
+            real_legs_idx = {
+                i: rleg for i, rleg in enumerate(real_pricing.get("legs", []))
+            }
+            for i, leg in enumerate(legs_with_iv):
+                rleg = real_legs_idx.get(i, {})
+                real_mid = rleg.get("mid")
+                if real_mid is None or real_mid <= 0:
+                    continue
+                T_entry = max(
+                    0.0,
+                    (leg["expiration"] - entry_time).total_seconds() / (365.25 * 24 * 3600),
+                )
+                calib_iv = calibrate_leg_iv(
+                    spot=spot,
+                    strike=float(leg["strike"]),
+                    T=T_entry,
+                    r=risk_free_rate,
+                    flag=leg["flag"],
+                    real_mid=abs(real_mid),   # use abs — calibrate on the price, sign via side
+                    iv_guess=atmiv,
+                )
+                leg["iv"] = calib_iv
+
             # ── 7. Price grid bounds (shared by P/L curve + edge zones) ───
             # Computed once so both consumers cover the same asymmetric range.
             grid_lo, grid_hi = build_grid_bounds(spot, implied_move, regime_block)
 
-            # ── 8. P/L curve ──────────────────────────────────────────────
-            pl_curve = compute_pl_curve(
+            # ── 8. Multi-horizon P/L curves (expiry + t1/t5/t15) ─────────
+            # BSM P/L curves calibrated to real entry mids.  The at-expiry
+            # curve is intrinsic − real_debit; horizon curves are smooth BSM
+            # surfaces that pass near the real entry debit at spot.
+            pl_curves = compute_pl_curves(
                 legs_with_iv, spot, implied_move,
-                evaluation_time, market_state, initial_cost,
+                evaluation_time, entry_time, market_state, initial_cost,
                 regime_block=regime_block,
             )
+            # pl_curve (singular) = the at-expiry curve for backwards compat.
+            pl_curve = next(
+                (c for c in pl_curves if c["label"] == "expiry"),
+                pl_curves[0] if pl_curves else {"prices": [], "pnl": []},
+            )
 
-            # ── 8. IV curve (flat atmiv across price grid) ─────────────────
+            # ── 8b. IV curve (flat atmiv across price grid) ────────────────
             iv_curve = {
                 "prices": pl_curve["prices"],
                 "iv":     [atmiv] * len(pl_curve["prices"]),
@@ -562,6 +594,7 @@ def register_proposals_routes(server) -> None:
                 "implied_move":   implied_move,
                 "legs":           legs_out,
                 "pl_curve":       pl_curve,
+                "pl_curves":      pl_curves,
                 "iv_curve":       iv_curve,
                 "trade_thesis":   trade_thesis,
                 "edge_zones":     edge_zones,
