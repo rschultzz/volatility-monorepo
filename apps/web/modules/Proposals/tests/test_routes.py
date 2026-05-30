@@ -329,14 +329,37 @@ class TestHappyPath(unittest.TestCase):
         # available in the local Python 3.9 test environment (NumPy 1.20).
         # Production runs NumPy 2.2.6 from requirements.txt; that layer is
         # tested via packages/shared/tests. Here we just verify the pipeline wires up.
+        # price_proposal_legs and build_real_strike_band are patched so the
+        # happy-path tests don't hit the options cache (DB / ORATS network).
+        _REAL_PRICING_RESULT = {
+            "legs": [
+                {"flag": "c", "side": "long",  "qty": 1, "strike_es": 4225,
+                 "spx_strike": 4225, "opra": "SPX230505C04225000",
+                 "expiration": __import__("datetime").date(2023, 5, 5),
+                 "bid": 5.10, "ask": 5.30, "mid": 5.20},
+                {"flag": "c", "side": "short", "qty": 1, "strike_es": 4250,
+                 "spx_strike": 4250, "opra": "SPX230505C04250000",
+                 "expiration": __import__("datetime").date(2023, 5, 5),
+                 "bid": 3.00, "ask": 3.20, "mid": 3.10},
+            ],
+            "net_debit": round(5.20 - 3.10, 4),
+            "warnings": [],
+        }
+        _MOCK_CHAIN = [
+            {"strike": k, "call_price": max(0.01, (4210.0 - k) * 0.1)}
+            for k in range(4000, 4400, 5)
+        ]
         patches = [
             patch(f"{_MODULE}._conn",                    return_value=mock_conn),
             patch(f"{_MODULE}._rank_analogues_with_outcomes", return_value=_MOCK_ANALOGUES),
             patch(f"{_MODULE}.compute_edge_zones",       return_value=[]),
             patch(f"{_MODULE}.compute_implied_pdf",      return_value={4000.0: 0.01, 4400.0: 0.01}),
             patch(f"{_MODULE}.compute_implied_prob_in_range", return_value=0.37),
+            patch(f"{_MODULE}.price_proposal_legs",      return_value=_REAL_PRICING_RESULT),
+            patch(f"{_MODULE}.build_real_strike_band",   return_value=_MOCK_CHAIN),
         ]
-        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6]:
             return _post(self.app, _VALID_BODY)
 
     def test_200_response_ok(self):
@@ -403,6 +426,10 @@ class TestHappyPath(unittest.TestCase):
         for leg in data["legs"]:
             self.assertIn("iv",            leg)
             self.assertIn("initial_value", leg)
+            self.assertIn("bid",           leg)
+            self.assertIn("ask",           leg)
+            self.assertIn("mid",           leg)
+            self.assertIn("opra",          leg)
 
     def test_200_legs_have_strike_spx(self):
         """Each leg in the response must carry strike_spx as a multiple of 5."""

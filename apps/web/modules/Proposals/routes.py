@@ -42,6 +42,10 @@ from packages.shared.implied_distribution import (
     compute_implied_pdf,
     compute_implied_prob_in_range,
 )
+from packages.shared.options_cache.pricing import (
+    build_real_strike_band,
+    price_proposal_legs,
+)
 from packages.shared.pricing.engine import compute_position_greeks
 from packages.shared.probability import _rank_analogues_with_outcomes
 from packages.shared.structural_distribution import (
@@ -308,12 +312,15 @@ def register_proposals_routes(server) -> None:
         raw_legs:     list    = norm["legs"]
 
         # Shortest expiration drives evaluation_time (at-expiry payoff curve).
-        # entry_time is the pricing moment: 07:00 PT (10:00 ET) on trade_date
-        # so T = expiration − entry_time > 0, giving real time value at entry.
+        # entry_time is the pricing moment: 07:00 PT (10:00 ET) on trade_date.
+        # entry_pt_naive is the same instant as a naive PT datetime, required by
+        # fetch_option_bars which rejects tz-aware inputs.
         expir_dates    = sorted(leg["expiration"] for leg in raw_legs)
         shortest_expir = expir_dates[0]
         evaluation_time = build_evaluation_time(shortest_expir)
         entry_time      = build_entry_time(trade_date)
+        _PT_TZ = ZoneInfo("America/Los_Angeles")
+        entry_pt_naive  = entry_time.astimezone(_PT_TZ).replace(tzinfo=None)
 
         # ── 2. DB connect ─────────────────────────────────────────────────
         try:
@@ -365,12 +372,30 @@ def register_proposals_routes(server) -> None:
                     "using atmiv for all legs (per-leg smile interpolation not yet implemented)"
                 )
 
-            # ── 6. Initial cost at entry_time (not expiry) ────────────────
-            # Pricing at entry_time ensures T > 0 so OTM legs carry real
-            # time value.  The at-expiry P/L curve (step 8) subtracts this.
-            initial_cost = compute_initial_cost(
-                legs_with_iv, spot, entry_time, market_state
+            # ── 6. Real entry cost via ORATS mids ─────────────────────────
+            # price_proposal_legs fetches real bid/ask mids from the options
+            # cache (writing through on miss).  Falls back to BSM at entry_time
+            # if all legs are unavailable so the route never hard-fails.
+            real_pricing = price_proposal_legs(
+                raw_legs,
+                trade_date=trade_date,
+                entry_pt=entry_pt_naive,
+                r=risk_free_rate,
+                q=yield_rate,
             )
+            warn_msgs.extend(real_pricing["warnings"])
+
+            if real_pricing["net_debit"] is not None:
+                initial_cost = real_pricing["net_debit"]
+            else:
+                # BSM fallback at entry_time ensures T > 0 (zero-debit fix).
+                initial_cost = compute_initial_cost(
+                    legs_with_iv, spot, entry_time, market_state
+                )
+                if real_pricing["warnings"]:
+                    warn_msgs.append(
+                        "real entry pricing unavailable; using BSM fallback"
+                    )
 
             # ── 7. Price grid bounds (shared by P/L curve + edge zones) ───
             # Computed once so both consumers cover the same asymmetric range.
@@ -389,9 +414,22 @@ def register_proposals_routes(server) -> None:
                 "iv":     [atmiv] * len(pl_curve["prices"]),
             }
 
-            # ── 9. BSM option chain for implied PDF ───────────────────────
+            # ── 9. Real strike band for implied PDF (Breeden-Litzenberger) ──
+            # Fetches real per-strike call mids around the thesis range from
+            # the options cache. Falls back to a synthetic BSM chain if the
+            # band returns fewer than 2 strikes (total cache miss scenario).
             tte = _TTE_BY_TIMEFRAME[timeframe]
-            option_chain = build_bsm_chain(spot, atmiv, risk_free_rate, tte)
+            option_chain = build_real_strike_band(
+                spot, implied_move,
+                expiration_date=shortest_expir,
+                entry_pt=entry_pt_naive,
+            )
+            if len(option_chain) < 2:
+                warn_msgs.append(
+                    "real strike band unavailable (< 2 strikes fetched); "
+                    "falling back to BSM chain (no skew)"
+                )
+                option_chain = build_bsm_chain(spot, atmiv, risk_free_rate, tte)
 
             # ── 10. Analogues (K=20 KNN) ───────────────────────────────────
             analogues = _rank_analogues_with_outcomes(
@@ -476,30 +514,43 @@ def register_proposals_routes(server) -> None:
                 "edge_ratio":      edge_ratio,
             }
 
-            # ── 18. Per-leg response (echo + IV + initial_value + strike_spx) ─
-            legs_out = [
-                {
-                    "strike":        leg["strike"],
-                    "strike_spx":    compute_spx_strike(
-                                         leg["strike"],
-                                         (raw["expiration"] - trade_date).days,
-                                         risk_free_rate,
-                                         yield_rate,
-                                     ),
-                    "expiration":    raw["expiration"].isoformat(),
-                    "flag":          leg["flag"],
-                    "side":          leg["side"],
-                    "qty":           leg["qty"],
-                    "iv":            atmiv,
-                    "initial_value": round(
-                        compute_initial_cost(
-                            [leg], spot, entry_time, market_state
-                        ),
+            # ── 18. Per-leg response (echo + IV + real prices + strike_spx) ─
+            # Merge real pricing from price_proposal_legs into the leg output.
+            # Index-aligned: real_pricing["legs"] has the same order as raw_legs.
+            real_legs_by_idx = {
+                i: rleg for i, rleg in enumerate(real_pricing.get("legs", []))
+            }
+            legs_out = []
+            for i, (leg, raw) in enumerate(zip(legs_with_iv, raw_legs)):
+                rleg = real_legs_by_idx.get(i, {})
+                dte_i = (raw["expiration"] - trade_date).days
+                spx_strike_i = rleg.get("spx_strike") or compute_spx_strike(
+                    raw["strike"], dte_i, risk_free_rate, yield_rate
+                )
+                real_mid = rleg.get("mid")
+                if real_mid is not None:
+                    initial_val = round(
+                        (1.0 if raw["side"] == "long" else -1.0) * raw.get("qty", 1) * real_mid,
                         4,
-                    ),
-                }
-                for leg, raw in zip(legs_with_iv, raw_legs)
-            ]
+                    )
+                else:
+                    initial_val = round(
+                        compute_initial_cost([leg], spot, entry_time, market_state), 4
+                    )
+                legs_out.append({
+                    "strike":        raw["strike"],
+                    "strike_spx":    spx_strike_i,
+                    "opra":          rleg.get("opra"),
+                    "expiration":    raw["expiration"].isoformat(),
+                    "flag":          raw["flag"],
+                    "side":          raw["side"],
+                    "qty":           raw.get("qty", 1),
+                    "iv":            atmiv,
+                    "bid":           rleg.get("bid"),
+                    "ask":           rleg.get("ask"),
+                    "mid":           real_mid,
+                    "initial_value": initial_val,
+                })
 
             return jsonify({
                 "ok":             True,
