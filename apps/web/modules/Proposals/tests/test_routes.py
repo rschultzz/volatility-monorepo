@@ -23,6 +23,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from flask import Flask
 from apps.web.modules.Proposals.routes import register_proposals_routes, _fetch_smile_row
+from apps.web.modules.Proposals.service import build_entry_time, build_evaluation_time
 
 _MODULE = "apps.web.modules.Proposals.routes"
 
@@ -77,6 +78,46 @@ def _post(app: Flask, body: dict) -> tuple:
             content_type="application/json",
         )
         return resp.status_code, resp.get_json()
+
+
+# ── build_entry_time unit tests ───────────────────────────────────────────────
+
+class TestBuildEntryTime(unittest.TestCase):
+    """build_entry_time must produce 07:00 PT (10:00 ET) on trade_date, in UTC."""
+
+    def test_returns_utc_aware_datetime(self):
+        import datetime as dt
+        from zoneinfo import ZoneInfo
+        result = build_entry_time(dt.date(2023, 5, 1))
+        self.assertIsNotNone(result.tzinfo, "build_entry_time must return tz-aware datetime")
+        self.assertEqual(str(result.tzinfo), "UTC")
+
+    def test_is_1000_et_on_trade_date(self):
+        """07:00 PT = 10:00 ET — confirm the UTC offset is correct."""
+        import datetime as dt
+        from zoneinfo import ZoneInfo
+        result = build_entry_time(dt.date(2023, 5, 1))
+        et = result.astimezone(ZoneInfo("America/New_York"))
+        self.assertEqual(et.hour, 10)
+        self.assertEqual(et.minute, 0)
+        self.assertEqual(et.date(), dt.date(2023, 5, 1))
+
+    def test_entry_time_before_evaluation_time_same_expiry_date(self):
+        """entry_time on trade_date must be < evaluation_time on expiry_date."""
+        import datetime as dt
+        trade_date  = dt.date(2023, 5, 1)
+        expiry_date = dt.date(2023, 5, 5)
+        entry  = build_entry_time(trade_date)
+        expiry = build_evaluation_time(expiry_date)
+        self.assertLess(entry, expiry)
+
+    def test_entry_time_even_before_same_day_expiry(self):
+        """07:00 PT on a day < 16:00 ET on the same day (0DTE check)."""
+        import datetime as dt
+        same_day = dt.date(2023, 5, 1)
+        entry  = build_entry_time(same_day)
+        expiry = build_evaluation_time(same_day)
+        self.assertLess(entry, expiry)
 
 
 # ── _fetch_smile_row unit tests ───────────────────────────────────────────────
@@ -306,7 +347,7 @@ class TestHappyPath(unittest.TestCase):
     def test_200_top_level_keys_present(self):
         _, data = self._run()
         required = {
-            "ok", "trade_date", "ticker", "evaluation_time",
+            "ok", "trade_date", "ticker", "evaluation_time", "entry_time",
             "current_spot", "implied_move", "legs",
             "pl_curve", "iv_curve",
             "trade_thesis", "edge_zones", "greeks", "key_levels", "warnings",
@@ -325,6 +366,29 @@ class TestHappyPath(unittest.TestCase):
         _, data = self._run()
         # Should end in +00:00 (UTC)
         self.assertIn("+00:00", data["evaluation_time"])
+
+    def test_200_entry_time_before_evaluation_time(self):
+        """entry_time must be before evaluation_time (trade_date before expiry)."""
+        import datetime as dt
+        _, data = self._run()
+        self.assertIn("+00:00", data["entry_time"])
+        et = dt.datetime.fromisoformat(data["entry_time"])
+        ev = dt.datetime.fromisoformat(data["evaluation_time"])
+        self.assertLess(et, ev, "entry_time must be before evaluation_time (expiry)")
+
+    def test_200_legs_initial_value_nonzero_for_otm_spread(self):
+        """OTM vertical spread at entry must have non-zero initial_value per leg.
+
+        The zero-debit bug priced at T=0 → intrinsic only → OTM legs = 0.
+        With entry_time (T>0), BSM produces positive time value even for OTM.
+        """
+        _, data = self._run()
+        # _VALID_BODY is a call debit spread (long 4225C / short 4250C) with spot 4184.25
+        # At entry T > 0, both OTM legs should have positive BSM time value.
+        for leg in data["legs"]:
+            # initial_value is signed by side; just check it's non-zero
+            self.assertNotEqual(leg["initial_value"], 0.0,
+                f"Leg {leg['flag']} @ {leg['strike']} has initial_value 0.0 (zero-debit bug)")
 
     def test_200_pl_curve_has_prices_and_pnl(self):
         _, data = self._run()

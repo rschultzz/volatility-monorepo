@@ -51,6 +51,7 @@ from packages.shared.structural_distribution import (
 
 from .service import (
     build_bsm_chain,
+    build_entry_time,
     build_evaluation_time,
     build_grid_bounds,
     compute_initial_cost,
@@ -306,10 +307,13 @@ def register_proposals_routes(server) -> None:
         regime_block: dict    = norm["regime_block"]
         raw_legs:     list    = norm["legs"]
 
-        # Shortest expiration drives evaluation_time
+        # Shortest expiration drives evaluation_time (at-expiry payoff curve).
+        # entry_time is the pricing moment: 07:00 PT (10:00 ET) on trade_date
+        # so T = expiration − entry_time > 0, giving real time value at entry.
         expir_dates    = sorted(leg["expiration"] for leg in raw_legs)
         shortest_expir = expir_dates[0]
         evaluation_time = build_evaluation_time(shortest_expir)
+        entry_time      = build_entry_time(trade_date)
 
         # ── 2. DB connect ─────────────────────────────────────────────────
         try:
@@ -361,9 +365,11 @@ def register_proposals_routes(server) -> None:
                     "using atmiv for all legs (per-leg smile interpolation not yet implemented)"
                 )
 
-            # ── 6. Initial cost at spot ────────────────────────────────────
+            # ── 6. Initial cost at entry_time (not expiry) ────────────────
+            # Pricing at entry_time ensures T > 0 so OTM legs carry real
+            # time value.  The at-expiry P/L curve (step 8) subtracts this.
             initial_cost = compute_initial_cost(
-                legs_with_iv, spot, evaluation_time, market_state
+                legs_with_iv, spot, entry_time, market_state
             )
 
             # ── 7. Price grid bounds (shared by P/L curve + edge zones) ───
@@ -487,7 +493,7 @@ def register_proposals_routes(server) -> None:
                     "iv":            atmiv,
                     "initial_value": round(
                         compute_initial_cost(
-                            [leg], spot, evaluation_time, market_state
+                            [leg], spot, entry_time, market_state
                         ),
                         4,
                     ),
@@ -500,6 +506,7 @@ def register_proposals_routes(server) -> None:
                 "trade_date":     trade_date.isoformat(),
                 "ticker":         ticker,
                 "evaluation_time": evaluation_time.isoformat(),
+                "entry_time":     entry_time.isoformat(),
                 "current_spot":   spot,
                 "implied_move":   implied_move,
                 "legs":           legs_out,

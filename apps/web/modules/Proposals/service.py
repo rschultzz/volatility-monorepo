@@ -4,6 +4,7 @@ No DB I/O in this module. All DB access is in routes.py.
 
 Functions:
     build_evaluation_time   — expiration date → 16:00 ET → UTC datetime
+    build_entry_time        — trade date → 07:00 PT (10:00 ET) → UTC datetime
     build_bsm_chain         — BSM call prices across spot ± range_pts
     build_grid_bounds       — regime-aware (lo, hi) for the price grid
     compute_initial_cost    — net premium at entry from BSM pricing
@@ -25,6 +26,7 @@ from packages.shared.pricing.engine import (
 )
 
 _ET  = ZoneInfo("America/New_York")
+_PT  = ZoneInfo("America/Los_Angeles")
 _UTC = ZoneInfo("UTC")
 
 # Regimes that get a symmetric spot-centred grid (no magnet/pin extension).
@@ -39,6 +41,18 @@ def build_evaluation_time(expir_date: dt.date) -> dt.datetime:
     """
     naive = dt.datetime(expir_date.year, expir_date.month, expir_date.day, 16, 0)
     return naive.replace(tzinfo=_ET).astimezone(_UTC)
+
+
+def build_entry_time(trade_date: dt.date) -> dt.datetime:
+    """Return 07:00 PT (10:00 ET) on trade_date, converted to UTC.
+
+    This is the entry pricing time for proposals — 30 min after open,
+    market settled, ORATS has intraday data from this minute onward.
+    Used to compute entry debit with T > 0 (fixes the zero-debit bug
+    that arose from pricing at expiry where T = 0).
+    """
+    naive = dt.datetime(trade_date.year, trade_date.month, trade_date.day, 7, 0)
+    return naive.replace(tzinfo=_PT).astimezone(_UTC)
 
 
 def build_bsm_chain(
