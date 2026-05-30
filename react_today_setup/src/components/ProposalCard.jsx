@@ -117,6 +117,30 @@ function WarningsBadge({ warnings }) {
   );
 }
 
+/** Render net debit or net credit from the pl-data response. */
+function NetCostLine({ netCost }) {
+  if (netCost === undefined) return null;   // not yet loaded
+
+  const label = netCost === null
+    ? '—'
+    : netCost >= 0
+      ? `Net debit  $${netCost.toFixed(2)}`
+      : `Net credit $${Math.abs(netCost).toFixed(2)}`;
+
+  return (
+    <div
+      style={{
+        fontSize:   10,
+        fontWeight: 700,
+        color:      netCost === null ? '#475569' : netCost >= 0 ? '#f87171' : '#4ade80',
+        fontVariantNumeric: 'tabular-nums',
+      }}
+    >
+      {label}
+    </div>
+  );
+}
+
 // ── Expanded chart panel ───────────────────────────────────────────────────────
 
 function ExpandedPanel({
@@ -271,6 +295,8 @@ export default function ProposalCard({
   const defaultData  = cacheRef.current[DEFAULT_TIMEFRAME] || chartData;
   const pricedLegs   = defaultData?.ok ? (defaultData.legs ?? null) : null;
   const pricingWarns = defaultData?.ok ? (defaultData.warnings ?? []) : [];
+  // net_cost: undefined = not yet fetched, null = unavailable (leg missing mid)
+  const netCost = defaultData?.ok ? defaultData.net_cost : undefined;
 
   function handleTimeframeChange(tf) {
     if (tf === timeframe) return;
@@ -305,6 +331,9 @@ export default function ProposalCard({
       <div className="rationale">{rationale}</div>
 
       <SourceLine source={source} wingRecipe={wing_distance_recipe} />
+
+      {/* Net debit/credit (Step 8) */}
+      {canExpand && <NetCostLine netCost={netCost} />}
 
       {/* Data-quality warnings badge */}
       {pricingWarns.length > 0 && <WarningsBadge warnings={pricingWarns} />}

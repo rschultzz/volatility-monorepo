@@ -371,7 +371,7 @@ class TestHappyPath(unittest.TestCase):
         _, data = self._run()
         required = {
             "ok", "trade_date", "ticker", "evaluation_time", "entry_time",
-            "current_spot", "implied_move", "legs",
+            "current_spot", "implied_move", "legs", "net_cost",
             "pl_curve", "pl_curves", "iv_curve",
             "trade_thesis", "edge_zones", "greeks", "key_levels", "warnings",
         }
@@ -453,6 +453,15 @@ class TestHappyPath(unittest.TestCase):
         self.assertEqual(tt["regime_kind"], "magnet-above")
         self.assertAlmostEqual(tt["lower"], 4187.0, places=1)
         self.assertIsNone(tt["upper"])
+
+    def test_200_net_cost_present_and_positive_for_debit_spread(self):
+        """A long-call / short-call debit spread (long lower strike) has net_cost > 0."""
+        _, data = self._run()
+        self.assertIn("net_cost", data)
+        # The mock returns long mid=5.20, short mid=3.10 → net_debit = 2.10 > 0
+        self.assertIsNotNone(data["net_cost"])
+        self.assertGreater(data["net_cost"], 0,
+            "Debit spread must have positive net_cost (debit > 0)")
 
     def test_200_greeks_has_all_keys(self):
         _, data = self._run()

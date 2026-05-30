@@ -603,6 +603,12 @@ def register_proposals_routes(server) -> None:
                 "current_spot":   spot,
                 "implied_move":   implied_move,
                 "legs":           legs_out,
+                # net_cost uses real mids (None if any leg unavailable, not BSM estimate)
+                "net_cost":       (
+                    round(real_pricing["net_debit"], 4)
+                    if real_pricing.get("net_debit") is not None
+                    else None
+                ),
                 "pl_curve":       pl_curve,
                 "pl_curves":      pl_curves,
                 "iv_curve":       iv_curve,
