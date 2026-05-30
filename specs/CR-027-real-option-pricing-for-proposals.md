@@ -192,3 +192,47 @@ Step 1's `price_proposal_legs` is built as the reusable, UI-free unit a future h
 
 - **Read:** `packages/shared/options_cache/pricing.py`, `fetcher.py`, `opra.py`, `repository.py`, `models.py`; `packages/shared/forward_math.py`; `packages/shared/implied_distribution.py`; `packages/shared/pricing/engine.py`; `packages/shared/strategy_templates.py`; `apps/web/modules/Proposals/routes.py`, `service.py`
 - **Write:** `packages/shared/options_cache/pricing.py` (or new `proposal_pricing.py`); `apps/web/modules/Proposals/routes.py`, `service.py`; `react_today_setup/.../LegTable.jsx`, proposal card; tests under `packages/shared/options_cache/tests/` and `apps/web/modules/Proposals/tests/`
+
+---
+
+## Step 0 — Diagnosis findings (2026-05-29)
+
+### Pre-implementation grep results (all CLEAN — no contradictions)
+
+1. **`compute_initial_cost`** — only in `Proposals/routes.py` (import + calls at lines 365, 489) and `Proposals/service.py` (definition). No other consumers. Safe to demote to entry-T BSM then replace with real mids.
+
+2. **`build_bsm_chain`** — only in `Proposals/routes.py` (import + call at line 388) and `Proposals/service.py` (definition). No other consumers. Safe to replace for implied distribution.
+
+3. **`compute_pl_curve`** — only in `Proposals/routes.py` (import + call at line 374) and `Proposals/service.py` (definition). `edge_zones.py:231` is a comment, not a caller. Safe.
+
+4. **`orats_options_minute` uniqueness** — confirmed: `ON CONFLICT (opra_symbol, snapshot_pt) DO NOTHING` in `repository.py:156`. Correct unique key.
+
+5. **`expiry_tod`** — present in `OptionMinuteBar` as `expiry_tod: Optional[str] = None` (models.py:140). Nullable, populated from ORATS data.
+
+6. **SPX root** — `opra.py` docstring explicitly: "ORATS uses root `SPX` for all SPX expirations, including PM-settled weeklies (colloquially called SPXW). The `expiryTod` column distinguishes AM vs PM settlement." Condor path already uses `"SPX"` root. No ambiguity — use `"SPX"` for all.
+
+7. **Frontend prop shapes** — `LegTable.jsx` reads `leg.type`, `leg.quantity`, `leg.strike`, `leg.strike_spx`, `leg.side` from **`proposal.legs`** (the generator output), not from the pl-data response. The pl-data response uses `leg.flag` and `leg.qty`. These are two distinct schemas — `LegTable` is always showing proposal generator legs, not pl-data legs. For Step 5, pricing will be shown via `chartData.legs` in the `ExpandedPanel` (which has `initial_value`), not by modifying the header `LegTable`.
+
+**Critical spec assumption VERIFIED:** `Leg.strike` IS in ES discounted-forward space — confirmed at `routes.py:477–484` where `compute_spx_strike(leg["strike"], ...)` is called to convert for the response display. Spec assertion holds.
+
+**Connection path verified:** `pricing.py` / `repository.py` use their own SQLAlchemy engine (reads `DATABASE_URL` from env). This is independent of the `psycopg.connect()` used in the proposals route. Both read the same `DATABASE_URL`. The condor panel writes via this path in production, so the web app's role can write `orats_options_minute` via this path. No role/connection mismatch.
+
+### Step 0 design-lock decisions
+
+1. **SPX root / AM-PM** — LOCKED: Use `"SPX"` root for all SPX option OPRAs. `expiry_tod` field in cache distinguishes AM/PM but OPRA format is always `SPX`. For 8-30 DTE proposals (standard weeklies/monthlies), all PM-settled SPX. No stop condition.
+
+2. **Entry time** — LOCKED: `07:00 PT` (10:00 ET) on `trade_date`. Rationale: 30 minutes after open, market settled, ORATS has intraday data from open. Implementation: `build_entry_time(trade_date)` in `service.py` returning tz-aware UTC. For `fetch_option_bars` calls (which need naive PT), convert with `entry_time_utc.astimezone(PT).replace(tzinfo=None)` or use the naive PT `datetime(y, m, d, 7, 0)` directly.
+
+3. **Strike band** — LOCKED: `spot ± 1.5 × implied_move` at 5pt spacing. Uses same bounds as `build_grid_bounds` default (`half_sigma=1.5`). Strikes generated as `round((spot + i * 5) / 5) * 5` in the band range. For a typical SPX spot=5500, IM=50 → 5425 to 5575 → 31 strikes per call band.
+
+4. **BSM calibration** — LOCKED: Per-leg scipy `brentq` to find σ such that `BSM(spot, strike, T_entry, r, σ, flag) = real_mid`. Fallback to `atmiv` if calibration fails (tiny price, non-convergence). This σ feeds `compute_pl_curve` and horizon curves. Horizon curves are smooth BSM surfaces calibrated to entry reality.
+
+5. **Historical scope** — LOCKED: include historical fetch-on-demand. `fetch_option_bars` uses ORATS `/datav2/hist/live/one-minute/strikes/option` (same path as condor panel). Step 0-B coverage table will confirm anchor coverage before declaring OK.
+
+6. **Per-leg failure** — LOCKED: Mirror condor path exactly. `OratsPermanentError` → add warning, leg `mid = None`, excluded from `net_debit` (net_debit=None if any leg missing). Partial fills OK. No hard failure on 404.
+
+7. **Fetch trigger** — ALREADY LOCKED per spec. Per-card prefetch on mount (non-blocking). Band once per day is naturally handled by the existing cache — first proposal for a day populates the band, subsequent proposals for the same day are cache reads. No explicit per-day coordination needed in frontend.
+
+### Pre-existing observation (not a contradiction; pre-dates this CR)
+
+`LegTable.jsx` renders `leg.type` and `leg.quantity` (from `proposal.legs` shape) while the `/api/proposals/pl-data` response uses `leg.flag` and `leg.qty`. These are two separate data schemas; the LegTable is not consuming pl-data response legs and this is intentional. No action needed in this CR.
