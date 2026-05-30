@@ -173,6 +173,49 @@ function NetCostLine({ netCost }) {
   );
 }
 
+/** Render struct/implied/edge-ratio from trade_thesis.
+ *
+ * Color convention (consistent with edge-zone chart overlay):
+ *   edge_ratio > 1  → struct > implied → green
+ *   edge_ratio < 1  → struct < implied → red
+ *   edge_ratio null → implied unavailable → neutral
+ */
+function EdgeBlock({ tradeTthesis }) {
+  if (!tradeTthesis) return null;
+  const { structural_prob, implied_prob, edge_ratio } = tradeTthesis;
+  if (structural_prob == null) return null;
+
+  const structPct  = (structural_prob * 100).toFixed(1) + '%';
+  const impliedTxt = implied_prob != null
+    ? (implied_prob * 100).toFixed(1) + '%'
+    : 'unavailable';
+  const edgeTxt    = edge_ratio != null
+    ? edge_ratio.toFixed(2) + '×'
+    : '—';
+
+  // Edge color: green when struct > implied (edge_ratio > 1), red otherwise
+  const hasEdge = edge_ratio != null && edge_ratio > 1;
+  const noEdge  = edge_ratio != null && edge_ratio <= 1;
+  const edgeColor = hasEdge ? '#4ade80' : noEdge ? '#f87171' : '#94a3b8';
+
+  return (
+    <div style={{
+      fontSize: 10,
+      color: '#64748b',
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      alignItems: 'center',
+    }}>
+      <span>Struct <strong style={{ color: '#94a3b8' }}>{structPct}</strong></span>
+      <span style={{ color: '#334155' }}>·</span>
+      <span>Implied <strong style={{ color: implied_prob != null ? '#94a3b8' : '#475569' }}>{impliedTxt}</strong></span>
+      <span style={{ color: '#334155' }}>·</span>
+      <span>Edge <strong style={{ color: edgeColor }}>{edgeTxt}</strong></span>
+    </div>
+  );
+}
+
 // ── Expanded chart panel ───────────────────────────────────────────────────────
 
 function ExpandedPanel({
@@ -328,7 +371,8 @@ export default function ProposalCard({
   const pricedLegs   = defaultData?.ok ? (defaultData.legs ?? null) : null;
   const pricingWarns = defaultData?.ok ? (defaultData.warnings ?? []) : [];
   // net_cost: undefined = not yet fetched, null = unavailable (leg missing mid)
-  const netCost = defaultData?.ok ? defaultData.net_cost : undefined;
+  const netCost    = defaultData?.ok ? defaultData.net_cost    : undefined;
+  const tradeTthesis = defaultData?.ok ? defaultData.trade_thesis : null;
 
   function handleTimeframeChange(tf) {
     if (tf === timeframe) return;
@@ -370,6 +414,9 @@ export default function ProposalCard({
 
       {/* Net debit/credit (Step 8) */}
       {canExpand && <NetCostLine netCost={netCost} />}
+
+      {/* Edge block: struct / implied / edge-ratio (Step 10) */}
+      {canExpand && tradeTthesis && <EdgeBlock tradeTthesis={tradeTthesis} />}
 
       {/* Data-quality warnings badge */}
       {pricingWarns.length > 0 && <WarningsBadge warnings={pricingWarns} />}
