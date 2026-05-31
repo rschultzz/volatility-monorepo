@@ -216,6 +216,226 @@ function EdgeBlock({ tradeTthesis }) {
   );
 }
 
+// ── Today's edge block ────────────────────────────────────────────────────────
+
+// Row labels for the edge table — session offsets, NOT DTEs.
+// "+1" = "how analogues closed at session+1"; not a 1-DTE reprice of the spread.
+const HORIZON_LABELS = { t1: '+1', t5: '+5', t15: '+15' };
+
+function _fmtEdge(edge) {
+  if (edge == null) return '—';
+  const pct = (edge * 100).toFixed(1);
+  return edge >= 0 ? `+${pct}pp` : `${pct}pp`;
+}
+
+function _fmtProb(p) {
+  if (p == null) return '—';
+  return (p * 100).toFixed(1) + '%';
+}
+
+function _fmtCi(ci) {
+  if (!ci || ci[0] == null || ci[1] == null) return '';
+  return ` [${Math.round(ci[0] * 100)}–${Math.round(ci[1] * 100)}%]`;
+}
+
+/**
+ * Edge state for one (struct, structCi, mkt, edge) cell.
+ *
+ * 'clears'   — point estimate positive AND lower-bound ≥ market (solid edge)
+ * 'fails-lb' — point estimate positive BUT lower-bound < market (uncertain)
+ * 'negative' — point estimate ≤ 0 (no edge)
+ * 'no-data'  — any required value is null
+ */
+function _edgeState(edge, structCi, mktProb) {
+  if (edge == null || mktProb == null) return 'no-data';
+  if (edge <= 0) return 'negative';
+  const lb = structCi?.[0];
+  if (lb != null && lb >= mktProb) return 'clears';
+  return 'fails-lb';
+}
+
+const _STATE_COLORS = {
+  'clears':   '#4ade80',   // green
+  'fails-lb': '#f59e0b',   // amber
+  'negative': '#f87171',   // red
+  'no-data':  '#475569',   // muted
+};
+
+/** Render one edge cell: coloured edge number + optional ~ flag + CI breakdown. */
+function EdgeCell({ edge, structProb, structCi, mktProb }) {
+  const state = _edgeState(edge, structCi, mktProb);
+  const color = _STATE_COLORS[state];
+  const failsLb = state === 'fails-lb';
+
+  return (
+    <td style={{ textAlign: 'center', paddingTop: 2 }}>
+      <span style={{ color, fontWeight: 700 }}>
+        {_fmtEdge(edge)}
+      </span>
+      {failsLb && (
+        <span
+          title="Positive at the point estimate but the structural lower-bound falls below the market probability — edge is uncertain"
+          style={{ color: '#f59e0b', fontWeight: 700, marginLeft: 2, cursor: 'help' }}
+        >
+          ~
+        </span>
+      )}
+      {mktProb != null && (
+        <span style={{ fontSize: 8, color: '#334155', marginLeft: 3 }}>
+          ({_fmtProb(structProb)}{_fmtCi(structCi)} vs {_fmtProb(mktProb)})
+        </span>
+      )}
+    </td>
+  );
+}
+
+/** Per-horizon touch & close edge strip. Iterates per_horizon list — never
+ *  three hard-coded columns. Three edge states per cell:
+ *    clears   (green)  — struct lower-bound ≥ market, solid positive edge
+ *    fails-lb (amber~) — struct point > market but lower-bound < market
+ *    negative (red)    — struct point ≤ market
+ *
+ * Rows are analogue session-outcome windows for this fixed spread —
+ * NOT a multi-DTE reprice of the trade (those are different structures).
+ */
+function TodaysEdgeBlock({ todaysEdge }) {
+  if (!todaysEdge || !todaysEdge.per_horizon || !todaysEdge.per_horizon.length) return null;
+
+  return (
+    <div style={{ fontSize: 10, marginTop: 4 }}>
+      <div style={{
+        fontSize: 9, color: '#475569', textTransform: 'uppercase',
+        letterSpacing: '0.06em', fontWeight: 700, marginBottom: 2,
+      }}>
+        Analogue session-close edge — this fixed spread
+      </div>
+      <div style={{ fontSize: 8, color: '#334155', marginBottom: 4 }}>
+        Session outcome windows for these strikes (not multi-DTE reprices) · close: |δ| · touch: 2×|δ|est · ~ = fails lower-bound
+      </div>
+
+      <table style={{
+        width: '100%', borderCollapse: 'collapse', fontSize: 10,
+        fontVariantNumeric: 'tabular-nums',
+      }}>
+        <thead>
+          <tr>
+            {['Sess', 'Touch edge', 'Close edge', 'N'].map((h, i) => (
+              <th key={i} style={{
+                textAlign: i === 0 ? 'left' : 'center',
+                color: '#475569', fontWeight: 600, paddingBottom: 2,
+                fontSize: 9, borderBottom: '1px solid #1f2937',
+              }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {todaysEdge.per_horizon.map(row => {
+            const label = HORIZON_LABELS[row.horizon] || row.horizon;
+            const dim = row.low_confidence ? '#334155' : undefined;
+            return (
+              <tr key={row.horizon} style={{ opacity: row.low_confidence ? 0.6 : 1 }}>
+                <td style={{ color: dim || '#64748b', paddingRight: 8, paddingTop: 2 }}>
+                  {label}
+                  {row.low_confidence && (
+                    <span style={{ fontSize: 8, color: '#f59e0b', marginLeft: 4 }}>thin</span>
+                  )}
+                </td>
+                <EdgeCell
+                  edge={row.touch_edge}
+                  structProb={row.struct_touch}
+                  structCi={row.struct_touch_ci}
+                  mktProb={row.mkt_touch}
+                />
+                <EdgeCell
+                  edge={row.close_edge}
+                  structProb={row.struct_close}
+                  structCi={row.struct_close_ci}
+                  mktProb={row.mkt_close}
+                />
+                <td style={{ textAlign: 'center', color: '#475569', paddingTop: 2, fontSize: 9 }}>
+                  {row.n_close ?? '—'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Strike-delta display — short-strike δ per horizon + long leg δ at entry.
+ *
+ * Short-strike δ is `mkt_close` from each per_horizon row (already |delta|).
+ * Long leg δ is `pricedLegs[i].delta` for the long leg (raw signed; display |δ|).
+ * No new fetches — reads values already in the response.
+ */
+function DeltaBlock({ todaysEdge, pricedLegs }) {
+  const horizonRows = todaysEdge?.per_horizon ?? [];
+  const longLeg = pricedLegs?.find(l => l.side === 'long');
+  const longDelta = longLeg?.delta != null ? Math.abs(longLeg.delta) : null;
+
+  if (!horizonRows.length) return null;
+
+  const TH = { textAlign: 'center', color: '#475569', fontWeight: 600, fontSize: 9, paddingLeft: 10, paddingBottom: 2, borderBottom: '1px solid #1f2937' };
+  const TD = { textAlign: 'center', color: '#94a3b8', fontWeight: 700, fontSize: 10, paddingLeft: 10, paddingTop: 2, fontVariantNumeric: 'tabular-nums' };
+  const TDmuted = { ...TD, color: '#334155', fontWeight: 400 };
+
+  return (
+    <div style={{ fontSize: 10, marginTop: 2 }}>
+      <div style={{
+        fontSize: 9, color: '#475569', textTransform: 'uppercase',
+        letterSpacing: '0.06em', fontWeight: 700, marginBottom: 3,
+      }}>
+        Strike deltas by session
+      </div>
+      <table style={{ borderCollapse: 'collapse', fontVariantNumeric: 'tabular-nums' }}>
+        <thead>
+          <tr>
+            <th style={{ ...TH, textAlign: 'left', paddingLeft: 0 }}></th>
+            {horizonRows.map(row => (
+              <th key={row.horizon} style={TH}>
+                {HORIZON_LABELS[row.horizon] || row.horizon}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {/* Short (magnet) strike: delta at each horizon's nearest SPX expiry */}
+          <tr>
+            <td style={{ color: '#64748b', fontSize: 9, paddingRight: 4, whiteSpace: 'nowrap', paddingTop: 2 }}>Short (magnet)</td>
+            {horizonRows.map(row => (
+              <td key={row.horizon} style={row.mkt_close != null ? TD : TDmuted}>
+                {row.mkt_close != null ? (row.mkt_close * 100).toFixed(0) + '%' : '—'}
+              </td>
+            ))}
+          </tr>
+          {/* Long strike: only at proposal's own expiration (~+15 sess equiv) */}
+          <tr>
+            <td style={{ color: '#64748b', fontSize: 9, paddingRight: 4, whiteSpace: 'nowrap', paddingTop: 2 }}>Long</td>
+            {horizonRows.map(row => {
+              const isT15 = row.horizon === 't15';
+              const val = isT15 && longDelta != null ? (longDelta * 100).toFixed(0) + '%' : '—';
+              return (
+                <td key={row.horizon} style={isT15 && longDelta != null ? TD : TDmuted}>
+                  {val}
+                </td>
+              );
+            })}
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colSpan={horizonRows.length + 1} style={{ fontSize: 8, color: '#1e293b', paddingTop: 2 }}>
+              Long at proposal expiry only (+1/+5 not fetched)
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
 // ── Expanded chart panel ───────────────────────────────────────────────────────
 
 function ExpandedPanel({
@@ -371,8 +591,8 @@ export default function ProposalCard({
   const pricedLegs   = defaultData?.ok ? (defaultData.legs ?? null) : null;
   const pricingWarns = defaultData?.ok ? (defaultData.warnings ?? []) : [];
   // net_cost: undefined = not yet fetched, null = unavailable (leg missing mid)
-  const netCost    = defaultData?.ok ? defaultData.net_cost    : undefined;
-  const tradeTthesis = defaultData?.ok ? defaultData.trade_thesis : null;
+  const netCost    = defaultData?.ok ? defaultData.net_cost   : undefined;
+  const todaysEdge = defaultData?.ok ? defaultData.todays_edge : null;
 
   function handleTimeframeChange(tf) {
     if (tf === timeframe) return;
@@ -398,7 +618,10 @@ export default function ProposalCard({
       {isNoTrade ? (
         <div className="no-trade-headline">NO TRADE</div>
       ) : (
-        <LegTable legs={legs} pricedLegs={pricedLegs} />
+        // netCost passed so LegTable renders it as a tfoot total under the Mid column.
+        // SourceLine and EdgeBlock removed: source info is in rationale/label;
+        // B-L edge ratio is superseded by the per-horizon edge table below.
+        <LegTable legs={legs} pricedLegs={pricedLegs} netCost={netCost} />
       )}
 
       {/* Expiry: real calendar date from payload (Step 9) + DTE/bucket context */}
@@ -414,13 +637,13 @@ export default function ProposalCard({
 
       <div className="rationale">{rationale}</div>
 
-      <SourceLine source={source} wingRecipe={wing_distance_recipe} />
+      {/* Today's edge: per-horizon touch & close vs market (CR-V Step 3) */}
+      {canExpand && todaysEdge && <TodaysEdgeBlock todaysEdge={todaysEdge} />}
 
-      {/* Net debit/credit (Step 8) */}
-      {canExpand && <NetCostLine netCost={netCost} />}
-
-      {/* Edge block: struct / implied / edge-ratio (Step 10) */}
-      {canExpand && tradeTthesis && <EdgeBlock tradeTthesis={tradeTthesis} />}
+      {/* Strike deltas by session (CR-V step-3b) */}
+      {canExpand && todaysEdge && (
+        <DeltaBlock todaysEdge={todaysEdge} pricedLegs={pricedLegs} />
+      )}
 
       {/* Data-quality warnings badge */}
       {pricingWarns.length > 0 && <WarningsBadge warnings={pricingWarns} />}

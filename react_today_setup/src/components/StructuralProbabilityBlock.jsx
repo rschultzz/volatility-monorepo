@@ -102,7 +102,7 @@ function PostTouchSection({ pt, dte }) {
   if (filter_mode === 'insufficient') {
     return (
       <div className="pt-section">
-        <span className="pt-title">Post-touch close distribution</span>
+        <span className="pt-title">Post-touch close distribution (conditional on touch)</span>
         <p className="sp-note">
           Insufficient post-touch sample ({total_touchers ?? 0} touchers — need ≥ 4)
         </p>
@@ -113,7 +113,7 @@ function PostTouchSection({ pt, dte }) {
   if (filter_mode === 'zero_dte_corpus_insufficient') {
     return (
       <div className="pt-section">
-        <span className="pt-title">Post-touch close distribution</span>
+        <span className="pt-title">Post-touch close distribution (conditional on touch)</span>
         <p className="sp-note">0DTE corpus insufficient (3 days in corpus)</p>
       </div>
     );
@@ -136,10 +136,11 @@ function PostTouchSection({ pt, dte }) {
   return (
     <div className="pt-section">
       <div className="pt-header">
-        <span className="pt-title">Post-touch close distribution</span>
+        <span className="pt-title">Post-touch close distribution (conditional on touch)</span>
         {isPooled && <span className="sp-bucket-fallback-badge">pooled fallback</span>}
       </div>
       <p className="pt-subline">{denomLabel}</p>
+      <p className="pt-caption">Where analogues closed after touching — not a pre-entry probability. For the unconditional read, see the edge table.</p>
 
       <div className="pt-bars">
         {TF_ROWS.map(({ key, label }) => (

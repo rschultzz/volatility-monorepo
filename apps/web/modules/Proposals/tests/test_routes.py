@@ -373,7 +373,8 @@ class TestHappyPath(unittest.TestCase):
             "ok", "trade_date", "ticker", "evaluation_time", "entry_time",
             "current_spot", "implied_move", "legs", "net_cost",
             "pl_curve", "pl_curves", "iv_curve",
-            "trade_thesis", "edge_zones", "greeks", "key_levels", "warnings",
+            "trade_thesis", "edge_zones", "greeks", "key_levels",
+            "todays_edge", "warnings",
         }
         self.assertTrue(required.issubset(data.keys()), f"Missing keys: {required - data.keys()}")
 

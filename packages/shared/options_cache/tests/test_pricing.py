@@ -455,5 +455,84 @@ class TestBuildRealStrikeBand(unittest.TestCase):
         self.assertEqual(chain, [])
 
 
+class TestNearestSpxExpiration(unittest.TestCase):
+    """Tests for nearest_spx_expiration (CR-V Step 2 helper)."""
+
+    def test_1_trading_day_from_monday_returns_wednesday(self):
+        # 2026-06-01 is Monday; 1 trading day ahead = Tuesday (not MWF)
+        # → next MWF at or after Tuesday = Wednesday 2026-06-03
+        from packages.shared.options_cache.pricing import nearest_spx_expiration
+        td = date(2026, 6, 1)   # Monday
+        result = nearest_spx_expiration(td, 1)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.weekday(), 2)   # Wednesday
+        self.assertGreater(result, td)
+
+    def test_5_trading_days_from_monday_returns_mwf(self):
+        # 2026-06-01 Mon; 5 trading days ahead = Mon 2026-06-08 (weekday=0)
+        from packages.shared.options_cache.pricing import nearest_spx_expiration
+        td = date(2026, 6, 1)
+        result = nearest_spx_expiration(td, 5)
+        self.assertIsNotNone(result)
+        self.assertIn(result.weekday(), {0, 2, 4})
+        self.assertGreaterEqual((result - td).days, 5)
+
+    def test_result_is_always_mwf(self):
+        from packages.shared.options_cache.pricing import nearest_spx_expiration
+        for target_days in (1, 5, 15):
+            result = nearest_spx_expiration(date(2026, 5, 19), target_days)
+            self.assertIsNotNone(result)
+            self.assertIn(result.weekday(), {0, 2, 4},
+                          f"target={target_days}: weekday {result.weekday()} not Mon/Wed/Fri")
+
+
+class TestPriceProposalLegsDelta(unittest.TestCase):
+    """Tests that price_proposal_legs now surfaces bar.delta (CR-V Step 2)."""
+
+    _TD = date(2026, 5, 19)
+    _EP = datetime(2026, 5, 19, 7, 0)
+
+    def _make_bar(self, opra, delta=0.35):
+        return OptionMinuteBar(
+            opra_symbol=opra, ticker="SPX",
+            expir_date="2026-06-06", expir_date_d=date(2026, 6, 6),
+            strike=5400.0, option_type="C",
+            trade_date=str(self._TD), trade_date_d=self._TD,
+            quote_date=str(self._TD), snapshot_pt=self._EP,
+            snapshot_utc=self._EP, bid_price=3.0, ask_price=3.2, delta=delta,
+        )
+
+    def test_delta_surfaced_on_cache_hit(self):
+        legs = [{"flag": "c", "side": "long", "qty": 1,
+                 "strike": 5400.0, "expiration": date(2026, 6, 6)}]
+
+        def bars_fn(opra, *_):
+            return [self._make_bar(opra, delta=0.42)]
+
+        with patch("packages.shared.options_cache.pricing.fetch_option_bars",
+                   return_value=_summary()), \
+             patch("packages.shared.options_cache.pricing.repo.get_bars_for_contract",
+                   side_effect=bars_fn):
+            result = pricing.price_proposal_legs(
+                legs, trade_date=self._TD, entry_pt=self._EP,
+            )
+
+        self.assertEqual(result["legs"][0]["delta"], 0.42)
+
+    def test_delta_none_on_cache_miss(self):
+        legs = [{"flag": "c", "side": "long", "qty": 1,
+                 "strike": 5400.0, "expiration": date(2026, 6, 6)}]
+
+        with patch("packages.shared.options_cache.pricing.fetch_option_bars",
+                   return_value=_summary()), \
+             patch("packages.shared.options_cache.pricing.repo.get_bars_for_contract",
+                   return_value=[]):
+            result = pricing.price_proposal_legs(
+                legs, trade_date=self._TD, entry_pt=self._EP,
+            )
+
+        self.assertIsNone(result["legs"][0]["delta"])
+
+
 if __name__ == "__main__":
     unittest.main()
