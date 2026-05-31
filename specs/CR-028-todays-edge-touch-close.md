@@ -298,3 +298,23 @@ Read: `packages/shared/probability.py`, `packages/shared/structural_distribution
 Write (new): `packages/shared/edge_today.py`, `packages/shared/tests/test_edge_today.py`
 
 Write (extend): `packages/shared/options_cache/pricing.py` (surface `bar.delta` in `price_proposal_legs`; add `fetch_horizon_delta`), `apps/web/modules/Proposals/routes.py` (assemble and call edge, add to response), frontend proposal card component
+
+---
+
+## Step 4 — Empirical sanity pass findings (2026-05-31)
+
+Verified by smoke test suite (no live DB; synthetic analogues). Live anchor sanity deferred until next trading day when the route returns real data.
+
+**Key invariants confirmed:**
+
+1. **Unconditional close < touch-conditional close**: smoke test 2 asserts this for any corpus subset where touch < 100%. The unconditional denominator (all computed analogues) is always ≥ the toucher-only denominator, and the non-toucher closes are generally below the magnet, so the unconditional rate is structurally lower. Correct.
+
+2. **Event matching enforced**: `touch_edge` uses `2×|delta|`; `close_edge` uses `|delta|`. Crossing them (the 8.65× class of error) is caught by smoke test 3 and does not compile into the edge function. Correct.
+
+3. **Horizon parameterization confirmed**: passing 2 horizons vs 4 changes only the output list length — no logic branches on horizon names. Smoke test 4 passes. Correct.
+
+4. **No BSM import**: confirmed by smoke test 8 (AST static check). `edge_today.py` imports only `_project_close` from `structural_distribution` and `wilson_ci` from `stats`. Correct.
+
+5. **2× cap**: `mkt_touch = min(1.0, 2×|delta|)`. For ITM options (|delta| > 0.5), touch probability is capped at 1.0. Smoke test 10 confirms. Correct.
+
+**Live sanity (to do on next real trading day):** Load a magnet-above day, confirm `todays_edge.per_horizon` returns 3 rows, close-edge values are lower than touch-edge values, and both are lower than the old 8.65× ratio. This is the key field validation.
