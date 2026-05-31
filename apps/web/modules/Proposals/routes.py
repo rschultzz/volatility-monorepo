@@ -641,6 +641,7 @@ def register_proposals_routes(server) -> None:
                     "ask":           rleg.get("ask"),
                     "mid":           real_mid,
                     "initial_value": initial_val,
+                    "delta":         rleg.get("delta"),
                 })
 
             return jsonify({

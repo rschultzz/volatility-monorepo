@@ -313,6 +313,51 @@ function TodaysEdgeBlock({ todaysEdge }) {
   );
 }
 
+/** Strike-delta display — short-strike δ per horizon + long leg δ at entry.
+ *
+ * Short-strike δ is `mkt_close` from each per_horizon row (already |delta|).
+ * Long leg δ is `pricedLegs[i].delta` for the long leg (raw signed; display |δ|).
+ * No new fetches — reads values already in the response.
+ */
+function DeltaBlock({ todaysEdge, pricedLegs }) {
+  const horizonRows = todaysEdge?.per_horizon ?? [];
+  const longLeg = pricedLegs?.find(l => l.side === 'long');
+  const longDelta = longLeg?.delta != null ? Math.abs(longLeg.delta) : null;
+
+  if (!horizonRows.length && longDelta == null) return null;
+
+  return (
+    <div style={{ fontSize: 10, marginTop: 2 }}>
+      <div style={{
+        fontSize: 9, color: '#475569', textTransform: 'uppercase',
+        letterSpacing: '0.06em', fontWeight: 700, marginBottom: 3,
+      }}>
+        Strike deltas (|δ|)
+      </div>
+      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+        {/* Short-strike (magnet) delta per horizon */}
+        {horizonRows.length > 0 && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span style={{ color: '#64748b' }}>Short:</span>
+            {horizonRows.map(row => (
+              <span key={row.horizon} style={{ color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+                <strong>{(HORIZON_LABELS[row.horizon] || row.horizon) + ' '}{row.mkt_close != null ? (row.mkt_close * 100).toFixed(0) + '%' : '—'}</strong>
+              </span>
+            ))}
+          </div>
+        )}
+        {/* Long leg delta at entry (proposal's own expiration) */}
+        {longDelta != null && (
+          <div style={{ color: '#64748b', fontVariantNumeric: 'tabular-nums' }}>
+            <span>Long (entry): </span>
+            <strong style={{ color: '#94a3b8' }}>{(longDelta * 100).toFixed(0)}%</strong>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Expanded chart panel ───────────────────────────────────────────────────────
 
 function ExpandedPanel({
@@ -522,6 +567,11 @@ export default function ProposalCard({
 
       {/* Today's edge: per-horizon touch & close vs market (CR-V Step 3) */}
       {canExpand && todaysEdge && <TodaysEdgeBlock todaysEdge={todaysEdge} />}
+
+      {/* Strike deltas: short-strike δ per horizon + long-leg δ at entry (CR-V step-3b) */}
+      {canExpand && (todaysEdge || pricedLegs) && (
+        <DeltaBlock todaysEdge={todaysEdge} pricedLegs={pricedLegs} />
+      )}
 
       {/* Data-quality warnings badge */}
       {pricingWarns.length > 0 && <WarningsBadge warnings={pricingWarns} />}

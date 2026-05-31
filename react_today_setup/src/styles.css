@@ -482,6 +482,13 @@ textarea {
   margin: 0;
 }
 
+.pt-caption {
+  font-size: 9px;
+  color: #4b5563;
+  font-style: italic;
+  margin: 2px 0 0;
+}
+
 .pt-bars {
   display: flex;
   flex-direction: column;
