@@ -126,3 +126,15 @@ For 2026-05-13: confirm analogue count drops from 20 → ≤5 via the probabilit
 - Recency decay — CR-X
 - Stats window localization — CR-X decision
 - UI changes for 0-analogue state — deferred
+
+## Step 0 diagnosis — execution notes
+
+Scripts run 2026-05-31. Full output validated above. All locks decided:
+
+- Ceiling = **4.0σ** (v1 config)
+- `before_date` param: mandatory for backtesting callers, optional (None) for UI callers
+- Config module: `packages/shared/knn_config.py`
+- Stats computed from before_date-filtered pool (not the full corpus) when before_date is set and stats=None
+- `distance_ceiling=math.inf` default preserves backward compat for any call site not yet updated
+
+Gate check: no undecided locks. Proceeding to Step 1.
