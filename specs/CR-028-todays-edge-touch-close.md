@@ -275,7 +275,7 @@ Run for 2–3 real setups. Key checks:
 
 ---
 
-## Step 0 — Code verification findings (2026-05-31)
+## Step 0 — Diagnosis gate (2026-05-31 code read findings)
 
 ### `_project_close` on non-touchers (CONFIRMED clean)
 
