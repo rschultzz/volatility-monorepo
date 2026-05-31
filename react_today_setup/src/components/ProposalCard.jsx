@@ -216,6 +216,103 @@ function EdgeBlock({ tradeTthesis }) {
   );
 }
 
+// ── Today's edge block ────────────────────────────────────────────────────────
+
+const HORIZON_LABELS = { t1: '~1d', t5: '~5d', t15: '~15d' };
+
+function _edgeColor(edge) {
+  if (edge == null) return '#475569';
+  return edge >= 0 ? '#4ade80' : '#f87171';
+}
+
+function _fmtEdge(edge) {
+  if (edge == null) return '—';
+  const pct = (edge * 100).toFixed(1);
+  return edge >= 0 ? `+${pct}pp` : `${pct}pp`;
+}
+
+function _fmtProb(p) {
+  if (p == null) return '—';
+  return (p * 100).toFixed(1) + '%';
+}
+
+/** Per-horizon touch & close edge strip. Iterates per_horizon list — never
+ *  three hard-coded columns. Designed per spec CR-028 Step 3.
+ */
+function TodaysEdgeBlock({ todaysEdge }) {
+  if (!todaysEdge || !todaysEdge.per_horizon || !todaysEdge.per_horizon.length) return null;
+
+  return (
+    <div style={{ fontSize: 10, marginTop: 4 }}>
+      <div style={{
+        fontSize: 9, color: '#475569', textTransform: 'uppercase',
+        letterSpacing: '0.06em', fontWeight: 700, marginBottom: 4,
+      }}>
+        Struct vs Mkt prob (edge)
+        <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 6 }}>
+          — close: |δ| · touch: 2×|δ| (est.)
+        </span>
+      </div>
+
+      <table style={{
+        width: '100%', borderCollapse: 'collapse', fontSize: 10,
+        fontVariantNumeric: 'tabular-nums',
+      }}>
+        <thead>
+          <tr>
+            {['', 'Touch edge', 'Close edge', 'N'].map((h, i) => (
+              <th key={i} style={{
+                textAlign: i === 0 ? 'left' : 'center',
+                color: '#475569', fontWeight: 600, paddingBottom: 2,
+                fontSize: 9, borderBottom: '1px solid #1f2937',
+              }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {todaysEdge.per_horizon.map(row => {
+            const label = HORIZON_LABELS[row.horizon] || row.horizon;
+            const dim = row.low_confidence ? '#334155' : undefined;
+            return (
+              <tr key={row.horizon} style={{ opacity: row.low_confidence ? 0.6 : 1 }}>
+                <td style={{ color: dim || '#64748b', paddingRight: 8, paddingTop: 2 }}>
+                  {label}
+                  {row.low_confidence && (
+                    <span style={{ fontSize: 8, color: '#f59e0b', marginLeft: 4 }}>thin</span>
+                  )}
+                </td>
+                <td style={{ textAlign: 'center', paddingTop: 2 }}>
+                  <span style={{ color: _edgeColor(row.touch_edge), fontWeight: 700 }}>
+                    {_fmtEdge(row.touch_edge)}
+                  </span>
+                  {row.mkt_touch != null && (
+                    <span style={{ fontSize: 8, color: '#334155', marginLeft: 3 }}>
+                      ({_fmtProb(row.struct_touch)} vs {_fmtProb(row.mkt_touch)})
+                    </span>
+                  )}
+                </td>
+                <td style={{ textAlign: 'center', paddingTop: 2 }}>
+                  <span style={{ color: _edgeColor(row.close_edge), fontWeight: 700 }}>
+                    {_fmtEdge(row.close_edge)}
+                  </span>
+                  {row.mkt_close != null && (
+                    <span style={{ fontSize: 8, color: '#334155', marginLeft: 3 }}>
+                      ({_fmtProb(row.struct_close)} vs {_fmtProb(row.mkt_close)})
+                    </span>
+                  )}
+                </td>
+                <td style={{ textAlign: 'center', color: '#475569', paddingTop: 2, fontSize: 9 }}>
+                  {row.n_close ?? '—'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── Expanded chart panel ───────────────────────────────────────────────────────
 
 function ExpandedPanel({
@@ -373,6 +470,7 @@ export default function ProposalCard({
   // net_cost: undefined = not yet fetched, null = unavailable (leg missing mid)
   const netCost    = defaultData?.ok ? defaultData.net_cost    : undefined;
   const tradeTthesis = defaultData?.ok ? defaultData.trade_thesis : null;
+  const todaysEdge   = defaultData?.ok ? defaultData.todays_edge  : null;
 
   function handleTimeframeChange(tf) {
     if (tf === timeframe) return;
@@ -421,6 +519,9 @@ export default function ProposalCard({
 
       {/* Edge block: struct / implied / edge-ratio (Step 10) */}
       {canExpand && tradeTthesis && <EdgeBlock tradeTthesis={tradeTthesis} />}
+
+      {/* Today's edge: per-horizon touch & close vs market (CR-V Step 3) */}
+      {canExpand && todaysEdge && <TodaysEdgeBlock todaysEdge={todaysEdge} />}
 
       {/* Data-quality warnings badge */}
       {pricingWarns.length > 0 && <WarningsBadge warnings={pricingWarns} />}

@@ -56,6 +56,30 @@ const MOCK_PL_RESPONSE = {
   edge_zones: [],
   greeks: { delta: 0, gamma: 0, theta: 0, vega: 0, rho: 0 },
   key_levels: { max_profit: 25, max_loss: 0, breakevens: [4225.27] },
+  todays_edge: {
+    regime: 'magnet-above',
+    per_horizon: [
+      {
+        horizon: 't1', struct_touch: 0.50, struct_touch_ci: [0.28, 0.72], n_touch: 14,
+        mkt_touch: 0.10, touch_edge: 0.40,
+        struct_close: 0.07, struct_close_ci: [0.02, 0.19], n_close: 14,
+        mkt_close: 0.05, close_edge: 0.02, low_confidence: false,
+      },
+      {
+        horizon: 't5', struct_touch: 0.64, struct_touch_ci: [0.41, 0.82], n_touch: 14,
+        mkt_touch: 0.30, touch_edge: 0.34,
+        struct_close: 0.21, struct_close_ci: [0.07, 0.45], n_close: 14,
+        mkt_close: 0.15, close_edge: 0.06, low_confidence: false,
+      },
+      {
+        horizon: 't15', struct_touch: 0.64, struct_touch_ci: [0.41, 0.82], n_touch: 14,
+        mkt_touch: 0.50, touch_edge: 0.14,
+        struct_close: 0.36, struct_close_ci: [0.15, 0.62], n_close: 14,
+        mkt_close: 0.25, close_edge: 0.11, low_confidence: false,
+      },
+    ],
+    warnings: [],
+  },
   warnings: [],
 }
 
@@ -281,5 +305,53 @@ describe('ProposalCard — multi-card independence', () => {
     // Collapse card 1 — only card 2 remains expanded
     fireEvent.click(btn1)
     expect(container.querySelectorAll('[data-testid="proposal-expanded-panel"]')).toHaveLength(1)
+  })
+})
+
+// ── TodaysEdgeBlock rendering ─────────────────────────────────────────────────
+
+describe('ProposalCard — today\'s edge block (CR-V)', () => {
+  let fetchMock
+
+  beforeEach(() => {
+    fetchMock = vi.fn(() =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_PL_RESPONSE) })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('renders per-horizon rows from todays_edge.per_horizon (list-driven)', async () => {
+    renderCard()
+    // Wait for prefetch to resolve
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    await waitFor(() => screen.getByText('~1d'))
+    // All three horizons rendered (list-driven, not hard-coded)
+    expect(screen.getByText('~1d')).toBeInTheDocument()
+    expect(screen.getByText('~5d')).toBeInTheDocument()
+    expect(screen.getByText('~15d')).toBeInTheDocument()
+  })
+
+  it('renders touch edge and close edge labels', async () => {
+    renderCard()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    await waitFor(() => screen.getByText('Touch edge'))
+    expect(screen.getByText('Touch edge')).toBeInTheDocument()
+    expect(screen.getByText('Close edge')).toBeInTheDocument()
+  })
+
+  it('shows null gracefully when todays_edge is absent from response', async () => {
+    const noEdge = { ...MOCK_PL_RESPONSE, todays_edge: null }
+    fetchMock = vi.fn(() =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve(noEdge) })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    renderCard()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    // No ~1d / ~5d / ~15d horizon rows rendered
+    expect(screen.queryByText('~1d')).not.toBeInTheDocument()
   })
 })
