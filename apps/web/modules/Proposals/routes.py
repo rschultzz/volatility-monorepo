@@ -42,8 +42,10 @@ from packages.shared.implied_distribution import (
     compute_implied_pdf,
     compute_implied_prob_in_range,
 )
+from packages.shared.edge_today import HORIZON_SESSION_DAYS, HORIZONS, compute_todays_edge
 from packages.shared.options_cache.pricing import (
     build_real_strike_band,
+    fetch_horizon_delta,
     price_proposal_legs,
 )
 from packages.shared.pricing.engine import compute_position_greeks
@@ -536,7 +538,54 @@ def register_proposals_routes(server) -> None:
             # ── 16. Key levels ─────────────────────────────────────────────
             key_levels = compute_key_levels(pl_curve["pnl"], pl_curve["prices"])
 
-            # ── 17. Assemble trade thesis block ────────────────────────────
+            # ── 17. Today's edge (CR-V) — per-horizon touch & close ───────
+            # Find the short (magnet) leg from price_proposal_legs output.
+            # Supported only for magnet regimes; other regimes return None.
+            todays_edge: Optional[dict] = None
+            regime_kind_for_edge = trade_range.get("regime_kind", "")
+            if regime_kind_for_edge in ("magnet-above", "magnet-below"):
+                short_legs = [
+                    rleg for rleg in real_pricing.get("legs", [])
+                    if rleg.get("side") == "short"
+                ]
+                if short_legs:
+                    magnet_strike_es = float(short_legs[0]["strike_es"])
+                    # t15: delta from the proposal's own short-leg bar
+                    delta_t15 = short_legs[0].get("delta")
+                    delta_t15_abs = round(abs(float(delta_t15)), 4) if delta_t15 is not None else None
+                    # t1/t5: fetch the magnet strike at the nearest matching expiration
+                    delta_t1 = fetch_horizon_delta(
+                        magnet_strike_es, trade_date,
+                        HORIZON_SESSION_DAYS["t1"], entry_pt_naive,
+                        risk_free_rate, yield_rate,
+                    )
+                    delta_t5 = fetch_horizon_delta(
+                        magnet_strike_es, trade_date,
+                        HORIZON_SESSION_DAYS["t5"], entry_pt_naive,
+                        risk_free_rate, yield_rate,
+                    )
+                    magnet_delta_by_horizon = {
+                        "t1": delta_t1,
+                        "t5": delta_t5,
+                        "t15": delta_t15_abs,
+                    }
+                    net_debit = real_pricing.get("net_debit")
+                    spread_cost_by_horizon = {tN: net_debit for tN in HORIZONS}
+                    edge_result = compute_todays_edge(
+                        regime=regime_kind_for_edge,
+                        strike_es=magnet_strike_es,
+                        today_spot=spot,
+                        today_implied_move=implied_move,
+                        analogues=analogues,
+                        horizons=HORIZONS,
+                        magnet_delta_by_horizon=magnet_delta_by_horizon,
+                        spread_cost_by_horizon=spread_cost_by_horizon,
+                        spread_width=10.0,
+                    )
+                    warn_msgs.extend(edge_result.get("warnings", []))
+                    todays_edge = edge_result
+
+            # ── 18. Assemble trade thesis block ────────────────────────────
             struct_prob = struct_result["prob"] if struct_result else None
             edge_ratio = (
                 struct_prob / impl_prob
@@ -616,6 +665,7 @@ def register_proposals_routes(server) -> None:
                 "edge_zones":     edge_zones,
                 "greeks":         greeks,
                 "key_levels":     key_levels,
+                "todays_edge":    todays_edge,
                 "warnings":       warn_msgs,
             })
 

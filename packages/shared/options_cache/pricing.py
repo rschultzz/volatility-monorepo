@@ -21,6 +21,9 @@ from .opra import format_opra
 from . import repository as repo
 from packages.shared.forward_math import compute_spx_strike
 
+# SPX expirations occur on Mon (0), Wed (2), Fri (4)
+_SPX_EXPIRY_WEEKDAYS = frozenset({0, 2, 4})
+
 logger = logging.getLogger(__name__)
 
 _PT = ZoneInfo("America/Los_Angeles")
@@ -308,7 +311,7 @@ def price_proposal_legs(
             warnings_out.append(
                 f"no quote data for {meta['opra']} at {entry_pt.strftime('%H:%M')} PT"
             )
-            priced_legs.append({**meta, "bid": None, "ask": None, "mid": None})
+            priced_legs.append({**meta, "bid": None, "ask": None, "mid": None, "delta": None})
             net_debit = None
             continue
 
@@ -317,7 +320,7 @@ def price_proposal_legs(
         ask = bar.ask_price
         mid = round((float(bid) + float(ask)) / 2.0, 4) if (bid is not None and ask is not None) else None
 
-        priced_legs.append({**meta, "bid": bid, "ask": ask, "mid": mid})
+        priced_legs.append({**meta, "bid": bid, "ask": ask, "mid": mid, "delta": bar.delta})
 
         if net_debit is not None and mid is not None:
             sign = 1.0 if meta["side"] == "long" else -1.0
@@ -411,3 +414,74 @@ def build_real_strike_band(
             chain.append({"strike": float(spx_strike), "call_price": round(mid, 4)})
 
     return chain
+
+
+# ── Per-horizon delta fetch (CR-V Step 2) ────────────────────────────────────
+
+
+def _add_trading_days(d: date, n: int) -> date:
+    """Add n trading days (Mon-Fri, no holiday adjustment) to date d."""
+    result = d
+    added = 0
+    while added < n:
+        result = result + timedelta(days=1)
+        if result.weekday() < 5:
+            added += 1
+    return result
+
+
+def nearest_spx_expiration(trade_date: date, target_session_days: int) -> Optional[date]:
+    """Find the nearest SPX expiration ≈ target_session_days trading days ahead.
+
+    SPX weeklies expire Mon/Wed/Fri. Steps forward by target_session_days
+    business days from trade_date, then returns the first Mon/Wed/Fri at or
+    after that target date. Returns None if none found within 30 calendar days.
+    """
+    target = _add_trading_days(trade_date, target_session_days)
+    for i in range(30):
+        candidate = target + timedelta(days=i)
+        if candidate.weekday() in _SPX_EXPIRY_WEEKDAYS:
+            return candidate
+    return None
+
+
+def fetch_horizon_delta(
+    magnet_strike_es: float,
+    trade_date: date,
+    target_session_days: int,
+    entry_pt: datetime,
+    r: float = 0.05,
+    q: float = 0.0,
+) -> Optional[float]:
+    """Fetch |delta| at the magnet strike for the horizon-appropriate expiration.
+
+    Finds the nearest SPX expiration ≈ target_session_days trading days from
+    trade_date, builds the call OPRA for magnet_strike at that expiry (ES→SPX
+    via compute_spx_strike), fetches from the options cache (writing through on
+    miss), and returns abs(bar.delta).
+
+    entry_pt must be a **naive PT datetime**.
+    Returns None on cache miss, fetch error, or no valid expiration found.
+    """
+    expir = nearest_spx_expiration(trade_date, target_session_days)
+    if expir is None:
+        logger.warning(
+            "fetch_horizon_delta: no SPX expiration found for trade_date=%s target=%dd",
+            trade_date, target_session_days,
+        )
+        return None
+
+    dte = (expir - trade_date).days
+    spx_strike = compute_spx_strike(magnet_strike_es, dte, r, q)
+    opra = format_opra("SPX", expir, "C", spx_strike)
+
+    try:
+        fetch_option_bars([opra], entry_pt, entry_pt)
+    except (OratsPermanentError, OratsError) as e:
+        logger.warning("fetch_horizon_delta: fetch error %s @ %s: %s", opra, entry_pt, e)
+
+    bars = repo.get_bars_for_contract(opra, entry_pt, entry_pt)
+    if not bars:
+        return None
+
+    return round(abs(float(bars[0].delta)), 4)
