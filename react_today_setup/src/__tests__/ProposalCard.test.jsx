@@ -328,11 +328,11 @@ describe('ProposalCard — today\'s edge block (CR-V)', () => {
     renderCard()
     // Wait for prefetch to resolve
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
-    await waitFor(() => screen.getByText('~1d'))
+    await waitFor(() => screen.getAllByText('+1'))
     // All three horizons rendered (list-driven, not hard-coded)
-    expect(screen.getByText('~1d')).toBeInTheDocument()
-    expect(screen.getByText('~5d')).toBeInTheDocument()
-    expect(screen.getByText('~15d')).toBeInTheDocument()
+    expect(screen.getAllByText('+1')[0]).toBeInTheDocument()
+    expect(screen.getAllByText('+5')[0]).toBeInTheDocument()
+    expect(screen.getAllByText('+15')[0]).toBeInTheDocument()
   })
 
   it('renders touch edge and close edge labels', async () => {
@@ -352,14 +352,14 @@ describe('ProposalCard — today\'s edge block (CR-V)', () => {
     renderCard()
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
     // No ~1d / ~5d / ~15d horizon rows rendered
-    expect(screen.queryByText('~1d')).not.toBeInTheDocument()
+    expect(screen.queryByText('+1')).not.toBeInTheDocument()
   })
 
   it('renders CI brackets in the breakdown text', async () => {
     // t1 touch: struct_touch_ci [0.28, 0.72] → renders "[28–72%]"
     renderCard()
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
-    await waitFor(() => screen.getByText('~1d'))
+    await waitFor(() => screen.getAllByText('+1'))
     // CI bracket should appear somewhere in the rendered output
     const el = document.body.textContent
     expect(el).toContain('[28–72%]')
@@ -370,7 +370,7 @@ describe('ProposalCard — today\'s edge block (CR-V)', () => {
     // t1 touch:  struct_lb 28% ≥ mkt_touch 10% → clears   → no ~ in t1-touch position
     renderCard()
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
-    await waitFor(() => screen.getByText('~1d'))
+    await waitFor(() => screen.getAllByText('+1'))
     // At least one ~ flag present (for fails-lb cells in the mock data)
     const tildes = screen.getAllByText('~')
     expect(tildes.length).toBeGreaterThan(0)
@@ -379,7 +379,7 @@ describe('ProposalCard — today\'s edge block (CR-V)', () => {
   it('~ flag has descriptive title for tooltip', async () => {
     renderCard()
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
-    await waitFor(() => screen.getByText('~1d'))
+    await waitFor(() => screen.getAllByText('+1'))
     const tilde = screen.getAllByText('~')[0]
     expect(tilde).toHaveAttribute('title')
     expect(tilde.getAttribute('title')).toMatch(/lower.bound/i)
