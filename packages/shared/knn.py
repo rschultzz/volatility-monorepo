@@ -10,8 +10,8 @@ its call sites (routes.py) are unchanged.
 Public entry points:
     feature_stats(feature_vectors)               → {feature: {mean, std}}
     similarity_distance(query, candidate, stats) → float
-    rank_analogues(anchor_vec, candidates, k, *, exclude_date, stats)
-                                                 → list of (trade_date, distance)
+    rank_analogues(anchor_vec, candidates, k, *, exclude_date, before_date,
+                   stats, distance_ceiling)      → list of (trade_date, distance)
 """
 from __future__ import annotations
 
@@ -93,17 +93,28 @@ def rank_analogues(
     k: int,
     *,
     exclude_date: Optional[str] = None,
+    before_date: Optional[str] = None,
     stats: Optional[dict] = None,
+    distance_ceiling: float = math.inf,
 ) -> list[tuple]:
     """Rank candidate days by similarity to the anchor.
 
     candidates is an iterable of (trade_date_iso, feature_vector_dict).
     Returns a list of (trade_date_iso, distance) sorted closest-first,
-    truncated to k. exclude_date (ISO string) is removed from the
-    candidate list before ranking. stats may be precomputed; falls back
-    to computing across candidates.
+    truncated to k. Filters applied in order:
+
+      1. exclude_date (ISO string) — removed before ranking (self-exclusion).
+      2. before_date (ISO string) — excludes candidates with date >= before_date;
+         used for as-of-history backtesting to prevent look-ahead bias (CR-029).
+      3. feature_stats computed from the remaining pool when stats is None.
+      4. distance_ceiling (σ) — hard upper bound; candidates beyond are dropped,
+         making K adaptive: count = how common this setup is (CR-029).
+
+    distance_ceiling=math.inf reproduces pre-CR-029 behavior.
     """
     cand_list = [(d, v) for (d, v) in candidates if d != exclude_date]
+    if before_date is not None:
+        cand_list = [(d, v) for (d, v) in cand_list if d < before_date]
     if not cand_list:
         return []
     if stats is None:
@@ -113,4 +124,6 @@ def rank_analogues(
         for (d, v) in cand_list
     ]
     scored.sort(key=lambda x: x[1])
+    if math.isfinite(distance_ceiling):
+        scored = [(d, dist) for (d, dist) in scored if dist <= distance_ceiling]
     return scored[:k]
