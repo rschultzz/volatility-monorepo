@@ -36,6 +36,10 @@ from packages.shared.day_features import (
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
 from packages.shared.gex_landscape import compute_implied_move
 from packages.shared.audit_overrides import get_effective_regime
+from packages.shared.knn_config import (
+    CANONICAL_KNN_CONFIG_VERSION,
+    get_knn_config,
+)
 
 from apps.web.modules.Bars.service import fetch_rth_open
 
@@ -355,6 +359,14 @@ def register_analogues_routes(server) -> None:
             if not version:
                 version = CANONICAL_FEATURE_VERSION
 
+            knn_cfg_version = (
+                request.args.get("knn_config_version") or ""
+            ).strip() or CANONICAL_KNN_CONFIG_VERSION
+            try:
+                knn_cfg = get_knn_config(knn_cfg_version)
+            except ValueError as e:
+                return jsonify({"ok": False, "error": str(e)}), 400
+
             # ── anchor vector ─────────────────────────────────────────────
             anchor_vec = _load_feature_row(conn, ticker, anchor_date, version)
             if anchor_vec is None:
@@ -378,7 +390,9 @@ def register_analogues_routes(server) -> None:
             stats = feature_stats(v for (_, v) in candidates) if candidates else {}
             ranked = rank_analogues(
                 anchor_vec, candidates, k,
-                exclude_date=anchor_date.isoformat(), stats=stats,
+                exclude_date=anchor_date.isoformat(),
+                stats=stats,
+                distance_ceiling=knn_cfg["distance_ceiling"],
             )
 
             # ── enrich top-K ──────────────────────────────────────────────
