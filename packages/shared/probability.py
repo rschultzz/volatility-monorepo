@@ -22,6 +22,7 @@ from typing import Optional
 
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
 from packages.shared.knn import feature_stats, rank_analogues
+from packages.shared.knn_config import get_knn_config
 from packages.shared.stats import wilson_ci
 
 log = logging.getLogger(__name__)
@@ -486,6 +487,8 @@ def _rank_analogues_with_outcomes(
     *,
     ticker: str = "SPX",
     exclude_date: Optional[str] = None,
+    before_date: Optional[str] = None,
+    knn_config_version: Optional[str] = None,
 ) -> list[dict]:
     """Load corpus, rank by KNN distance, join outcomes.
 
@@ -534,10 +537,14 @@ def _rank_analogues_with_outcomes(
     fv_by_date  = {d: v for (d, v) in candidates}
 
     # 2. Rank
-    stats  = feature_stats(v for (_, v) in candidates)
-    ranked = rank_analogues(
+    knn_cfg = get_knn_config(knn_config_version)
+    stats   = feature_stats(v for (_, v) in candidates)
+    ranked  = rank_analogues(
         today_features, candidates, k,
-        exclude_date=exclude_date, stats=stats,
+        exclude_date=exclude_date,
+        before_date=before_date,
+        stats=stats,
+        distance_ceiling=knn_cfg["distance_ceiling"],
     )
     if not ranked:
         return []
