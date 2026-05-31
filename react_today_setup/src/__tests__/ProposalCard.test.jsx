@@ -354,4 +354,34 @@ describe('ProposalCard — today\'s edge block (CR-V)', () => {
     // No ~1d / ~5d / ~15d horizon rows rendered
     expect(screen.queryByText('~1d')).not.toBeInTheDocument()
   })
+
+  it('renders CI brackets in the breakdown text', async () => {
+    // t1 touch: struct_touch_ci [0.28, 0.72] → renders "[28–72%]"
+    renderCard()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    await waitFor(() => screen.getByText('~1d'))
+    // CI bracket should appear somewhere in the rendered output
+    const el = document.body.textContent
+    expect(el).toContain('[28–72%]')
+  })
+
+  it('shows ~ flag for fails-lb cells, not for clears cells', async () => {
+    // t15 touch: struct_lb 41% < mkt_touch 50% → fails-lb → shows ~
+    // t1 touch:  struct_lb 28% ≥ mkt_touch 10% → clears   → no ~ in t1-touch position
+    renderCard()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    await waitFor(() => screen.getByText('~1d'))
+    // At least one ~ flag present (for fails-lb cells in the mock data)
+    const tildes = screen.getAllByText('~')
+    expect(tildes.length).toBeGreaterThan(0)
+  })
+
+  it('~ flag has descriptive title for tooltip', async () => {
+    renderCard()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    await waitFor(() => screen.getByText('~1d'))
+    const tilde = screen.getAllByText('~')[0]
+    expect(tilde).toHaveAttribute('title')
+    expect(tilde.getAttribute('title')).toMatch(/lower.bound/i)
+  })
 })

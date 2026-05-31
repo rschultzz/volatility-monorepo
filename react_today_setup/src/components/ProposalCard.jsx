@@ -220,11 +220,6 @@ function EdgeBlock({ tradeTthesis }) {
 
 const HORIZON_LABELS = { t1: '~1d', t5: '~5d', t15: '~15d' };
 
-function _edgeColor(edge) {
-  if (edge == null) return '#475569';
-  return edge >= 0 ? '#4ade80' : '#f87171';
-}
-
 function _fmtEdge(edge) {
   if (edge == null) return '—';
   const pct = (edge * 100).toFixed(1);
@@ -236,8 +231,67 @@ function _fmtProb(p) {
   return (p * 100).toFixed(1) + '%';
 }
 
+function _fmtCi(ci) {
+  if (!ci || ci[0] == null || ci[1] == null) return '';
+  return ` [${Math.round(ci[0] * 100)}–${Math.round(ci[1] * 100)}%]`;
+}
+
+/**
+ * Edge state for one (struct, structCi, mkt, edge) cell.
+ *
+ * 'clears'   — point estimate positive AND lower-bound ≥ market (solid edge)
+ * 'fails-lb' — point estimate positive BUT lower-bound < market (uncertain)
+ * 'negative' — point estimate ≤ 0 (no edge)
+ * 'no-data'  — any required value is null
+ */
+function _edgeState(edge, structCi, mktProb) {
+  if (edge == null || mktProb == null) return 'no-data';
+  if (edge <= 0) return 'negative';
+  const lb = structCi?.[0];
+  if (lb != null && lb >= mktProb) return 'clears';
+  return 'fails-lb';
+}
+
+const _STATE_COLORS = {
+  'clears':   '#4ade80',   // green
+  'fails-lb': '#f59e0b',   // amber
+  'negative': '#f87171',   // red
+  'no-data':  '#475569',   // muted
+};
+
+/** Render one edge cell: coloured edge number + optional ~ flag + CI breakdown. */
+function EdgeCell({ edge, structProb, structCi, mktProb }) {
+  const state = _edgeState(edge, structCi, mktProb);
+  const color = _STATE_COLORS[state];
+  const failsLb = state === 'fails-lb';
+
+  return (
+    <td style={{ textAlign: 'center', paddingTop: 2 }}>
+      <span style={{ color, fontWeight: 700 }}>
+        {_fmtEdge(edge)}
+      </span>
+      {failsLb && (
+        <span
+          title="Positive at the point estimate but the structural lower-bound falls below the market probability — edge is uncertain"
+          style={{ color: '#f59e0b', fontWeight: 700, marginLeft: 2, cursor: 'help' }}
+        >
+          ~
+        </span>
+      )}
+      {mktProb != null && (
+        <span style={{ fontSize: 8, color: '#334155', marginLeft: 3 }}>
+          ({_fmtProb(structProb)}{_fmtCi(structCi)} vs {_fmtProb(mktProb)})
+        </span>
+      )}
+    </td>
+  );
+}
+
 /** Per-horizon touch & close edge strip. Iterates per_horizon list — never
- *  three hard-coded columns. Designed per spec CR-028 Step 3.
+ *  three hard-coded columns. Three edge states per cell:
+ *    clears   (green)  — struct lower-bound ≥ market, solid positive edge
+ *    fails-lb (amber~) — struct point > market but lower-bound < market
+ *    negative (red)    — struct point ≤ market
  */
 function TodaysEdgeBlock({ todaysEdge }) {
   if (!todaysEdge || !todaysEdge.per_horizon || !todaysEdge.per_horizon.length) return null;
@@ -250,7 +304,7 @@ function TodaysEdgeBlock({ todaysEdge }) {
       }}>
         Struct vs Mkt prob (edge)
         <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 6 }}>
-          — close: |δ| · touch: 2×|δ| (est.)
+          — close: |δ| · touch: 2×|δ| (est.) · ~ = positive but fails lower-bound
         </span>
       </div>
 
@@ -281,26 +335,18 @@ function TodaysEdgeBlock({ todaysEdge }) {
                     <span style={{ fontSize: 8, color: '#f59e0b', marginLeft: 4 }}>thin</span>
                   )}
                 </td>
-                <td style={{ textAlign: 'center', paddingTop: 2 }}>
-                  <span style={{ color: _edgeColor(row.touch_edge), fontWeight: 700 }}>
-                    {_fmtEdge(row.touch_edge)}
-                  </span>
-                  {row.mkt_touch != null && (
-                    <span style={{ fontSize: 8, color: '#334155', marginLeft: 3 }}>
-                      ({_fmtProb(row.struct_touch)} vs {_fmtProb(row.mkt_touch)})
-                    </span>
-                  )}
-                </td>
-                <td style={{ textAlign: 'center', paddingTop: 2 }}>
-                  <span style={{ color: _edgeColor(row.close_edge), fontWeight: 700 }}>
-                    {_fmtEdge(row.close_edge)}
-                  </span>
-                  {row.mkt_close != null && (
-                    <span style={{ fontSize: 8, color: '#334155', marginLeft: 3 }}>
-                      ({_fmtProb(row.struct_close)} vs {_fmtProb(row.mkt_close)})
-                    </span>
-                  )}
-                </td>
+                <EdgeCell
+                  edge={row.touch_edge}
+                  structProb={row.struct_touch}
+                  structCi={row.struct_touch_ci}
+                  mktProb={row.mkt_touch}
+                />
+                <EdgeCell
+                  edge={row.close_edge}
+                  structProb={row.struct_close}
+                  structCi={row.struct_close_ci}
+                  mktProb={row.mkt_close}
+                />
                 <td style={{ textAlign: 'center', color: '#475569', paddingTop: 2, fontSize: 9 }}>
                   {row.n_close ?? '—'}
                 </td>
