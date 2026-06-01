@@ -182,6 +182,77 @@ Logic:
 - Regime classification changes (`regime-classification-may-be-distance-blind`).
 - Multi-DTE horizon build.
 
+## Step 0 Findings (locked 2026-05-31)
+
+Script: `scripts/cr_x_step0_analysis.py` + `scripts/cr_x_step0_may07_diagnostic.py`.
+Corpus: 735 rows, `feature_version=v0.5.0-rebuilt`.
+
+### Lock 1a — z_diff cap validates the 2026-05-07 fix ✓
+
+`cluster_2_quality_ordinal` blowup: **60.0% → 17.5%** of squared distance for nearest
+neighbor. Distance for 2026-05-07 → nearest: **11.47σ → 3.875σ** (3× compression). The
+nearest 10 neighbors are all `magnetic-pin` (vs magnet-above top-ranked days under equal
+weights). Transform confirmed working.
+
+Under v2 (no ceiling), `cluster_2_quality_ordinal` still shows at 17.5% with z_diff_raw=16.4
+but the cap+weight keeps its effective contribution to `0.25 × 9 = 2.25` vs the 67.2 it
+contributed under equal-weight no-cap. Top contributor is now `cluster_1_signed_distance_sigma`
+(21.7%) — the actual proximity-to-wall signal. ✓
+
+### Lock 1 — Redundancy handled via weights ✓
+
+Named down-weighting:
+- `cluster_2_quality_ordinal`, `cluster_3_quality_ordinal`: 0.25 (was 1.0)
+- `n_pin`, `n_target`, `n_feature`: 0.25 (was 1.0)
+Full weight table in knn_config.py v2 (see Step 1 commit).
+
+### Lock 2 — Expert-prior weights confirmed ✓
+
+v2 weight table (in `PROPOSED_WEIGHTS` in the step0 script) produces sensible per-feature
+breakdowns: `cluster_1_signed_distance_sigma` leads at w=3.0; regime flags at 2.5; vol at 2.0.
+
+### Lock 3 — Recency: half_life_months=18.0 ✓
+
+Formula: `effective_distance = distance × 2^(years_ago / 1.5)`.
+Chosen by design (1-year-old day counts 2× harder; 3-year-old day (2023) counts 8× harder
+for identical structural match). Config param: `half_life_months`. Zero/None → no decay.
+
+### Lock 4 — Coherence design ✓
+
+EOD return pts + intraday range pts from `ironbeam_es_1m_bars`.
+Resemblance score per anchor: `max(0, 1 - |z_anchor_in_neighbour_dist| / 2)`.
+Aggregated coherence = mean(score) over anchors with K≥5. `before_date=anchor_date` required.
+Smoke test: omitting before_date raises score (lookahead demonstrated).
+
+### Lock 5 — Ceiling: 5.0σ ✓
+
+v2 corpus stats (no ceiling):
+- NN distance: min=0.273σ  median=1.217σ  p90=3.008σ  p99=5.251σ  max=7.063σ
+- K=20th neighbour: median=3.178σ  p90=5.487σ  max=8.764σ
+
+Zero-analogue rates at candidate ceilings:
+- 4.0σ → 4.5% zero (33 anchors), median K=20
+- **5.0σ → 1.6% zero (12 anchors), median K=20  ← chosen**
+- 6.0σ → 0.4% zero (3 anchors), median K=20
+
+**Ceiling = 5.0σ** (zero-analogue rate 1.6%, down from 7.3% under v1; median K=20 unchanged).
+
+### Spot-check: three anchors v1 vs v2
+
+| Anchor | Regime | v1 K | v1 dists | v2 K | v2 dists | v2 regimes |
+|--------|--------|------|----------|------|----------|------------|
+| 2026-05-07 | magnetic-pin | 0 | — | 19 | 3.88–4.97σ | 19× pin |
+| 2026-05-13 | magnet-above | 5 | 1.29–3.92σ | 20 | 1.32–3.85σ | 20× magnet-above |
+| 2024-11-04 | amplification | 20 | 1.60–2.97σ | 20 | 1.93–2.85σ | 20× amplification |
+| 2026-04-27 | untethered | 6 | 1.70–3.99σ | 10 | 1.69–4.99σ | 10× untethered |
+
+Key: 2026-05-13 goes from K=5 to K=20 under v2 — the previously-outlier 4.14–4.98σ cluster
+under equal-weighting moves inside 3.85σ after reweighting (those days' structural similarity
+on regime/proximity features now dominates, bucket-dominance trivia no longer inflates). No
+regression on typical cases.
+
+**All five Step-0 locks confirmed. Proceeding to Step 1.**
+
 ## Status Updates
 
 (filled during execution)
