@@ -707,7 +707,9 @@ def compute_structural_probability(
                          If None, derived from the boolean flags in today_features.
 
     Returns:
-        Dict with outcome_status, k, k_with_outcomes, touch_rate,
+        Dict with outcome_status, k (real within-ceiling analogue count,
+        not the safety bound), k_with_outcomes (subset with computed outcomes
+        — what the Wilson CI is actually built on), touch_rate,
         touch_ci_lower/upper, close_rate, mean_days_to_reach,
         mean_excursion_pct, regime_kind, note, post_touch.
     """
@@ -716,7 +718,7 @@ def compute_structural_probability(
         ticker=ticker, exclude_date=exclude_date,
     )
     result = _aggregate_outcomes(rows)
-    result["k"]           = k
+    result["k"]           = len(rows)   # real within-ceiling count, not the safety bound
     result["regime_kind"] = regime_kind or _infer_regime_kind(today_features)
 
     # ── Post-touch distribution (CR-I) ────────────────────────────────────────
