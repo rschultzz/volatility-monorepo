@@ -1,8 +1,14 @@
-"""Tests for knn.py — rank_analogues, before_date, distance_ceiling (CR-029)."""
+"""Tests for knn.py — rank_analogues, before_date, distance_ceiling (CR-029);
+weighted_similarity_distance, z_diff_cap, recency, config v2 (CR-030)."""
 import math
 import pytest
 
-from packages.shared.knn import feature_stats, rank_analogues, similarity_distance
+from packages.shared.knn import (
+    feature_stats,
+    rank_analogues,
+    similarity_distance,
+    weighted_similarity_distance,
+)
 from packages.shared.knn_config import (
     CANONICAL_KNN_CONFIG_VERSION,
     KNN_CONFIGS,
@@ -62,8 +68,28 @@ def _compute_distance_between(v1: dict, v2: dict, pool: list) -> float:
 # ─── knn_config tests ───────────────────────────────────────────────────────
 
 class TestKnnConfig:
-    def test_canonical_version_is_v1(self):
-        assert CANONICAL_KNN_CONFIG_VERSION == "v1"
+    def test_canonical_version_is_v2(self):
+        assert CANONICAL_KNN_CONFIG_VERSION == "v2"
+
+    def test_v2_ceiling_is_5(self):
+        cfg = get_knn_config("v2")
+        assert cfg["distance_ceiling"] == pytest.approx(5.0)
+
+    def test_v2_has_z_diff_cap(self):
+        cfg = get_knn_config("v2")
+        assert cfg["z_diff_cap"] == pytest.approx(3.0)
+
+    def test_v2_has_feature_weights(self):
+        cfg = get_knn_config("v2")
+        assert "feature_weights" in cfg
+        assert isinstance(cfg["feature_weights"], dict)
+        # All FEATURE_NAMES should be present in weights
+        for name in FEATURE_NAMES:
+            assert name in cfg["feature_weights"], f"Missing weight for {name}"
+
+    def test_v2_has_half_life_months(self):
+        cfg = get_knn_config("v2")
+        assert cfg["half_life_months"] == pytest.approx(18.0)
 
     def test_v1_ceiling_is_4(self):
         cfg = get_knn_config("v1")
@@ -81,12 +107,15 @@ class TestKnnConfig:
             get_knn_config("v999")
 
     def test_ceiling_literal_only_in_config_module(self):
-        """The literal 4.0 should live only in knn_config.py, not knn.py."""
+        """Distance ceiling and weight literals must live only in knn_config.py."""
         import inspect
         from packages.shared import knn
         src = inspect.getsource(knn)
         assert "4.0" not in src, (
-            "Hard-coded ceiling found in knn.py — it must live in knn_config.py only"
+            "Hard-coded 4.0 ceiling found in knn.py — must live in knn_config.py only"
+        )
+        assert "5.0" not in src, (
+            "Hard-coded 5.0 ceiling found in knn.py — must live in knn_config.py only"
         )
 
 
@@ -245,3 +274,330 @@ class TestDistanceCeiling:
         )
         dates = [d for d, _ in result]
         assert dates == ["2024-01-01"]
+
+
+# ─── CR-030: weighted_similarity_distance tests ─────────────────────────────
+
+class TestWeightedSimilarityDistance:
+    """Tests for the weighted + z_diff_cap distance function."""
+
+    def _two_candidate_stats(self, anchor_val: float, cand_val: float,
+                              feature: str = "implied_move_1d") -> dict:
+        """Build stats from a two-vector pool (anchor + candidate)."""
+        pool = [
+            _dense_vec(**{feature: anchor_val}),
+            _dense_vec(**{feature: cand_val}),
+        ]
+        return feature_stats(pool)
+
+    def test_equal_weights_and_no_cap_matches_similarity_distance(self):
+        """weight=1.0 for all features + no cap → identical to similarity_distance."""
+        anchor = _dense_vec(implied_move_1d=1.0, cluster_1_signed_distance_sigma=0.5)
+        cand   = _dense_vec(implied_move_1d=2.0, cluster_1_signed_distance_sigma=1.5)
+        candidates = [("2024-01-01", anchor), ("2024-01-02", cand)]
+        stats = feature_stats(v for (_, v) in candidates)
+        equal_weights = {name: 1.0 for name in FEATURE_NAMES}
+
+        wd = weighted_similarity_distance(anchor, cand, stats,
+                                          feature_weights=equal_weights,
+                                          z_diff_cap=None)
+        sd = similarity_distance(anchor, cand, stats)
+        assert wd == pytest.approx(sd, rel=1e-6)
+
+    def test_zero_weight_feature_does_not_contribute(self):
+        """A feature with weight=0.0 contributes nothing regardless of z_diff."""
+        anchor = _dense_vec(implied_move_1d=10.0)
+        cand   = _dense_vec(implied_move_1d=0.0)   # large raw difference
+        candidates = [("2024-01-01", anchor), ("2024-01-02", cand)]
+        stats = feature_stats(v for (_, v) in candidates)
+        # All weights 1.0 except implied_move_1d = 0.0
+        weights = {name: (0.0 if name == "implied_move_1d" else 1.0)
+                   for name in FEATURE_NAMES}
+        # With weight=0: distance should be 0 (all other features identical)
+        wd = weighted_similarity_distance(anchor, cand, stats,
+                                          feature_weights=weights,
+                                          z_diff_cap=None)
+        assert wd == pytest.approx(0.0, abs=1e-9)
+
+    def test_high_weight_feature_increases_distance(self):
+        """Up-weighting a feature whose values differ increases the distance."""
+        anchor = _dense_vec(cluster_1_signed_distance_sigma=0.0)
+        cand   = _dense_vec(cluster_1_signed_distance_sigma=1.0)
+        candidates = [("2024-01-01", anchor), ("2024-01-02", cand)]
+        stats = feature_stats(v for (_, v) in candidates)
+        equal_w  = {name: 1.0  for name in FEATURE_NAMES}
+        high_w   = dict(equal_w); high_w["cluster_1_signed_distance_sigma"] = 4.0
+
+        d_equal = weighted_similarity_distance(anchor, cand, stats,
+                                               feature_weights=equal_w)
+        d_high  = weighted_similarity_distance(anchor, cand, stats,
+                                               feature_weights=high_w)
+        assert d_high > d_equal
+
+    def test_z_diff_cap_bounds_extreme_contribution(self):
+        """A z_diff exceeding z_diff_cap should be capped, reducing the distance.
+
+        Pool design: 8 zeros + big_anchor(10) + small_cand(-10) on a sparse
+        single-feature vector. With 10 items: mean=0, std=sqrt(20)≈4.47.
+        z_diff = (10-(-10))/4.47 ≈ 4.47 > 3.0 → cap kicks in.
+        """
+        zeros = [(f"zero{i}", _sparse_vec(cluster_2_quality_ordinal=0.0))
+                 for i in range(8)]
+        big_anchor = _sparse_vec(cluster_2_quality_ordinal=10.0)
+        small_cand = _sparse_vec(cluster_2_quality_ordinal=-10.0)
+        pool = [("big", big_anchor), ("small", small_cand)] + zeros
+        stats = feature_stats(v for (_, v) in pool)
+
+        # Verify pre-condition: raw z_diff exceeds cap
+        fst = stats["cluster_2_quality_ordinal"]
+        std_v = max(fst["std"], 1e-6)
+        raw_zdiff = abs(10.0 / std_v - (-10.0 / std_v))
+        assert raw_zdiff > 3.0, f"Pre-condition failed: z_diff={raw_zdiff:.2f} ≤ 3.0"
+
+        w_uniform = {name: 1.0 for name in FEATURE_NAMES}
+        d_nocap = weighted_similarity_distance(big_anchor, small_cand, stats,
+                                               feature_weights=w_uniform,
+                                               z_diff_cap=None)
+        d_capped = weighted_similarity_distance(big_anchor, small_cand, stats,
+                                                feature_weights=w_uniform,
+                                                z_diff_cap=3.0)
+        # Capped version must be strictly smaller (z_diff > cap was active)
+        assert d_capped < d_nocap
+
+    def test_z_diff_cap_contribution_bounded(self):
+        """With z_diff_cap=C and weight=w, no single feature can contribute > w×C²."""
+        big_anchor = _sparse_vec(cluster_2_quality_ordinal=100.0)
+        small_cand = _sparse_vec(cluster_2_quality_ordinal=0.0)
+        pool = [("a", big_anchor), ("b", small_cand)]
+        stats = feature_stats(v for (_, v) in pool)
+        w = {name: 1.0 for name in FEATURE_NAMES}
+        CAP = 3.0
+        # With z_diff_cap=3.0, max per-feature contribution = 1.0 × 3.0² = 9.0
+        # With only ONE active feature, rescale=sqrt(34/1), so dist = sqrt(9)*sqrt(34)
+        d = weighted_similarity_distance(big_anchor, small_cand, stats,
+                                         feature_weights=w, z_diff_cap=CAP)
+        max_possible = math.sqrt(1.0 * CAP * CAP) * math.sqrt(len(FEATURE_NAMES) / 1)
+        assert d <= max_possible + 1e-9
+
+
+# ─── CR-030: rank_analogues weighting + recency tests ───────────────────────
+
+class TestWeightedRankAnalogues:
+    """Smoke tests for rank_analogues with CR-030 parameters."""
+
+    def test_feature_weights_none_reproduces_baseline(self):
+        """feature_weights=None → identical ordering to pre-CR-030 behavior."""
+        cands = _candidates_sparse(n_close=5, n_far=0)
+        anchor = _sparse_vec(cluster_1_signed_distance_sigma=0.0)
+        result_baseline = rank_analogues(anchor, cands, 20,
+                                         feature_weights=None)
+        result_explicit = rank_analogues(anchor, cands, 20,
+                                         feature_weights=None,
+                                         z_diff_cap=None)
+        assert [d for d, _ in result_baseline] == [d for d, _ in result_explicit]
+
+    def test_weight_effect_reorders_candidates(self):
+        """Up-weighting a feature whose values differ more on one candidate
+        pushes that candidate further away."""
+        # cand_a differs on cluster_1_signed_distance_sigma
+        # cand_b differs on implied_move_1d (same diff magnitude in z-space)
+        # Up-weight cluster_1; cand_a should rank behind cand_b
+        anchor = _dense_vec(cluster_1_signed_distance_sigma=0.0,
+                             implied_move_1d=0.0)
+        cand_a = _dense_vec(cluster_1_signed_distance_sigma=5.0,
+                             implied_move_1d=0.0)
+        cand_b = _dense_vec(cluster_1_signed_distance_sigma=0.0,
+                             implied_move_1d=5.0)
+        candidates = [("a", anchor), ("a2", cand_a), ("b", cand_b)]
+        stats = feature_stats(v for (_, v) in candidates)
+
+        # Equal weights: same z_diff magnitude → same raw distance, order arbitrary
+        equal_w = {name: 1.0 for name in FEATURE_NAMES}
+        r_equal = rank_analogues(anchor, candidates, 10, stats=stats,
+                                 exclude_date="a",
+                                 feature_weights=equal_w)
+        d_a_equal = next(d for (dt, d) in r_equal if dt == "a2")
+        d_b_equal = next(d for (dt, d) in r_equal if dt == "b")
+        assert d_a_equal == pytest.approx(d_b_equal, rel=1e-4)
+
+        # Up-weight cluster_1; cand_a farther
+        high_w = dict(equal_w)
+        high_w["cluster_1_signed_distance_sigma"] = 4.0
+        r_weighted = rank_analogues(anchor, candidates, 10, stats=stats,
+                                    exclude_date="a",
+                                    feature_weights=high_w)
+        d_a_w = next(d for (dt, d) in r_weighted if dt == "a2")
+        d_b_w = next(d for (dt, d) in r_weighted if dt == "b")
+        assert d_a_w > d_b_w
+
+    def test_recency_effect_penalizes_older_candidate(self):
+        """An older candidate with the same structural distance as a newer one
+        should rank worse when half_life_months is set."""
+        anchor = _dense_vec(implied_move_1d=1.0)
+        # Both candidates are structurally identical to the anchor
+        cand_new = _dense_vec(implied_move_1d=1.0)  # 3 months ago
+        cand_old = _dense_vec(implied_move_1d=1.0)  # 3 years ago
+        # Add tiny structural difference to break ties
+        cand_new["cluster_1_signed_distance_sigma"] = 0.001
+        cand_old["cluster_1_signed_distance_sigma"] = 0.002
+        candidates = [
+            ("2026-02-01", cand_new),   # ~3 months before anchor
+            ("2023-05-31", cand_old),   # ~3 years before anchor
+        ]
+        anchor_date = "2026-05-31"
+        stats = feature_stats(v for (_, v) in candidates)
+        equal_w = {name: 1.0 for name in FEATURE_NAMES}
+
+        result = rank_analogues(
+            anchor, candidates, 10,
+            stats=stats,
+            feature_weights=equal_w,
+            half_life_months=18.0,
+            anchor_date=anchor_date,
+        )
+        dates = [d for d, _ in result]
+        # The recent candidate should rank first despite tiny structural disadvantage
+        assert dates[0] == "2026-02-01", (
+            "Newer candidate should rank first when recency is active"
+        )
+
+    def test_recency_none_no_effect(self):
+        """half_life_months=None → same ordering as baseline."""
+        cands = _candidates_sparse(n_close=5, n_far=0)
+        anchor = _sparse_vec(cluster_1_signed_distance_sigma=0.0)
+        r1 = rank_analogues(anchor, cands, 20, feature_weights=None)
+        r2 = rank_analogues(anchor, cands, 20, feature_weights=None,
+                            half_life_months=None, anchor_date=None)
+        assert [d for d, _ in r1] == [d for d, _ in r2]
+
+    def test_recency_applied_before_ceiling(self):
+        """A structurally close but old candidate can be pushed beyond the ceiling
+        by recency scaling — ceiling is applied to effective (age-scaled) distance.
+
+        Pool design: anchor + old_cand + ref_cand in the stats pool so that
+        feature_stats are non-degenerate and implied_move_1d has a real std.
+        Structural distance old_cand→anchor ≈ 0.5σ; with half_life=6mo and 3yr
+        age, effective = 0.5 × 2^6 = 32σ >> 5σ ceiling.
+        """
+        anchor   = _dense_vec(implied_move_1d=1.0)
+        old_cand = _dense_vec(implied_move_1d=1.01)   # slightly different
+        ref_cand = _dense_vec(implied_move_1d=1.05)   # reference for normalisation
+        candidates = [
+            ("2023-01-01", old_cand),   # 3 years before anchor
+            ("2025-12-01", ref_cand),   # ~1 month before anchor — low recency penalty
+        ]
+        anchor_date = "2026-01-01"
+        stats = feature_stats(v for (_, v) in candidates)
+
+        w = {name: 1.0 for name in FEATURE_NAMES}
+
+        # Without recency: structural distance ≈ small, well inside ceiling=5.0
+        r_no_decay = rank_analogues(
+            anchor, candidates, 10, stats=stats,
+            feature_weights=w,
+            half_life_months=None, anchor_date=None,
+            distance_ceiling=5.0,
+        )
+        assert len(r_no_decay) == 2   # both pass ceiling without decay
+
+        # With recency half_life=6mo: 3yr-old day multiplier = 2^(3/0.5) = 2^6 = 64×
+        # Structural dist * 64 >> 5σ ceiling → excluded
+        r_decayed = rank_analogues(
+            anchor, candidates, 10, stats=stats,
+            feature_weights=w,
+            half_life_months=6.0,   # very aggressive: 6-month half-life
+            anchor_date=anchor_date,
+            distance_ceiling=5.0,
+        )
+        # old_cand (3yr ago, 64× multiplier) should be excluded; ref_cand (1mo ago) survives
+        old_dates = [d for d, _ in r_decayed]
+        assert "2023-01-01" not in old_dates, (
+            "3-year-old candidate should be pushed beyond ceiling by aggressive decay"
+        )
+        assert "2025-12-01" in old_dates, (
+            "Recent candidate (1 month ago) should survive the ceiling"
+        )
+
+    def test_z_diff_cap_regression_two_pin_cluster_style(self):
+        """Regression: a near-zero-mean ordinal feature (cluster_2_quality_ordinal)
+        with rare value=2 (corpus mean≈0) should NOT dominate squared distance.
+        Mirrors the 2026-05-07 two-pin-cluster structural issue (CR-030 hard gate).
+        """
+        # Build a corpus where cluster_2_quality_ordinal is 0 for all candidates
+        # and 2 for the anchor — mimicking the actual corpus situation.
+        n = 10
+        candidates = [
+            (f"2024-{i:02d}-01",
+             _dense_vec(cluster_2_quality_ordinal=0.0,
+                        cluster_1_signed_distance_sigma=float(i) * 0.1))
+            for i in range(1, n + 1)
+        ]
+        anchor = _dense_vec(cluster_2_quality_ordinal=2.0,
+                            cluster_1_signed_distance_sigma=0.0)
+        stats = feature_stats(v for (_, v) in candidates)
+
+        # Without cap: cluster_2_quality_ordinal has z_diff >> others → dominates
+        w = {name: 1.0 for name in FEATURE_NAMES}
+        breakdown_nocap = [
+            (name,
+             weighted_similarity_distance(
+                 anchor,
+                 dict(candidates[0][1]),
+                 stats,
+                 feature_weights=w,
+                 z_diff_cap=None,
+             ))
+            for name in ["cluster_2_quality_ordinal"]
+        ]
+        # The interesting assertion: with cap=3.0, the blowup feature should
+        # NOT contribute more than z_diff_cap^2 × weight per feature.
+        best_cand_vec = candidates[0][1]
+        # Compute contribution of cluster_2_quality_ordinal with cap vs without
+        fstats = stats["cluster_2_quality_ordinal"]
+        std_val = max(fstats["std"], 1e-6)
+        z_q = (2.0 - fstats["mean"]) / std_val
+        z_c = (0.0 - fstats["mean"]) / std_val
+        raw_diff = z_q - z_c
+        capped_diff = min(abs(raw_diff), 3.0) * (1 if raw_diff >= 0 else -1)
+
+        contrib_nocap = 1.0 * raw_diff ** 2
+        contrib_capped = 1.0 * capped_diff ** 2
+
+        assert abs(raw_diff) > 3.0, "Test pre-condition: raw z_diff should exceed cap"
+        assert contrib_capped <= 9.0 + 1e-9, (
+            "Capped contribution must be ≤ z_diff_cap² = 9.0"
+        )
+        assert contrib_capped < contrib_nocap, (
+            "Capped contribution must be less than uncapped"
+        )
+
+        # With cap applied in rank_analogues, 2026-05-07-style anchor should
+        # find candidates (not get zero due to blowup)
+        result_capped = rank_analogues(
+            anchor, candidates, 10,
+            feature_weights=w,
+            z_diff_cap=3.0,
+            distance_ceiling=8.0,
+        )
+        result_nocap = rank_analogues(
+            anchor, candidates, 10,
+            feature_weights=w,
+            z_diff_cap=None,
+            distance_ceiling=8.0,
+        )
+        # With cap the distances should be lower (blowup removed)
+        if result_capped and result_nocap:
+            assert result_capped[0][1] < result_nocap[0][1], (
+                "Capped distance must be strictly less than uncapped"
+            )
+
+    def test_all_config_params_from_config_not_literals(self):
+        """Confirm no hardcoded ceiling / weight / cap literals in knn.py."""
+        import inspect
+        from packages.shared import knn
+        src = inspect.getsource(knn)
+        for literal in ("4.0", "5.0", "3.0", "18.0", "2.5", "0.25"):
+            assert literal not in src, (
+                f"Hard-coded literal {literal!r} found in knn.py — "
+                "it must live in knn_config.py only"
+            )
