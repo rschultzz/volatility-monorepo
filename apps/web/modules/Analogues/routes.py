@@ -393,6 +393,10 @@ def register_analogues_routes(server) -> None:
                 exclude_date=anchor_date.isoformat(),
                 stats=stats,
                 distance_ceiling=knn_cfg["distance_ceiling"],
+                feature_weights=knn_cfg.get("feature_weights"),
+                z_diff_cap=knn_cfg.get("z_diff_cap"),
+                half_life_months=knn_cfg.get("half_life_months"),
+                anchor_date=anchor_date.isoformat(),
             )
 
             # ── enrich top-K ──────────────────────────────────────────────
@@ -406,8 +410,12 @@ def register_analogues_routes(server) -> None:
                     conn, ticker, trade_date_iso,
                     implied_move=float(vec.get("implied_move_1d", 0.0) or 0.0),
                 )
-                # Feature-distance breakdown (CR-016)
-                distances = feature_distance_breakdown(anchor_vec, vec, stats)
+                # Feature-distance breakdown (CR-016; CR-030: weighted when v2)
+                distances = feature_distance_breakdown(
+                    anchor_vec, vec, stats,
+                    feature_weights=knn_cfg.get("feature_weights"),
+                    z_diff_cap=knn_cfg.get("z_diff_cap"),
+                )
                 # Effective regime (CR-016)
                 analogue_date = dt.date.fromisoformat(trade_date_iso)
                 effective_regime = get_effective_regime(conn, ticker, analogue_date)

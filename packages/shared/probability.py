@@ -545,6 +545,10 @@ def _rank_analogues_with_outcomes(
         before_date=before_date,
         stats=stats,
         distance_ceiling=knn_cfg["distance_ceiling"],
+        feature_weights=knn_cfg.get("feature_weights"),
+        z_diff_cap=knn_cfg.get("z_diff_cap"),
+        half_life_months=knn_cfg.get("half_life_months"),
+        anchor_date=exclude_date,  # for live path, exclude_date IS the anchor date
     )
     if not ranked:
         return []
