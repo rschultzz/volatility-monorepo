@@ -468,9 +468,11 @@ def register_proposals_routes(server) -> None:
                 )
                 option_chain = build_bsm_chain(spot, atmiv, risk_free_rate, tte)
 
-            # ── 10. Analogues (K=20 KNN) ───────────────────────────────────
+            # ── 10. Analogues (ceiling-gated KNN, safety bound 200) ────────
+            # CR-031: pass 200 so the distance ceiling is the sole gate;
+            # common setups return 40–80 analogues (was capped at 20).
             analogues = _rank_analogues_with_outcomes(
-                feature_vector, conn, 20, CANONICAL_FEATURE_VERSION,
+                feature_vector, conn, 200, CANONICAL_FEATURE_VERSION,
                 ticker=ticker,
                 exclude_date=trade_date.isoformat(),
             )

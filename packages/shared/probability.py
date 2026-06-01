@@ -27,6 +27,10 @@ from packages.shared.stats import wilson_ci
 
 log = logging.getLogger(__name__)
 
+# CR-031: safety bound mirrors routes.py _K_SAFETY.  The distance ceiling is
+# the real similarity gate; this only caps compute on pathological corpora.
+_K_SAFETY = 200
+
 
 # ── Bucket label helpers ─────────────────────────────────────────────────────
 
@@ -195,10 +199,18 @@ def aggregate_post_touch_distribution(
     fallback_threshold: int = 7,
     pooled_minimum: int = 4,
 ) -> dict:
-    """Aggregate post-touch positions across K=20 analogues.
+    """Aggregate post-touch positions across analogues (up to _K_SAFETY=200).
 
     Produces the 9-cell below/at/above fraction matrix with Wilson CIs across
     T+1/T+5/T+15 timeframes, bucket-filtered for physical-regime consistency.
+
+    CR-031 note: analogues_with_outcomes can now contain up to _K_SAFETY=200
+    rows (was capped at 20).  Common setups with K=40–80 will have larger
+    same-bucket counts, causing strict mode to trigger more often.  This is
+    intentional — a 60% above-fraction from 30 touchers is more reliable than
+    from 10.  Thresholds (fallback_threshold=7, pooled_minimum=4) remain
+    unchanged; they were calibrated conservatively for K=20 and remain valid
+    at larger K.
 
     Args:
         analogues_with_outcomes: List of outcome dicts (same format as
@@ -216,8 +228,10 @@ def aggregate_post_touch_distribution(
 
         fallback_threshold: Minimum same-bucket touchers to use strict mode.
             Default 7 (revised from spec's 10 based on Step 0 empirical check;
-            mean ~9.7 same-bucket analogues × 82% touch rate ≈ 8 expected
-            touchers — threshold 7 keeps ~70% of anchors in strict mode).
+            at K=20: mean ~9.7 same-bucket analogues × 82% touch rate ≈ 8
+            expected touchers — threshold 7 kept ~70% of anchors in strict
+            mode.  At K=40–80 strict mode triggers on essentially all common
+            setups, which is the correct behavior).
 
         pooled_minimum: Minimum total touchers for pooled-fallback mode.
             Default 4 (revised from 5 based on Step 0 empirical check).
@@ -240,8 +254,9 @@ def aggregate_post_touch_distribution(
 
     0DTE pre-check: if anchor_bucket == "0DTE", returns immediately with
     filter_mode "zero_dte_corpus_insufficient". Only 3 0DTE days exist in
-    the current corpus; no 0DTE anchor will find same-bucket analogues in
-    K=20. This is a structural corpus-coverage fact, not a per-anchor issue.
+    the current corpus; no 0DTE anchor will find same-bucket analogues even
+    with K up to _K_SAFETY=200. This is a structural corpus-coverage fact,
+    not a per-anchor issue.
     """
     # ── 0DTE corpus pre-check ────────────────────────────────────────────────
     if anchor_bucket == "0DTE":
@@ -656,7 +671,7 @@ def _rank_analogues_with_outcomes(
 def compute_structural_probability(
     today_features: dict,
     conn,
-    k: int = 20,
+    k: int = _K_SAFETY,
     feature_version: str = CANONICAL_FEATURE_VERSION,
     *,
     ticker: str = "SPX",
@@ -678,7 +693,11 @@ def compute_structural_probability(
     Args:
         today_features:  Feature dict matching bt_daily_features_active.feature_vector.
         conn:            psycopg connection.
-        k:               Number of nearest neighbours. Default 20.
+        k:               Safety bound on analogues returned. Default _K_SAFETY=200.
+                         CR-031: the distance ceiling is the real similarity gate;
+                         this only bounds compute on pathological corpora.  Common
+                         setups return 40–80 within-ceiling analogues; rare setups
+                         return fewer (as few as 1); K=200 never binds in practice.
         feature_version: Corpus to rank against. Defaults to CANONICAL_FEATURE_VERSION
                          (currently 'v0.5.0-rebuilt', 735 rows).
         ticker:          Instrument. Default 'SPX'.

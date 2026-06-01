@@ -261,7 +261,7 @@ def register_today_setup_routes(server) -> None:
                 structural_probability = compute_structural_probability(
                     today_features,
                     conn,
-                    k=20,
+                    k=200,   # CR-031: safety bound; ceiling is the real gate
                     ticker=ticker,
                     exclude_date=trade_date.isoformat(),
                     regime_kind=effective_regime,
