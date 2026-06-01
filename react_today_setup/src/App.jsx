@@ -345,6 +345,24 @@ export default function App() {
     setSelectedAnalogue(null);
   }
 
+  // ── Open in Price Chart ───────────────────────────────────────────────────
+  async function onOpenInPriceChart(targetDate) {
+    try {
+      await fetch(`${API_BASE}/api/backtests-v2/select-trade`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trade_date: targetDate }),
+      });
+    } catch { /* non-fatal — still navigate */ }
+
+    const params = new URLSearchParams(window.location.search);
+    const apiBaseParam = params.get('api_base');
+    const target = apiBaseParam
+      ? `/?tab=price-chart&api_base=${encodeURIComponent(apiBaseParam)}`
+      : '/?tab=price-chart';
+    window.location.href = target;
+  }
+
   // ── Derived values ────────────────────────────────────────────────────────
   const context = proposals?.context;
   const structuralProb = proposals?.structural_probability;
@@ -506,6 +524,7 @@ export default function App() {
                   onPromote={() => anchorFlag && handlePromote(anchorFlag.flag_id)}
                   onDemote={() => anchorFlag && handleDemote(anchorFlag.flag_id)}
                   onDeleteFlag={() => anchorFlag && handleDeleteFlag(anchorFlag.flag_id)}
+                  onOpenInPriceChart={() => date && onOpenInPriceChart(date)}
                 />
               </div>
             )}
@@ -527,6 +546,7 @@ export default function App() {
                 onDemote={() => selectedFlag && handleDemote(selectedFlag.flag_id)}
                 onDeleteFlag={() => selectedFlag && handleDeleteFlag(selectedFlag.flag_id)}
                 onPairFlag={() => selectedDate && handlePairFlag(date, selectedDate)}
+                onOpenInPriceChart={() => selectedDate && onOpenInPriceChart(selectedDate)}
               />
             </div>
           </div>

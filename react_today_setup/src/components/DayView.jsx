@@ -34,20 +34,21 @@ const GEX_LAYERS = [
 ]
 
 export default function DayView({
-  label,            // "Anchor" | "Selected"
-  date,             // "YYYY-MM-DD"
+  label,                // "Anchor" | "Selected"
+  date,                 // "YYYY-MM-DD"
   ticker,
   apiBase,
-  landscapeData,    // data for GexLandscape (or null)
-  regime,           // effective regime string
-  autoRegime,       // stored auto regime
-  flag,             // existing flag object or null
-  allowPairFlag,    // bool — show "not a true analogue" control
-  onRegimeFlag,     // (correctedRegime) => void
-  onPromote,        // () => void
-  onDemote,         // () => void
-  onDeleteFlag,     // () => void
-  onPairFlag,       // () => void — flag as not a true analogue
+  landscapeData,        // data for GexLandscape (or null)
+  regime,               // effective regime string
+  autoRegime,           // stored auto regime
+  flag,                 // existing flag object or null
+  allowPairFlag,        // bool — show "not a true analogue" control
+  onRegimeFlag,         // (correctedRegime) => void
+  onPromote,            // () => void
+  onDemote,             // () => void
+  onDeleteFlag,         // () => void
+  onPairFlag,           // () => void — flag as not a true analogue
+  onOpenInPriceChart,   // () => void — navigate to Price Chart with this day's date
 }) {
   const [showRegimePicker, setShowRegimePicker] = useState(false)
   const [selectedCorrection, setSelectedCorrection] = useState('')
@@ -113,6 +114,15 @@ export default function DayView({
           <span style={{ fontSize: 10, color: '#94a3b8' }}>
             auto: {autoRegime} → yours: {flag.corrected_regime}
           </span>
+        )}
+        {date && onOpenInPriceChart && (
+          <button
+            type="button"
+            onClick={onOpenInPriceChart}
+            style={smallBtn('#1e3a5f', '#60a5fa')}
+          >
+            Open in Price Chart
+          </button>
         )}
       </div>
 
