@@ -115,9 +115,20 @@ KNN_CONFIGS: dict[str, dict] = {
         "feature_weights":  _V2_FEATURE_WEIGHTS,
         "half_life_months": 18.0,      # recency: 1-year-old day counts 2× harder
     },
+    # v3 (CR-031): half-life sweep (18/24/36 months) confirmed hl=18 optimal.
+    # hl=18 coherence=0.5850 > hl=24=0.5821 > hl=36=0.5782 on 735-row corpus.
+    # The 2026-05-07 edge anchor K=1 at all half-lives — genuine rarity, not
+    # fixable by half-life change.  All other parameters unchanged from v2;
+    # this version documents the sweep decision and advances the canonical.
+    "v3": {
+        "distance_ceiling": 5.0,
+        "z_diff_cap":       3.0,
+        "feature_weights":  _V2_FEATURE_WEIGHTS,
+        "half_life_months": 18.0,
+    },
 }
 
-CANONICAL_KNN_CONFIG_VERSION: str = "v2"
+CANONICAL_KNN_CONFIG_VERSION: str = "v3"
 
 
 def get_knn_config(version: Optional[str] = None) -> dict:

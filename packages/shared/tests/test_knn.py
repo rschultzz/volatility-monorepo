@@ -68,24 +68,41 @@ def _compute_distance_between(v1: dict, v2: dict, pool: list) -> float:
 # ─── knn_config tests ───────────────────────────────────────────────────────
 
 class TestKnnConfig:
-    def test_canonical_version_is_v2(self):
-        assert CANONICAL_KNN_CONFIG_VERSION == "v2"
+    def test_canonical_version_is_v3(self):
+        assert CANONICAL_KNN_CONFIG_VERSION == "v3"
 
-    def test_v2_ceiling_is_5(self):
-        cfg = get_knn_config("v2")
+    def test_v3_ceiling_is_5(self):
+        cfg = get_knn_config("v3")
         assert cfg["distance_ceiling"] == pytest.approx(5.0)
 
-    def test_v2_has_z_diff_cap(self):
-        cfg = get_knn_config("v2")
+    def test_v3_has_z_diff_cap(self):
+        cfg = get_knn_config("v3")
         assert cfg["z_diff_cap"] == pytest.approx(3.0)
 
-    def test_v2_has_feature_weights(self):
-        cfg = get_knn_config("v2")
+    def test_v3_has_feature_weights(self):
+        cfg = get_knn_config("v3")
         assert "feature_weights" in cfg
         assert isinstance(cfg["feature_weights"], dict)
         # All FEATURE_NAMES should be present in weights
         for name in FEATURE_NAMES:
             assert name in cfg["feature_weights"], f"Missing weight for {name}"
+
+    def test_v3_half_life_is_18(self):
+        """v3 reaffirms hl=18 (sweep: 18 > 24 > 36 on coherence)."""
+        cfg = get_knn_config("v3")
+        assert cfg["half_life_months"] == pytest.approx(18.0)
+
+    def test_v2_still_selectable_and_params_unchanged(self):
+        """v2 remains selectable; baseline reproducibility preserved."""
+        cfg_v2 = get_knn_config("v2")
+        cfg_v3 = get_knn_config("v3")
+        assert cfg_v2["distance_ceiling"] == pytest.approx(5.0)
+        assert cfg_v2["z_diff_cap"] == pytest.approx(3.0)
+        assert cfg_v2["half_life_months"] == pytest.approx(18.0)
+        # v2 and v3 are parameter-identical (v3 advances canonical only)
+        assert cfg_v2["distance_ceiling"] == pytest.approx(cfg_v3["distance_ceiling"])
+        assert cfg_v2["z_diff_cap"] == pytest.approx(cfg_v3["z_diff_cap"])
+        assert cfg_v2["half_life_months"] == pytest.approx(cfg_v3["half_life_months"])
 
     def test_v2_has_half_life_months(self):
         cfg = get_knn_config("v2")
