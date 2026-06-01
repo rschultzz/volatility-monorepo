@@ -47,7 +47,11 @@ from .service import feature_stats, rank_analogues, feature_distance_breakdown
 
 
 _K_DEFAULT = 5
-_K_MAX = 20
+# CR-031: replaces the old hard cap of 20 with a generous safety bound.
+# The distance ceiling is the sole similarity gate; this limit only guards
+# against pathological compute on a degenerate corpus.  It effectively never
+# binds on real setups (p99 within-ceiling count was 95 at Step 0).
+_K_SAFETY = 200
 
 
 def _normalize_db_url(url: str) -> str:
@@ -318,8 +322,8 @@ def register_analogues_routes(server) -> None:
             return jsonify({"ok": False, "error": "k must be an integer"}), 400
         if k < 1:
             return jsonify({"ok": False, "error": "k must be >= 1"}), 400
-        if k > _K_MAX:
-            k = _K_MAX
+        if k > _K_SAFETY:
+            k = _K_SAFETY
 
         # ── DB session ────────────────────────────────────────────────────
         try:
@@ -388,8 +392,11 @@ def register_analogues_routes(server) -> None:
             candidates = [(d, v) for (d, v) in candidates if d not in excluded_dates]
 
             stats = feature_stats(v for (_, v) in candidates) if candidates else {}
+            # CR-031: pass _K_SAFETY so the ceiling is the sole gate; every
+            # within-ceiling day is returned.  URL param k is kept for
+            # backward-compat validation but does not truncate results.
             ranked = rank_analogues(
-                anchor_vec, candidates, k,
+                anchor_vec, candidates, _K_SAFETY,
                 exclude_date=anchor_date.isoformat(),
                 stats=stats,
                 distance_ceiling=knn_cfg["distance_ceiling"],
@@ -442,7 +449,7 @@ def register_analogues_routes(server) -> None:
                     "spot_source": spot_source,
                     "implied_move": implied_move,
                 },
-                "k": k,
+                "k": len(analogues),   # actual within-ceiling count (CR-031)
                 "n_candidates": len(candidates),
                 "analogues": analogues,
             })

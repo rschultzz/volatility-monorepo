@@ -601,3 +601,120 @@ class TestWeightedRankAnalogues:
                 f"Hard-coded literal {literal!r} found in knn.py — "
                 "it must live in knn_config.py only"
             )
+
+
+# ─── CR-031: adaptive-K uncap smoke tests ───────────────────────────────────
+
+def _make_within_ceiling_candidates(n: int, ceiling: float = 5.0) -> list:
+    """Generate n candidates all at distance ≈ 0 from any dense anchor.
+
+    All features are 0.0; when the anchor is also 0.0, σ-normalized distance
+    is 0.0 — guaranteed within any positive ceiling.  Used to test that k=200
+    returns all n without truncation (whereas k=20 would cap at 20).
+    """
+    return [
+        (f"2024-{i // 31 + 1:02d}-{(i % 30) + 1:02d}", _dense_vec())
+        for i in range(n)
+    ]
+
+
+class TestAdaptiveKUncap:
+    """CR-031 Step 1 smoke tests — verify that the safety bound (k=200)
+    is the only numeric gate; the distance ceiling is the similarity gate."""
+
+    def test_35_within_ceiling_returned_when_k_200(self):
+        """Common setup: 35 candidates within ceiling, k=200 → all 35 returned.
+
+        This is the adaptive-K design intent: a well-precedented setup earns
+        its full count; the ceiling is the gate, not a hard numeric cap.
+        """
+        anchor = _dense_vec()
+        candidates = _make_within_ceiling_candidates(35)
+        result = rank_analogues(anchor, candidates, k=200, distance_ceiling=5.0)
+        assert len(result) == 35, (
+            f"Expected 35 within-ceiling analogues; got {len(result)}. "
+            "The k=200 safety bound should not truncate 35 results."
+        )
+
+    def test_old_k20_would_have_truncated_to_20(self):
+        """Documents the pre-CR-031 bug: k=20 truncates even with 35 qualifying days.
+
+        This test demonstrates why routes.py MUST call rank_analogues with
+        k=_K_SAFETY (200), not the URL-param k (formerly capped at 20).
+        """
+        anchor = _dense_vec()
+        candidates = _make_within_ceiling_candidates(35)
+        result = rank_analogues(anchor, candidates, k=20, distance_ceiling=5.0)
+        assert len(result) == 20, (
+            "k=20 should truncate to 20 even when 35 candidates are within ceiling"
+        )
+
+    def test_rare_setup_unchanged_by_uncap(self):
+        """Rare setup: 6 candidates within ceiling, k=200 → still returns 6.
+
+        Uncapping must not affect rare setups — their small K is honest.
+        """
+        anchor = _dense_vec()
+        candidates = _make_within_ceiling_candidates(6)
+        result = rank_analogues(anchor, candidates, k=200, distance_ceiling=5.0)
+        assert len(result) == 6, (
+            f"Rare setup should return 6 analogues; got {len(result)}."
+        )
+
+    def test_safety_bound_200_binds_at_200_not_lower(self):
+        """201 within-ceiling candidates with k=200 → exactly 200 returned.
+
+        The safety bound is the ONLY numeric cap; it must not activate before 200.
+        """
+        anchor = _dense_vec()
+        candidates = _make_within_ceiling_candidates(201)
+        result = rank_analogues(anchor, candidates, k=200, distance_ceiling=5.0)
+        assert len(result) == 200, (
+            f"Safety bound should bind at 200; got {len(result)}."
+        )
+
+    def test_ceiling_still_gates_after_uncap(self):
+        """Ceiling is still the similarity gate: far candidates stay excluded.
+
+        With k=200, the ceiling (not k) decides admittance.  Far candidates
+        (distance >> 5σ) must never appear in the result.
+        """
+        anchor = _dense_vec()
+        close_cands = _make_within_ceiling_candidates(25)
+        # Far candidates: sparse vec with extreme single-feature offset
+        # (1 active feature → rescale=sqrt(34)≈5.83; offset=50 → distance≈290σ)
+        far_cands = [
+            (f"2099-01-{i+1:02d}",
+             _sparse_vec(cluster_1_signed_distance_sigma=50.0))
+            for i in range(5)
+        ]
+        all_cands = close_cands + far_cands
+        result = rank_analogues(anchor, all_cands, k=200, distance_ceiling=5.0)
+        returned_dates = {d for d, _ in result}
+        far_dates = {d for d, _ in far_cands}
+        assert not returned_dates & far_dates, (
+            f"Far candidates leaked through the ceiling: {returned_dates & far_dates}"
+        )
+        assert len(result) == 25, (
+            f"Expected 25 within-ceiling analogues; got {len(result)}"
+        )
+
+    def test_safety_bound_literal_not_in_routes(self):
+        """The old _K_MAX=20 must not appear in routes.py; _K_SAFETY must be >= 100."""
+        import os
+        routes_path = os.path.join(
+            os.path.dirname(__file__), "../../../apps/web/modules/Analogues/routes.py"
+        )
+        src = open(routes_path).read()
+        import re as _re
+        assert not _re.search(r"_K_MAX\s*=\s*\d+", src), (
+            "_K_MAX=<n> assignment must be removed from routes.py (CR-031); "
+            "use _K_SAFETY instead"
+        )
+        assert "_K_SAFETY" in src, "_K_SAFETY must be defined in routes.py"
+        # Extract _K_SAFETY value from source (e.g. "_K_SAFETY = 200")
+        import re
+        m = re.search(r"_K_SAFETY\s*=\s*(\d+)", src)
+        assert m is not None, "_K_SAFETY assignment not found in routes.py"
+        safety_val = int(m.group(1))
+        assert safety_val >= 100, f"_K_SAFETY={safety_val} is too low; expected ≥ 100"
