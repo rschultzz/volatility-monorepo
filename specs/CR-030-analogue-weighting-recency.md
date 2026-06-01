@@ -253,6 +253,71 @@ regression on typical cases.
 
 **All five Step-0 locks confirmed. Proceeding to Step 1.**
 
+## Step 2 Coherence Results (locked 2026-05-31)
+
+Script: `scripts/cr_x_coherence_check.py`. Corpus: 735 rows with 735/735 outcome coverage.
+
+| Config | Coherence | Anchors scored | Notes |
+|--------|-----------|---------------|-------|
+| v1 (ceiling-only baseline) | **0.5527** | 473 / 735 | |
+| **v2 (weights+cap+recency)** | **0.5785** | 556 / 735 | **+4.7%** |
+
+v2 per-regime: magnetic-pin 0.6004, magnet-above 0.5779, amplification 0.5713,
+untethered 0.5764, bounded **0.5399** (was 0.2056 under v1 — biggest gain).
+
+**Lookahead smoke test**: guarded (before_date=anchor) coherence=0.5785 vs
+lookahead (before_date=None) coherence=0.6313. Guard is load-bearing (+7.3pp
+inflation without it). ✓ as-of-history correctness confirmed.
+
+**Verdict: v2 BEATS v1. Config selected as canonical.**
+
+## Step 3 Sanity + Step 4 Empirical (2026-05-31)
+
+Script: `scripts/cr_x_step3_sanity.py`.
+
+### 2026-05-07 (magnetic-pin, two-pin-cluster — the regression test)
+
+- v1: K=0 (the pre-fix state)
+- v2: K=1, nearest=4.667σ → 2026-04-17 (magnetic-pin) ✓
+- `cluster_2_quality_ordinal` contribution: **12.7%** (was ~60% under v0) ✓ blowup fixed
+- Note: recency (18mo half-life) penalizes all 2023-2024 structurally-similar pin days
+  by 3-4× effective distance from a May 2026 vantage → only 2026-04-17 (3 weeks ago)
+  passes the 5σ effective ceiling. K=1 is thin but better than K=0. Flag as a
+  "nudge" candidate if live observation shows this pattern persisting.
+
+### 2026-05-13 (magnet-above, original CR-029 problem case — no regression)
+
+- v1: K=5, dists=[1.29..3.92]σ, all magnet-above
+- v2: K=15, dists=[3.36..4.99]σ, all magnet-above ✓ improved, no regression
+
+### Corpus-wide K distribution under v2
+
+- Zero-analogue: **18/735 = 2.4%** (down from 7.3% under v1) ✓ criterion met (<5%)
+- Median K: 20 ✓
+- K=20 (full): 568/735 = 77.3%
+- K≥10: 629/735 = 85.6%
+
+### Recency nuance (flagged for next session)
+
+18-month half-life is aggressive against the current 3-year corpus. For live anchors
+in 2026, data from 2023-2024 (2-3yr old) gets 2.5-4× effective-distance multiplier,
+pushing many structurally-close analogues beyond the 5σ ceiling. The coherence check
+validates recency helps overall (uses before_date so historical anchors see contemporary
+corpus — modest multipliers). For live near-future use, consider nudging half_life_months
+to 36 if K consistently <5 for new live setups. Deferred to post-deployment observation.
+
+### Wrap check
+
+- ✓ Steps 1–3 committed; Step 4 findings logged here
+- ✓ Weighting + recency + z_diff cap live, config-driven, external to vector, clean baseline
+- ✓ Coherence harness exists, as-of-history safe (smoke-tested), v2 beats v1 (+4.7%)
+- ✓ v2 config locked as canonical (`CANONICAL_KNN_CONFIG_VERSION = "v2"`)
+- ✓ 2026-05-07 regression fixed (K=0 → K=1, blowup 60%→12.7%)
+- ✓ Corpus zero-analogue rate dropped (7.3% → 2.4%)
+- ✓ Ceiling re-picked (4.0σ → 5.0σ, 1.6% zero without recency, 2.4% with recency)
+- → knn-feature-weighting-and-recency-decay open-question needs status update
+- → Supervised tuning deferred (no labels); Option B (localized stats window) deferred
+
 ## Status Updates
 
 (filled during execution)
