@@ -11,15 +11,46 @@ function mostRecentTradingDay() {
   const day = d.getDay();
   if (day === 6) d.setDate(d.getDate() - 1);
   if (day === 0) d.setDate(d.getDate() - 2);
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
 }
 
+function isPageReload() {
+  try {
+    return performance.getEntriesByType('navigation')[0]?.type === 'reload';
+  } catch {
+    return false;
+  }
+}
+
+const TODAY_SETUP_DATE_KEY = 'today-setup-date';
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 const API_BASE = import.meta.env.VITE_API_BASE || '';
+
+function resolveInitialDate(q) {
+  const urlDate = q.get('date');
+  if (urlDate && DATE_RE.test(urlDate)) return urlDate;
+
+  if (isPageReload()) {
+    try { sessionStorage.removeItem(TODAY_SETUP_DATE_KEY); } catch { /* ignore */ }
+    return mostRecentTradingDay();
+  }
+
+  try {
+    const stored = sessionStorage.getItem(TODAY_SETUP_DATE_KEY);
+    if (stored && DATE_RE.test(stored)) return stored;
+  } catch { /* ignore */ }
+
+  return mostRecentTradingDay();
+}
 
 function parseQS() {
   const q = new URLSearchParams(window.location.search);
   return {
-    date: q.get('date') || mostRecentTradingDay(),
+    date: resolveInitialDate(q),
     ticker: q.get('ticker') || 'SPX',
     mode: q.get('mode') || 'analogue',
   };
@@ -121,6 +152,11 @@ export default function App() {
 
   const listRef = useRef(null);
   const anchorAbortRef = useRef(null);
+
+  // Persist date to sessionStorage on every change so it survives tab-nav.
+  useEffect(() => {
+    try { sessionStorage.setItem(TODAY_SETUP_DATE_KEY, date); } catch { /* ignore */ }
+  }, [date]);
 
   // ── Anchor / proposals fetch ─────────────────────────────────────────────
   const loadAnchor = useCallback(async () => {
