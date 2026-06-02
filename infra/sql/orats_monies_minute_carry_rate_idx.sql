@@ -1,0 +1,41 @@
+-- CR-035: covering index for _fetch_carry_rates two-subselect rewrite.
+--
+-- CONCURRENTLY is intentional and mandatory:
+--   - orats_monies_minute has 16.27M rows; a plain CREATE INDEX would take an
+--     exclusive table-lock for several minutes, blocking the intraday ORATS
+--     ingest crons (orats_monies_today_ingest*.py) that write to this table
+--     during market hours.
+--   - CONCURRENTLY builds the index without an exclusive lock, at the cost of
+--     two full-table scans instead of one.
+--   - CONCURRENTLY is ILLEGAL inside an explicit transaction (BEGIN/COMMIT).
+--
+-- Apply with:
+--   psql $DATABASE_URL -f infra/sql/orats_monies_minute_carry_rate_idx.sql
+--
+-- Do NOT wrap in BEGIN/COMMIT.  Do NOT run via a migration framework that
+-- auto-wraps statements in transactions.
+--
+-- Verify after applying:
+--   \d orats_monies_minute   -- must NOT show "(INVALID)" next to the new index
+--   SELECT indexname, idx_scan FROM pg_stat_user_indexes
+--     WHERE tablename = 'orats_monies_minute';
+--
+-- If the index shows (INVALID) (e.g. connection dropped mid-build), drop and
+-- re-run:
+--   DROP INDEX CONCURRENTLY IF EXISTS idx_omm_trade_date_ticker_dte_snapshot;
+--
+-- Index design rationale:
+--   (trade_date, ticker)   compound equality predicate shared by both
+--                          _fetch_carry_rates subqueries and _resolve_implied_move.
+--                          Existing indexes leave ticker as a post-filter scan
+--                          over all 21K rows for a given trade_date.
+--   dte                    ORDER BY dte ASC (sub1 dte >= target) / dte DESC
+--                          (sub2 dte < target) — each subquery becomes an
+--                          O(log N) index seek returning exactly 1 row instead
+--                          of scanning and sorting 21K rows.
+--   snapshot_pt DESC       secondary sort for sub1 (ORDER BY dte ASC,
+--                          snapshot_pt DESC): returns the most-recent snapshot
+--                          for the nearest DTE above target in a single probe.
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_omm_trade_date_ticker_dte_snapshot
+    ON orats_monies_minute (trade_date, ticker, dte, snapshot_pt DESC);

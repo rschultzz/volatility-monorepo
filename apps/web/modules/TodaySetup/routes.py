@@ -119,18 +119,44 @@ def _fetch_carry_rates(
     Selects the row closest to dte_target (calendar days), using the latest
     snapshot on trade_date.  Used to populate strike_spx on proposal legs.
 
+    CR-035: rewrote from ORDER BY ABS(dte-%s) (full 21K-row heapsort, ~3.5s)
+    to a UNION ALL of two bounded sub-selects — nearest DTE >= target and
+    nearest DTE < target — each an O(log N) index seek on
+    idx_omm_trade_date_ticker_dte_snapshot.  The outer ORDER BY ABS(dte-%s)
+    then runs over at most 2 rows.  Signature, return type, and (0.05, 0.0)
+    fallback are unchanged.
+
+    Tiebreak (equidistant DTE above and below target): immaterial for carry
+    rates; risk_free_rate and yield_rate are stable across DTE in normal
+    markets and the tiebreaker is not preserved from the old query.
+
     Fallback: (0.05, 0.0) if no data is available for the date.
     """
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT risk_free_rate, yield_rate
-            FROM orats_monies_minute
-            WHERE trade_date = %s AND ticker = %s AND dte > 0
-            ORDER BY ABS(dte - %s) ASC, snapshot_pt DESC
+            FROM (
+                (SELECT risk_free_rate, yield_rate, dte
+                 FROM orats_monies_minute
+                 WHERE trade_date = %s AND ticker = %s AND dte >= %s
+                 ORDER BY dte ASC, snapshot_pt DESC
+                 LIMIT 1)
+                UNION ALL
+                (SELECT risk_free_rate, yield_rate, dte
+                 FROM orats_monies_minute
+                 WHERE trade_date = %s AND ticker = %s AND dte > 0 AND dte < %s
+                 ORDER BY dte DESC
+                 LIMIT 1)
+            ) candidates
+            ORDER BY ABS(dte - %s) ASC
             LIMIT 1
             """,
-            (trade_date.isoformat(), ticker, dte_target),
+            (
+                trade_date.isoformat(), ticker, dte_target,   # sub1
+                trade_date.isoformat(), ticker, dte_target,   # sub2
+                dte_target,                                    # outer ORDER BY
+            ),
         )
         row = cur.fetchone()
     if not row:
