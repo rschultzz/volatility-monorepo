@@ -281,7 +281,7 @@ function EdgeCell({ edge, structProb, structCi, mktProb }) {
         </span>
       )}
       {mktProb != null && (
-        <span style={{ fontSize: 8, color: '#334155', marginLeft: 3 }}>
+        <span style={{ fontSize: 8, color: '#94a3b8', marginLeft: 3 }}>
           ({_fmtProb(structProb)}{_fmtCi(structCi)} vs {_fmtProb(mktProb)})
         </span>
       )}
@@ -304,12 +304,12 @@ function TodaysEdgeBlock({ todaysEdge }) {
   return (
     <div style={{ fontSize: 10, marginTop: 4 }}>
       <div style={{
-        fontSize: 9, color: '#475569', textTransform: 'uppercase',
+        fontSize: 9, color: '#64748b', textTransform: 'uppercase',
         letterSpacing: '0.06em', fontWeight: 700, marginBottom: 2,
       }}>
         Analogue session-close edge — this fixed spread
       </div>
-      <div style={{ fontSize: 8, color: '#334155', marginBottom: 4 }}>
+      <div style={{ fontSize: 8, color: '#64748b', marginBottom: 4 }}>
         Session outcome windows for these strikes (not multi-DTE reprices) · close: |δ| · touch: 2×|δ|est · ~ = fails lower-bound
       </div>
 
@@ -322,7 +322,7 @@ function TodaysEdgeBlock({ todaysEdge }) {
             {['Sess', 'Touch edge', 'Close edge', 'N'].map((h, i) => (
               <th key={i} style={{
                 textAlign: i === 0 ? 'left' : 'center',
-                color: '#475569', fontWeight: 600, paddingBottom: 2,
+                color: '#64748b', fontWeight: 600, paddingBottom: 2,
                 fontSize: 9, borderBottom: '1px solid #1f2937',
               }}>{h}</th>
             ))}
@@ -352,7 +352,7 @@ function TodaysEdgeBlock({ todaysEdge }) {
                   structCi={row.struct_close_ci}
                   mktProb={row.mkt_close}
                 />
-                <td style={{ textAlign: 'center', color: '#475569', paddingTop: 2, fontSize: 9 }}>
+                <td style={{ textAlign: 'center', color: '#64748b', paddingTop: 2, fontSize: 9 }}>
                   {row.n_close ?? '—'}
                 </td>
               </tr>
@@ -377,14 +377,14 @@ function DeltaBlock({ todaysEdge, pricedLegs }) {
 
   if (!horizonRows.length) return null;
 
-  const TH = { textAlign: 'center', color: '#475569', fontWeight: 600, fontSize: 9, paddingLeft: 10, paddingBottom: 2, borderBottom: '1px solid #1f2937' };
+  const TH = { textAlign: 'center', color: '#64748b', fontWeight: 600, fontSize: 9, paddingLeft: 10, paddingBottom: 2, borderBottom: '1px solid #1f2937' };
   const TD = { textAlign: 'center', color: '#94a3b8', fontWeight: 700, fontSize: 10, paddingLeft: 10, paddingTop: 2, fontVariantNumeric: 'tabular-nums' };
   const TDmuted = { ...TD, color: '#334155', fontWeight: 400 };
 
   return (
     <div style={{ fontSize: 10, marginTop: 2 }}>
       <div style={{
-        fontSize: 9, color: '#475569', textTransform: 'uppercase',
+        fontSize: 9, color: '#64748b', textTransform: 'uppercase',
         letterSpacing: '0.06em', fontWeight: 700, marginBottom: 3,
       }}>
         Strike deltas by session
@@ -426,7 +426,7 @@ function DeltaBlock({ todaysEdge, pricedLegs }) {
         </tbody>
         <tfoot>
           <tr>
-            <td colSpan={horizonRows.length + 1} style={{ fontSize: 8, color: '#1e293b', paddingTop: 2 }}>
+            <td colSpan={horizonRows.length + 1} style={{ fontSize: 8, color: '#475569', paddingTop: 2 }}>
               Long at proposal expiry only (+1/+5 not fetched)
             </td>
           </tr>
