@@ -93,3 +93,20 @@ The spec (vault note) says "four handlers" and lists four API calls (`postFlag/d
 - AbortController + `anchorAbortRef` semantics ✅
 
 **Amendment to Implementation Order:** commit 4 invalidates **five** handlers, not four.
+
+---
+
+## Outcome
+
+**Build:** `npm run build` clean (1.43s, no warnings).
+
+**Diff:** `git diff --stat origin/main` = `react_today_setup/src/App.jsx` (+94/-9) + `specs/CR-034-today-setup-data-cache.md` (new). Scope held — no other files.
+
+**Smoke (preview environment, no backend):**
+- AC #4 ✅ Hard reload clears all `today-setup-cache:v1:*` keys and the date key — verified via `sessionStorage` inspection after `window.location.reload()`.
+- AC #2/#3 logic ✅ TTL validation: historical entry (200s-old timestamp) → HIT; today's entry (200s-old) → MISS; today's entry (10s-old) → HIT.
+- AC #8 ✅ App renders without console errors (root has content); all storage access in try/catch.
+
+**ACs requiring live backend (manual smoke against production):** #1 (historical instant return), #2/#3 (today TTL round-trip), #5 (`?date=` + cache composes), #6 (date A→B→A hydrates A), #7 (flag invalidation → correct flags on return).
+
+**PR:** #36 — `feat/CR-034-today-setup-data-cache` → `main` (merge commit).
