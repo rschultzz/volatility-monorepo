@@ -381,25 +381,35 @@ export default function App() {
       auto_regime: autoRegime,
     });
     const res = await fetchFlags(d === date ? date : d, ticker);
-    if (res?.flags) setFlags(prev => {
-      const other = prev.filter(f => f.trade_date !== d || f.flag_type !== 'regime_wrong');
-      return [...other, ...res.flags.filter(f => f.flag_type === 'regime_wrong' && f.trade_date === d)];
-    });
+    if (res?.flags) {
+      setFlags(prev => {
+        const other = prev.filter(f => f.trade_date !== d || f.flag_type !== 'regime_wrong');
+        return [...other, ...res.flags.filter(f => f.flag_type === 'regime_wrong' && f.trade_date === d)];
+      });
+      invalidateCache(ticker, date);
+    }
   }
 
   async function handleDeleteFlag(flagId) {
     await deleteFlag(flagId);
     setFlags(prev => prev.filter(f => f.flag_id !== flagId));
+    invalidateCache(ticker, date);
   }
 
   async function handlePromote(flagId) {
     const res = await promoteFlag(flagId);
-    if (res.flag) setFlags(prev => prev.map(f => f.flag_id === flagId ? res.flag : f));
+    if (res.flag) {
+      setFlags(prev => prev.map(f => f.flag_id === flagId ? res.flag : f));
+      invalidateCache(ticker, date);
+    }
   }
 
   async function handleDemote(flagId) {
     const res = await demoteFlag(flagId);
-    if (res.flag) setFlags(prev => prev.map(f => f.flag_id === flagId ? res.flag : f));
+    if (res.flag) {
+      setFlags(prev => prev.map(f => f.flag_id === flagId ? res.flag : f));
+      invalidateCache(ticker, date);
+    }
   }
 
   async function handlePairFlag(anchorDate, analogueDate) {
@@ -417,6 +427,7 @@ export default function App() {
     setSelectedDate(null);
     setSelectedLandscape(null);
     setSelectedAnalogue(null);
+    invalidateCache(ticker, anchorDate);
   }
 
   // ── Open in Price Chart ───────────────────────────────────────────────────
