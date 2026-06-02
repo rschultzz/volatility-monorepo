@@ -25,8 +25,60 @@ function isPageReload() {
   }
 }
 
+function cacheKey(ticker, date) {
+  return `${TODAY_SETUP_CACHE_PREFIX}${ticker}:${date}`;
+}
+
+function isCurrentTradingDay(date) {
+  return date === mostRecentTradingDay();
+}
+
+function readCache(ticker, date) {
+  try {
+    const raw = sessionStorage.getItem(cacheKey(ticker, date));
+    if (!raw) return null;
+    let entry;
+    try { entry = JSON.parse(raw); } catch {
+      try { sessionStorage.removeItem(cacheKey(ticker, date)); } catch { /* ignore */ }
+      return null;
+    }
+    if (!entry || typeof entry !== 'object') {
+      try { sessionStorage.removeItem(cacheKey(ticker, date)); } catch { /* ignore */ }
+      return null;
+    }
+    if (isCurrentTradingDay(date) && Date.now() - entry.savedAt > TODAY_TTL_MS) return null;
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(ticker, date, data) {
+  try {
+    sessionStorage.setItem(cacheKey(ticker, date), JSON.stringify({ savedAt: Date.now(), ...data }));
+  } catch { /* ignore — quota exceeded or storage disabled */ }
+}
+
+function invalidateCache(ticker, date) {
+  try { sessionStorage.removeItem(cacheKey(ticker, date)); } catch { /* ignore */ }
+}
+
+function clearAllCache() {
+  try {
+    const keysToRemove = [];
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i);
+      if (k && k.startsWith(TODAY_SETUP_CACHE_PREFIX)) keysToRemove.push(k);
+    }
+    keysToRemove.forEach(k => { try { sessionStorage.removeItem(k); } catch { /* ignore */ } });
+  } catch { /* ignore */ }
+}
+
 const TODAY_SETUP_DATE_KEY = 'today-setup-date';
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+const TODAY_SETUP_CACHE_PREFIX = 'today-setup-cache:v1:';
+const TODAY_TTL_MS = 90_000;
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -36,6 +88,7 @@ function resolveInitialDate(q) {
 
   if (isPageReload()) {
     try { sessionStorage.removeItem(TODAY_SETUP_DATE_KEY); } catch { /* ignore */ }
+    clearAllCache();
     return mostRecentTradingDay();
   }
 
@@ -192,8 +245,13 @@ export default function App() {
 
       // Proposals — surface error but don't block the other panels.
       if (propR.status === 'fulfilled' && propR.value?.ok) {
-        setProposals(propR.value);
+        const proposals = propR.value;
+        const analogues = analogR.status === 'fulfilled' && analogR.value?.ok ? analogR.value : null;
+        const anchorLandscape = landscapeR.status === 'fulfilled' && landscapeR.value?.ok !== false ? landscapeR.value : null;
+        const flags = flagsR.status === 'fulfilled' && flagsR.value?.flags ? flagsR.value.flags : [];
+        setProposals(proposals);
         setError(null);  // clear any stale error from a prior slow request
+        writeCache(ticker, date, { proposals, analogues, anchorLandscape, flags });
       } else {
         const msg = propR.status === 'rejected'
           ? propR.reason?.message || 'Proposals error'
@@ -211,8 +269,24 @@ export default function App() {
   }, [date, ticker]);
 
   useEffect(() => {
-    if (mode === 'analogue') loadAnchor();
-  }, [mode, loadAnchor]);
+    if (mode !== 'analogue') return;
+    // Abort any in-flight request before checking cache (cache hit skips loadAnchor).
+    anchorAbortRef.current?.abort();
+    const cached = readCache(ticker, date);
+    if (cached) {
+      setLoading(false);
+      setError(null);
+      setProposals(cached.proposals);
+      setAnalogues(cached.analogues);
+      setAnchorLandscape(cached.anchorLandscape);
+      setFlags(cached.flags);
+      setSelectedDate(null);
+      setSelectedLandscape(null);
+      setSelectedAnalogue(null);
+    } else {
+      loadAnchor();
+    }
+  }, [mode, loadAnchor, ticker, date]);
 
   // ── Browse fetch ──────────────────────────────────────────────────────────
   const loadBrowse = useCallback(async () => {
@@ -307,25 +381,35 @@ export default function App() {
       auto_regime: autoRegime,
     });
     const res = await fetchFlags(d === date ? date : d, ticker);
-    if (res?.flags) setFlags(prev => {
-      const other = prev.filter(f => f.trade_date !== d || f.flag_type !== 'regime_wrong');
-      return [...other, ...res.flags.filter(f => f.flag_type === 'regime_wrong' && f.trade_date === d)];
-    });
+    if (res?.flags) {
+      setFlags(prev => {
+        const other = prev.filter(f => f.trade_date !== d || f.flag_type !== 'regime_wrong');
+        return [...other, ...res.flags.filter(f => f.flag_type === 'regime_wrong' && f.trade_date === d)];
+      });
+      invalidateCache(ticker, date);
+    }
   }
 
   async function handleDeleteFlag(flagId) {
     await deleteFlag(flagId);
     setFlags(prev => prev.filter(f => f.flag_id !== flagId));
+    invalidateCache(ticker, date);
   }
 
   async function handlePromote(flagId) {
     const res = await promoteFlag(flagId);
-    if (res.flag) setFlags(prev => prev.map(f => f.flag_id === flagId ? res.flag : f));
+    if (res.flag) {
+      setFlags(prev => prev.map(f => f.flag_id === flagId ? res.flag : f));
+      invalidateCache(ticker, date);
+    }
   }
 
   async function handleDemote(flagId) {
     const res = await demoteFlag(flagId);
-    if (res.flag) setFlags(prev => prev.map(f => f.flag_id === flagId ? res.flag : f));
+    if (res.flag) {
+      setFlags(prev => prev.map(f => f.flag_id === flagId ? res.flag : f));
+      invalidateCache(ticker, date);
+    }
   }
 
   async function handlePairFlag(anchorDate, analogueDate) {
@@ -343,6 +427,7 @@ export default function App() {
     setSelectedDate(null);
     setSelectedLandscape(null);
     setSelectedAnalogue(null);
+    invalidateCache(ticker, anchorDate);
   }
 
   // ── Open in Price Chart ───────────────────────────────────────────────────
