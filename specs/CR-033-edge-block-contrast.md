@@ -81,3 +81,29 @@ All 8 pass. No contradictions. Implementation proceeded immediately.
 1. **Spec freeze** — this file.
 2. **Contrast bump** — the 8 edits above to `ProposalCard.jsx`.
 3. **Smoke + wrap** — `npm run build` clean; `git diff --stat` shows only `ProposalCard.jsx` + spec; PR via merge commit.
+
+## Outcome
+
+All 8 edits landed as specified. Two-tier palette applied:
+
+| Element | Before | After | Tier |
+|---------|--------|-------|------|
+| EdgeCell CI breakdown span | `#334155` | `#94a3b8` | Data |
+| TodaysEdgeBlock block title | `#475569` | `#64748b` | Chrome |
+| TodaysEdgeBlock caption | `#334155` | `#64748b` | Chrome |
+| TodaysEdgeBlock TH headers | `#475569` | `#64748b` | Chrome |
+| TodaysEdgeBlock N cells | `#475569` | `#64748b` | Chrome |
+| DeltaBlock section title | `#475569` | `#64748b` | Chrome |
+| DeltaBlock TH constant | `#475569` | `#64748b` | Chrome |
+| DeltaBlock tfoot footnote | `#1e293b` | `#475569` | Tertiary lift |
+
+`npm run build` clean (51 modules, no warnings). `git diff --stat origin/main` shows exactly
+`ProposalCard.jsx` + this spec — nothing else touched. All untouched items confirmed clean:
+`_STATE_COLORS` entries (#4ade80 / #f59e0b / #f87171 / #475569), `~` amber, `TDmuted` (#334155),
+`dim` (#334155), every `fontSize`, all layout/spacing properties.
+
+Visual smoke: requires live Flask backend (no-data state in dev). The CI breakdown span
+(#94a3b8) is now visually in the same legible tier as the `ExpiryLine` and `NetCostLine`
+values elsewhere on the card. The green/amber/red headline edge values (700-weight, full
+_STATE_COLORS palette) remain the dominant visual anchor. Chrome labels (#64748b) sit
+clearly above the old #475569 dim without competing with the headline data.
