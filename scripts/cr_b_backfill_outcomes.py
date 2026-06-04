@@ -44,7 +44,8 @@ from packages.shared.backfill_safety import (
     update_run_progress,
     update_run_smoke,
 )
-from packages.shared.outcomes import compute_outcome, pick_drift_target
+from packages.shared.outcomes import pick_drift_target
+from packages.shared.outcomes_runner import compute_outcome_for_date, derive_dominant_bucket
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -148,56 +149,12 @@ def _load_env() -> None:
                 os.environ.setdefault(k.strip(), v.strip())
 
 
-def _derive_dominant_bucket(feature_vector: dict) -> Optional[str]:
-    """Argmax of dominance_* fields. None if all are missing/zero."""
-    candidates = {
-        "0DTE":     feature_vector.get("dominance_0DTE",   0.0) or 0.0,
-        "1-7 DTE":  feature_vector.get("dominance_1_7",    0.0) or 0.0,
-        "8-30 DTE": feature_vector.get("dominance_8_30",   0.0) or 0.0,
-        "30+ DTE":  feature_vector.get("dominance_30plus", 0.0) or 0.0,
-    }
-    if not any(candidates.values()):
-        return None
-    return max(candidates, key=candidates.__getitem__)
 
-
-# _pick_drift_target moved to packages/shared/outcomes.pick_drift_target (CR-I Step 2b).
-# Imported above; this alias keeps existing call sites in this file unchanged.
+# _pick_drift_target alias: kept for dry-run display path below.
 _pick_drift_target = pick_drift_target
 
-
-# Distance threshold for magnetic-pin sanity check.
-# Matches near_dist_pts default in classify_regime — a dominant wall further
-# than this from spot is not acting as a pin, so the outcome would be garbage.
-_PIN_MAX_DISTANCE_PTS = 30.0
-
-
-def _direction_sanity(
-    regime: str,
-    drift_target: float,
-    table_spot: float,
-    trade_date: dt.date,
-) -> bool:
-    """Return False (and log) if drift_target contradicts regime direction or is implausibly far."""
-    if regime == "magnet-above" and drift_target < table_spot:
-        log.warning(
-            "direction_sanity FAIL %s %s: magnet-above but drift_target=%.2f < spot=%.2f",
-            trade_date, regime, drift_target, table_spot,
-        )
-        return False
-    if regime == "magnet-below" and drift_target > table_spot:
-        log.warning(
-            "direction_sanity FAIL %s %s: magnet-below but drift_target=%.2f > spot=%.2f",
-            trade_date, regime, drift_target, table_spot,
-        )
-        return False
-    if regime == "magnetic-pin" and abs(drift_target - table_spot) > _PIN_MAX_DISTANCE_PTS:
-        log.warning(
-            "direction_sanity FAIL %s magnetic-pin: drift_target=%.2f too far from spot=%.2f (>%.0fpt)",
-            trade_date, drift_target, table_spot, _PIN_MAX_DISTANCE_PTS,
-        )
-        return False
-    return True
+# _derive_dominant_bucket alias: kept for dry-run display path below.
+_derive_dominant_bucket = derive_dominant_bucket
 
 
 def _get_target_rows(
@@ -389,58 +346,15 @@ def main() -> None:
 
         for i, (trade_date, regime, fv) in enumerate(target_rows, 1):
             try:
-                feature_vector  = fv or {}
-                landscape       = landscape_by_date.get(trade_date, {})
-                walls           = landscape.get("walls") or []
-                table_spot      = landscape.get("table_spot")
-                dominant_bucket = _derive_dominant_bucket(feature_vector)
-                drift_target    = _pick_drift_target(walls)
-                expected_move   = feature_vector.get("implied_move_1d")
-                if expected_move is not None:
-                    try:
-                        expected_move = float(expected_move)
-                    except (TypeError, ValueError):
-                        expected_move = None
-
-                # Runner-side direction sanity: skip to na_data if the dominant wall
-                # is on the wrong side of spot (directional) or too far from spot (pin).
-                sanity_ok = True
-                if drift_target is not None and table_spot is not None:
-                    sanity_ok = _direction_sanity(regime, drift_target, table_spot, trade_date)
-
-                # session_open_t0: FIRST RTH bar open on trade_date.
-                # Computable from daily_bars regardless of outcome_status —
-                # must be populated for all new rows so the pl-data endpoint
-                # can normalise analogue returns without a separate backfill step.
-                session_open_t0 = (
-                    float(daily_bars.loc[trade_date, "open"])
-                    if trade_date in daily_bars.index
-                    else None
+                feature_vector = fv or {}
+                landscape      = landscape_by_date.get(trade_date, {})
+                outcome, session_open_t0 = compute_outcome_for_date(
+                    trade_date     = trade_date,
+                    regime         = regime,
+                    feature_vector = feature_vector,
+                    landscape      = landscape,
+                    daily_bars     = daily_bars,
                 )
-
-                if not sanity_ok:
-                    outcome = {
-                        "regime_kind_at_classification":    regime,
-                        "dominant_bucket_at_classification": dominant_bucket,
-                        "horizon_sessions":                 None,
-                        "horizon_end_date":                 None,
-                        "outcome_status":                   "na_data",
-                        "reached_touch":                    None,
-                        "reached_close":                    None,
-                        "days_to_reach":                    None,
-                        "max_excursion_in_direction":       None,
-                        "final_close_distance_from_target": None,
-                        "actual_realized_em_pct":           None,
-                    }
-                else:
-                    outcome = compute_outcome(
-                        trade_date      = trade_date,
-                        regime          = regime or "",
-                        drift_target    = drift_target,
-                        dominant_bucket = dominant_bucket or "",
-                        expected_move   = expected_move,
-                        bars            = daily_bars,
-                    )
 
                 with conn.cursor() as cur:
                     cur.execute(_INSERT_OUTCOME_SQL, (
