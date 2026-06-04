@@ -125,3 +125,62 @@ UPDATE path anywhere that promotes `pending_history → computed`.
 - **New:** `packages/shared/outcomes_runner.py`
 - **Modified:** `scripts/cr_b_backfill_outcomes.py` (call shared helper)
 - **New:** `scripts/cr_aa_sweep_pending_outcomes.py`
+
+## Step 0 Findings (2026-06-04)
+
+### 0.1 — `horizon_end_date` semantics
+
+Confirmed: `compute_outcome` sets `base["horizon_end_date"] = horizon.index[-1]` in step 6,
+but returns `pending_history` in step 5 — **before** step 6 executes. Therefore
+`horizon_end_date IS NULL` for every `pending_history` row in the DB (verified:
+0 pending rows have a non-NULL `horizon_end_date`).
+
+**Impact on target query:** The spec's proposed predicate
+`WHERE horizon_end_date <= <latest_session>` returns 0 rows for all pending rows
+(NULL comparisons are NULL/falsy). The sweep must compute the expected horizon
+end date from `trade_date + N sessions` using the actual RTH session list.
+
+**Resolution (no unilateral behavior change):** Python-side maturity check —
+load all RTH session dates once; for each pending row find the Nth session
+on/after `trade_date` (where N = `bucket_sessions(bucket)`); the row is matured
+if that date `<= latest_session`. This is semantically equivalent to the spec's
+intent.
+
+### 0.2 — Latest-session boundary SQL
+
+```sql
+SELECT MAX((datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date)
+FROM ironbeam_es_1m_bars
+```
+
+Result as of 2026-06-04: **2026-06-04** (872 total distinct RTH session dates in DB).
+
+### 0.3 — Extraction boundary
+
+The per-date loop body in `cr_b_backfill_outcomes.py` lines 390–443 will be extracted
+as `compute_outcome_for_date(trade_date, regime, feature_vector, landscape, daily_bars)`
+→ `(outcome_dict, session_open_t0)`.
+
+Functions moving to `outcomes_runner.py`:
+- `_derive_dominant_bucket` → `derive_dominant_bucket`
+- `_direction_sanity` → `direction_sanity`
+- `_PIN_MAX_DISTANCE_PTS` constant
+
+`pick_drift_target` stays in `outcomes.py` (already canonical shared location).
+
+CR-022 behavior is identical post-extraction: same code, same order, same
+inputs/outputs — extraction is pure movement, zero logic change.
+
+### 0.4 — Current pending population (2026-06-04)
+
+| Bucket | Total | Matured | Not-yet-matured |
+|---|---|---|---|
+| 1-7 DTE | 1 | 1 | 0 |
+| 8-30 DTE | 13 | 6 | 7 |
+| 30+ DTE | 9 | 4 | 5 |
+| **Total** | **23** | **11** | **12** |
+
+Matured rows (first sweep's expected promotion count): **11**
+- `30+ DTE`: 2026-03-03, 2026-03-05, 2026-03-11, 2026-03-12
+- `8-30 DTE`: 2026-04-29, 2026-04-30, 2026-05-04, 2026-05-05, 2026-05-06, 2026-05-07
+- `1-7 DTE`:  2026-05-22
