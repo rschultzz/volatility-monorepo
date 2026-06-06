@@ -84,6 +84,9 @@ _TARGET_DATES_SQL = """
 """
 
 # Hard-gate query: corpus dates with no 06:33+ DTE>0 open straddle snapshot.
+# Uses ::date cast on m.trade_date so the comparison is format-agnostic
+# (orats_monies_minute.trade_date is TEXT; pre-2025 rows may be 'YYYYMMDD'
+# rather than 'YYYY-MM-DD' depending on which ingestion path wrote them).
 _MISSING_SNAPSHOTS_SQL = """
     SELECT f.trade_date
     FROM bt_daily_features f
@@ -93,10 +96,10 @@ _MISSING_SNAPSHOTS_SQL = """
       AND NOT EXISTS (
           SELECT 1
           FROM orats_monies_minute m
-          WHERE m.trade_date      = f.trade_date::text
-            AND m.ticker          = %s
-            AND m.atmiv           IS NOT NULL
-            AND m.dte             > 0
+          WHERE m.trade_date::date = f.trade_date
+            AND m.ticker           = %s
+            AND m.atmiv            IS NOT NULL
+            AND m.dte              > 0
             AND m.snapshot_pt::time >= '06:33'
       )
     ORDER BY f.trade_date
@@ -163,7 +166,7 @@ def _compute_and_insert_one(
     spot = float(table_spot)
 
     with conn.cursor() as cur:
-        cur.execute(_OPEN_STRADDLE_SQL, (trade_date.isoformat(), ticker))
+        cur.execute(_OPEN_STRADDLE_SQL, (trade_date, ticker))
         iv_row = cur.fetchone()
     if not iv_row or iv_row[0] is None:
         log.warning("  [SKIP] %s: no 06:33+ open straddle snapshot", trade_date)

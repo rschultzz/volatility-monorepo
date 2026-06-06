@@ -290,9 +290,9 @@ _IMPLIED_MOVE_SQL = """
     ORDER BY snapshot_pt DESC, dte ASC
     LIMIT 1
 """
-# orats_monies_minute.trade_date is stored as TEXT (ISO YYYY-MM-DD); we
-# pass trade_date.isoformat() rather than the date object so the cast
-# happens client-side.
+# orats_monies_minute.trade_date is stored as TEXT; the dominant format is
+# ISO 'YYYY-MM-DD', but pre-2025 rows from earlier ingest paths may use
+# 'YYYYMMDD'. _OPEN_STRADDLE_SQL uses ::date cast to handle both formats.
 
 # Five features whose values depend on implied_move. The EOD cron cannot
 # compute them (no open-session IV at 03:01 PDT); they are left NULL and
@@ -308,10 +308,15 @@ _IV_DEPENDENT_FEATURES: tuple[str, ...] = (
 # Post-open snapshot query: first orats_monies_minute row at/after 06:33 PT
 # (= 09:33 ET, 3 min into RTH), smallest dte>0. snapshot_pt is stored as a
 # naive PT timestamp (tz_convert("America/Los_Angeles").tz_localize(None)).
+#
+# trade_date is stored as TEXT; use ::date cast so the comparison is
+# format-agnostic (works for both 'YYYY-MM-DD' and 'YYYYMMDD' stored values,
+# which may coexist for pre-2025 data loaded by different ingestion paths).
+# Callers must pass a dt.date object (not a string) for the first parameter.
 _OPEN_STRADDLE_SQL = """
     SELECT atmiv, dte
     FROM orats_monies_minute
-    WHERE trade_date = %s
+    WHERE trade_date::date = %s
       AND ticker = %s
       AND atmiv IS NOT NULL
       AND dte > 0
@@ -510,7 +515,7 @@ def compute_and_upsert_open_implied_move(
 
     # First snapshot at/after 06:33 PT, smallest dte>0 (open straddle pin).
     with conn.cursor() as cur:
-        cur.execute(_OPEN_STRADDLE_SQL, (trade_date.isoformat(), ticker))
+        cur.execute(_OPEN_STRADDLE_SQL, (trade_date, ticker))
         iv_row = cur.fetchone()
 
     if not iv_row or iv_row[0] is None:
