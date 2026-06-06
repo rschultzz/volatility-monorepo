@@ -40,7 +40,47 @@ has no `orats_monies_minute` rows yet → `implied_move = 0` → `backfill_outco
 
 ## Step 0 — verification gates (no commits)
 
-Gates 0.1, 0.2, 0.4, 0.6 — see findings below.
+### Gate 0.1 — `_IMPLIED_MOVE_SQL` call path ✅
+
+- **Only live producer** of `bt_daily_features.implied_move_1d`: `compute_and_upsert_daily_features`
+  in `day_features.py`, called by `job_orats_eod.py` on `store_trade_date`.
+- **σ-normalized features** (`cluster_1/2/3_signed_distance_sigma`, `nearest_neg_signed_distance_sigma`)
+  are computed in `extract_features` by dividing by `implied_move`. The split MUST move BOTH
+  the IV lookup AND these five expressions to the post-open job.
+- **Secondary importers** (not the live path): `cr_a_backfill_landscape.py` and
+  `cr_a_determinism_check.py` import `_IMPLIED_MOVE_SQL` directly. These are historical one-off
+  scripts. To avoid breaking them, `_IMPLIED_MOVE_SQL` is retained as-is; the new pinned-floor
+  query is a separate constant `_OPEN_STRADDLE_SQL`.
+- `backfill_daily_features.py` calls `compute_and_upsert_daily_features` directly — this is
+  also the live re-backfill path; it will call the refactored EOD-only function (no IV),
+  which is correct for Step 4 (IV is written by a separate pass).
+
+### Gate 0.2 — `snapshot_pt` timezone ✅
+
+- Column type: `TIMESTAMP WITHOUT TIME ZONE`.
+- Values are **PT wall-clock**: 06:30 = RTH open, 13:00 = RTH close. NOT UTC.
+- `snapshot_pt::time >= '06:33'` is the correct PT-floor expression. No timezone cast needed.
+
+### Gate 0.4 — Data-safety re-backfill pattern ✅ (with DDL prerequisite noted)
+
+- `active BOOLEAN DEFAULT true` ✅; `backfill_run_id UUID nullable` ✅.
+- `bt_daily_features_active` view: `SELECT ... FROM bt_daily_features WHERE active = true` ✅.
+- PK: `(ticker, trade_date, feature_version)` — `v0.6.0-openiv` rows don't conflict with
+  `v0.5.0-rebuilt` rows on INSERT. ✅
+- **DDL prerequisite confirmed:** `dash_backfill_writer` currently has NO UPDATE on
+  `bt_daily_features` (verified empirically during manual unblock — DATABASE_URL was required).
+  The column-level GRANT in Step 3 (`infra/sql/bt_daily_features_backfill_writer_feature_update.sql`)
+  must be applied before the post-open cron can run. This is a pre-existing plan item, not a
+  new finding.
+
+### Gate 0.6 — Open-straddle corpus coverage ✅ CLEAN
+
+- Full corpus: **743 active dates** (2023-05-01 to 2026-06-05) at `v0.5.0-rebuilt`.
+- Corpus dates missing a 06:33+ DTE>0 ATM IV snapshot: **0 of 743**.
+- Oldest 5 dates (2023-05-01 through 2023-05-05) all confirmed present.
+- No fallback logic needed for Step 4 re-backfill.
+
+**All four gates clear — no contradictions. Proceeding to Step 1.**
 
 ## Step 1 — Split `day_features.py`
 
