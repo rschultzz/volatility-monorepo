@@ -124,9 +124,22 @@ has no `orats_monies_minute` rows yet → `implied_move = 0` → `backfill_outco
 
 **Commit:** `cr-ab/step-4: re-backfill corpus onto open-straddle basis (v0.6.0-openiv)`
 
-- INSERT with `v0.6.0-openiv` ON CONFLICT DO NOTHING for all corpus dates.
-  Reads 06:33 open straddle for each historical date.
-- `v0.5.0-rebuilt` untouched.
+- `scripts/cr_ab_backfill_openiv.py`: INSERT `bt_daily_features` rows at `v0.6.0-openiv`
+  ON CONFLICT DO NOTHING for all corpus dates. Reads 06:33 open straddle for each date.
+  `v0.5.0-rebuilt` rows untouched.
+- **Step 4 also requires an outcome re-backfill** (discovered 2026-06-06, Step 4 gap):
+  `bt_daily_outcomes` is queried by `feature_version` in `Proposals/routes.py` and
+  `probability.py` — after the canonical flip, all 743 historical dates return
+  "no session_open_t0" because their outcomes exist only at `v0.5.0-rebuilt`.
+  Run `scripts/cr_b_backfill_outcomes.py` after the features backfill to write 743
+  `v0.6.0-openiv` outcome rows. No new script needed — step-5b already fixed `cr_b`
+  to use `CANONICAL_FEATURE_VERSION = v0.6.0-openiv`.
+- Deploy order (invariant: canonical must not flip until both feature + outcome rows verified):
+  1. `cr_ab_backfill_openiv.py` → 743 feature rows
+  2. `cr_b_backfill_outcomes.py` → 743 outcome rows
+  3. Verify sample dates: implied_move differs from close-basis; session_open_t0 NOT NULL
+  4. Sweep 12 v0.5.0-rebuilt pending_history rows (one-off pinned run before merge)
+  5. Merge PR → canonical flips → GRANT DDL → new 13:35 cron → reschedule backfill_outcomes
 - Verify against manual 06:33-vs-12:57 comparison numbers from the ADR.
 
 ## Step 5 — Flip canonical + live-path review
