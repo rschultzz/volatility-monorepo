@@ -290,9 +290,9 @@ _IMPLIED_MOVE_SQL = """
     ORDER BY snapshot_pt DESC, dte ASC
     LIMIT 1
 """
-# orats_monies_minute.trade_date is stored as TEXT; the dominant format is
-# ISO 'YYYY-MM-DD', but pre-2025 rows from earlier ingest paths may use
-# 'YYYYMMDD'. _OPEN_STRADDLE_SQL uses ::date cast to handle both formats.
+# orats_monies_minute.trade_date is stored as TEXT in ISO 'YYYY-MM-DD' format.
+# _OPEN_STRADDLE_SQL uses text equality (trade_date = %s) so queries hit the
+# (trade_date, ticker, …) index rather than forcing a full table scan.
 
 # Five features whose values depend on implied_move. The EOD cron cannot
 # compute them (no open-session IV at 03:01 PDT); they are left NULL and
@@ -309,18 +309,26 @@ _IV_DEPENDENT_FEATURES: tuple[str, ...] = (
 # (= 09:33 ET, 3 min into RTH), smallest dte>0. snapshot_pt is stored as a
 # naive PT timestamp (tz_convert("America/Los_Angeles").tz_localize(None)).
 #
-# trade_date is stored as TEXT; use ::date cast so the comparison is
-# format-agnostic (works for both 'YYYY-MM-DD' and 'YYYYMMDD' stored values,
-# which may coexist for pre-2025 data loaded by different ingestion paths).
-# Callers must pass a dt.date object (not a string) for the first parameter.
+# Query design (index-friendliness):
+#   - trade_date = %s  (text equality) — uses the (trade_date, ticker, …) text index.
+#     orats_monies_minute.trade_date is TEXT; pass trade_date.isoformat() so the
+#     equality hits the index rather than forcing a full table scan.
+#   - snapshot_pt >= %s  (timestamp range, no function cast) — the third parameter
+#     is the 06:33 floor: dt.datetime.combine(trade_date, dt.time(6, 33, 0)).
+#     Avoids snapshot_pt::time >= '06:33' which can't use any index.
+#   Covered by idx_omm_open_straddle (trade_date, ticker, snapshot_pt ASC, dte ASC)
+#   with a partial filter (dte > 0 AND atmiv IS NOT NULL).  See
+#   infra/sql/orats_monies_minute_open_straddle_idx.sql (CR-037).
+#
+# Callers pass: (trade_date.isoformat(), ticker, dt.datetime.combine(trade_date, dt.time(6,33,0)))
 _OPEN_STRADDLE_SQL = """
     SELECT atmiv, dte
     FROM orats_monies_minute
-    WHERE trade_date::date = %s
-      AND ticker = %s
-      AND atmiv IS NOT NULL
-      AND dte > 0
-      AND snapshot_pt::time >= '06:33'
+    WHERE trade_date  = %s
+      AND ticker      = %s
+      AND atmiv       IS NOT NULL
+      AND dte         > 0
+      AND snapshot_pt >= %s
     ORDER BY snapshot_pt ASC, dte ASC
     LIMIT 1
 """
@@ -514,8 +522,9 @@ def compute_and_upsert_open_implied_move(
     spot = float(table_spot)
 
     # First snapshot at/after 06:33 PT, smallest dte>0 (open straddle pin).
+    floor_ts = dt.datetime.combine(trade_date, dt.time(6, 33, 0))
     with conn.cursor() as cur:
-        cur.execute(_OPEN_STRADDLE_SQL, (trade_date, ticker))
+        cur.execute(_OPEN_STRADDLE_SQL, (trade_date.isoformat(), ticker, floor_ts))
         iv_row = cur.fetchone()
 
     if not iv_row or iv_row[0] is None:

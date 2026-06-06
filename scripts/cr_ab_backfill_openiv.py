@@ -84,9 +84,14 @@ _TARGET_DATES_SQL = """
 """
 
 # Hard-gate query: corpus dates with no 06:33+ DTE>0 open straddle snapshot.
-# Uses ::date cast on m.trade_date so the comparison is format-agnostic
-# (orats_monies_minute.trade_date is TEXT; pre-2025 rows may be 'YYYYMMDD'
-# rather than 'YYYY-MM-DD' depending on which ingestion path wrote them).
+# Uses index-friendly expressions matching _OPEN_STRADDLE_SQL:
+#   m.trade_date = f.trade_date::text  — text equality on the TEXT column so
+#     the (trade_date, ticker, snapshot_pt ASC) index is usable per subquery.
+#   m.snapshot_pt >= f.trade_date + INTERVAL '6 hours 33 minutes'  — DATE + INTERVAL
+#     constructs a TIMESTAMP floor without a function cast on snapshot_pt.
+# orats_monies_minute.trade_date is stored as ISO 'YYYY-MM-DD' text for all
+# corpus dates (confirmed by code comment; pre-2025 coverage confirmed 0 missing
+# in gate 0.6 live query).
 _MISSING_SNAPSHOTS_SQL = """
     SELECT f.trade_date
     FROM bt_daily_features f
@@ -96,11 +101,11 @@ _MISSING_SNAPSHOTS_SQL = """
       AND NOT EXISTS (
           SELECT 1
           FROM orats_monies_minute m
-          WHERE m.trade_date::date = f.trade_date
-            AND m.ticker           = %s
-            AND m.atmiv            IS NOT NULL
-            AND m.dte              > 0
-            AND m.snapshot_pt::time >= '06:33'
+          WHERE m.trade_date  = f.trade_date::text
+            AND m.ticker      = %s
+            AND m.atmiv       IS NOT NULL
+            AND m.dte         > 0
+            AND m.snapshot_pt >= f.trade_date + INTERVAL '6 hours 33 minutes'
       )
     ORDER BY f.trade_date
 """
@@ -165,8 +170,9 @@ def _compute_and_insert_one(
     landscape_rows, table_spot = row
     spot = float(table_spot)
 
+    floor_ts = dt.datetime.combine(trade_date, dt.time(6, 33, 0))
     with conn.cursor() as cur:
-        cur.execute(_OPEN_STRADDLE_SQL, (trade_date, ticker))
+        cur.execute(_OPEN_STRADDLE_SQL, (trade_date.isoformat(), ticker, floor_ts))
         iv_row = cur.fetchone()
     if not iv_row or iv_row[0] is None:
         log.warning("  [SKIP] %s: no 06:33+ open straddle snapshot", trade_date)
