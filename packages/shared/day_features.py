@@ -51,8 +51,11 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import logging
 import math
 from typing import Any, Optional
+
+log = logging.getLogger(__name__)
 
 # ─── Version + feature schema ──────────────────────────────────────────────
 
@@ -291,6 +294,44 @@ _IMPLIED_MOVE_SQL = """
 # pass trade_date.isoformat() rather than the date object so the cast
 # happens client-side.
 
+# Five features whose values depend on implied_move. The EOD cron cannot
+# compute them (no open-session IV at 03:01 PDT); they are left NULL and
+# filled by compute_and_upsert_open_implied_move at 13:35 UTC.
+_IV_DEPENDENT_FEATURES: tuple[str, ...] = (
+    "cluster_1_signed_distance_sigma",
+    "cluster_2_signed_distance_sigma",
+    "cluster_3_signed_distance_sigma",
+    "nearest_neg_signed_distance_sigma",
+    "implied_move_1d",
+)
+
+# Post-open snapshot query: first orats_monies_minute row at/after 06:33 PT
+# (= 09:33 ET, 3 min into RTH), smallest dte>0. snapshot_pt is stored as a
+# naive PT timestamp (tz_convert("America/Los_Angeles").tz_localize(None)).
+_OPEN_STRADDLE_SQL = """
+    SELECT atmiv, dte
+    FROM orats_monies_minute
+    WHERE trade_date = %s
+      AND ticker = %s
+      AND atmiv IS NOT NULL
+      AND dte > 0
+      AND snapshot_pt::time >= '06:33'
+    ORDER BY snapshot_pt ASC, dte ASC
+    LIMIT 1
+"""
+
+# UPDATE used by the post-open job. regime_at_classification is excluded —
+# it is set by the EOD cron and must not change after the open.
+_UPDATE_IV_SQL = """
+    UPDATE bt_daily_features
+    SET feature_vector      = %s,
+        feature_config_hash = %s,
+        computed_at         = NOW()
+    WHERE ticker          = %s
+      AND trade_date      = %s
+      AND feature_version = %s
+"""
+
 
 def _materialize_payload(landscape_rows: list, spot: float, implied_move: float) -> dict:
     """Run the spot-dependent classifier chain on a stored landscape grid,
@@ -360,6 +401,12 @@ def compute_and_upsert_daily_features(
     """Load the stored landscape, materialize the spot-dependent payload,
     run ``extract_features``, and UPSERT into ``bt_daily_features``.
 
+    Writes non-IV features only. The five ``_IV_DEPENDENT_FEATURES``
+    (``implied_move_1d`` and the four σ-normalized distance features) are
+    stored as JSON null — they are unavailable at EOD cron time (03:01 PDT)
+    and are filled by ``compute_and_upsert_open_implied_move`` once the
+    06:33 PDT open-straddle snapshot exists.
+
     Runs entirely on the caller's connection and transaction — issues no
     COMMIT. The EOD cron passes the same connection used for the landscape
     upsert; the backfill script commits per date itself.
@@ -368,10 +415,10 @@ def compute_and_upsert_daily_features(
     ``(ticker, trade_date)`` or its ``table_spot`` is NULL.
 
     Returns a summary dict: ``ticker``, ``trade_date``, ``feature_version``,
-    ``feature_config_hash``, ``spot``, ``implied_move``, ``n_features``.
+    ``feature_config_hash``, ``spot``, ``implied_move`` (always None),
+    ``n_features``, ``regime_at_classification``.
     """
     from psycopg.types.json import Jsonb
-    from packages.shared.gex_landscape import compute_implied_move
 
     with conn.cursor() as cur:
         cur.execute(_LANDSCAPE_ROW_SQL, (ticker, trade_date))
@@ -389,24 +436,15 @@ def compute_and_upsert_daily_features(
         )
     spot = float(table_spot)
 
-    # Implied move — ATM IV at last snapshot, smallest dte>0, computed
-    # against spot via compute_implied_move(spot, iv, dte=1.0).
-    with conn.cursor() as cur:
-        cur.execute(_IMPLIED_MOVE_SQL, (trade_date.isoformat(), ticker))
-        iv_row = cur.fetchone()
-    if iv_row and iv_row[0] is not None:
-        try:
-            iv_f = float(iv_row[0])
-            implied_move = compute_implied_move(spot, iv_f, dte=1.0)
-        except (TypeError, ValueError):
-            implied_move = 0.0
-    else:
-        implied_move = 0.0
+    # IV is unavailable at EOD time; materialize with implied_move=0 so
+    # classify_regime / per_bucket / confluences run, then overwrite the
+    # IV-dependent features with None before storing.
+    payload = _materialize_payload(landscape_rows, spot, implied_move=0.0)
+    features = extract_features(payload, spot, implied_move=0.0)
+    for key in _IV_DEPENDENT_FEATURES:
+        features[key] = None
 
-    payload = _materialize_payload(landscape_rows, spot, implied_move)
-    features = extract_features(payload, spot, implied_move)
     config_hash = compute_feature_config_hash(version)
-
     regime_at_classification = (payload.get("regime") or {}).get("regime") or None
 
     with conn.cursor() as cur:
@@ -422,7 +460,104 @@ def compute_and_upsert_daily_features(
         "feature_version": version,
         "feature_config_hash": config_hash,
         "spot": spot,
-        "implied_move": implied_move,
+        "implied_move": None,
         "n_features": len(features),
         "regime_at_classification": regime_at_classification,
+    }
+
+
+def compute_and_upsert_open_implied_move(
+    conn,
+    ticker: str,
+    trade_date: dt.date,
+    *,
+    version: str = FEATURE_VERSION,
+) -> dict:
+    """Pin the 06:33 PDT open-straddle ATM IV, recompute σ-features, UPDATE the row.
+
+    Reads the first ``orats_monies_minute`` snapshot at or after 06:33 PT on
+    ``trade_date`` (smallest ``dte > 0``), computes ``implied_move_1d``,
+    recomputes the full feature vector, and UPDATEs ``bt_daily_features``.
+
+    If no 06:33+ snapshot exists for ``trade_date``, logs a WARNING and
+    returns without touching the DB — ``implied_move_1d`` stays NULL
+    (honest-missing per constraint #4).
+
+    Requires UPDATE (feature_vector, feature_config_hash, computed_at) on
+    ``bt_daily_features`` — granted to dash_backfill_writer by
+    ``infra/sql/bt_daily_features_backfill_writer_feature_update.sql``
+    (CR-037 prerequisite DDL).
+
+    Runs on the caller's connection. In the post-open daily cron the
+    connection is autocommit; in tests the caller controls the transaction.
+
+    Returns a summary dict with ``implied_move`` (float or None) and
+    ``updated`` (bool).
+    """
+    from psycopg.types.json import Jsonb
+    from packages.shared.gex_landscape import compute_implied_move
+
+    with conn.cursor() as cur:
+        cur.execute(_LANDSCAPE_ROW_SQL, (ticker, trade_date))
+        row = cur.fetchone()
+    if not row or row[1] is None:
+        raise ValueError(
+            f"compute_and_upsert_open_implied_move: no landscape row "
+            f"for ({ticker!r}, {trade_date})"
+        )
+    landscape_rows, table_spot = row
+    spot = float(table_spot)
+
+    # First snapshot at/after 06:33 PT, smallest dte>0 (open straddle pin).
+    with conn.cursor() as cur:
+        cur.execute(_OPEN_STRADDLE_SQL, (trade_date.isoformat(), ticker))
+        iv_row = cur.fetchone()
+
+    if not iv_row or iv_row[0] is None:
+        log.warning(
+            "compute_and_upsert_open_implied_move: no 06:33+ snapshot for "
+            "(%s, %s) — implied_move_1d stays NULL", ticker, trade_date,
+        )
+        return {
+            "ticker": ticker,
+            "trade_date": trade_date,
+            "feature_version": version,
+            "implied_move": None,
+            "updated": False,
+        }
+
+    try:
+        iv_f = float(iv_row[0])
+        implied_move = compute_implied_move(spot, iv_f, dte=1.0)
+    except (TypeError, ValueError):
+        log.warning(
+            "compute_and_upsert_open_implied_move: implied_move computation "
+            "failed for (%s, %s) — implied_move_1d stays NULL", ticker, trade_date,
+        )
+        return {
+            "ticker": ticker,
+            "trade_date": trade_date,
+            "feature_version": version,
+            "implied_move": None,
+            "updated": False,
+        }
+
+    payload = _materialize_payload(landscape_rows, spot, implied_move)
+    features = extract_features(payload, spot, implied_move)
+    config_hash = compute_feature_config_hash(version)
+
+    with conn.cursor() as cur:
+        cur.execute(_UPDATE_IV_SQL, (
+            Jsonb(features), config_hash, ticker, trade_date, version,
+        ))
+
+    return {
+        "ticker": ticker,
+        "trade_date": trade_date,
+        "feature_version": version,
+        "feature_config_hash": config_hash,
+        "spot": spot,
+        "implied_move": implied_move,
+        "n_features": len(features),
+        "updated": True,
     }
