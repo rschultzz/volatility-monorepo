@@ -264,10 +264,9 @@ def main():
                     landscape_summary["table_spot"],
                 )
 
-                # Day-features (CR-013, v0.5) — same transaction. Reads the
-                # landscape row just written above and the ATM IV from
-                # orats_monies_minute to compute the day's feature vector
-                # for the analogue-comparison KNN.
+                # Day-features (CR-037, v0.6) — same transaction. Writes
+                # non-IV features only; implied_move_1d and sigma-normalized
+                # features are NULL until the 13:35 UTC post-open job fills them.
                 day_features_summary = compute_and_upsert_daily_features(
                     conn=conn,
                     ticker=TICKER,
@@ -276,10 +275,9 @@ def main():
                 )
                 log.info(
                     "bt_daily_features upserted for (%s, %s): "
-                    "version=%s implied_move=%.2f n_features=%s",
+                    "version=%s implied_move=NULL (post-open job fills at 13:35 UTC) n_features=%s",
                     TICKER, store_trade_date.isoformat(),
                     day_features_summary["feature_version"],
-                    day_features_summary["implied_move"],
                     day_features_summary["n_features"],
                 )
 
