@@ -44,13 +44,14 @@ from packages.shared.backfill_safety import (
     update_run_progress,
     update_run_smoke,
 )
+from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
 from packages.shared.outcomes import pick_drift_target
 from packages.shared.outcomes_runner import compute_outcome_for_date, derive_dominant_bucket
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-FEATURE_VERSION = "v0.5.0-rebuilt"
+FEATURE_VERSION = CANONICAL_FEATURE_VERSION
 
 # Rows in bt_daily_features not yet in bt_daily_outcomes.
 _TARGET_DATES_SQL = """

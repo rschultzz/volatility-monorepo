@@ -139,8 +139,10 @@ def main() -> None:
             )
             conn.commit()
             ok += 1
+            im = summary["implied_move"]
+            im_str = f"{im:.2f}" if im is not None else "NULL"
             print(f"  {tag}  OK  spot={summary['spot']:.2f} "
-                  f"implied_move={summary['implied_move']:.2f} "
+                  f"implied_move={im_str} "
                   f"n_features={summary['n_features']}")
         except Exception as e:
             conn.rollback()

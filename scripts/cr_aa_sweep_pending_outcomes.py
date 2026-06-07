@@ -48,12 +48,17 @@ from packages.shared.backfill_safety import (
     update_run_smoke,
 )
 from packages.shared.buckets import bucket_sessions
+from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
 from packages.shared.outcomes_runner import compute_outcome_for_date
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-FEATURE_VERSION = "v0.5.0-rebuilt"
+# Follow the canonical so openiv pending rows are swept after the Step-5 flip.
+# NOTE: 12 v0.5.0-rebuilt pending_history rows existed as of 2026-06-06; run
+# a one-off sweep pinned to v0.5.0-rebuilt before merging to avoid orphaning them,
+# or accept that they remain pending (harmless — they never feed live proposals).
+FEATURE_VERSION = CANONICAL_FEATURE_VERSION
 
 _PENDING_ROWS_SQL = """
     SELECT o.trade_date,
