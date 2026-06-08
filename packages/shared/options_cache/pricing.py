@@ -103,7 +103,11 @@ def _fetch_minute_quotes(opras: dict, minute_pt: datetime, warnings: list) -> di
     for role in LEG_ROLES:
         opra = opras[role]
         try:
-            fetch_option_bars([opra], minute_pt, minute_pt)
+            fetch_option_bars(
+                [opra], minute_pt, minute_pt,
+                record_empty_windows=False,
+                source="live_poll",
+            )
         except OratsPermanentError as e:
             logger.info("condor-pricing: permanent error fetching %s @ %s: %s",
                         opra, minute_pt, e)
@@ -244,6 +248,7 @@ def price_proposal_legs(
     entry_pt: datetime,
     r: float = 0.05,
     q: float = 0.0,
+    live: bool = False,
 ) -> dict:
     """Price proposal legs at entry using real ORATS mids via the options cache.
 
@@ -296,8 +301,11 @@ def price_proposal_legs(
 
     # ── 2. Batched fetch (writes to cache; idempotent on cache hit) ────────
     unique_opras = list(dict.fromkeys(opra_list))   # dedup, preserve order
+    _fetch_kwargs = (
+        {"record_empty_windows": False, "source": "live_poll"} if live else {}
+    )
     try:
-        fetch_option_bars(unique_opras, entry_pt, entry_pt)
+        fetch_option_bars(unique_opras, entry_pt, entry_pt, **_fetch_kwargs)
     except OratsPermanentError as e:
         warnings_out.append(f"permanent error fetching OPRAs at {entry_pt.strftime('%H:%M')}: {e}")
     except OratsError as e:
@@ -348,6 +356,7 @@ def build_real_strike_band(
     entry_pt: datetime,
     spacing: float = 5.0,
     half_sigma: float = 1.5,
+    live: bool = False,
 ) -> list[dict]:
     """Fetch a dense band of real ORATS call mids for Breeden-Litzenberger.
 
@@ -394,8 +403,11 @@ def build_real_strike_band(
     call_opras = [format_opra("SPX", expiration_date, "C", s) for s in unique_strikes]
 
     # Batched fetch — writes to cache, idempotent
+    _fetch_kwargs = (
+        {"record_empty_windows": False, "source": "live_poll"} if live else {}
+    )
     try:
-        fetch_option_bars(call_opras, entry_pt, entry_pt)
+        fetch_option_bars(call_opras, entry_pt, entry_pt, **_fetch_kwargs)
     except (OratsPermanentError, OratsError) as e:
         logger.warning("build_real_strike_band: fetch error for %s: %s", entry_pt, e)
         # Continue: return whatever is in cache from prior fetches
@@ -452,6 +464,7 @@ def fetch_horizon_delta(
     entry_pt: datetime,
     r: float = 0.05,
     q: float = 0.0,
+    live: bool = False,
 ) -> Optional[float]:
     """Fetch |delta| at the magnet strike for the horizon-appropriate expiration.
 
@@ -475,8 +488,11 @@ def fetch_horizon_delta(
     spx_strike = compute_spx_strike(magnet_strike_es, dte, r, q)
     opra = format_opra("SPX", expir, "C", spx_strike)
 
+    _fetch_kwargs = (
+        {"record_empty_windows": False, "source": "live_poll"} if live else {}
+    )
     try:
-        fetch_option_bars([opra], entry_pt, entry_pt)
+        fetch_option_bars([opra], entry_pt, entry_pt, **_fetch_kwargs)
     except (OratsPermanentError, OratsError) as e:
         logger.warning("fetch_horizon_delta: fetch error %s @ %s: %s", opra, entry_pt, e)
 
