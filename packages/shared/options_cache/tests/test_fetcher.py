@@ -442,6 +442,111 @@ class TestFetchOptionBars(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# CR-AE: record_empty_windows flag
+# ─────────────────────────────────────────────────────────────────────
+
+class TestRecordEmptyWindowsFlag(unittest.TestCase):
+    """CR-AE: record_empty_windows=False must not write a row_count=0 window;
+    record_empty_windows=True (default) must still write it (backtest guard)."""
+
+    def setUp(self):
+        self.put_opra = "SPX240202P04935000"
+        self.call_opra = "SPX240202C04935000"
+        self.minute_pt = datetime(2024, 2, 2, 7, 0)
+
+    @patch("packages.shared.options_cache.fetcher.repo")
+    @patch("packages.shared.options_cache.fetcher._fetch_option_bars_from_orats")
+    def test_empty_response_flag_false_writes_no_window(self, mock_primitive, mock_repo):
+        """Empty ORATS response with record_empty_windows=False writes no window."""
+        mock_repo.get_windows_for_contract.return_value = []
+        mock_primitive.return_value = []
+        mock_repo.insert_bars.return_value = 0
+
+        result = fetch_option_bars(
+            [self.put_opra], self.minute_pt, self.minute_pt,
+            record_empty_windows=False,
+        )
+
+        mock_repo.record_fetched_window.assert_not_called()
+        self.assertEqual(result.gaps_filled, 1)
+        self.assertEqual(result.bars_written, 0)
+
+    @patch("packages.shared.options_cache.fetcher.repo")
+    @patch("packages.shared.options_cache.fetcher._fetch_option_bars_from_orats")
+    def test_empty_response_flag_true_writes_zero_row_count_window(self, mock_primitive, mock_repo):
+        """Empty ORATS response with record_empty_windows=True (default) still
+        writes a row_count=0 window — regression guard for backtest behavior."""
+        mock_repo.get_windows_for_contract.return_value = []
+        mock_primitive.return_value = []
+        mock_repo.insert_bars.return_value = 0
+
+        fetch_option_bars(
+            [self.put_opra], self.minute_pt, self.minute_pt,
+            record_empty_windows=True,
+        )
+
+        mock_repo.record_fetched_window.assert_called_once()
+        written: FetchedWindow = mock_repo.record_fetched_window.call_args.args[0]
+        self.assertEqual(written.opra_symbol, self.put_opra)
+        self.assertEqual(written.row_count, 0)
+
+    @patch("packages.shared.options_cache.fetcher.repo")
+    @patch("packages.shared.options_cache.fetcher._fetch_option_bars_from_orats")
+    def test_empty_then_populated_self_heals(self, mock_primitive, mock_repo):
+        """With record_empty_windows=False an empty first fetch leaves no window,
+        so the minute stays a gap and a later populated fetch succeeds."""
+        mock_repo.get_windows_for_contract.return_value = []
+        mock_primitive.return_value = []
+        mock_repo.insert_bars.return_value = 0
+
+        # First call — empty, no window written
+        fetch_option_bars(
+            [self.put_opra], self.minute_pt, self.minute_pt,
+            record_empty_windows=False,
+        )
+        mock_repo.record_fetched_window.assert_not_called()
+
+        # Second call — ORATS now has data
+        mock_primitive.return_value = [
+            _make_bar(self.put_opra, self.minute_pt, "P"),
+            _make_bar(self.call_opra, self.minute_pt, "C"),
+        ]
+        mock_repo.insert_bars.return_value = 2
+
+        result2 = fetch_option_bars(
+            [self.put_opra], self.minute_pt, self.minute_pt,
+            record_empty_windows=False,
+        )
+
+        self.assertEqual(mock_primitive.call_count, 2)
+        self.assertEqual(mock_repo.record_fetched_window.call_count, 2)
+        self.assertEqual(result2.bars_written, 2)
+
+    @patch("packages.shared.options_cache.fetcher.repo")
+    @patch("packages.shared.options_cache.fetcher._fetch_option_bars_from_orats")
+    def test_nonempty_response_flag_false_still_writes_window(self, mock_primitive, mock_repo):
+        """record_empty_windows=False only suppresses empty windows;
+        a non-empty response always records the window."""
+        mock_repo.get_windows_for_contract.return_value = []
+        mock_primitive.return_value = [
+            _make_bar(self.put_opra, self.minute_pt, "P"),
+            _make_bar(self.call_opra, self.minute_pt, "C"),
+        ]
+        mock_repo.insert_bars.return_value = 2
+
+        fetch_option_bars(
+            [self.put_opra], self.minute_pt, self.minute_pt,
+            record_empty_windows=False,
+        )
+
+        recorded_opras = {
+            call.args[0].opra_symbol
+            for call in mock_repo.record_fetched_window.call_args_list
+        }
+        self.assertEqual(recorded_opras, {self.put_opra, self.call_opra})
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Input validation
 # ─────────────────────────────────────────────────────────────────────
 
