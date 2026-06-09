@@ -142,7 +142,7 @@ class TestBuildCondorPricingPayload(unittest.TestCase):
         # Three legs fetch cleanly; the fourth (long_call) raises 404.
         # Payload should still come back 200 with a warning, the bad
         # leg as None mids, and the net_credit suppressed.
-        def fetch(opras, start, end, *, source=None):
+        def fetch(opras, start, end, **kwargs):
             if opras[0].endswith("C05830000"):  # long_call OPRA
                 raise OratsPermanentError("404 from ORATS")
             return _summary()
@@ -532,6 +532,92 @@ class TestPriceProposalLegsDelta(unittest.TestCase):
             )
 
         self.assertIsNone(result["legs"][0]["delta"])
+
+
+# ─────────────────────────────────────────────────────────────────────
+# CR-AE: live-flag threading through condor and proposal callers
+# ─────────────────────────────────────────────────────────────────────
+
+class TestLiveFlagThreading(unittest.TestCase):
+    """CR-AE: verify that live callers pass record_empty_windows=False,
+    source='live_poll' through to fetch_option_bars."""
+
+    MINUTE_PT = datetime(2026, 5, 19, 7, 32)
+
+    def test_condor_passes_live_flags_to_fetch_option_bars(self):
+        """_fetch_minute_quotes hard-codes record_empty_windows=False, source='live_poll'."""
+        with patch("packages.shared.options_cache.pricing.fetch_option_bars",
+                   return_value=_summary()) as mock_fetch, \
+             patch("packages.shared.options_cache.pricing.repo.get_bars_for_contract",
+                   return_value=[]):
+            # Build a minimal condor payload call that exercises _fetch_minute_quotes
+            pricing.build_condor_pricing_payload(
+                trade_date="2026-05-19",
+                expiration_date="2026-05-19",
+                spx=5800.0,
+                iv_pct=30.0,
+                minutes_to_expiry=60.0,
+                entry_pt="07:32",
+                eval_pt="07:42",
+            )
+
+        # _fetch_minute_quotes calls fetch_option_bars once per leg per minute;
+        # every call must carry the live flags.
+        self.assertGreater(mock_fetch.call_count, 0, "fetch_option_bars not called")
+        for call in mock_fetch.call_args_list:
+            kwargs = call.kwargs
+            self.assertFalse(
+                kwargs.get("record_empty_windows", True),
+                f"expected record_empty_windows=False; got {kwargs}",
+            )
+            self.assertEqual(
+                kwargs.get("source"), "live_poll",
+                f"expected source='live_poll'; got {kwargs}",
+            )
+
+    def test_price_proposal_legs_live_true_passes_live_flags(self):
+        """price_proposal_legs with live=True forwards record_empty_windows=False,
+        source='live_poll' to fetch_option_bars."""
+        legs = [{"flag": "p", "side": "short", "qty": 1,
+                 "strike": 5800.0, "expiration": date(2026, 5, 19)}]
+
+        with patch("packages.shared.options_cache.pricing.fetch_option_bars",
+                   return_value=_summary()) as mock_fetch, \
+             patch("packages.shared.options_cache.pricing.repo.get_bars_for_contract",
+                   return_value=[]):
+            pricing.price_proposal_legs(
+                legs,
+                trade_date=date(2026, 5, 19),
+                entry_pt=self.MINUTE_PT,
+                live=True,
+            )
+
+        self.assertEqual(mock_fetch.call_count, 1)
+        kwargs = mock_fetch.call_args.kwargs
+        self.assertFalse(kwargs.get("record_empty_windows", True))
+        self.assertEqual(kwargs.get("source"), "live_poll")
+
+    def test_price_proposal_legs_live_false_uses_defaults(self):
+        """price_proposal_legs with live=False (default) does NOT pass live flags —
+        backtest behavior is preserved."""
+        legs = [{"flag": "p", "side": "short", "qty": 1,
+                 "strike": 5800.0, "expiration": date(2026, 5, 19)}]
+
+        with patch("packages.shared.options_cache.pricing.fetch_option_bars",
+                   return_value=_summary()) as mock_fetch, \
+             patch("packages.shared.options_cache.pricing.repo.get_bars_for_contract",
+                   return_value=[]):
+            pricing.price_proposal_legs(
+                legs,
+                trade_date=date(2026, 5, 19),
+                entry_pt=self.MINUTE_PT,
+                live=False,
+            )
+
+        kwargs = mock_fetch.call_args.kwargs
+        # record_empty_windows should not be overridden (absent = default True in fetcher)
+        self.assertNotIn("record_empty_windows", kwargs)
+        self.assertNotIn("source", kwargs)
 
 
 if __name__ == "__main__":
