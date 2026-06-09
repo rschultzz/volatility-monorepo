@@ -100,7 +100,8 @@ from packages.shared.backtest.models import distance_band
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 
-DRY_RUN: bool = False           # flip to False for the full ~150-date run
+DRY_RUN: bool = True            # flip to False for production runs
+REBACKFILL_B_ONLY: bool = False  # True = re-backfill only B-bucket (wrong-expiry) dates
 
 # When DRY_RUN=True, probe-fetch the first N dates (actually calls ORATS + reads back).
 # Remaining dry-run dates print plan only. Set to 0 to skip probe entirely.
@@ -119,10 +120,107 @@ ES_OPEN_LOOKUP_MINS: int = 5    # look for first ES bar within N min of RTH open
 _UTC = ZoneInfo("UTC")
 _PT = ZoneInfo("America/Los_Angeles")
 
+# ── NYSE HOLIDAY CALENDAR (2023–2026) ─────────────────────────────────────────
+# Hard-coded for the backfill's date range. Includes all standard closures plus
+# the Carter state funeral (2025-01-09) and Inauguration Day (2025-01-20, which
+# coincides with MLK Day that year).
+
+_NYSE_HOLIDAYS: frozenset[date] = frozenset({
+    # 2023
+    date(2023, 1, 2),   # New Year's Day (observed)
+    date(2023, 1, 16),  # Martin Luther King Jr. Day
+    date(2023, 2, 20),  # Presidents' Day
+    date(2023, 4, 7),   # Good Friday
+    date(2023, 5, 29),  # Memorial Day
+    date(2023, 6, 19),  # Juneteenth
+    date(2023, 7, 4),   # Independence Day
+    date(2023, 9, 4),   # Labor Day
+    date(2023, 11, 23), # Thanksgiving
+    date(2023, 12, 25), # Christmas
+    # 2024
+    date(2024, 1, 1),   # New Year's Day
+    date(2024, 1, 15),  # Martin Luther King Jr. Day
+    date(2024, 2, 19),  # Presidents' Day
+    date(2024, 3, 29),  # Good Friday
+    date(2024, 5, 27),  # Memorial Day
+    date(2024, 6, 19),  # Juneteenth
+    date(2024, 7, 4),   # Independence Day
+    date(2024, 9, 2),   # Labor Day
+    date(2024, 11, 28), # Thanksgiving
+    date(2024, 12, 25), # Christmas
+    # 2025
+    date(2025, 1, 1),   # New Year's Day
+    date(2025, 1, 9),   # Carter state funeral (special NYSE closure)
+    date(2025, 1, 20),  # Martin Luther King Jr. Day / Inauguration Day (coincide)
+    date(2025, 2, 17),  # Presidents' Day
+    date(2025, 4, 18),  # Good Friday
+    date(2025, 5, 26),  # Memorial Day
+    date(2025, 6, 19),  # Juneteenth
+    date(2025, 7, 4),   # Independence Day
+    date(2025, 9, 1),   # Labor Day
+    date(2025, 11, 27), # Thanksgiving
+    date(2025, 12, 25), # Christmas
+    # 2026
+    date(2026, 1, 1),   # New Year's Day
+    date(2026, 1, 19),  # Martin Luther King Jr. Day
+    date(2026, 2, 16),  # Presidents' Day
+    date(2026, 4, 3),   # Good Friday
+    date(2026, 5, 25),  # Memorial Day
+    date(2026, 6, 19),  # Juneteenth
+    date(2026, 7, 3),   # Independence Day (observed — Jul 4 falls on Saturday)
+    date(2026, 9, 7),   # Labor Day
+    date(2026, 11, 26), # Thanksgiving
+    date(2026, 12, 25), # Christmas
+})
+
+# ── B-BUCKET RE-BACKFILL: previously skipped 404 dates (C + D from initial run) ─
+# Used in REBACKFILL_B_ONLY mode to exclude the 47 already-404'd dates so only
+# the 47 wrong-expiry-but-fetched B-dates are re-processed.
+_PREVIOUSLY_SKIPPED_404: frozenset[date] = frozenset({
+    # near/train (6)
+    date(2023, 5, 18), date(2024, 6, 12), date(2024, 11, 12),
+    date(2025, 5, 29), date(2025, 6, 11), date(2025, 7, 16),
+    # near/holdout (7)
+    date(2025, 9, 23), date(2025, 10, 2), date(2025, 10, 22), date(2025, 12, 3),
+    date(2026, 1, 29), date(2026, 4, 30), date(2026, 5, 21),
+    # mid/train (4)
+    date(2023, 5, 11), date(2024, 5, 23), date(2025, 1, 27), date(2025, 6, 4),
+    # mid/holdout (11)
+    date(2025, 8, 18), date(2025, 8, 19), date(2025, 8, 25), date(2025, 9, 8),
+    date(2026, 1, 7), date(2026, 1, 13), date(2026, 2, 3), date(2026, 2, 12),
+    date(2026, 4, 14), date(2026, 5, 4), date(2026, 5, 19),
+    # far/train (14)
+    date(2023, 5, 25), date(2023, 9, 11), date(2023, 11, 1), date(2024, 5, 6),
+    date(2024, 5, 22), date(2024, 6, 24), date(2024, 7, 1), date(2024, 8, 15),
+    date(2024, 10, 8), date(2024, 10, 31), date(2025, 1, 6), date(2025, 2, 4),
+    date(2025, 2, 11), date(2025, 5, 12),
+    # far/holdout (5)
+    date(2025, 8, 21), date(2025, 10, 16), date(2025, 12, 9),
+    date(2025, 12, 17), date(2026, 1, 6),
+})
+
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 
 def nth_business_day(from_date: date, n: int) -> date:
-    """Return the nth weekday (Mon–Fri) after from_date. Holidays not excluded."""
+    """Return the nth NYSE trading day after from_date.
+
+    Excludes weekends AND NYSE holidays in _NYSE_HOLIDAYS. Covers 2023–2026.
+    """
+    current = from_date
+    count = 0
+    while count < n:
+        current += timedelta(days=1)
+        if current.weekday() < 5 and current not in _NYSE_HOLIDAYS:
+            count += 1
+    return current
+
+
+def _blind_nth_weekday(from_date: date, n: int) -> date:
+    """Holiday-blind weekday counter — mirrors the original (buggy) implementation.
+
+    Used only to identify B-bucket dates: those where the holiday-aware result
+    differs from the blind result. Not used in the actual backfill calculation.
+    """
     current = from_date
     count = 0
     while count < n:
@@ -651,6 +749,34 @@ def main() -> None:
         key=lambda x: x["trade_date"],
     )
 
+    # ── REBACKFILL_B_ONLY: filter to B-bucket dates ───────────────────────────
+    # B-bucket = selected dates where the holiday-aware expiry differs from the
+    # blind expiry (holiday in positions 1-14) AND the date was previously fetched
+    # (not in the 47 known-404 list). These dates have wrong-expiry bars in
+    # orats_options_minute; re-fetching with the corrected expiry writes new
+    # (correct) OPRA symbols without conflicting with the old ones.
+    if REBACKFILL_B_ONLY:
+        b_bucket = [
+            e for e in all_selected
+            if _blind_nth_weekday(e["trade_date"], DTE_TARGET)
+               != nth_business_day(e["trade_date"], DTE_TARGET)
+            and e["trade_date"] not in _PREVIOUSLY_SKIPPED_404
+        ]
+        print(
+            f"\nREBACKFILL_B_ONLY: {len(b_bucket)} B-bucket dates identified "
+            f"(expiry changed by holiday-aware fix, previously fetched).",
+            flush=True,
+        )
+        for e in b_bucket:
+            old_exp = _blind_nth_weekday(e["trade_date"], DTE_TARGET)
+            new_exp = nth_business_day(e["trade_date"], DTE_TARGET)
+            print(
+                f"  {e['band']}/{e['partition']}  {e['trade_date']}"
+                f"  blind={old_exp}  aware={new_exp}",
+                flush=True,
+            )
+        all_selected = b_bucket
+
     # ── Print full selection ───────────────────────────────────────────────────
     print(f"\n{'─'*65}", flush=True)
     print(f"FULL SELECTION ({len(all_selected)} dates):", flush=True)
@@ -683,9 +809,14 @@ def main() -> None:
         flush=True,
     )
 
-    # ── Process: dry-run = first 3 (with probe for first N); full = all 150 ───
+    # ── Process: dry-run = first 3 (with probe for first N); full = all ────────
     to_process = all_selected[:3] if DRY_RUN else all_selected
-    mode = "DRY-RUN (first 3 dates)" if DRY_RUN else f"FULL RUN ({len(to_process)} dates)"
+    if DRY_RUN:
+        mode = "DRY-RUN (first 3 dates)"
+    elif REBACKFILL_B_ONLY:
+        mode = f"REBACKFILL B-ONLY ({len(to_process)} dates)"
+    else:
+        mode = f"FULL RUN ({len(to_process)} dates)"
     print(f"\n{sep}", flush=True)
     print(f"PROCESSING: {mode}", flush=True)
     print(sep, flush=True)
