@@ -94,12 +94,13 @@ from packages.shared.day_features import (
 )
 from packages.shared.gex_landscape import compute_implied_move
 from packages.shared.options_cache.fetcher import fetch_option_bars
+from packages.shared.options_cache.http_client import OratsPermanentError
 from packages.shared.options_cache.opra import format_opra
 from packages.shared.backtest.models import distance_band
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 
-DRY_RUN: bool = True            # flip to False for the full ~150-date run
+DRY_RUN: bool = False           # flip to False for the full ~150-date run
 
 # When DRY_RUN=True, probe-fetch the first N dates (actually calls ORATS + reads back).
 # Remaining dry-run dates print plan only. Set to 0 to skip probe entirely.
@@ -444,50 +445,70 @@ def backfill_date(
     total_api_calls = 0  # gaps_filled == number of ORATS HTTP range calls
     t_fetch_start = _time.perf_counter()
 
-    # Entry-day
-    print("    FETCH entry-day...", flush=True)
-    r_entry = fetch_option_bars(
-        opras, entry_start_pt, entry_end_pt,
-        source="historical_backfill", record_empty_windows=True,
-    )
-    total_bars += r_entry.bars_written
-    total_api_calls += r_entry.gaps_filled
-    print(
-        f"      bars_written={r_entry.bars_written}  cache_hits={r_entry.cache_hits}  "
-        f"gaps_filled={r_entry.gaps_filled}",
-        flush=True,
-    )
-
-    # Touch-window (RTH or gap-open, depending on resolution)
-    r_touch = None
-    if touch_fetch_start_pt is not None:
-        window_label = "touch-window" if touch_resolution == "rth_touch" else "gap-open-window"
-        print(f"    FETCH {window_label}...", flush=True)
-        r_touch = fetch_option_bars(
-            opras, touch_fetch_start_pt, touch_fetch_end_pt,
+    try:
+        # Entry-day
+        print("    FETCH entry-day...", flush=True)
+        r_entry = fetch_option_bars(
+            opras, entry_start_pt, entry_end_pt,
             source="historical_backfill", record_empty_windows=True,
         )
-        total_bars += r_touch.bars_written
-        total_api_calls += r_touch.gaps_filled
+        total_bars += r_entry.bars_written
+        total_api_calls += r_entry.gaps_filled
         print(
-            f"      bars_written={r_touch.bars_written}  cache_hits={r_touch.cache_hits}  "
-            f"gaps_filled={r_touch.gaps_filled}",
+            f"      bars_written={r_entry.bars_written}  cache_hits={r_entry.cache_hits}  "
+            f"gaps_filled={r_entry.gaps_filled}",
             flush=True,
         )
 
-    # Settlement
-    print("    FETCH settlement...", flush=True)
-    r_settle = fetch_option_bars(
-        opras, settle_start_pt, settle_end_pt,
-        source="historical_backfill", record_empty_windows=True,
-    )
-    total_bars += r_settle.bars_written
-    total_api_calls += r_settle.gaps_filled
-    print(
-        f"      bars_written={r_settle.bars_written}  cache_hits={r_settle.cache_hits}  "
-        f"gaps_filled={r_settle.gaps_filled}",
-        flush=True,
-    )
+        # Touch-window (RTH or gap-open, depending on resolution)
+        r_touch = None
+        if touch_fetch_start_pt is not None:
+            window_label = "touch-window" if touch_resolution == "rth_touch" else "gap-open-window"
+            print(f"    FETCH {window_label}...", flush=True)
+            r_touch = fetch_option_bars(
+                opras, touch_fetch_start_pt, touch_fetch_end_pt,
+                source="historical_backfill", record_empty_windows=True,
+            )
+            total_bars += r_touch.bars_written
+            total_api_calls += r_touch.gaps_filled
+            print(
+                f"      bars_written={r_touch.bars_written}  cache_hits={r_touch.cache_hits}  "
+                f"gaps_filled={r_touch.gaps_filled}",
+                flush=True,
+            )
+
+        # Settlement
+        print("    FETCH settlement...", flush=True)
+        r_settle = fetch_option_bars(
+            opras, settle_start_pt, settle_end_pt,
+            source="historical_backfill", record_empty_windows=True,
+        )
+        total_bars += r_settle.bars_written
+        total_api_calls += r_settle.gaps_filled
+        print(
+            f"      bars_written={r_settle.bars_written}  cache_hits={r_settle.cache_hits}  "
+            f"gaps_filled={r_settle.gaps_filled}",
+            flush=True,
+        )
+
+    except OratsPermanentError as exc:
+        elapsed = _time.perf_counter() - t_fetch_start
+        print(f"    SKIPPED (ORATS 4xx): {exc}", flush=True)
+        return {
+            "trade_date": str(trade_date),
+            "band": band,
+            "partition": partition,
+            "short_opra": short_opra,
+            "long_opra": long_opra,
+            "touch_resolution": touch_resolution,
+            "bars_written": 0,
+            "total_api_calls": total_api_calls,
+            "elapsed_s": round(elapsed, 1),
+            "skipped_404": True,
+            "skip_reason": str(exc),
+            "dry_run": dry_run,
+            "probe_fetch": probe_fetch,
+        }
 
     elapsed = _time.perf_counter() - t_fetch_start
     print(f"    fetch elapsed: {elapsed:.1f}s  total_api_calls={total_api_calls}", flush=True)
@@ -684,7 +705,10 @@ def main() -> None:
 
         # ── Summary stats ─────────────────────────────────────────────────────
         touch_counts = {}
+        skipped_404 = [r for r in results if r.get("skipped_404")]
         for r in results:
+            if r.get("skipped_404"):
+                continue
             res = r.get("touch_resolution", "unknown")
             touch_counts[res] = touch_counts.get(res, 0) + 1
 
@@ -692,6 +716,7 @@ def main() -> None:
             "mode": "dry_run" if DRY_RUN else "full_run",
             "probe_fetch_count": len(probe_results),
             "dates_processed": len(results),
+            "dates_skipped_404": len(skipped_404),
             "touch_resolution_counts": touch_counts,
             "selection": {
                 band: {
@@ -722,7 +747,13 @@ def main() -> None:
     # ── Final report ──────────────────────────────────────────────────────────
     print(f"\n{sep}", flush=True)
     print(f"Done. run_id={run_id}", flush=True)
-    print(f"\nTouch resolution breakdown ({len(results)} dates):", flush=True)
+    fetched_results = [r for r in results if not r.get("skipped_404")]
+    print(f"\nDates processed: {len(results)}  fetched: {len(fetched_results)}  skipped_404: {len(skipped_404)}", flush=True)
+    if skipped_404:
+        print("Skipped dates (ORATS 4xx — no contract data):", flush=True)
+        for r in skipped_404:
+            print(f"  {r['trade_date']}  {r['band']}/{r['partition']}  {r['short_opra']}", flush=True)
+    print(f"\nTouch resolution breakdown ({len(fetched_results)} fetched dates):", flush=True)
     for resolution in ("rth_touch", "gap_touch", "afterhours_touch_retraced", "no_touch"):
         count = touch_counts.get(resolution, 0)
         print(f"  {resolution:<30}: {count}", flush=True)
@@ -743,7 +774,7 @@ def main() -> None:
         print(f"  Expected wall-clock: ~{extrap_elapsed/60:.0f} min  ({extrap_elapsed:.0f}s)", flush=True)
 
     if not DRY_RUN:
-        total_bars = sum(r.get("bars_written", 0) for r in results)
+        total_bars = sum(r.get("bars_written", 0) for r in fetched_results)
         print(f"Total bars written: {total_bars}", flush=True)
     print(sep, flush=True)
 
