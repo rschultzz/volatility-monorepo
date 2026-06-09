@@ -75,6 +75,7 @@ def fetch_option_bars(
     end_pt: datetime,
     *,
     source: FetchSource = "historical_backfill",
+    record_empty_windows: bool = True,
 ) -> FetchOptionBarsSummary:
     """
     Cache-aware fetch for one or more OPRA contracts via the option endpoint.
@@ -92,6 +93,11 @@ def fetch_option_bars(
         start_pt: Start of range, naive Pacific Time.
         end_pt: End of range, naive PT. Inclusive.
         source: Provenance tag for fetched_windows rows.
+        record_empty_windows: When True (default), an empty ORATS response
+            records a row_count=0 window so the gap is not re-fetched.
+            When False, an empty response records nothing — the minute stays
+            a gap and is retried on the next call. Set False for live callers
+            where an empty response is ORATS ingestion lag, not genuine absence.
 
     Returns:
         FetchOptionBarsSummary with operation counters.
@@ -149,6 +155,8 @@ def fetch_option_bars(
                 opras_to_record.append(opra_symbol)
 
             for sym in opras_to_record:
+                if not record_empty_windows and bars_per_opra.get(sym, 0) == 0:
+                    continue
                 repo.record_fetched_window(FetchedWindow(
                     opra_symbol=sym,
                     window_start_pt=gap.start_pt,

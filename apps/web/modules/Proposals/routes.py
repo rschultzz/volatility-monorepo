@@ -328,6 +328,9 @@ def register_proposals_routes(server) -> None:
         entry_time      = build_entry_time(trade_date)
         _PT_TZ = ZoneInfo("America/Los_Angeles")
         entry_pt_naive  = entry_time.astimezone(_PT_TZ).replace(tzinfo=None)
+        # live=True when pricing the current session: compare in PT so a UTC
+        # server doesn't roll to "tomorrow" while it's still the PT trading day.
+        live = (trade_date == dt.datetime.now(_PT_TZ).date())
 
         # ── 2. DB connect ─────────────────────────────────────────────────
         try:
@@ -385,6 +388,7 @@ def register_proposals_routes(server) -> None:
                 entry_pt=entry_pt_naive,
                 r=risk_free_rate,
                 q=yield_rate,
+                live=live,
             )
             warn_msgs.extend(real_pricing["warnings"])
 
@@ -460,6 +464,7 @@ def register_proposals_routes(server) -> None:
                 spot, implied_move,
                 expiration_date=shortest_expir,
                 entry_pt=entry_pt_naive,
+                live=live,
             )
             if len(option_chain) < 2:
                 warn_msgs.append(
@@ -560,11 +565,13 @@ def register_proposals_routes(server) -> None:
                         magnet_strike_es, trade_date,
                         HORIZON_SESSION_DAYS["t1"], entry_pt_naive,
                         risk_free_rate, yield_rate,
+                        live=live,
                     )
                     delta_t5 = fetch_horizon_delta(
                         magnet_strike_es, trade_date,
                         HORIZON_SESSION_DAYS["t5"], entry_pt_naive,
                         risk_free_rate, yield_rate,
+                        live=live,
                     )
                     magnet_delta_by_horizon = {
                         "t1": delta_t1,
