@@ -27,6 +27,7 @@ from packages.shared.strategy_templates import Leg
 from packages.shared.backtest.models import QuoteMap, TradeInput
 from packages.shared.backtest.harness import BacktestHarness
 from packages.shared.backtest.plugins.vertical import VerticalPlugin
+from packages.shared.backtest.plugins.debit_vertical import DebitVerticalPlugin
 
 
 # ── Shared spread fixture ────────────────────────────────────────────────────
@@ -63,6 +64,15 @@ def _harness():
     return BacktestHarness(
         plugin=VerticalPlugin(),
         edge_threshold=0.0,   # fill on first quoted minute, always
+        split_date=_SPLIT,
+    )
+
+
+def _debit_harness():
+    """Harness with DebitVerticalPlugin — for touch-exit reconciliation tests."""
+    return BacktestHarness(
+        plugin=DebitVerticalPlugin(),
+        edge_threshold=0.0,
         split_date=_SPLIT,
     )
 
@@ -183,6 +193,9 @@ class TestB_StrikeBoundaries(unittest.TestCase):
 class TestC_TouchCloseReconciliation(unittest.TestCase):
     """Confirms touch_exit_pnl and close_pnl use a consistent basis.
 
+    Uses DebitVerticalPlugin (touch_exit_is_meaningful=True, decision #6).
+    The credit plugin (VerticalPlugin) has no touch-exit P&L by design.
+
     Set up a trade where the option market at the touch minute prices the spread
     at EXACTLY its intrinsic value at S=4205 (between strikes):
 
@@ -203,6 +216,11 @@ class TestC_TouchCloseReconciliation(unittest.TestCase):
     Both must equal −3.50. If they differ, the two second terms use a different
     basis (one being position-value from-holder, the other being payoff at expiry)
     and the sign chain is broken somewhere.
+
+    Note: The spread here is short 4200 / long 4210 (credit orientation), but
+    DebitVerticalPlugin is used to exercise the touch-exit harness path. The
+    per-leg payoff formula is structure-agnostic; the reconciliation holds for
+    any spread where option market prices reflect intrinsic value at the moment.
     """
 
     TOUCH_C1 = 6.00   # short 4200 mid at touch — makes pos_val = intrinsic at S=4205
@@ -219,7 +237,7 @@ class TestC_TouchCloseReconciliation(unittest.TestCase):
         touch_ts  = _ts(14, 0)
         touch_window = [(_ts(14, 0), {(SHORT_K, "C"): self.TOUCH_C1,
                                        (LONG_K,  "C"): self.TOUCH_C2})]
-        return _harness().run_trade(_trade(), entry_day, touch_ts, touch_window, 4205.0)
+        return _debit_harness().run_trade(_trade(), entry_day, touch_ts, touch_window, 4205.0)
 
     def test_C1_touch_exit_equals_expected(self):
         result = self._run()

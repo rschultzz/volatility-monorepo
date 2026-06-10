@@ -79,3 +79,8 @@ class TradeResult:
     baseline_net_credit: Optional[float]
     baseline_touch_exit_pnl: Optional[float]
     baseline_close_pnl: Optional[float]
+
+    # Two-axis tagging (decision #12) — populated by Step 3 at write time, not by harness
+    pattern_label: Optional[str] = None
+    reversion_wilson_lo: Optional[float] = None
+    continuation_wilson_lo: Optional[float] = None

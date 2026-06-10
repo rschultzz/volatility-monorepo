@@ -13,6 +13,7 @@ from packages.shared.strategy_templates import Leg
 from packages.shared.backtest.models import QuoteMap, TradeInput
 from packages.shared.backtest.harness import BacktestHarness
 from packages.shared.backtest.plugins.vertical import VerticalPlugin
+from packages.shared.backtest.plugins.debit_vertical import DebitVerticalPlugin
 from packages.shared.backtest.plugins.stub_condor import StubCondorPlugin
 from packages.shared.backtest.plugins.protocol import BacktestPlugin
 
@@ -57,6 +58,15 @@ def _empty_qmap():
 def _harness(threshold=0.0, plugin=None):
     return BacktestHarness(
         plugin=plugin or VerticalPlugin(),
+        edge_threshold=threshold,
+        split_date=_SPLIT_DATE,
+    )
+
+
+def _debit_harness(threshold=0.0):
+    """Harness with DebitVerticalPlugin — use for all touch-exit P&L tests."""
+    return BacktestHarness(
+        plugin=DebitVerticalPlugin(),
         edge_threshold=threshold,
         split_date=_SPLIT_DATE,
     )
@@ -156,10 +166,14 @@ class TestFillLogic(unittest.TestCase):
 
 
 class TestTouchExitOutcome(unittest.TestCase):
-    """Touch-exit P&L = entry_credit + position_value_at_close."""
+    """Touch-exit P&L = entry_credit + position_value_at_close.
+
+    Uses DebitVerticalPlugin (touch_exit_is_meaningful=True). For credit (VerticalPlugin),
+    touch-exit P&L is None by design (decision #6).
+    """
 
     def _run_with_touch(self, fill_credit, close_pos_val, touch_ts=None, close_ts=None):
-        """Run a filled trade with touch at touch_ts, close quote at close_ts."""
+        """Run a filled debit trade with touch at touch_ts, close quote at close_ts."""
         touch_ts = touch_ts or _ts(14, 0)
         close_ts = close_ts or _ts(14, 0)
         # entry credit: -pos_val → pos_val = -fill_credit
@@ -170,7 +184,7 @@ class TestTouchExitOutcome(unittest.TestCase):
         # pick c1_close s.t. -c1_close + 2.0 = close_pos_val
         c1_close = 2.0 - close_pos_val
         touch_window = [(close_ts, _complete_qmap(c1=c1_close, c2=2.0))]
-        harness = _harness(threshold=0.0)
+        harness = _debit_harness(threshold=0.0)
         trade = _make_input(structural_prob=0.60)
         return harness.run_trade(trade, entry_day, touch_ts, touch_window, None)
 
@@ -185,7 +199,7 @@ class TestTouchExitOutcome(unittest.TestCase):
         self.assertAlmostEqual(result.touch_exit_pnl, 0.0)
 
     def test_no_touch_exit_pnl_when_no_touch(self):
-        harness = _harness(threshold=0.0)
+        harness = _debit_harness(threshold=0.0)
         entry_day = [(_ts(13, 31), _complete_qmap())]
         result = harness.run_trade(_make_input(), entry_day, None, [], 5095.0)
         self.assertIsNone(result.touch_exit_pnl)
@@ -193,7 +207,7 @@ class TestTouchExitOutcome(unittest.TestCase):
 
     def test_touch_exit_minute_at_or_after_touch(self):
         """First option-quote minute AT or AFTER touch_datetime is used."""
-        harness = _harness(threshold=0.0)
+        harness = _debit_harness(threshold=0.0)
         entry_day = [(_ts(13, 31), _complete_qmap(c1=5.0, c2=2.0))]
         touch_ts = _ts(14, 30)
         touch_window = [
@@ -205,13 +219,13 @@ class TestTouchExitOutcome(unittest.TestCase):
         self.assertEqual(result.touch_exit_minute, _ts(14, 30))
 
     def test_touch_found_flag_set(self):
-        harness = _harness(threshold=0.0)
+        harness = _debit_harness(threshold=0.0)
         entry_day = [(_ts(13, 31), _complete_qmap())]
         result = harness.run_trade(_make_input(), entry_day, _ts(14, 0), [(_ts(14, 0), _complete_qmap())], None)
         self.assertTrue(result.touch_found)
 
     def test_touch_found_false_when_no_touch(self):
-        harness = _harness(threshold=0.0)
+        harness = _debit_harness(threshold=0.0)
         entry_day = [(_ts(13, 31), _complete_qmap())]
         result = harness.run_trade(_make_input(), entry_day, None, [], 5095.0)
         self.assertFalse(result.touch_found)
@@ -340,29 +354,70 @@ class TestStubCondorPlugin(unittest.TestCase):
 
 
 class TestDualOutcomeIndependence(unittest.TestCase):
-    """touch_exit_pnl and close_pnl are independent — both computed from fill_net_credit."""
+    """touch_exit_pnl and close_pnl are independent — both computed from fill_net_credit.
+
+    Uses DebitVerticalPlugin (touch_exit_is_meaningful=True). Decision #6.
+    """
 
     def test_both_outcomes_computed(self):
-        harness = _harness(threshold=0.0)
+        harness = _debit_harness(threshold=0.0)
         entry_day = [(_ts(13, 31), _complete_qmap(c1=5.0, c2=2.0))]  # credit=3.0
         touch_ts = _ts(14, 0)
         touch_window = [(_ts(14, 0), _complete_qmap(c1=4.0, c2=1.5))]  # pos_val=-2.5
         # touch_exit_pnl = 3.0 + (-2.5) = 0.5
-        result = harness.run_trade(_make_input(), entry_day, touch_ts, touch_window, 5095.0)
-        # close_pnl: settlement=5095, S < 5100 → max_profit zone, payoff=0, pnl=3.0
+        result = _debit_harness().run_trade(_make_input(), entry_day, touch_ts, touch_window, 5095.0)
+        # close_pnl: DebitVerticalPlugin, settlement=5095 < 5100 (long) → max_loss zone
+        # payoff at 5095 for debit (long 5100, short 5110): long 5100C = max(5095-5100,0)=0 → payoff=0
+        # close_pnl = 3.0 + 0 = 3.0; zone = max_loss (debit: settle ≤ lower)
         self.assertAlmostEqual(result.touch_exit_pnl, 0.5)
         self.assertAlmostEqual(result.close_pnl, 3.0)
-        self.assertEqual(result.close_zone, "max_profit")
+        self.assertEqual(result.close_zone, "max_loss")
 
     def test_one_outcome_none_doesnt_affect_other(self):
         """No settlement → close_pnl is None; touch outcome unaffected."""
-        harness = _harness(threshold=0.0)
+        harness = _debit_harness(threshold=0.0)
         entry_day = [(_ts(13, 31), _complete_qmap(c1=5.0, c2=2.0))]
         touch_ts = _ts(14, 0)
         touch_window = [(_ts(14, 0), _complete_qmap(c1=4.0, c2=1.5))]
         result = harness.run_trade(_make_input(), entry_day, touch_ts, touch_window, None)
         self.assertAlmostEqual(result.touch_exit_pnl, 0.5)
         self.assertIsNone(result.close_pnl)
+
+
+class TestStructureAsymmetricOutcomes(unittest.TestCase):
+    """Decision #6: debit computes touch-exit P&L; credit (VerticalPlugin) does not."""
+
+    def test_debit_computes_touch_exit_pnl(self):
+        """DebitVerticalPlugin: touch_exit_pnl is populated when touch occurs."""
+        harness = _debit_harness(threshold=0.0)
+        entry_day = [(_ts(13, 31), _complete_qmap(c1=5.0, c2=2.0))]
+        touch_ts = _ts(14, 0)
+        touch_window = [(_ts(14, 0), _complete_qmap(c1=4.0, c2=1.5))]
+        result = harness.run_trade(_make_input(), entry_day, touch_ts, touch_window, None)
+        self.assertTrue(result.touch_found)
+        self.assertIsNotNone(result.touch_exit_pnl)
+
+    def test_credit_touch_exit_pnl_is_none(self):
+        """VerticalPlugin (credit): touch_exit_pnl is None even when touch occurs."""
+        harness = _harness(threshold=0.0)  # default = VerticalPlugin (credit)
+        entry_day = [(_ts(13, 31), _complete_qmap(c1=5.0, c2=2.0))]
+        touch_ts = _ts(14, 0)
+        touch_window = [(_ts(14, 0), _complete_qmap(c1=4.0, c2=1.5))]
+        result = harness.run_trade(_make_input(), entry_day, touch_ts, touch_window, None)
+        self.assertTrue(result.touch_found)
+        self.assertIsNone(result.touch_exit_pnl,
+            msg="Credit plugin must not produce touch-exit P&L (breach diagnostic only)")
+
+    def test_credit_baseline_touch_exit_pnl_is_none(self):
+        """Credit baseline also has no touch-exit P&L."""
+        harness = _harness(threshold=0.99)  # high threshold → no edge fill
+        entry_day = [(_ts(13, 31), _complete_qmap(c1=5.0, c2=2.0))]
+        touch_ts = _ts(14, 0)
+        touch_window = [(_ts(14, 0), _complete_qmap(c1=4.0, c2=1.5))]
+        result = harness.run_trade(_make_input(structural_prob=0.10), entry_day, touch_ts, touch_window, 5050.0)
+        self.assertIsNone(result.baseline_touch_exit_pnl,
+            msg="Credit baseline touch-exit P&L must be None")
+        self.assertIsNotNone(result.baseline_close_pnl)
 
 
 if __name__ == "__main__":

@@ -648,3 +648,52 @@ Schema is consistent. Live paths are a subset of the historical path (1 row vs f
 | Is the schema compatible if data existed? | Yes — identical column structure |
 
 **Decision: The 4 BOTH_404 dates (2025-05-12, 2025-08-18, 2026-01-06, 2026-01-13) are permanent ORATS per-minute gaps, unrecoverable via any endpoint. They remain D. No further recovery path exists. Backfill is closed at A=106.**
+
+---
+
+## CR Status updates
+
+### Step 3 — debit plugin (built + hand-checked) — 2026-06-10
+
+**Files added / modified:**
+
+| File | Change |
+|---|---|
+| `packages/shared/backtest/plugins/debit_vertical.py` | NEW — `DebitVerticalPlugin` |
+| `packages/shared/backtest/plugins/protocol.py` | Added `touch_exit_is_meaningful: bool` + `close_zone()` to protocol |
+| `packages/shared/backtest/plugins/vertical.py` | Added `touch_exit_is_meaningful = False` + credit `close_zone()` |
+| `packages/shared/backtest/plugins/stub_condor.py` | Added `touch_exit_is_meaningful = True` + stub `close_zone()` |
+| `packages/shared/backtest/plugins/__init__.py` | Exported `DebitVerticalPlugin` |
+| `packages/shared/backtest/models.py` | Added `pattern_label`, `reversion_wilson_lo`, `continuation_wilson_lo` to `TradeResult` |
+| `packages/shared/backtest/harness.py` | Edge formula fix (`abs(net_credit)`); `close_zone()` delegated to plugin; touch-exit gated on `touch_exit_is_meaningful` |
+| `packages/shared/backtest/tests/test_debit_vertical_plugin.py` | NEW — 30 hand-check tests |
+| `packages/shared/backtest/tests/test_harness.py` | Updated to use `_debit_harness()`; added `TestStructureAsymmetricOutcomes` (3 tests) |
+| `packages/shared/backtest/tests/test_verification.py` | Updated `TestC` to use debit harness |
+
+**Debit hand-check — five canonical points**
+(Spread: LONG 4190C @ 3.00, SHORT 4200C @ 1.50; net debit = 1.50; width = 10)
+
+| settle | payoff | P&L | zone |
+|---|---|---|---|
+| 4180 (below long) | 0.00 | **−1.50** | `max_loss` |
+| 4190 (at long) | 0.00 | **−1.50** | `max_loss` |
+| 4195 (between) | +5.00 | **+3.50** | `partial_loss` |
+| 4200 (at short = target) | +10.00 | **+8.50** | `max_profit` |
+| 4210 (above short) | +10.00 | **+8.50** | `max_profit` |
+
+Touch-exit P&L (at-touch quotes: long=11.00, short=1.00): `−1.50 + 10.00 = +8.50`
+
+Edge formula (debit): `structural_prob − abs(net_credit)/width = 0.60 − 1.50/10 = 0.45`
+
+**Test count: 105 passed (75 original + 30 new debit tests) in 0.20s — 0 failures**
+
+**Harness asymmetry confirmed:**
+- `test_debit_computes_touch_exit_pnl` → `touch_exit_pnl` is not None for `DebitVerticalPlugin` ✓
+- `test_credit_touch_exit_pnl_is_none` → `touch_exit_pnl` is None for `VerticalPlugin` ✓
+- `test_credit_baseline_touch_exit_pnl_is_none` → `baseline_touch_exit_pnl` also None for credit ✓
+
+**Decisions recorded in this step:**
+- Decision #5: mirrored three-zone payoff — per-leg sign convention handles both structures; only `close_zone()` logic differs between credit and debit
+- Decision #6: asymmetric outcomes — debit computes touch-exit P&L (touch = WIN); credit sets `touch_exit_pnl = None` (touch = breach diagnostic only)
+- Decision #12: two-axis tagging fields added to `TradeResult` (`pattern_label`, `reversion_wilson_lo`, `continuation_wilson_lo`); populated at write time in Step 4
+- Edge formula fix: `abs(net_credit)` in denominator prevents sign error that inflated debit edge

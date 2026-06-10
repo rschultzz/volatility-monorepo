@@ -1,7 +1,7 @@
 """BacktestHarness — structure-agnostic runner for per-date trade evaluation."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Optional
 
@@ -12,7 +12,6 @@ from packages.shared.backtest.models import (
     TradeResult,
 )
 from packages.shared.backtest.plugins.protocol import BacktestPlugin
-from packages.shared.strategy_templates import Leg
 
 
 @dataclass
@@ -122,7 +121,9 @@ class BacktestHarness:
                 continue
 
             net_credit = -pos_val
-            edge = trade_input.structural_prob - (net_credit / trade_input.spread_width)
+            # abs(): market-implied P(win) = |net_credit| / width for both structures.
+            # For credit, net_credit > 0; for debit, net_credit < 0. abs() normalises.
+            edge = trade_input.structural_prob - (abs(net_credit) / trade_input.spread_width)
             scan_rows.append(EntryMinuteScan(
                 snapshot_pt=snap_pt,
                 net_position_value=pos_val,
@@ -147,6 +148,9 @@ class BacktestHarness:
         touch_window_scan: list[tuple[datetime, QuoteMap]],
         trade_input: TradeInput,
     ) -> tuple[Optional[float], Optional[datetime]]:
+        # Decision #6: credit plugin records touch as breach diagnostic only.
+        if not self.plugin.touch_exit_is_meaningful:
+            return None, None
         if not filled or touch_datetime is None:
             return None, None
 
@@ -174,7 +178,7 @@ class BacktestHarness:
         fill_credit = fill_snap[1]  # type: ignore[index]
         payoff_val = self.plugin.payoff(trade_input.legs, settlement_price)
         close_pnl = fill_credit + payoff_val
-        zone = _close_zone(trade_input.legs, settlement_price)
+        zone = self.plugin.close_zone(trade_input.legs, settlement_price)
         return close_pnl, zone
 
     def _baseline_outcomes(
@@ -192,7 +196,8 @@ class BacktestHarness:
         baseline_touch_exit_pnl: Optional[float] = None
         baseline_close_pnl: Optional[float] = None
 
-        if touch_datetime is not None:
+        # Decision #6: credit has no meaningful touch-exit P&L.
+        if self.plugin.touch_exit_is_meaningful and touch_datetime is not None:
             for snap_pt, qmap in touch_window_scan:
                 if snap_pt >= touch_datetime:
                     pos_val = self.plugin.net_price(trade_input.legs, qmap)
@@ -207,24 +212,3 @@ class BacktestHarness:
         return baseline_touch_exit_pnl, baseline_close_pnl
 
 
-def _close_zone(legs: list[Leg], settlement_price: float) -> str:
-    """Three-zone settlement classification for a credit vertical spread.
-
-    Zones are defined by settlement_price vs the lower and upper strikes:
-      max_profit  — S ≤ lower strike (both legs OTM for credit call spread)
-      partial_loss — lower < S < upper
-      max_loss    — S ≥ upper strike (both legs ITM for credit call spread)
-
-    Note: zone names reflect credit-spread semantics. For a debit spread,
-    'max_profit' and 'max_loss' are structurally reversed but the geometry
-    (below/between/above) is correct in both cases.
-    """
-    strikes = sorted(set(l.strike for l in legs))
-    if len(strikes) < 2:
-        return "unknown"
-    low, high = strikes[0], strikes[-1]
-    if settlement_price <= low:
-        return "max_profit"
-    if settlement_price < high:
-        return "partial_loss"
-    return "max_loss"
