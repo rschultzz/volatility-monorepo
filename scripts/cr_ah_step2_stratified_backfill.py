@@ -100,8 +100,8 @@ from packages.shared.backtest.models import distance_band
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 
-DRY_RUN: bool = True            # flip to False for production runs
-REBACKFILL_B_ONLY: bool = False  # True = re-backfill only B-bucket (wrong-expiry) dates
+DRY_RUN: bool = False           # flip to False for production runs
+REBACKFILL_B_ONLY: bool = True   # True = re-backfill only B-bucket (wrong-expiry) dates
 
 # When DRY_RUN=True, probe-fetch the first N dates (actually calls ORATS + reads back).
 # Remaining dry-run dates print plan only. Set to 0 to skip probe entirely.
