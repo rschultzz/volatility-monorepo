@@ -309,3 +309,124 @@ ORATS does cover most of the D-bucket expiries under "SPX" root. What actually h
 17 of those 30 are confirmed ORATS-available at the correct expiry+strike. These can be recovered by a targeted re-backfill (fix `_PREVIOUSLY_SKIPPED_404` to only include dates where `blind==aware`, then run the filter-miss dates at their correct expiry).
 
 Decision to user: authorize the targeted 17-date re-backfill? If yes, effective clean sample grows from A=94 to A=111, holdout from 18 to 26.
+
+---
+
+## Still-404 deep diagnostic (read-only, 2026-06-09)
+
+### The 13 filter-miss dates that 404'd at correct expiry
+
+Of the 30 filter-miss dates (blind≠aware in `_PREVIOUSLY_SKIPPED_404`): 17 returned HTTP 200, 13 returned HTTP 404. This diagnostic investigates whether the 13 are genuinely unrecoverable.
+
+**The 13 still-404 dates** (correct expiry, proposed short_strike in parens):
+
+| Date | Cell | Correct expiry | Short strike |
+|---|---|---|---|
+| 2024-05-22 | far/train | 2024-06-13 | 5405 |
+| 2024-07-01 | far/train | 2024-07-23 | 5585 |
+| 2025-01-06 | far/train | 2025-01-29 | 6065 |
+| 2025-02-04 | far/train | 2025-02-26 | 6205 |
+| 2025-02-11 | far/train | 2025-03-05 | 6185 |
+| 2025-05-12 | far/train | 2025-06-03 | 5805 |
+| 2025-06-04 | mid/train | 2025-06-26 | 6055 |
+| 2025-08-18 | mid/holdout | 2025-09-09 | 6505 |
+| 2025-08-25 | mid/holdout | 2025-09-16 | 6505 |
+| 2026-01-06 | far/holdout | 2026-01-28 | 7005 |
+| 2026-01-07 | mid/holdout | 2026-01-29 | 7005 |
+| 2026-01-13 | mid/holdout | 2026-02-04 | 7045 |
+| 2026-02-03 | mid/holdout | 2026-02-25 | 7055 |
+
+### Contradiction check — orats_monies_minute
+
+`orats_monies_minute` has fitted surface rows for EVERY one of the 13 dates at the EXACT (signal_trade_date, correct_expiry) pair:
+
+| Date | Correct expiry | Monies rows at (trade_date, expiry) |
+|---|---|---|
+| 2024-05-22 | 2024-06-13 | **387** |
+| 2024-07-01 | 2024-07-23 | **390** |
+| 2025-01-06 | 2025-01-29 | **390** |
+| 2025-02-04 | 2025-02-26 | **389** |
+| 2025-02-11 | 2025-03-05 | **388** |
+| 2025-05-12 | 2025-06-03 | **391** |
+| 2025-06-04 | 2025-06-26 | **389** |
+| 2025-08-18 | 2025-09-09 | **391** |
+| 2025-08-25 | 2025-09-16 | **391** |
+| 2026-01-06 | 2026-01-28 | **391** |
+| 2026-01-07 | 2026-01-29 | **391** |
+| 2026-01-13 | 2026-02-04 | **391** |
+| 2026-02-03 | 2026-02-25 | **391** |
+
+The fitted surface EXISTS for all 13. The contract was tracked by ORATS on those dates.
+
+### Strike-grid test
+
+All 13 proposed short strikes (5405, 5585, 6065, 6205, 6185, 5805, 6055, 6505, 6505, 7005, 7005, 7045, 7055) are multiples of 5 — valid SPX listed strike spacings. Strike-grid is NOT the cause.
+
+The ORATS chain endpoint (per-minute strike snapshot) 404s for all 13 dates even when queried at the exact trade_date that monies covers. Adjacent dates (±1-2 trading days) also 404 from the option endpoint. ORATS did not capture per-minute chain snapshots for these (expiry, trade_date) combinations.
+
+### Root cause of the 13 still-404
+
+**ORATS provides two distinct data products with different coverage:**
+
+1. **`orats_monies_minute`** (fitted volatility surface parameters): Broad coverage — ORATS extrapolates the surface from whatever near-the-money data it has. All 13 expiry/date pairs are present (~387-391 rows).
+
+2. **ORATS per-minute strike bars** (option endpoint, what feeds `orats_options_minute`): Sparse coverage — requires ORATS to have captured actual order-book snapshots at that minute. All 13 return 404.
+
+The existence of monies data does NOT guarantee per-minute strike bars exist. The user's statement "ORATS fits surfaces FROM the chain" is true in aggregate, but ORATS can produce a monies surface from partial data and extrapolate; the per-minute bars at specific strikes require explicit capture.
+
+### Classification: ALL 13 are GENUINE
+
+- **OFF_GRID: 0** — all proposed strikes are valid 5pt SPX grid strikes
+- **EXPIRY_NOT_LISTED: 0** — all correct expiries confirmed real (monies data present)  
+- **GENUINE: 13** — ORATS per-minute bar coverage gap; surface exists but bars were never captured for these specific (trade_date, expiry) combinations
+
+No fix to strike selection, expiry resolution, root symbol, or API parameters can recover these 13. The ORATS per-minute bar product simply did not capture those contracts on those dates.
+
+### 17 recoverable dates — validation
+
+All 17 tested with the ORIGINAL drift_target → short_strike values from the backfill log:
+
+| Date | Cell | Correct expiry | Short strike | ORATS status |
+|---|---|---|---|---|
+| 2023-05-18 | near/train | 2023-06-09 | 4205 | HTTP 200, 391 rows |
+| 2023-05-11 | mid/train | 2023-06-02 | 4205 | HTTP 200, 391 rows |
+| 2023-05-25 | far/train | 2023-06-16 | 4300 | HTTP 200, 602 rows |
+| 2024-05-23 | mid/train | 2024-06-14 | 5405 | HTTP 200, 391 rows |
+| 2024-06-12 | far/train | 2024-07-05 | 5425 | HTTP 200, 391 rows |
+| 2024-06-24 | far/train | 2024-07-16 | 5575 | HTTP 200, 391 rows |
+| 2024-08-15 | far/train | 2024-09-06 | 5560 | HTTP 200, 391 rows |
+| 2024-11-12 | near/train | 2024-12-04 | 6055 | HTTP 200, 391 rows |
+| 2025-06-11 | near/train | 2025-07-03 | 6075 | HTTP 200, 391 rows |
+| 2025-08-19 | mid/holdout | 2025-09-10 | 6525 | HTTP 200, 391 rows |
+| 2025-08-21 | far/holdout | 2025-09-12 | 6515 | HTTP 200, 391 rows |
+| 2025-12-09 | far/holdout | 2025-12-31 | 6975 | HTTP 200, 391 rows |
+| 2025-12-17 | far/holdout | 2026-01-09 | 6975 | HTTP 200, 391 rows |
+| 2026-01-29 | near/holdout | 2026-02-20 | 7055 | HTTP 200, 782 rows |
+| 2026-02-12 | mid/holdout | 2026-03-06 | 7045 | HTTP 200, 391 rows |
+| 2026-05-19 | mid/holdout | 2026-06-10 | 7525 | HTTP 200, 391 rows |
+| 2026-05-21 | near/holdout | 2026-06-12 | 7525 | HTTP 200, 391 rows |
+
+All 17 PASS: correct expiry + correct original strike → HTTP 200 from ORATS. All strikes are on the 5pt SPX grid. The re-backfill will use the same strikes the original backfill would have used — no width/edge recalculation needed.
+
+### Final D-bucket decomposition
+
+| Bucket | Count | Definition |
+|---|---|---|
+| Filter-miss recoverable | **17** | Correct expiry never tried; ORATS has per-minute bars → HTTP 200 at proposed strike |
+| GENUINE unrecoverable | **35** | ORATS per-minute bar coverage absent (13 filter-miss + 22 blind-eq-aware) |
+| **Total D** | **52** | |
+
+Total recoverable from all diagnostics: **17** (no increase from prior estimate — the 13 are genuinely unrecoverable).
+
+Recovery impact (unchanged):
+
+| Cell | Current A | After +17 | New % |
+|---|---|---|---|
+| near/train | 28 | 31 | 91% |
+| near/holdout | 7 | 9 | 56% |
+| mid/train | 25 | 27 | 87% |
+| mid/holdout | 8 | 11 | 58% |
+| far/train | 23 | 27 | 68% |
+| far/holdout | 3 | 6 | 60% |
+| **Train total** | **76** | **93** | **88%** |
+| **Holdout total** | **18** | **26** | **59%** |
