@@ -169,3 +169,60 @@ Still-thin cells (D-bucket problem, NOT solved by this fix):
 - **mid/holdout: n=8**, **near/holdout: n=7** — usable but CI will be wide.
 
 The D-bucket gap (43 original + 9 reclassified = 52 total) reflects ORATS coverage holes for specific expiry/strike combinations — not a calc bug and not recoverable.
+
+---
+
+## D-bucket root cause diagnostic (read-only, 2026-06-09)
+
+### Resolution function audit
+
+`nth_business_day()` at `scripts/cr_ah_step2_stratified_backfill.py:204` **does not snap to specific weekdays**. It counts M–F business days (excluding `_NYSE_HOLIDAYS`) and returns whatever calendar date that lands on. No M/W/F filter, no listed-expiry snap. Since SPX has had daily M–F expirations since ~May 2022, every weekday in 2023–2026 is a real listed SPX expiry — the raw business-day offset always resolves to a valid contract cycle. The live path's stale `_SPX_EXPIRY_WEEKDAYS = {0,2,4}` filter in `pricing.py` is NOT present in the backfill.
+
+### D1 / D2a / D2b classification
+
+For each of the 52 D-dates, query: does ORATS have ANY SPX OPRA with `expir_date_d` = correct expiry (any trade date, any strike)? If yes → D1 (cycle present, our strike absent). If no → D2 (whole cycle absent). D2 subclassified by whether the expiry date is a real weekday.
+
+| Bucket | Definition | Total |
+|---|---|---|
+| **D1** | Cycle present in ORATS (other strikes exist for that expiry); our specific proposed strike(s) absent | **17** |
+| **D2a** | Whole expiry cycle absent from ORATS; expiry IS a real M–F weekday (SPX expiry that existed in reality) | **35** |
+| **D2b** | Whole expiry cycle absent; expiry is NOT a real SPX expiry (resolution bug) | **0** |
+
+By band × split:
+
+| Cell | D1 | D2a | D2b | Total D |
+|---|---|---|---|---|
+| near/train | 1 | 4 | 0 | 5 |
+| near/holdout | 3 | 6 | 0 | 9 |
+| mid/train | 3 | 2 | 0 | 5 |
+| mid/holdout | 4 | 6 | 0 | 10 |
+| far/train | 5 | 11 | 0 | 16 |
+| far/holdout | 1 | 6 | 0 | 7 |
+| **Total** | **17** | **35** | **0** | **52** |
+
+### D2b = 0 — no resolution bug
+
+The "Thursday expirations absent" hypothesis in the Step 2 diagnostic was **wrong**. The D2a expiry weekday distribution is Mon=6, Tue=7, Wed=12, Thu=5, Fri=5 — all weekdays affected, Wednesdays most common. The issue is structural ORATS coverage, not a specific cycle type. ORATS covers only **317 of 1,003 SPX-eligible business days (31.6%)** in 2023–2026. The D2a dates are simply hitting the 68% of cycles where ORATS has no data.
+
+### D1 pattern — strike range vs. far-OTM proposals
+
+For the 17 D1 dates, the expiry cycle exists in ORATS but at a strike range that doesn't include our proposed strikes. For example:
+- `2024-09-06` far/train: ORATS has calls at strikes 5370–5485 (12 distinct); our far-train proposal targets ~5570+ → outside ORATS' captured range.
+- `2025-02-26` far/train: ORATS has calls at 5940–6020; our proposal targets ~6200+.
+- Some cases have only 1 strike in ORATS at a very different level (e.g., `2023-11-10` expiry 2023-12-04: only strike 4510 = our short; long at 4520 is absent).
+
+Pattern: **far-magnet proposals are systematically more likely to be D1** because the proposed strikes are further OTM than what ORATS captures for that cycle.
+
+### 2023-11-01 anomaly
+
+`2023-11-01` (far/train, expiry=2023-11-22 Wed) has no ORATS data for that expiry and no nearby expiries within ±7 days. ORATS data shows a complete gap for all SPX expiry cycles between `2023-11-03` and `2023-12-01` — a 4-week systematic absence in the ORATS DB for this date range. Classified D2a (real expiry, ORATS structural hole).
+
+### Verdict
+
+**D is overwhelmingly genuine and unrecoverable from ORATS.**
+
+- D2b = 0: no third expiry-resolution bug. `nth_business_day()` is correct.
+- D1 = 17: ORATS has the cycle at other strikes; our specific far-OTM strikes aren't covered. Unrecoverable from ORATS without changing strike selection.
+- D2a = 35: ORATS covers only 32% of SPX expiry cycles. These 35 dates hit systematic ORATS coverage holes. Real trades existed; ORATS simply never captured them.
+
+No change to expiry resolution would recover any D-bucket date. The only paths are: (1) accept D as unrecoverable from ORATS and proceed to Step 3 with n=94 clean dates, or (2) source missing cycles from Databento/other provider (separate CR scope).
