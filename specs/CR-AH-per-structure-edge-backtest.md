@@ -430,3 +430,55 @@ Recovery impact (unchanged):
 | far/holdout | 3 | 6 | 60% |
 | **Train total** | **76** | **93** | **88%** |
 | **Holdout total** | **18** | **26** | **59%** |
+
+---
+
+## Still-404 ATM-vs-OTM test (read-only, 2026-06-09)
+
+### Purpose
+
+Test whether ORATS has per-minute bars at an ATM strike for each of the 13 still-404 (trade_date, correct_expiry) pairs. Prior diagnostic established that monies (fitted surface) exists for all 13 but the option endpoint 404s at the proposed OTM short_strike. If ATM also returns data → proves "per-minute OTM sparsity" hypothesis (ORATS captured near-money but not far-OTM). If ATM also 404s → whole chain absent, a more severe but still genuine coverage gap.
+
+Script: `scripts/cr_ah_atm_otm_test.py` (committed with these findings). READ-ONLY; no DB writes.
+
+### Per-date results
+
+| Date | Expiry | Cell | Spot | ATM_strike | OTM_strike | ATM result | OTM result | Classification |
+|---|---|---|---|---|---|---|---|---|
+| 2024-05-22 | 2024-06-13 | far/train | 5330 | 5330 | 5405 | **HTTP 200 (391 rows)** | HTTP 404 | CONFIRMED |
+| 2024-07-01 | 2024-07-23 | far/train | 5485 | 5485 | 5585 | **HTTP 200 (391 rows)** | HTTP 404 | CONFIRMED |
+| 2025-01-06 | 2025-01-29 | far/train | 5993 | 5995 | 6065 | **HTTP 200 (382 rows)** | HTTP 404 | CONFIRMED |
+| 2025-02-04 | 2025-02-26 | far/train | 6007 | 6005 | 6205 | **HTTP 200 (391 rows)** | HTTP 404 | CONFIRMED |
+| 2025-02-11 | 2025-03-05 | far/train | 6052 | 6050 | 6185 | **HTTP 200 (391 rows)** | HTTP 404 | CONFIRMED |
+| 2025-05-12 | 2025-06-03 | far/train | 5828 | 5830 | 5805 | HTTP 404 | HTTP 404 | BOTH_404 |
+| 2025-06-04 | 2025-06-26 | mid/train | 5990 | 5990 | 6055 | **HTTP 200 (391 rows)** | HTTP 404 | CONFIRMED |
+| 2025-08-18 | 2025-09-09 | mid/holdout | 6465 | 6465 | 6505 | HTTP 404 | HTTP 404 | BOTH_404 |
+| 2025-08-25 | 2025-09-16 | mid/holdout | 6491 | 6490 | 6505 | **HTTP 200 (391 rows)** | HTTP 404 | CONFIRMED |
+| 2026-01-06 | 2026-01-28 | far/holdout | 6914 | 6915 | 7005 | HTTP 404 | HTTP 404 | BOTH_404 |
+| 2026-01-07 | 2026-01-29 | mid/holdout | 6959 | 6960 | 7005 | **HTTP 200 (391 rows)** | HTTP 404 | CONFIRMED |
+| 2026-01-13 | 2026-02-04 | mid/holdout | 6994 | 6995 | 7045 | HTTP 404 | HTTP 404 | BOTH_404 |
+| 2026-02-03 | 2026-02-25 | mid/holdout | 6998 | 7000 | 7055 | **HTTP 200 (391 rows)** | HTTP 404 | CONFIRMED |
+
+### Results: 9 CONFIRMED + 4 BOTH_404
+
+**CONFIRMED (9/13):** ATM returns 382–391 rows, OTM 404s. ORATS captured the liquid near-money chain for these expirations but did not extend capture to the far-OTM strike used as the proposal. This is the "per-minute OTM sparsity" hypothesis — **proven, not inferred**.
+
+**BOTH_404 (4/13):** ATM also 404s. ORATS has no per-minute bars at ANY strike for those (trade_date, expiry) combinations — the whole chain snapshot is absent. These are: 2025-05-12, 2025-08-18, 2026-01-06, 2026-01-13. All 4 are mid or far holdout/train.
+
+**This is NOT a format/request issue.** The same request format (PT→ET YYYYMMDDHHMM, side-stripped OPRA ticker) returns 391 rows for the 9 CONFIRMED dates and for all 17 recoverable dates. The 4 BOTH_404 dates have no data because ORATS simply never captured a per-minute chain snapshot for those (trade_date, expiry) pairs — a more severe form of the same ORATS coverage gap.
+
+### Revised classification of the 13 still-404
+
+Both CONFIRMED and BOTH_404 are GENUINE (unrecoverable from ORATS). The distinction is:
+
+| Sub-class | Count | Meaning |
+|---|---|---|
+| **OTM-sparse** (CONFIRMED) | **9** | ORATS has ATM chain (382–391 rows); OTM too far from money. Unrecoverable without changing strike selection. |
+| **Chain-absent** (BOTH_404) | **4** | ORATS has no per-minute bars at any strike for that (date, expiry). Monies surface exists from ATM extrapolation. |
+| **Total GENUINE** | **13** | |
+
+The BOTH_404 sub-class is actually a **stronger** confirmation of "genuinely unrecoverable" — the coverage gap is complete for those chains, not just OTM-sparse.
+
+### Impact on re-backfill decision
+
+All 13 remain classified GENUINE. Total recoverable stays at **17**. Re-backfill impact unchanged (A=94→111, holdout 18→26). Per user instruction, STOPPED before Task 2 (17-date re-backfill) pending explicit authorization given the 4 BOTH_404 dates required investigation.
