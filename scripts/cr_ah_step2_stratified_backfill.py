@@ -102,11 +102,14 @@ from packages.shared.backtest.models import distance_band
 
 DRY_RUN: bool = False                  # flip to False for production runs
 REBACKFILL_B_ONLY: bool = False         # True = re-backfill only B-bucket (wrong-expiry) dates
-REBACKFILL_FILTER_MISS_ONLY: bool = True  # True = re-backfill the 17 filter-miss recoverable dates
+REBACKFILL_FILTER_MISS_ONLY: bool = False  # True = re-backfill the 17 filter-miss recoverable dates
+TARGET_MINUS_10: bool = True            # True = Step 2.5: backfill debit long leg (target-10)
+                                        #        for all A-bucket clean dates.
+                                        #        Supersedes REBACKFILL_* when set.
 
 # When DRY_RUN=True, probe-fetch the first N dates (actually calls ORATS + reads back).
 # Remaining dry-run dates print plan only. Set to 0 to skip probe entirely.
-PROBE_FETCH_COUNT: int = 1
+PROBE_FETCH_COUNT: int = 2
 
 TARGET_PER_BAND: int = 50       # stride-select this many per band
 SPLIT_DATE = date(2025, 8, 12)
@@ -284,6 +287,89 @@ def stride_select(entries: list, target: int = 50) -> list:
     return [entries[int(i * step)] for i in range(target)]
 
 
+def load_clean_a_dates(conn, all_entries: list[dict]) -> list[dict]:
+    """Filter to A-bucket dates: both credit legs (target + target+10) have entry-day bars.
+
+    Queries orats_options_minute per date to confirm actual data presence.
+    Used by TARGET_MINUS_10 mode to determine which dates to backfill target-10 for.
+
+    Returns a list of entry dicts extended with:
+        short_opra, long_opra, expiry_date  (credit legs, for reference)
+    """
+    if not all_entries:
+        return []
+
+    print(
+        f"\nA-bucket check: querying entry-day bar presence for {len(all_entries)} dates...",
+        flush=True,
+    )
+    clean: list[dict] = []
+    skipped: dict[str, int] = {"no_short": 0, "no_long": 0, "no_both": 0}
+
+    for i, entry in enumerate(all_entries):
+        if i % 30 == 0:
+            print(f"  checking {i}/{len(all_entries)}...", flush=True)
+
+        trade_date   = entry["trade_date"]
+        drift_target = entry["drift_target"]
+        short_strike = float(round_to_5pt(drift_target))
+        long_strike  = short_strike + 10.0
+        expiry_date  = nth_business_day(trade_date, DTE_TARGET)
+
+        short_opra = format_opra(OPRA_ROOT, expiry_date, "C", short_strike)
+        long_opra  = format_opra(OPRA_ROOT, expiry_date, "C", long_strike)
+
+        entry_start_pt = datetime(
+            trade_date.year, trade_date.month, trade_date.day, 6, 30
+        )
+        entry_end_pt   = datetime(
+            trade_date.year, trade_date.month, trade_date.day, 13, 0
+        )
+
+        row = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN opra_symbol = %s THEN 1 ELSE 0 END) > 0 AS has_short,
+                SUM(CASE WHEN opra_symbol = %s THEN 1 ELSE 0 END) > 0 AS has_long
+            FROM orats_options_minute
+            WHERE opra_symbol = ANY(%s)
+              AND snapshot_pt >= %s AND snapshot_pt < %s
+            """,
+            (
+                short_opra, long_opra,
+                [short_opra, long_opra],
+                entry_start_pt, entry_end_pt,
+            ),
+        ).fetchone()
+
+        has_short = bool(row[0]) if row else False
+        has_long  = bool(row[1]) if row else False
+
+        if has_short and has_long:
+            clean.append({
+                **entry,
+                "short_opra":  short_opra,
+                "long_opra":   long_opra,
+                "expiry_date": expiry_date,
+            })
+        else:
+            if not has_short and not has_long:
+                skipped["no_both"] += 1
+            elif not has_short:
+                skipped["no_short"] += 1
+            else:
+                skipped["no_long"] += 1
+
+    print(
+        f"  A-bucket: {len(clean)} clean dates, "
+        f"skipped {sum(skipped.values())} "
+        f"(no_short={skipped['no_short']}, no_long={skipped['no_long']}, "
+        f"no_both={skipped['no_both']})",
+        flush=True,
+    )
+    return clean
+
+
 # ── TOUCH RESOLUTION ─────────────────────────────────────────────────────────
 
 def _classify_touch(
@@ -428,12 +514,19 @@ def backfill_date(
     conn,
     dry_run: bool = True,
     probe_fetch: bool = False,
+    leg_offset: int = 10,
 ) -> dict:
     """Backfill one signal date's option quotes.
 
     dry_run=True, probe_fetch=False  — plan only (no fetches).
     dry_run=True, probe_fetch=True   — plan + real fetches + read-back verification.
     dry_run=False                    — plan + real fetches (normal production path).
+
+    leg_offset=+10 (default): credit structure — fetch both short (target) and
+        long (target+10).  This is the original backfill mode.
+    leg_offset=-10: debit structure (TARGET_MINUS_10) — fetch ONLY the offset leg
+        (target-10). The target leg is already in orats_options_minute; fetching it
+        again is harmless (idempotent cache hit) but wasteful, so skip it.
     """
     trade_date  = entry["trade_date"]
     drift_target = entry["drift_target"]
@@ -441,16 +534,20 @@ def backfill_date(
     partition   = entry["partition"]
 
     # ── Strikes (round to nearest 5pt listed SPX strike) ──────────────────────
-    short_strike = float(round_to_5pt(drift_target))
-    long_strike  = short_strike + 10.0
+    short_strike  = float(round_to_5pt(drift_target))
+    offset_strike = short_strike + float(leg_offset)   # +10 = credit long; -10 = debit long
 
     # ── Expiry resolution: 15th business day from signal date ─────────────────
     expiry_date = nth_business_day(trade_date, DTE_TARGET)
 
     # ── OPRA symbols (call side — magnet-above vertical is a call spread) ─────
-    short_opra = format_opra(OPRA_ROOT, expiry_date, "C", short_strike)
-    long_opra  = format_opra(OPRA_ROOT, expiry_date, "C", long_strike)
-    opras = [short_opra, long_opra]
+    short_opra  = format_opra(OPRA_ROOT, expiry_date, "C", short_strike)
+    offset_opra = format_opra(OPRA_ROOT, expiry_date, "C", offset_strike)
+    # Credit (leg_offset>0): fetch both legs.
+    # Debit long only (leg_offset<0): target is already backfilled; fetch only the new leg.
+    opras = [offset_opra] if leg_offset < 0 else [short_opra, offset_opra]
+    long_strike = offset_strike  # keep naming consistent for result dict
+    long_opra   = offset_opra
 
     # ── Entry-day window: full RTH 06:30–13:00 PT ─────────────────────────────
     entry_start_pt = datetime(trade_date.year, trade_date.month, trade_date.day, 6, 30)
@@ -507,7 +604,10 @@ def backfill_date(
         f"σ={entry['sigma']:.2f}  expiry={expiry_date}",
         flush=True,
     )
-    print(f"    short={short_opra}  long={long_opra}", flush=True)
+    if leg_offset < 0:
+        print(f"    debit_long={offset_opra}  strike={offset_strike:.0f}  (target={short_strike:.0f} already backfilled)", flush=True)
+    else:
+        print(f"    short={short_opra}  long={long_opra}", flush=True)
     print(f"    entry-day:   {entry_start_pt:%H:%M}–{entry_end_pt:%H:%M} PT on {trade_date}", flush=True)
 
     if touch_utc is None:
@@ -771,13 +871,29 @@ def main() -> None:
         key=lambda x: x["trade_date"],
     )
 
+    # ── Mode selection: TARGET_MINUS_10 supersedes REBACKFILL_* ──────────────
+    leg_offset_value: int = 10  # default: credit long leg (+10)
+
+    # ── TARGET_MINUS_10: A-bucket clean dates → backfill debit long leg ───────
+    # Queries orats_options_minute to confirm which selected dates have BOTH
+    # credit legs (target + target+10). Then backfills only the new leg (target-10)
+    # for each of those dates. Target is already in the cache; fetch is idempotent.
+    if TARGET_MINUS_10:
+        all_selected = load_clean_a_dates(conn, all_selected)
+        leg_offset_value = -10
+        print(
+            f"\nTARGET_MINUS_10: {len(all_selected)} A-bucket dates → "
+            f"backfilling debit long leg (target-10) for each.",
+            flush=True,
+        )
+
     # ── REBACKFILL_B_ONLY: filter to B-bucket dates ───────────────────────────
     # B-bucket = selected dates where the holiday-aware expiry differs from the
     # blind expiry (holiday in positions 1-14) AND the date was previously fetched
     # (not in the 47 known-404 list). These dates have wrong-expiry bars in
     # orats_options_minute; re-fetching with the corrected expiry writes new
     # (correct) OPRA symbols without conflicting with the old ones.
-    if REBACKFILL_B_ONLY:
+    elif REBACKFILL_B_ONLY:
         b_bucket = [
             e for e in all_selected
             if _blind_nth_weekday(e["trade_date"], DTE_TARGET)
@@ -856,8 +972,12 @@ def main() -> None:
 
     # ── Process: dry-run = first 3 (with probe for first N); full = all ────────
     to_process = all_selected[:3] if DRY_RUN else all_selected
-    if DRY_RUN:
+    if DRY_RUN and TARGET_MINUS_10:
+        mode = f"TARGET_MINUS_10 DRY-RUN (first 3 of {len(all_selected)} A-bucket dates)"
+    elif DRY_RUN:
         mode = "DRY-RUN (first 3 dates)"
+    elif TARGET_MINUS_10:
+        mode = f"TARGET_MINUS_10 FULL ({len(to_process)} A-bucket dates)"
     elif REBACKFILL_B_ONLY:
         mode = f"REBACKFILL B-ONLY ({len(to_process)} dates)"
     elif REBACKFILL_FILTER_MISS_ONLY:
@@ -875,7 +995,12 @@ def main() -> None:
         for i, entry in enumerate(to_process):
             print(f"\n[{i+1}/{len(to_process)}]", flush=True)
             do_probe = DRY_RUN and i < PROBE_FETCH_COUNT
-            result = backfill_date(entry, conn, dry_run=DRY_RUN, probe_fetch=do_probe)
+            result = backfill_date(
+                entry, conn,
+                dry_run=DRY_RUN,
+                probe_fetch=do_probe,
+                leg_offset=leg_offset_value,
+            )
             results.append(result)
             if do_probe:
                 probe_results.append(result)
@@ -890,8 +1015,14 @@ def main() -> None:
             res = r.get("touch_resolution", "unknown")
             touch_counts[res] = touch_counts.get(res, 0) + 1
 
+        _run_mode = (
+            "target_minus_10_dry" if (DRY_RUN and TARGET_MINUS_10)
+            else "target_minus_10_full" if TARGET_MINUS_10
+            else "dry_run" if DRY_RUN
+            else "full_run"
+        )
         smoke = {
-            "mode": "dry_run" if DRY_RUN else "full_run",
+            "mode": _run_mode,
             "probe_fetch_count": len(probe_results),
             "dates_processed": len(results),
             "dates_skipped_404": len(skipped_404),
