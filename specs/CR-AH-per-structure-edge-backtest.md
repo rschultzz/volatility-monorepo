@@ -775,3 +775,34 @@ Edge formula (debit): `structural_prob − abs(net_credit)/width = 0.60 − 1.50
 **Characterization of the 4 recoverable dates:** all 2023–2024 train-set; none in holdout or 2025+. The target+10 leg 404'd (far-OTM coverage gap) but target-10 has full 391-row coverage. These are genuine credit-only casualties recoverable for debit.
 
 **Decision pending:** the 3 far/train recoverable dates exceed the "more than ~1–2, especially in far" threshold. Awaiting authorization to run a 4-date target-10 backfill before Step 4 (OR to proceed with the asymmetric n=106 credit / n=110 debit sample).
+
+---
+
+### Step 2.5c — 4-date debit recovery backfill — 2026-06-10
+
+**Script:** `TARGET_MINUS_10_RECOVERY` mode added to `scripts/cr_ah_step2_stratified_backfill.py`.
+**Safety:** `BACKFILL_DATABASE_URL` / `dash_backfill_writer` / `backfill_run` / `record_empty_windows=True` — same as all prior runs.
+
+**Run result:** 4/4 fetched, 0 skipped_404, 3,582 bars written.
+- `SPX231002C04640000` (2023-09-11 far/train, strike=4640): 390 entry-day bars ✓ — no_touch
+- `SPX231204C04500000` (2023-11-10 far/train, strike=4500): 390 entry-day bars ✓ — rth_touch
+- `SPX240716C05565000` (2024-06-24 far/train, strike=5565): 390 entry-day bars ✓ — rth_touch
+- `SPX241204C06045000` (2024-11-12 near/train, strike=6045): 390 entry-day bars ✓ — rth_touch
+
+**Final per-structure coverage (data layer complete):**
+
+| band | split | credit n | debit n | both n | delta |
+|---|---|---|---|---|---|
+| near | train | 31 | **32** | 31 | +1 debit-only |
+| near | holdout | 9 | 9 | 9 | — |
+| mid | train | 27 | 27 | 27 | — |
+| mid | holdout | 9 | 9 | 9 | — |
+| far | train | 25 | **28** | 25 | +3 debit-only |
+| far | holdout | 5 | 5 | 5 | — |
+| **TOTAL** | | **106** | **110** | **106** | **+4 debit** |
+
+**Holdout confirmed unchanged:** credit=23, debit=23 — the recovery is train-only, as expected.
+
+**Binding constraint (unchanged):** far/holdout = **5** for both structures. This is the underpowered cell that limits the out-of-sample verdict regardless of the train recovery. Step 4 must flag this cell's CIs as wide and treat its result as underpowered.
+
+**Data layer is complete.** Step 4 (two-structure × two-axis reporting) can now proceed.

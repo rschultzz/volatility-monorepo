@@ -103,9 +103,12 @@ from packages.shared.backtest.models import distance_band
 DRY_RUN: bool = False                  # flip to False for production runs
 REBACKFILL_B_ONLY: bool = False         # True = re-backfill only B-bucket (wrong-expiry) dates
 REBACKFILL_FILTER_MISS_ONLY: bool = False  # True = re-backfill the 17 filter-miss recoverable dates
-TARGET_MINUS_10: bool = True            # True = Step 2.5: backfill debit long leg (target-10)
+TARGET_MINUS_10: bool = False           # True = Step 2.5: backfill debit long leg (target-10)
                                         #        for all A-bucket clean dates.
                                         #        Supersedes REBACKFILL_* when set.
+TARGET_MINUS_10_RECOVERY: bool = True   # True = Step 2.5c: backfill target-10 for the 4 debit-
+                                        #        recoverable dates identified in Step 2.5b.
+                                        #        Supersedes TARGET_MINUS_10 and REBACKFILL_* when set.
 
 # When DRY_RUN=True, probe-fetch the first N dates (actually calls ORATS + reads back).
 # Remaining dry-run dates print plan only. Set to 0 to skip probe entirely.
@@ -222,6 +225,17 @@ _FILTER_MISS_RECOVERABLE: frozenset[date] = frozenset({
     date(2023, 5, 25), date(2024, 6, 12), date(2024, 6, 24), date(2024, 8, 15),
     # far/holdout (3)
     date(2025, 8, 21), date(2025, 12, 9), date(2025, 12, 17),
+})
+
+# ── STEP 2.5c DEBIT RECOVERY: 4 dates where target+10 404'd but target-10 exists ──
+# Identified by Step 2.5b probe: target is present in orats_options_minute,
+# target+10 (credit long) 404'd on ORATS, target-10 (debit long) returns 391 rows.
+# All are train-set dates (2023–2024); no holdout dates recoverable.
+_DEBIT_RECOVERY_DATES: frozenset[date] = frozenset({
+    date(2023,  9, 11),   # far/train   target=4650  debit_long=4640
+    date(2023, 11, 10),   # far/train   target=4510  debit_long=4500
+    date(2024,  6, 24),   # far/train   target=5575  debit_long=5565
+    date(2024, 11, 12),   # near/train  target=6055  debit_long=6045
 })
 
 # ── HELPERS ───────────────────────────────────────────────────────────────────
@@ -871,14 +885,37 @@ def main() -> None:
         key=lambda x: x["trade_date"],
     )
 
-    # ── Mode selection: TARGET_MINUS_10 supersedes REBACKFILL_* ──────────────
+    # ── Mode selection: RECOVERY > TARGET_MINUS_10 > REBACKFILL_* ───────────
     leg_offset_value: int = 10  # default: credit long leg (+10)
+
+    # ── TARGET_MINUS_10_RECOVERY: 4 debit-recoverable dates (Step 2.5c) ──────
+    # These dates have target in orats_options_minute but target+10 (credit long)
+    # 404'd. ORATS confirmed target-10 has data (391 rows, Step 2.5b probe).
+    # Skip the A-bucket check — these dates are NOT A-bucket by design.
+    if TARGET_MINUS_10_RECOVERY:
+        recovery_bucket = [
+            e for e in all_selected
+            if e["trade_date"] in _DEBIT_RECOVERY_DATES
+        ]
+        print(
+            f"\nTARGET_MINUS_10_RECOVERY: {len(recovery_bucket)} debit-recoverable dates "
+            f"identified in Step 2.5b → backfilling target-10 for each.",
+            flush=True,
+        )
+        for e in recovery_bucket:
+            print(
+                f"  {e['band']}/{e['partition']}  {e['trade_date']}"
+                f"  target={e['drift_target']:.0f}",
+                flush=True,
+            )
+        all_selected = recovery_bucket
+        leg_offset_value = -10
 
     # ── TARGET_MINUS_10: A-bucket clean dates → backfill debit long leg ───────
     # Queries orats_options_minute to confirm which selected dates have BOTH
     # credit legs (target + target+10). Then backfills only the new leg (target-10)
     # for each of those dates. Target is already in the cache; fetch is idempotent.
-    if TARGET_MINUS_10:
+    elif TARGET_MINUS_10:
         all_selected = load_clean_a_dates(conn, all_selected)
         leg_offset_value = -10
         print(
@@ -972,7 +1009,9 @@ def main() -> None:
 
     # ── Process: dry-run = first 3 (with probe for first N); full = all ────────
     to_process = all_selected[:3] if DRY_RUN else all_selected
-    if DRY_RUN and TARGET_MINUS_10:
+    if TARGET_MINUS_10_RECOVERY:
+        mode = f"TARGET_MINUS_10_RECOVERY ({len(to_process)} debit-recovery dates)"
+    elif DRY_RUN and TARGET_MINUS_10:
         mode = f"TARGET_MINUS_10 DRY-RUN (first 3 of {len(all_selected)} A-bucket dates)"
     elif DRY_RUN:
         mode = "DRY-RUN (first 3 dates)"
@@ -1016,7 +1055,8 @@ def main() -> None:
             touch_counts[res] = touch_counts.get(res, 0) + 1
 
         _run_mode = (
-            "target_minus_10_dry" if (DRY_RUN and TARGET_MINUS_10)
+            "target_minus_10_recovery" if TARGET_MINUS_10_RECOVERY
+            else "target_minus_10_dry" if (DRY_RUN and TARGET_MINUS_10)
             else "target_minus_10_full" if TARGET_MINUS_10
             else "dry_run" if DRY_RUN
             else "full_run"
