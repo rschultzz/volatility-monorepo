@@ -697,3 +697,35 @@ Edge formula (debit): `structural_prob − abs(net_credit)/width = 0.60 − 1.50
 - Decision #6: asymmetric outcomes — debit computes touch-exit P&L (touch = WIN); credit sets `touch_exit_pnl = None` (touch = breach diagnostic only)
 - Decision #12: two-axis tagging fields added to `TradeResult` (`pattern_label`, `reversion_wilson_lo`, `continuation_wilson_lo`); populated at write time in Step 4
 - Edge formula fix: `abs(net_credit)` in denominator prevents sign error that inflated debit edge
+
+---
+
+### Step 2.5 — target−10 backfill (debit long leg) — 2026-06-10
+
+**Script:** `scripts/cr_ah_step2_stratified_backfill.py` — added `TARGET_MINUS_10` mode (`leg_offset=-10`).
+**Safety:** `BACKFILL_DATABASE_URL` / `dash_backfill_writer` / `backfill_run` context manager / `record_empty_windows=True` — same as main run.
+
+**A-bucket confirmed from DB:** 106 dates (queried via `load_clean_a_dates()` — not hardcoded).
+- 44 skipped from the 150-date stratified selection: 34 `no_both` (neither leg), 10 `no_long` (target+10 only; target+10 was the partial/404 leg).
+
+**Backfill results:** 104/106 fetched, 2 `skipped_404` on touch/settlement windows (entry-day bars written for both). 29,692 bars written total across all restarts.
+
+**Dry-run probe (2 dates before full run):**
+- `SPX230522C04195000` (target=4205 → debit_long=4195): 390 entry-day bars ✓
+- `SPX230524C04230000` (target=4241 → debit_long=4230): 390 entry-day bars ✓
+
+**Per-structure effective coverage (entry-day bars, by band × split):**
+
+| band | split | credit n | debit n | both n |
+|---|---|---|---|---|
+| near | train | 31 | 31 | 31 |
+| near | holdout | 9 | 9 | 9 |
+| mid | train | 27 | 27 | 27 |
+| mid | holdout | 9 | 9 | 9 |
+| far | train | 25 | 25 | 25 |
+| far | holdout | 5 | 5 | 5 |
+| **TOTAL** | | **106** | **106** | **106** |
+
+**Zero divergence between structures.** Every A-bucket date is usable for both credit and debit. Target-10's better-coverage expectation held: 0 debit casualties, 0 dates where structures differ.
+
+**Step 4 implication:** both structures run on the identical 106-date sample. No asymmetric cell sizes to worry about. The two structures are directly comparable across all band × split cells.
