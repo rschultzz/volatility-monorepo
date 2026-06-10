@@ -556,3 +556,17 @@ Net new A: **+12** (not +17 as projected). Long-leg OTM sparsity accounts for th
 Holdout breakdown: near=9, mid=9, far=5. Total=23 (expected 26 before long-leg 404 issue emerged).
 Far/holdout=5 (expected 6; 2025-12-17 blocked by long-leg 404).
 Mid/holdout=9 (expected 11; 2025-08-19 and 2026-05-19 blocked by long-leg 404).
+
+### Long-leg availability re-test (confirms 5 partial dates unrecoverable)
+
+Directly hit ORATS option endpoint for short AND long strike on each of the 5 partial dates:
+
+| Date | Expiry | Short (short_strike) | Long (short+10) |
+|---|---|---|---|
+| 2024-06-24 | 2024-07-16 | 5575 → HTTP 200 (391 rows) | 5585 → HTTP 404 |
+| 2024-11-12 | 2024-12-04 | 6055 → HTTP 200 (391 rows) | 6065 → HTTP 404 |
+| 2025-08-19 | 2025-09-10 | 6525 → HTTP 200 (391 rows) | 6535 → HTTP 404 |
+| 2025-12-17 | 2026-01-09 | 6975 → HTTP 200 (391 rows) | 6985 → HTTP 404 |
+| 2026-05-19 | 2026-06-10 | 7525 → HTTP 200 (391 rows) | 7535 → HTTP 404 |
+
+**All 5 long legs definitively 404.** ORATS captures exactly the short strike's coverage boundary; the long strike (+10pts further OTM) is outside it in all 5 cases. Unrecoverable at 10pt spread width. The 5 dates remain D. Backfill is complete at A=106.
