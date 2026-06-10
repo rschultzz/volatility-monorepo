@@ -806,3 +806,99 @@ Edge formula (debit): `structural_prob − abs(net_credit)/width = 0.60 − 1.50
 **Binding constraint (unchanged):** far/holdout = **5** for both structures. This is the underpowered cell that limits the out-of-sample verdict regardless of the train recovery. Step 4 must flag this cell's CIs as wide and treat its result as underpowered.
 
 **Data layer is complete.** Step 4 (two-structure × two-axis reporting) can now proceed.
+
+---
+
+### Step 4 — Two-structure × two-axis analysis (built + run, 2026-06-10)
+
+**Script:** `scripts/cr_ah_step4_analysis.py`. Run ID: `6be26595-e97f-4f5d-ad5e-020efbb1cea1`. Runtime: 172s. Aggregate stats written to `bt_edge_backtest_results`.
+
+**Data in:**
+- Debit n=110 (debit_spread_to_target: long target−10, short target — CHASE)
+- Credit n=106 (directional_spread_to_target: short target, long target+10 — FADE)
+- Coverage: debit 106/110 have settlement, credit 102/106
+- Actionable touches (rth + gap): debit 70/110, credit 67/106
+- Post-touch pattern_label: NONE — all 0 of 216 trade dates returned a pattern_label from `compute_structural_probability`. The 37% analogue coverage for `position_t15_post_touch` was insufficient to produce patterns. Engine hypothesis (decision #13) UNTESTABLE with current corpus.
+- Selection bias (far band): debit = none (clean σ=3.16, dropped σ=2.90). Credit = DETECTED (clean σ=2.81, dropped σ=3.47 — clean far trades are closer to spot; far-band credit result is optimistically selected).
+- Split date: 2025-08-12. Holdout: debit n=22 settled, credit n=7 settled.
+
+#### Threshold sweep (TRAIN only, close P&L)
+
+| structure | T | n_settled | n_filled | mean_pnl | win% | beat |
+|---|---|---|---|---|---|---|
+| **DEBIT** | **0.00 ← chosen** | **84** | **87** | **+3.05** | **64%** | **−0.28** |
+| debit | 0.05 | 84 | 87 | +2.91 | 64% | −0.42 |
+| debit | 0.10 | 84 | 87 | +2.93 | 64% | −0.40 |
+| debit | 0.15 | 83 | 86 | +2.84 | 64% | −0.49 |
+| debit | 0.20 | 81 | 84 | +2.65 | 63% | −0.68 |
+| **CREDIT** | **0.00 ← chosen** | **28** | **30** | **−4.29** | **32%** | **−2.24** |
+| credit | 0.05 | 19 | 21 | −4.91 | 26% | −2.86 |
+| credit | 0.10 | 16 | 17 | −5.54 | 12% | −3.49 |
+| credit | 0.15 | 14 | 15 | −6.06 | 7% | −4.00 |
+| credit | 0.20 | 2 | 2 | −9.41 | 0% | −7.36 |
+
+**Threshold decisions:** Both structures choose T=0.00 (all-positive-edge). The debit threshold sweep is flat (all T values similar beat vs baseline, no meaningful threshold signal). Credit beat worsens monotonically — higher-threshold credit days are the worst performers.
+
+**Note on credit fill rate at T=0:** Only 30/83 credit train dates had ANY positive-edge minute. The other 53 dates had edge < 0 (market prices a higher fade probability than the structural model). The 30 that cleared T=0 still lost −4.29 pts on average — the positive-edge filter selected WORSE days for the credit fade.
+
+#### By distance band (HOLDOUT read once at T=0.00)
+
+| structure | band | partition | n | mean_pnl | win% | 95% Wilson CI | baseline | beat |
+|---|---|---|---|---|---|---|---|---|
+| **DEBIT** | near | train | 31 | +2.61 | 74% | [57%–86%] | +3.52 | −0.91 |
+| debit | mid | train | 27 | +2.81 | 63% | [44%–78%] | +2.61 | +0.20 |
+| debit | far | train | 26 | +3.83 | 54% | [35%–71%] | +3.84 | −0.02 |
+| debit | all | train | 84 | +3.05 | 64% | [54%–74%] | +3.33 | −0.28 |
+| **DEBIT HOLDOUT** | near | holdout | 8 | +0.73 | 62% | [31%–86%] | +0.24 | **+0.49** |
+| debit holdout | mid | holdout | 9 | +1.00 | 56% | [27%–81%] | −4.09 | **+5.09** ⚠ wide CI |
+| debit holdout | far | holdout | 5 | +1.42 | 40% | [12%–77%] | +1.42 | +0.00 ⚠ NOT INTERPRETABLE |
+| **DEBIT HOLDOUT** | **all** | **holdout** | **22** | **+1.00** | **55%** | **[35%–73%]** | **−1.26** | **+2.26** |
+| **CREDIT** | near | train | 7 | −8.03 | 0% | [0%–35%] | −2.34 | −5.69 |
+| credit | mid | train | 6 | −3.01 | 33% | [10%–70%] | −1.16 | −1.85 |
+| credit | far | train | 15 | −3.06 | 47% | [25%–70%] | −2.74 | −0.32 |
+| credit | all | train | 28 | −4.29 | 32% | [18%–51%] | −2.05 | −2.24 |
+| **CREDIT HOLDOUT** | near | holdout | 2 | −3.25 | 50% | [9%–91%] | −2.51 | −0.74 |
+| credit holdout | mid | holdout | 3 | −2.07 | 67% | [21%–94%] | +0.01 | −2.07 ⚠ wide CI |
+| credit holdout | far | holdout | 2 | −3.33 | 50% | [9%–91%] | −0.95 | −2.37 ⚠ NOT INTERPRETABLE |
+| **CREDIT HOLDOUT** | **all** | **holdout** | **7** | **−2.76** | **57%** | **[25%–84%]** | **−1.12** | **−1.64** |
+
+#### Debit touch resolution (TRAIN, T=0.00)
+
+| resolution | n | touch_exit P&L | close P&L | baseline close |
+|---|---|---|---|---|
+| rth_touch | 37 | +1.73 | +4.17 | +4.30 |
+| gap_touch | 25 | +1.55 | +4.89 | +4.48 |
+| afterhours_touch_retraced | 9 | — | +4.34 | +7.51 |
+| no_touch | 16 | — | −2.87 | −2.87 |
+
+**Touch-exit vs close:** Close (+4.17–4.89) significantly outperforms touch-exit (+1.55–1.73) on touched dates. The debit spread performs BETTER held to expiry than exited at the touch moment. Implication: the touch moment option quote doesn't capture full intrinsic — the spread needs time to settle into full profit after the ES touch.
+
+**No-touch dates** (n=16 train) average −2.87 on close. These are the losers — target never reached, debit expired (mostly) worthless. They are the primary drag on debit.
+
+#### Post-touch pattern (engine hypothesis — decision #13)
+
+**UNTESTABLE:** 0/216 dates returned a `pattern_label` from `compute_structural_probability`. Root cause: only ~37% of bt_daily_outcomes analogues have `position_t15_post_touch` populated; when the KNN returns 200 analogues and only ~74 have t15 data, the `aggregate_post_touch_distribution` function cannot compute a confident pattern. The 0.40 Wilson floor is never exceeded. The engine hypothesis must be scored separately after CR-I Step 2b post-touch backfill expands to full corpus.
+
+#### Summary reads A/B/C/D
+
+**A — Debit near-band holdout (n=8, T=0.00):** mean close P&L = +0.73 pts, win% = 62% [31%–86%], beat baseline by +0.49 pts. **READ: Directional but inconclusive.** Positive holdout edge for the chase near the magnet, but CI is too wide for a verdict at n=8. The near-band debit is the most plausible positive result in this data; it needs more dates for a conclusive read.
+
+**B — Credit near-band holdout (n=2, T=0.00):** Insufficient data for any read. Credit near-band holdout has only 2 settled trades. **READ: Credit fade is NOT supported by this data at any distance band.** Even on train, credit near-band returns −8.03 pts (0% win rate). The near-magnet fade hypothesis fails badly — the CHASE structure dominates when the magnet is nearby.
+
+**C — Structure crossover by distance (TRAIN, T=0.00, baseline-beat):**
+
+| band | debit beat | credit beat | winner |
+|---|---|---|---|
+| near | −0.91 | −5.69 | DEBIT leads by 4.78 |
+| mid | +0.20 | −1.85 | DEBIT leads by 2.05 |
+| far | −0.02 | −0.32 | DEBIT leads by 0.30 |
+
+**READ: NO crossover.** Debit beats credit at ALL distance bands. The expected distance-based crossover (credit outperforms far from the magnet) does NOT appear in this dataset. Both structures have negative beats at far, but debit is less negative. The credit fade is uniformly inferior to the debit chase across all distances. **The "fade at far" hypothesis is refuted by this data.** This does NOT mean credit can't work — it means the structural probability estimate (`1 - touch_rate`) is not producing positive edge for the credit fade in this regime. The market assigns higher fade probability than the model predicts, and the market is correct.
+
+**D — Engine hypothesis (decision #13):** **UNTESTABLE** — no pattern_label data. See post-touch section above. This is the primary unresolved question for CR-Y v1 and subsequent CR-I post-touch corpus expansion.
+
+#### Data quality notes
+
+1. **far/holdout n≤5:** Results in this cell are NOT INTERPRETABLE as standalone verdicts per the binding constraint established in Step 2.5c. The far/holdout cell shows +1.42 pts for debit but with 40% win rate and a CI of [12%–77%] — meaningless at n=5.
+2. **Credit positive-edge selection:** The 30 credit train dates that cleared T=0 positive edge are WORSE performers than the baseline. This is counter-intuitive and may reflect structural_prob miscalibration for the fade: `1 - touch_rate` is high (market is far from the magnet) but actual market credit is ALSO high (market assigns high NOT-reach probability), leaving little edge or even negative edge. On the 30 "positive-edge" dates, the credit is thin relative to model, suggesting those are the dates where the magnet is relatively closer and the model overestimates fade probability.
+3. **Credit far-band selection bias:** Confirmed selection bias — clean far-band credit trades (σ=2.81) are significantly closer to spot than dropped (σ=3.47). The far/train credit result (−0.32 beat) should be read as optimistically biased toward easier (closer) far-band trades.
