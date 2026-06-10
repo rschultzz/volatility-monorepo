@@ -729,3 +729,49 @@ Edge formula (debit): `structural_prob − abs(net_credit)/width = 0.60 − 1.50
 **Zero divergence between structures.** Every A-bucket date is usable for both credit and debit. Target-10's better-coverage expectation held: 0 debit casualties, 0 dates where structures differ.
 
 **Step 4 implication:** both structures run on the identical 106-date sample. No asymmetric cell sizes to worry about. The two structures are directly comparable across all band × split cells.
+
+---
+
+### Step 2.5b — debit-recoverable check on excluded dates — 2026-06-10
+
+**Script:** `scripts/cr_ah_step25b_debit_recovery_probe.py` — READ-ONLY. 10 ORATS API probes. No writes.
+
+**Excluded date breakdown (44 total = 150 selected − 106 A-bucket):**
+- `no_both` (34): target absent from DB → both structures unusable, no probe needed
+- `no_long` (10): target present, target+10 absent → credit unusable; probed ORATS for target-10
+
+**Probe results — 10 no_long dates:**
+
+| date | band/split | target | target-10 ORATS | verdict |
+|---|---|---|---|---|
+| 2023-09-11 | far/train | 4650 | **200 (391 rows)** | **DEBIT-RECOVERABLE** |
+| 2023-11-10 | far/train | 4510 | **200 (391 rows)** | **DEBIT-RECOVERABLE** |
+| 2024-06-24 | far/train | 5575 | **200 (391 rows)** | **DEBIT-RECOVERABLE** |
+| 2024-11-12 | near/train | 6055 | **200 (391 rows)** | **DEBIT-RECOVERABLE** |
+| 2025-08-19 | mid/holdout | 6525 | 404 | both-unusable |
+| 2025-09-08 | mid/holdout | 6525 | 404 | both-unusable |
+| 2025-09-23 | near/holdout | 6725 | 404 | both-unusable |
+| 2025-10-16 | far/holdout | 6825 | 404 | both-unusable |
+| 2025-12-17 | far/holdout | 6975 | 404 | both-unusable |
+| 2026-05-19 | mid/holdout | 7525 | 404 | both-unusable |
+
+**Summary: 4 debit-recoverable dates — all in TRAIN, all 2023–2024.**
+- far/train: +3 (2023-09-11, 2023-11-10, 2024-06-24)
+- near/train: +1 (2024-11-12)
+- far/holdout: **0 recoverable** — stays at n=5
+
+**Per-cell impact if recovered:**
+
+| band/split | credit (current) | debit (current) | debit (+recovery) | delta |
+|---|---|---|---|---|
+| near/train | 31 | 31 | 32 | +1 |
+| near/holdout | 9 | 9 | 9 | 0 |
+| mid/train | 27 | 27 | 27 | 0 |
+| mid/holdout | 9 | 9 | 9 | 0 |
+| far/train | 25 | 25 | **28** | **+3** |
+| far/holdout | 5 | 5 | 5 | 0 |
+| **TOTAL** | **106** | **106** | **110** | **+4** |
+
+**Characterization of the 4 recoverable dates:** all 2023–2024 train-set; none in holdout or 2025+. The target+10 leg 404'd (far-OTM coverage gap) but target-10 has full 391-row coverage. These are genuine credit-only casualties recoverable for debit.
+
+**Decision pending:** the 3 far/train recoverable dates exceed the "more than ~1–2, especially in far" threshold. Awaiting authorization to run a 4-date target-10 backfill before Step 4 (OR to proceed with the asymmetric n=106 credit / n=110 debit sample).
