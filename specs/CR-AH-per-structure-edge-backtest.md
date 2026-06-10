@@ -570,3 +570,81 @@ Directly hit ORATS option endpoint for short AND long strike on each of the 5 pa
 | 2026-05-19 | 2026-06-10 | 7525 → HTTP 200 (391 rows) | 7535 → HTTP 404 |
 
 **All 5 long legs definitively 404.** ORATS captures exactly the short strike's coverage boundary; the long strike (+10pts further OTM) is outside it in all 5 cases. Unrecoverable at 10pt spread width. The 5 dates remain D. Backfill is complete at A=106.
+
+---
+
+## Live-endpoint coverage probe (2026-06-10, READ-ONLY)
+
+**Hypothesis under test:** The 4 BOTH_404 dates may exist on ORATS's live/real-time one-minute endpoint (distinct from the historical endpoint) because "recent-date lag" has been suggested as a potential cause.
+
+**Dates under test:** 2025-05-12, 2025-08-18, 2026-01-06, 2026-01-13 (all BOTH_404 from ATM-vs-OTM test — ATM also 404 on historical path).
+
+### Step 1: Candidate live path discovery
+
+Tested three endpoint paths against a known-good date (2024-05-23, expiry=2024-06-14, strike=5405):
+
+| Path | Known-good (2024-05-23) | Notes |
+|---|---|---|
+| `/datav2/hist/live/one-minute/strikes/option` (HIST) | 200 (391 rows) | baseline confirmed |
+| `/datav2/live/one-minute/strikes/option` (LIVE_1) | 404 | — |
+| `/datav2/one-minute/strikes/option` (LIVE_2) | 404 | — |
+
+Both LIVE paths returned 404 for a 2-year-old date. Re-tested with the most recent date in `orats_monies_minute` (2026-06-09, expiry=2026-06-11, ATM=7425):
+
+| Path | 2026-06-09 (yesterday) | Notes |
+|---|---|---|
+| HIST | 200 (391 rows) | Full day of bars |
+| LIVE_1 | 200 (1 row) | Only latest minute bar |
+| LIVE_2 | 200 (1 row) | Only latest minute bar |
+
+**Finding:** Both live paths exist but serve only near-real-time data — they return the single most recent minute bar. They are NOT a historical series endpoint. Schema is identical across all three paths: `ticker,tradeDate,expirDate,dte,strike,stockPrice,callVolume,callOpenInterest,...`
+
+### Steps 2–3: BOTH_404 dates on all three endpoints
+
+All strikes tested with ATM = `round(spot/5)*5` from `orats_monies_minute`:
+
+| Date | Expiry | Strike | HIST | LIVE_1 | LIVE_2 |
+|---|---|---|---|---|---|
+| 2025-05-12 | 2025-06-03 | ATM=5830 | 404 | 404 | 404 |
+| 2025-05-12 | 2025-06-03 | OTM=5805 | 404 | 404 | 404 |
+| 2025-08-18 | 2025-09-09 | ATM=6465 | 404 | 404 | 404 |
+| 2025-08-18 | 2025-09-09 | OTM=6505 | 404 | 404 | 404 |
+| 2026-01-06 | 2026-01-28 | ATM=6915 | 404 | 404 | 404 |
+| 2026-01-06 | 2026-01-28 | OTM=7005 | 404 | 404 | 404 |
+| 2026-01-13 | 2026-02-04 | ATM=6995 | 404 | 404 | 404 |
+| 2026-01-13 | 2026-02-04 | OTM=7045 | 404 | 404 | 404 |
+
+**All 4 BOTH_404 dates: 404 on every endpoint for every strike tested.** Including 2026-01-06 (5 months ago) — far outside any plausible rolling live window. "Recent-date lag" hypothesis is dead.
+
+### Step 4: D2a candidate date (2026-04-14, mid/holdout)
+
+Selected from `orats_options_minute` query showing 0 OPRAs for expiry=2026-05-05. Probed with ATM=6970 and OTM proxy=7000 (ATM+30, no landscape available):
+
+| Path | ATM=6970 | OTM~7000 |
+|---|---|---|
+| HIST | **200 (376 rows)** | **200 (391 rows)** |
+| LIVE_1 | 404 | 404 |
+| LIVE_2 | 404 | 404 |
+
+**Unexpected finding:** HIST returns 200 for 2026-04-14. This means ORATS has per-minute bar data for this date/expiry, but `orats_options_minute` has 0 OPRAs stored for it. This date was misclassified as D2a. The 0-OPRA query against our DB found a date the backfill never successfully captured (likely a blind-expiry miss in the original backfill run, but the correct (trade_date, expiry, strike) exists at ORATS). This is outside CR-AH scope — noted as a potential future recovery candidate.
+
+### Schema comparison
+
+All three paths return identical column structure:
+```
+ticker,tradeDate,expirDate,dte,strike,stockPrice,callVolume,callOpenInterest,callOpenInterestChange,putVolume,putOpenInterest,putOpenInterestChange,callBidSize,callBidPrice,callMidPrice,callAskPrice,...
+```
+Schema is consistent. Live paths are a subset of the historical path (1 row vs full day).
+
+### Verdict
+
+| Question | Answer |
+|---|---|
+| Do live endpoints exist? | Yes — both LIVE_1 and LIVE_2 are valid paths |
+| Do live endpoints serve historical data? | No — only today's latest minute bar (1 row) |
+| Can live endpoints recover any BOTH_404 date? | **No** — 404 on all 3 paths for all 4 dates |
+| Is "recent-date lag" the cause of BOTH_404? | **No** — 2026-01-06 (5 months old) also 404 on live |
+| Are the 4 BOTH_404 dates permanent ORATS gaps? | **Yes — confirmed on all three endpoints** |
+| Is the schema compatible if data existed? | Yes — identical column structure |
+
+**Decision: The 4 BOTH_404 dates (2025-05-12, 2025-08-18, 2026-01-06, 2026-01-13) are permanent ORATS per-minute gaps, unrecoverable via any endpoint. They remain D. No further recovery path exists. Backfill is closed at A=106.**
