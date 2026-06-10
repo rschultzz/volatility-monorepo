@@ -100,8 +100,9 @@ from packages.shared.backtest.models import distance_band
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 
-DRY_RUN: bool = False           # flip to False for production runs
-REBACKFILL_B_ONLY: bool = True   # True = re-backfill only B-bucket (wrong-expiry) dates
+DRY_RUN: bool = False                  # flip to False for production runs
+REBACKFILL_B_ONLY: bool = False         # True = re-backfill only B-bucket (wrong-expiry) dates
+REBACKFILL_FILTER_MISS_ONLY: bool = True  # True = re-backfill the 17 filter-miss recoverable dates
 
 # When DRY_RUN=True, probe-fetch the first N dates (actually calls ORATS + reads back).
 # Remaining dry-run dates print plan only. Set to 0 to skip probe entirely.
@@ -197,6 +198,27 @@ _PREVIOUSLY_SKIPPED_404: frozenset[date] = frozenset({
     # far/holdout (5)
     date(2025, 8, 21), date(2025, 10, 16), date(2025, 12, 9),
     date(2025, 12, 17), date(2026, 1, 6),
+})
+
+# ── FILTER-MISS RECOVERABLE: 17 dates that now have confirmed ORATS data ─────
+# These dates have blind ≠ aware (holiday in positions 1-14). The original run
+# tried the BLIND expiry → ORATS 404'd → date went into _PREVIOUSLY_SKIPPED_404.
+# The B-bucket re-backfill excluded them (they were in _PREVIOUSLY_SKIPPED_404).
+# ORATS per-minute bars confirmed available at the CORRECT (aware) expiry.
+# Re-backfill these 17 dates at their correct expiry using REBACKFILL_FILTER_MISS_ONLY.
+_FILTER_MISS_RECOVERABLE: frozenset[date] = frozenset({
+    # near/train (3)
+    date(2023, 5, 18), date(2024, 11, 12), date(2025, 6, 11),
+    # near/holdout (2)
+    date(2026, 1, 29), date(2026, 5, 21),
+    # mid/train (2)
+    date(2023, 5, 11), date(2024, 5, 23),
+    # mid/holdout (3)
+    date(2025, 8, 19), date(2026, 2, 12), date(2026, 5, 19),
+    # far/train (4)
+    date(2023, 5, 25), date(2024, 6, 12), date(2024, 6, 24), date(2024, 8, 15),
+    # far/holdout (3)
+    date(2025, 8, 21), date(2025, 12, 9), date(2025, 12, 17),
 })
 
 # ── HELPERS ───────────────────────────────────────────────────────────────────
@@ -777,6 +799,29 @@ def main() -> None:
             )
         all_selected = b_bucket
 
+    # ── REBACKFILL_FILTER_MISS_ONLY: filter to 17 confirmed-recoverable dates ──
+    # Filter-miss dates: blind expiry was in _PREVIOUSLY_SKIPPED_404 but the
+    # correct (aware) expiry returns HTTP 200 from ORATS. The B-bucket pass
+    # excluded them; this pass processes them at their correct expiry.
+    elif REBACKFILL_FILTER_MISS_ONLY:
+        fm_bucket = [
+            e for e in all_selected
+            if e["trade_date"] in _FILTER_MISS_RECOVERABLE
+        ]
+        print(
+            f"\nREBACKFILL_FILTER_MISS_ONLY: {len(fm_bucket)} filter-miss recoverable dates "
+            f"(correct holiday-aware expiry confirmed available in ORATS).",
+            flush=True,
+        )
+        for e in fm_bucket:
+            aware_exp = nth_business_day(e["trade_date"], DTE_TARGET)
+            print(
+                f"  {e['band']}/{e['partition']}  {e['trade_date']}"
+                f"  correct_expiry={aware_exp}",
+                flush=True,
+            )
+        all_selected = fm_bucket
+
     # ── Print full selection ───────────────────────────────────────────────────
     print(f"\n{'─'*65}", flush=True)
     print(f"FULL SELECTION ({len(all_selected)} dates):", flush=True)
@@ -815,6 +860,8 @@ def main() -> None:
         mode = "DRY-RUN (first 3 dates)"
     elif REBACKFILL_B_ONLY:
         mode = f"REBACKFILL B-ONLY ({len(to_process)} dates)"
+    elif REBACKFILL_FILTER_MISS_ONLY:
+        mode = f"REBACKFILL FILTER-MISS ({len(to_process)} dates)"
     else:
         mode = f"FULL RUN ({len(to_process)} dates)"
     print(f"\n{sep}", flush=True)
