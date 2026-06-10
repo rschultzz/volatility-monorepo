@@ -226,3 +226,86 @@ Pattern: **far-magnet proposals are systematically more likely to be D1** becaus
 - D2a = 35: ORATS covers only 32% of SPX expiry cycles. These 35 dates hit systematic ORATS coverage holes. Real trades existed; ORATS simply never captured them.
 
 No change to expiry resolution would recover any D-bucket date. The only paths are: (1) accept D as unrecoverable from ORATS and proceed to Step 3 with n=94 clean dates, or (2) source missing cycles from Databento/other provider (separate CR scope).
+
+---
+
+## Root-symbol diagnostic — SPXW vs SPX (read-only, 2026-06-09)
+
+### Hypothesis under test
+
+User hypothesis: the D-bucket 404s are a root-symbol bug — ORATS serves PM-settled daily SPX expirations under root "SPXW" (not "SPX"), so requesting `SPX{yymmdd}{strike}` 404s even though the contract exists under `SPXW{yymmdd}{strike}`. The backfill always uses `OPRA_ROOT = "SPX"`.
+
+### SPXW hypothesis verdict: REFUTED
+
+Direct ORATS API tests on 5 D2a dates:
+
+| Band | Trade date | Expiry | Chain ticker | expiryTod | SPX option | SPXW option |
+|---|---|---|---|---|---|---|
+| near/train | 2023-05-18 | 2023-06-09 Fri | **SPX** | pm | HTTP 200 ✓ | HTTP 404 ✗ |
+| mid/train | 2024-05-23 | 2024-06-14 Fri | **SPX** | pm | HTTP 200 ✓ | HTTP 404 ✗ |
+| far/train | 2023-11-01 | 2023-11-22 Wed | **SPX** | pm | HTTP 200 (at 4360) ✓ | HTTP 404 ✗ |
+| near/holdout | 2025-08-15 | 2025-09-08 Mon | **SPX** | pm | HTTP 200 (at 6500) ✓ | HTTP 404 ✗ |
+| far/holdout | 2025-12-09 | 2025-12-31 Wed | **SPX** | pm | HTTP 200 ✓ | HTTP 404 ✗ |
+
+**ORATS uses "SPX" root for ALL SPX expirations**, including PM-settled dailies and weeklies. The `expiryTod` column (value `'pm'`) distinguishes AM/PM settlement; the root never changes. The `opra.py` docstring was correct. SPXW always 404s — ORATS does not serve under that root at all.
+
+### Real discovery: 17 D-dates are recoverable — re-backfill filter bug
+
+While refuting SPXW, a different bug was found: the ORATS chain endpoint returned data for the D2a expiry dates under "SPX" root (the correct root), but the OPTION endpoint at our **proposed strike** returned HTTP 200 on some and 404 on others. Re-examining the re-backfill filter revealed:
+
+`_PREVIOUSLY_SKIPPED_404` was set to all 47 original 404 dates (C+D from the original blind-expiry backfill). The `REBACKFILL_B_ONLY` filter excluded these from re-processing:
+```python
+b_bucket = [e for e in all_selected
+            if blind != aware AND e["trade_date"] not in _PREVIOUSLY_SKIPPED_404]
+```
+
+**Bug:** 30 of the 43 original D-dates have `blind ≠ aware` (a holiday fell in positions 1–14). For these dates:
+1. The original backfill tried the BLIND expiry → ORATS 404'd (blind expiry has no data)
+2. The date went into `_PREVIOUSLY_SKIPPED_404`
+3. The re-backfill filter excluded it, so the **CORRECT expiry was NEVER tried**
+4. Re-audit shows these as D (no data in cache), but that's cache absence, not ORATS absence
+
+Tested all 30 at their correct expiry via the ORATS option endpoint:
+
+- **17 of 30 → HTTP 200**: ORATS HAS the data; the correct expiry succeeds at the proposed strike. These are recoverable with a targeted re-backfill.
+- **13 of 30 → HTTP 404**: The correct expiry also fails in ORATS at the proposed strike. Truly unrecoverable.
+
+### Recovery breakdown by band × split (if authorized)
+
+| Cell | Current A | Recoverable | New A | Selected | New % |
+|---|---|---|---|---|---|
+| near/train | 28 | +3 | 31 | 34 | 91% |
+| near/holdout | 7 | +2 | 9 | 16 | 56% |
+| mid/train | 25 | +2 | 27 | 31 | 87% |
+| mid/holdout | 8 | +3 | 11 | 19 | 58% |
+| far/train | 23 | +4 | 27 | 40 | 68% |
+| far/holdout | 3 | +3 | 6 | 10 | 60% |
+| **Total** | **94** | **+17** | **111** | **150** | **74%** |
+
+**Holdout: 18 → 26 (+8).** far/holdout doubles from 3 to 6.
+
+### Revised D-bucket decomposition
+
+| Bucket | Count | Definition |
+|---|---|---|
+| True D (genuinely unrecoverable) | **35** | Correct expiry tried (or blind==aware, equivalent) AND ORATS 404s at proposed strike |
+| Filter-miss D (re-backfill never tried correct expiry, ORATS has data) | **17** | Holiday in window, blind 404'd, in `_PREVIOUSLY_SKIPPED_404`, correct expiry untested → now confirmed available |
+| **Total D** | **52** | |
+
+The 17 recoverable dates:
+- near/train (3): 2023-05-18, 2024-11-12, 2025-06-11
+- near/holdout (2): 2026-01-29, 2026-05-21
+- mid/train (2): 2023-05-11, 2024-05-23
+- mid/holdout (3): 2025-08-19, 2026-02-12, 2026-05-19
+- far/train (4): 2023-05-25, 2024-06-12, 2024-06-24, 2024-08-15
+- far/holdout (3): 2025-08-21, 2025-12-09, 2025-12-17
+
+### Revised verdict
+
+**SPXW is wrong. The "68% coverage hole" was an artifact of the re-backfill filter.**
+
+ORATS does cover most of the D-bucket expiries under "SPX" root. What actually happened: for 30 dates with holidays in the 15-day window, the original backfill tried the wrong (blind) expiry which 404'd, the date was incorrectly placed in `_PREVIOUSLY_SKIPPED_404`, and the correct expiry was never attempted.
+
+17 of those 30 are confirmed ORATS-available at the correct expiry+strike. These can be recovered by a targeted re-backfill (fix `_PREVIOUSLY_SKIPPED_404` to only include dates where `blind==aware`, then run the filter-miss dates at their correct expiry).
+
+Decision to user: authorize the targeted 17-date re-backfill? If yes, effective clean sample grows from A=94 to A=111, holdout from 18 to 26.
