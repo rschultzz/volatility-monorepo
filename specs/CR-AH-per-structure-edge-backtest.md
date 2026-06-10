@@ -482,3 +482,77 @@ The BOTH_404 sub-class is actually a **stronger** confirmation of "genuinely unr
 ### Impact on re-backfill decision
 
 All 13 remain classified GENUINE. Total recoverable stays at **17**. Re-backfill impact unchanged (A=94→111, holdout 18→26). Per user instruction, STOPPED before Task 2 (17-date re-backfill) pending explicit authorization given the 4 BOTH_404 dates required investigation.
+
+---
+
+## Filter-miss re-backfill result (2026-06-10)
+
+### Run summary
+
+Script: `scripts/cr_ah_step2_stratified_backfill.py` with `REBACKFILL_FILTER_MISS_ONLY=True, DRY_RUN=False`.
+Run ID: `239327a0-5e44-487d-bac9-a8791ffb6f8b`.
+Dates processed: 17 / Script-reported fetched: 10 / Script-reported skipped (4xx): 7.
+Total bars written: 17,218.
+
+### Per-date outcome
+
+| Date | Cell | Correct expiry | Short/long | Script result | DB outcome |
+|---|---|---|---|---|---|
+| 2023-05-11 | mid/train | 2023-06-02 | 4205/4215 | fetched (1774 bars) | **A (clean)** |
+| 2023-05-18 | near/train | 2023-06-09 | 4205/4215 | fetched (1608 bars) | **A (clean)** |
+| 2023-05-25 | far/train | 2023-06-16 | 4300/4310 | fetched (1848 bars) | **A (clean)** |
+| 2024-05-23 | mid/train | 2024-06-14 | 5405/5415 | fetched (1852 bars) | **A (clean)** |
+| 2024-06-12 | far/train | 2024-07-05 | 5425/5435 | fetched (1608 bars) | **A (clean)** |
+| 2024-06-24 | far/train | 2024-07-16 | 5575/5585 | SKIPPED (short ok, long 404) | **partial** (1 call OPRA) |
+| 2024-08-15 | far/train | 2024-09-06 | 5560/5570 | fetched (1608 bars) | **A (clean)** |
+| 2024-11-12 | near/train | 2024-12-04 | 6055/6065 | SKIPPED (short ok, long 404) | **partial** (1 call OPRA) |
+| 2025-06-11 | near/train | 2025-07-03 | 6075/6085 | entry+touch fetched; settlement 404 | **A (clean)** ‡ |
+| 2025-08-19 | mid/holdout | 2025-09-10 | 6525/6535 | SKIPPED (short ok, long 404) | **partial** (1 call OPRA) |
+| 2025-08-21 | far/holdout | 2025-09-12 | 6515/6525 | fetched (1852 bars) | **A (clean)** |
+| 2025-12-09 | far/holdout | 2025-12-31 | 6975/6985 | fetched (1852 bars) | **A (clean)** |
+| 2025-12-17 | far/holdout | 2026-01-09 | 6975/6985 | SKIPPED (short ok, long 404) | **partial** (1 call OPRA) |
+| 2026-01-29 | near/holdout | 2026-02-20 | 7055/7065 | fetched (1608 bars) | **A (clean)** |
+| 2026-02-12 | mid/holdout | 2026-03-06 | 7045/7055 | fetched (1608 bars) | **A (clean)** |
+| 2026-05-19 | mid/holdout | 2026-06-10 | 7525/7535 | SKIPPED (short ok, long 404) | **partial** (1 call OPRA) |
+| 2026-05-21 | near/holdout | 2026-06-12 | 7525/7535 | entry fetched; gap-open 404 (Memorial Day) | **A (clean)** ‡ |
+
+‡ Secondary window missing but both legs in entry-day; usable as A. Missing settlement (2025-06-11) or gap-open-window (2026-05-21) will appear as null in Step 4 column.
+
+### Root cause: long-leg 404 (5 partial dates)
+
+`fetch_option_bars` calls ORATS sequentially per OPRA symbol. For 5 dates, the SHORT leg fetched successfully (data committed to DB), then the LONG leg (short_strike+10) raised OratsPermanentError 404. The script caught the exception and reported SKIPPED, but the short-leg bars are in the DB.
+
+Cause: the long_strike is 10pts further OTM than the short_strike. The validation pass (prior session) only tested the short_strike. These 5 dates fall in the same "OTM-sparse" coverage pattern as the 9-of-13 CONFIRMED ATM-vs-OTM result: ORATS captures near-money but stops before reaching the long leg.
+
+The 5 partial dates are **NOT usable** for the vertical spread backtest (cannot compute net credit = short premium − long premium). They remain classified D.
+
+### Revised A/B/C/D (post-filter-miss rebackfill)
+
+| Cell | A | D | Total | Notes |
+|---|---|---|---|---|
+| near/train | 30 | 4 | 34 | +2 clean; 2024-11-12 stays D (partial) |
+| near/holdout | 9 | 7 | 16 | +2 clean |
+| mid/train | 27 | 4 | 31 | +2 clean |
+| mid/holdout | 9 | 10 | 19 | +1 clean; 2025-08-19 and 2026-05-19 stay D |
+| far/train | 26 | 14 | 40 | +3 clean; 2024-06-24 stays D (partial) |
+| far/holdout | 5 | 5 | 10 | +2 clean; 2025-12-17 stays D (partial) |
+| **Total** | **106** | **44** | **150** | B=0, C=4 (unchanged) |
+
+Net new A: **+12** (not +17 as projected). Long-leg OTM sparsity accounts for the delta.
+
+### Final effective clean sample (A only, post all re-backfills)
+
+| Cell | Selected | Clean (A) | % |
+|---|---|---|---|
+| near/train | 34 | 30 | 88% |
+| near/holdout | 16 | 9 | 56% |
+| mid/train | 31 | 27 | 87% |
+| mid/holdout | 19 | 9 | 47% |
+| far/train | 40 | 26 | 65% |
+| far/holdout | 10 | 5 | 50% |
+| **Train total** | **106** | **83** | **78%** |
+| **Holdout total** | **44** | **23** | **52%** |
+
+Holdout breakdown: near=9, mid=9, far=5. Total=23 (expected 26 before long-leg 404 issue emerged).
+Far/holdout=5 (expected 6; 2025-12-17 blocked by long-leg 404).
+Mid/holdout=9 (expected 11; 2025-08-19 and 2026-05-19 blocked by long-leg 404).
