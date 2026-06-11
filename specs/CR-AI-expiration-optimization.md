@@ -131,7 +131,53 @@ and apply DTE_TARGET_BY_BUCKET to get the "live rule DTE" per date.
 
 ## Step 0 findings (appended before backfill)
 
-<!-- Step 0 diagnosis answers will be appended here before commit 2 -->
+### 0a — CR-AH clean date set confirmed
+
+n=110  (near=41, mid=36, far=33)  train=87 / holdout=23 (split 2025-08-12)
+
+Reproduction logic: magnet-above rows from `bt_daily_features` (feature_version=v0.6.0-openiv)
+→ stride-select 50/band → A-bucket filter (both DTE=15 legs have entry-day bars in
+`orats_options_minute`). Exactly matches the CR-AH Step 4 analysis set.
+
+### 0b — ORATS coverage probe for candidate DTEs
+
+Probe method: for 3 spread-representative clean dates (2023-05-01, 2024-02-07, 2024-12-13),
+live-fetch entry-day bars for both legs at each candidate DTE and count bars in
+`orats_options_minute`.
+
+| Date       | DTE=5 | DTE=7 | DTE=10 | DTE=21 |
+|------------|-------|-------|--------|--------|
+| 2023-05-01 | 390✓  | 390✓  | 390✓   | 390✓   |
+| 2024-02-07 | 390✓  | 390✓  | 390✓   | 390✓   |
+| 2024-12-13 | 390✓  | 390✓  | 390✓   | 404✗   |
+
+DTE=21 failure: 2024-12-13 × DTE=21 → expiry 2025-01-16 → ORATS returns HTTP 404 for
+SPX250116 calls. Affects any trade date where DTE=21 crosses into 2025 expiry territory.
+
+DTE=15: 110/110 already cached from CR-AH Step 2 (no fetch needed).
+
+**Decision: drop DTE=21 (was optional per spec; coverage gap confirmed for 2025 expiries).**
+Final backfill grid: {5, 7, 10, 15}.
+
+### 0c — Re-proposal logic confirmed
+
+Strikes are DTE-invariant. For any clean date: `short_strike = round5(drift_target)`,
+`long_strike = short_strike − 10`. Only `expiry_date = nth_business_day(trade_date, dte)`
+changes. Example — 2023-05-01, short_strike=4205, long_strike=4195:
+- DTE=5:  SPX230508C04205000 / SPX230508C04195000
+- DTE=15: SPX230522C04205000 / SPX230522C04195000 (CR-AH baseline)
+
+drift_target and band are DTE-agnostic (computed on read, not re-banded per DTE).
+
+### 0d — Contradiction verdict
+
+No contradiction-stop. Primary grid {5, 7, 10, 15} has full coverage.
+DTE=21 dropped (optional, ORATS gap confirmed for 2025-spanning expiries).
+
+Note: `bt_daily_outcomes.dominant_bucket_at_classification` stores buckets with " DTE"
+suffix (e.g. "8-30 DTE") while `DTE_TARGET_BY_BUCKET` uses bare keys (e.g. "8-30").
+The live-rule comparison in the analysis note strips the suffix. All 110 clean dates
+map to "8-30 DTE" bucket → live DTE=15, matching the CR-AH baseline flat-DTE=15 row.
 
 ## Results (appended after backfill)
 
