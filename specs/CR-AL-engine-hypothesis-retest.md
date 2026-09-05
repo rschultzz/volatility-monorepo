@@ -93,3 +93,171 @@ The June run log is not in the vault; the CR-AH spec records the A-bucket clean 
 | `scripts/cr_z_step4_sanity.py:3` | docstring mention only, no call | untouched |
 | `packages/shared/tests/test_probability.py:6` | docstring mention only | untouched; new tests added here |
 | `packages/shared/knn_coherence.py` | calls `rank_analogues` directly with its own `before_date` guard | not a caller; untouched |
+
+## Step 1 — full mode (as CR-AH ran in June), train only
+
+Command: `PYTHONUNBUFFERED=1 apps/web/.venv/bin/python -u scripts/cr_ah_step4_analysis.py --universe-end 2026-06-05 --train-only --no-persist --cr-id CR-AL --structural-prob-mode full`. Log: `scripts/logs/cr_al_full_20260905_072039.log` (untracked). 342 s. Run row: `(UUID('2be34a8e-bf32-4272-b46d-b0a27aa4094b'), 'completed', datetime.datetime(2026, 9, 5, 14, 20, 40, 786839), datetime.datetime(2026, 9, 5, 14, 26, 21, 936478), "Step 4 complete [mode=full]: debit=87, credit=83, T_d=0.0, T_c=0.0, 342s; summary_d={'debit': 'INCONCLUSIVE', 'credit': 'untestable'}")`.
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G1 stratified train selection | near 34 / mid 31 / far 40 | **near 34 / mid 31 / far 40** (holdout 16 / 19 / 10 selected then dropped) | PASS |
+| G2 train clean counts vs June (±3) | credit ≈ 83, debit derived | **credit 83, debit 87** | PASS (note) |
+| G3 train dates with `pattern_label` | ≥ 30 per structure | **debit 83 / 87, credit 79 / 83** | PASS |
+
+G2 note: credit 83 equals June's recorded 83 train. For debit the vault only records total 110; with the same 23-date holdout as credit that is 87 train, matching exactly (the June note's "holdout n=18" is the near-band holdout cell, not the debit holdout total). The per-band tables below reproduce June's numbers to the cent (debit rth_touch 1.73 / 4.17, gap_touch 1.55 / 4.89; both thresholds 0.00), which confirms the universe pin reproduced June's train set.
+
+Chosen thresholds: DEBIT 0.00, CREDIT 0.00 (same as June).
+
+### Summary D (decision-9 read, full mode)
+
+- **DEBIT:** pattern_match (stepping-stone) n=55, mean close P&L 2.96 vs no_match (mixed) n=25, 3.64 → diff **−0.69 pts**, bootstrap 95% CI **[−3.89, +2.19]** → **INCONCLUSIVE** (direction is "hurts", CI spans 0).
+- **CREDIT:** pattern_match n=0, no_match n=79 → **untestable** — no credit-side pattern (touch-and-reject / slow-revert / overshoot-then-revert) occurs on any train date; the label set is stepping-stone + mixed only (Step 0 showed one slow-revert in 396 dates, and it is in the holdout).
+
+Coverage effect (labeled vs unlabeled): debit labeled 80 → 3.17 pts vs unlabeled 4 → 0.64; credit labeled 28 → −4.36 vs unlabeled 2 → −5.43. Unlabeled cells are too small to read.
+
+### Full output (Phases 1–6)
+
+```
+
+======================================================================
+CR-AH Step 4 — Two-structure × two-axis analysis
+  cr_id=CR-AL  structural-prob mode=full  train_only=True  no_persist=True  universe_end=2026-06-05  seed=20260905
+======================================================================
+
+Run ID: 2be34a8e-bf32-4272-b46d-b0a27aa4094b
+
+----------------------------------------------------------------------
+Phase 1: Loading signal dates and selecting clean subset...
+  Universe pinned to trade_date <= 2026-06-05: 375/396 magnet-above dates kept.
+  Loaded 374/375 signal entries (skipped 1).
+  Stratified selection: 150 dates
+  Selection by band/partition: {'far/holdout': 10, 'far/train': 40, 'mid/holdout': 19, 'mid/train': 31, 'near/holdout': 16, 'near/train': 34}
+  --train-only: kept 105/150 train entries; holdout not read.
+
+Filtering to A-bucket clean dates for each structure...
+  Credit (target + target+10)...
+    Credit clean: 83
+  Debit (target + target-10)...
+    Debit clean:  87
+
+  Credit by band/partition: {'far/train': 25, 'mid/train': 27, 'near/train': 31}
+  Debit  by band/partition: {'far/train': 28, 'mid/train': 27, 'near/train': 32}
+
+----------------------------------------------------------------------
+Phase 2: Collecting per-date trade data...
+  Processing 87 debit dates...
+  Processing 83 credit dates...
+
+  Collected: debit=87, credit=83
+  Settlement available: debit=84/87, credit=80/83
+  Actionable touches: debit=62/87, credit=59/83
+
+----------------------------------------------------------------------
+Phase 3: Threshold sweep on TRAIN only...
+
+  Chosen threshold — DEBIT: 0.00  CREDIT: 0.00
+
+DEBIT — Threshold sweep (TRAIN only) [mode=full]:
+       T  n_settled  fill_n  mean_pnl  win%   beat  chosen?
+  ────────────────────────────────────────────────────────────
+  0.00      84       87        3.05    64%    -0.28 ← CHOSEN
+  0.05      84       87        2.91    64%    -0.42
+  0.10      84       87        2.92    64%    -0.41
+  0.15      84       87        2.85    64%    -0.48
+  0.20      82       85        2.68    63%    -0.65
+
+CREDIT — Threshold sweep (TRAIN only) [mode=full]:
+       T  n_settled  fill_n  mean_pnl  win%   beat  chosen?
+  ────────────────────────────────────────────────────────────
+  0.00      30       32       -4.43    30%    -2.37 ← CHOSEN
+  0.05      20       22       -4.60    30%    -2.55
+  0.10      18       19       -5.28    22%    -3.23
+  0.15      13       14       -5.75     8%    -3.70
+  0.20       4        4       -7.11    25%    -5.06
+
+----------------------------------------------------------------------
+Phase 4: Full results (TRAIN only — holdout not read)
+
+DEBIT — By distance band (train only, T=0.00) [mode=full]:
+  band    part        n      pnl   win%  [lo–hi 95%]        base     beat
+  ──────────────────────────────────────────────────────────────────────
+  near    train      31     2.61    74%  [ 57%– 86%]     3.52    -0.91
+  mid     train      27     2.81    63%  [ 44%– 78%]     2.61     0.20
+  far     train      26     3.83    54%  [ 35%– 71%]     3.84    -0.02
+  all     train      84     3.05    64%  [ 54%– 74%]     3.33    -0.28
+
+CREDIT — By distance band (train only, T=0.00) [mode=full]:
+  band    part        n      pnl   win%  [lo–hi 95%]        base     beat
+  ──────────────────────────────────────────────────────────────────────
+  near    train       7    -8.03     0%  [  0%– 35%]    -2.34    -5.69
+  mid     train       7    -3.34    29%  [  8%– 64%]    -1.16    -2.18
+  far     train      16    -3.33    44%  [ 23%– 67%]    -2.74    -0.59
+  all     train      30    -4.43    30%  [ 17%– 48%]    -2.05    -2.37
+
+DEBIT — By post-touch pattern (TRAIN only, T=0.00) [mode=full]:
+  (n with pattern_label=83, n without=4)
+  pattern                           n      pnl   win%  [lo–hi 95%]        base     beat
+  ──────────────────────────────────────────────────────────────────────
+  mixed                            25     3.64    68%  [ 48%– 83%]     2.62     1.02
+  stepping-stone                   55     2.96    64%  [ 50%– 75%]     3.60    -0.64
+  ──────────────────────────────────────────────────────────────────────
+  (labeled)                        80     3.17    65%  [ 54%– 75%]     3.30    -0.12
+  (unlabeled)                       4     0.64    50%  [ 15%– 85%]     4.01    -3.38
+
+CREDIT — By post-touch pattern (TRAIN only, T=0.00) [mode=full]:
+  (n with pattern_label=79, n without=4)
+  pattern                           n      pnl   win%  [lo–hi 95%]        base     beat
+  ──────────────────────────────────────────────────────────────────────
+  mixed                             8    -6.98     0%  [  0%– 32%]    -4.02    -2.96
+  stepping-stone                   20    -3.30    45%  [ 26%– 66%]    -0.97    -2.34
+  ──────────────────────────────────────────────────────────────────────
+  (labeled)                        28    -4.36    32%  [ 18%– 51%]    -1.85    -2.51
+  (unlabeled)                       2    -5.43     0%  [  0%– 66%]    -5.89     0.46
+
+DEBIT — Touch resolution breakdown (TRAIN only, T=0.00) [mode=full]:
+  resolution                      n   touch_exit  close_pnl   base_close
+  ─────────────────────────────────────────────────────────────────
+  rth_touch                       37        1.73        4.17        4.30
+  gap_touch                       25        1.55        4.89        4.48
+  afterhours_touch_retraced        9           —        4.34        7.51
+  no_touch                        16           —       -2.87       -2.87
+
+DEBIT — Selection bias check (far band, decision #11) [mode=full]:
+  far/all: n=40  clean: n=28 (mean σ=3.27)  dropped: n=12 (mean σ=3.04)
+  ✓ No significant selection bias detected in far band.
+
+CREDIT — Selection bias check (far band, decision #11) [mode=full]:
+  far/all: n=40  clean: n=25 (mean σ=2.86)  dropped: n=15 (mean σ=3.77)
+  ⚠ BIAS: clean far trades are significantly CLOSER than dropped far trades.
+    The far-band result may be OPTIMISTICALLY SELECTED (closer to spot → easier trade).
+
+======================================================================
+SUMMARY READS A/B/C/D
+======================================================================
+[mode=full]
+
+── Summary A: Debit near-band holdout ──
+  holdout not read (--train-only).
+
+── Summary B: Credit near-band holdout ──
+  holdout not read (--train-only).
+
+── Summary C: Structure crossover by distance (TRAIN, close P&L beat) ──
+  near   debit_beat=  -0.91  credit_beat=  -5.69  → DEBIT leads by 4.78
+  mid    debit_beat=   0.20  credit_beat=  -2.18  → DEBIT leads by 2.38
+  far    debit_beat=  -0.02  credit_beat=  -0.59  → DEBIT leads by 0.58
+  READ: Structure crossover = distance band where debit stops leading and credit starts.
+
+── Summary D: Engine hypothesis (decision #13) ──
+  DEBIT engine check:  pattern_match (n=55) pnl=2.96  vs no_match (n=25) pnl=3.64
+  → Pattern filter HURTS debit (match performs WORSE). Engine rule may be wrong.
+  DEBIT decision-9 read [mode=full]: match−no_match = -0.69 pts, bootstrap 95% CI [-3.89, +2.19] (1000 resamples, seed=20260905) → INCONCLUSIVE
+  credit: too few pattern-labeled trades to score engine hypothesis (pattern_match n=0, no_match n=79).
+
+----------------------------------------------------------------------
+Phase 7: skipped (--no-persist) — bt_edge_backtest_results untouched.
+
+======================================================================
+Step 4 complete in 342s
+======================================================================
+```
