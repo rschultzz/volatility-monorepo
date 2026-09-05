@@ -177,3 +177,22 @@ Smoke 1 reads **767**, three below the spec's ≥ 770. The shortfall is exactly 
 Provenance note (row 7): `backfill_run_id` is a single column, so CR-I's UPDATE overwrote CR-G's id on the 387 touched rows. Final split: 386 rows carry the CR-G run id, 387 the CR-I run id — every one of the 773 targets carries one of the two. The "one `backfill_run_id` per column set" framing in decision #1 is therefore only recoverable from `bt_backfill_runs` timestamps, not per row.
 
 Roll-Friday spot check (old vs canonical positions on the six dates): 2024-09-20 and 2025-09-19 touched under both versions and classify identically (d=6 → 1/1/1; d=3 → 1/1/1). 2023-09-15 is one of the eight IV-basis flips from the vault note (old: no touch; canonical: touch at day 0 → −1/−1/−1). 2024-03-15, 2024-06-21, 2025-03-21 are `na_regime` under both.
+
+## Step 4 — live-path before / after
+
+Same probe as Step 0 (`compute_structural_probability` at canonical, k=200, `exclude_date` = the date, regime inferred from canonical feature flags; badge = what `apply_direction_qualification` returns for a credit + debit magnet-spread pair). JSON: scratchpad `step0_baseline.json` / `step4_after.json`.
+
+| Date | Regime | filter_mode | denominators t1/t5/t15 before → after | pattern_label before → after | Badge before → after |
+|---|---|---|---|---|---|
+| 2026-09-03 | magnet-above | pooled-fallback (unchanged) | 0/0/0 → **11/11/11** | None → **stepping-stone** | dte2, dte15: mixed pattern (both kept) → unchanged; **dte7 (t5): mixed pattern → "debit-to-target supported", credit proposal dropped** |
+| 2026-08-27 | magnet-above | strict (unchanged) | 0/0/0 → **9/9/9** | None → **mixed** | mixed pattern — no clear direction on both, all bands (unchanged, now on real data) |
+| 2026-07-30 | amplification | insufficient | 0/0/0 → 0/0/0 | None → None | low-confidence — post-touch sample insufficient (unchanged) |
+| 2026-06-24 | amplification | insufficient | 0/0/0 → 0/0/0 | None → None | low-confidence — post-touch sample insufficient (unchanged) |
+| 2026-04-28 | magnetic-pin | insufficient (k=0) | 0/0/0 → 0/0/0 | None → None | low-confidence — post-touch sample insufficient (unchanged) |
+
+After-run fractions for the two magnet dates:
+
+- 2026-09-03 (11 touchers): t1 below/at/above 0.09/0.27/0.64; t5 0.18/0.00/0.82; t15 0.27/0.09/0.64 → stepping-stone. Wilson lower bound on `above` at t5 clears the 0.40 floor, so only the t5 band (DTE 4–9) qualifies debit; t1 and t15 lower bounds fall short → mixed.
+- 2026-08-27 (9 same-bucket touchers, strict): t1 0.11/0.44/0.44; t5 0.11/0.22/0.67; t15 0.11/0.22/0.67 → mixed.
+
+G3 (diagnostic): "`filter_mode` no longer `insufficient` for ≥ 3 of 5" — **not met, 2 of 5**, and structurally could not be: three of the five probe dates are not magnet at canonical (Step 0 delta), so they never had touchers to lose. "`pattern_label` non-null for ≥ 1" — **met, 2 of 2** magnet dates. The direction gate is live again: before CR-AK every magnet-day proposal pair fell through to "mixed pattern"; now the badge is data-driven, and on 09-03 it actually selects a direction.
