@@ -326,3 +326,27 @@ Counters: dates 21 (0 without target; wall and payload targets identical on all 
 Entry-day 404s (15-DTE legs not served by ORATS for that session): **2026-06-16, 07-01, 07-13, 08-12, 08-13, 08-28, 09-03, 09-04.** The last two may be ingestion lag rather than absence (one and two days old at capture time); a 404 raises before any window row is written, so they remain fetchable. Settlement windows for the 06-16 / 07-01 / 07-13 / 08-12 / 08-13 expiries were captured even though their entry days were not.
 
 Holdout stream state after capture: 21 dates; **10 fully captured** (entry + settlement), **3 entry-only pending expiry** (08-18, 08-26, 08-27), **2 nothing yet, expiry pending** (09-03, 09-04 — retry entry-day), **6 entry-day unavailable** (5 with settlement captured). Follow-up capture after 2026-09-28 fetches the deferred settlement windows; the script is idempotent (cache hits on already-fetched windows).
+
+## What changed
+
+- `scripts/cr_ah_step4_analysis.py`: `SPLIT_DATE` constant replaced by `--split-date` (default 2026-06-05 per the ADR; June's 2025-08-12 remains selectable); every holdout print path (selection, by-band, Summary A/B, Phase 7) prints `holdout: none (split = universe end)` when no holdout rows exist; the `bt_edge_backtest_results` INSERT writes `cr_id` from `--cr-id`.
+- `scripts/cr_am_holdout_leg_capture.py` (new): captures entry-day RTH and expiry settlement-window quotes for the debit/credit legs of every post-split magnet-above date via `fetch_option_bars`, under `backfill_run(cr_id='CR-AM-capture')`. Logs dates / targets / legs / bars / 404s only; settlement windows with a future expiry are deferred (not fetched, not recorded as empty). No `net_price`, `payoff`, or P&L anywhere.
+- Data: CR-AM run `c52daf00` persisted 8 all-train rows to `bt_edge_backtest_results` (`cr_id='CR-AM'`); CR-AH's 16 rows untouched. Capture run `1ea36351`: 13 entry-day + 15 settlement windows fetched, 6 settlement windows deferred (future expiry), 8 entry-day 404s, 0 exceptions, 31,362 bars written.
+- Gates: G0.1–G0.3, G1–G4, G6 pass; G5 pass (8 ORATS 404s listed, 0 other exceptions). No halts. CR-AI Stage 2 not re-run (G0.2 absent).
+- Result: **credit refuted holds; hold-to-close beats touch-exit holds on RTH touches (gap-touch cell not measurable — quote junk); debit close-path edge weakens** to +0.32 pts all-train walk-forward (+0.48 excluding out-of-range trades), concentrated in the mid band; no verdict reverses on clean data. Mid-band negativity (CR-AI) is not reproduced under CR-AH's edge-gated convention — different measurement, not a contradiction.
+
+## Decisions
+
+- **Applied decision 7 mechanically and reported the sign flips it produces, then explained them.** Two cells "reverse" as run (credit far beat, debit gap-touch touch-exit); both are driven by out-of-range quote values and neither survives the range filter. Recorded as reverses in the table per the pre-registered rule, with the reasoning column carrying the diagnosis, rather than silently applying a filter that was not pre-registered.
+- **Persisted CR-AM rows as-run (no range filter),** because the spec says persist the re-run as the new reference and the filter is post-hoc. The sensitivity table lives in the spec, not in the table.
+- **Capture fetched the union of wall-target and payload-target strikes** (identical on all 21 dates, so no extra symbols) and **deferred settlement windows whose expiry is after today** rather than recording them as empty, so they stay fetchable.
+- **Did not gate the harness on quote sanity in this CR** (would change P&L on the persisted reference and June's comparison column). Filed as the first open question.
+- **G4 read against the script's own June classification** (CR-AL run on the same universe) rather than the CR-AH spec's hand-written Step-2.5 table, which is off by one credit date near↔far; totals and debit split match exactly.
+
+## Open questions
+
+- **Quote-sanity gate for the edge harness.** 26/110 debit and 20/106 credit trades carry a spread value outside ±width at the baseline minute, the fill minute, or the touch minute (inverted or stale leg mid). Every "beat vs baseline" in June and CR-AM is contaminated by this. Add a validity gate in `compute_pnl` / `net_price_from_real_quotes` (reject spread values outside [0, width], and a debit fill with positive credit), then re-derive both columns. Until then, prefer mean close P&L over beat when reading the tables.
+- **The debit edge is a mid-band effect** in walk-forward (+1.09 beat; near −0.11, far −0.01). This is the opposite of CR-AI's mid-negative finding under open-price entry — the entry rule, not the target distance, may be what separates them. See item 6 added to [[mid-band-drift-targets-lack-edge]].
+- **Holdout stream is 21 dates and growing;** entry-day quotes are missing at ORATS for 8 of them (404 on the 15-DTE legs). A powered read needs a minimum n per band, pre-registered — [[debit-edge-needs-powered-holdout]]. Deferred settlement windows (6 dates with expiry after 2026-09-05) need a follow-up capture after 2026-09-28.
+- **CR-Y reads `bt_edge_backtest_results`** — confirm it filters to the latest `cr_id` (CR-AM) and does not average across CR-AH and CR-AM rows.
+- **`cr_ah_posthoc_limit_entry.py`** remains untracked and unpatched for the cutoff contract.
