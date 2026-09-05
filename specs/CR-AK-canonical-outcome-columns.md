@@ -1,0 +1,70 @@
+# CR-AK — Canonical outcome column backfill (session OHLC + post-touch)
+
+> Authority: vault session note `Dash/sessions/2026-09-05 - CR-AK — Canonical Outcome Column Backfill.md`
+> Branch: `feat/CR-AK-canonical-outcome-columns` (off `origin/main` 7a63825)
+> Scope: `--feature-version` arg on two backfill scripts (default canonical) + two data runs. No other code changes.
+> Mode: unattended single-swing run; halts at the first STOP gate that misses.
+
+## Problem
+
+`[Certain]` Under the canonical feature version `v0.6.0-openiv`, all 804 active `bt_daily_outcomes` rows have NULL in every session-OHLC column (`session_{open,high,low,close}_t{1,5,15}`) and every post-touch position column (`position_t{1,5,15}_post_touch`). Only `session_open_t0` (795/804), `reached_touch`, `days_to_reach`, `max_excursion_in_direction`, `final_close_distance_from_target` are populated.
+
+Under the retired `v0.5.0-rebuilt` those columns are filled (697 OHLC, 360 post-touch). CR-G (`cr_g_backfill_session_ohlc.py`) and CR-I (`cr_i_backfill_post_touch_positions.py`) were run against the old version in May; CR-037 created fresh outcome rows under the new version on 2026-06-07 and the two null-fill backfills were never re-run. Both scripts hardcode `FEATURE_VERSION = "v0.5.0-rebuilt"`, have no argparse, and do not read `CANONICAL_FEATURE_VERSION`. The `cr_g` script is also untracked in git.
+
+**Live consequence.** `TodaySetup/routes.py` and `Proposals` call `compute_structural_probability` at canonical, which reads the post-touch and OHLC columns from `bt_daily_outcomes_active` at that version. `aggregate_post_touch_distribution` treats None as missing → the post-touch block has no fractions → `apply_direction_qualification` either badges every magnet-day proposal "low-confidence — post-touch sample insufficient" or passes through unfiltered. **The CR-I direction gate and the CR-G session-OHLC edge inputs have been inert in the live Dash since 2026-06-07.**
+
+**Research consequence.** CR-AH Step 4 recorded the engine hypothesis (decision #13, post-touch pattern split) as UNTESTABLE — 0/216 `pattern_label`s — and attributed it to ~37% t15 coverage. The true coverage at canonical was 0%. The hypothesis was never tested. [[engine-qualification-untested-needs-corpus]] is mis-diagnosed.
+
+## Why recompute, not copy
+
+Compared 743 dates present under both versions: 21 rows differ. 12 are staleness (the pre-PR#39 sweep cron only promoted `v0.5.0` rows; redeployed 2026-09-05, should self-resolve). 1 is 2023-05-23 (see below). **8 are genuine IV-basis differences** — the open-straddle σ changes the 0.25σ touch tolerance, so `reached_touch` flips (2023-06-13, 2023-09-15, 2023-12-15) or `days_to_reach` shifts by 1–2 sessions (2023-06-16, 2023-11-15, 2024-03-13, 2024-07-15, 2026-04-28). Post-touch positions at the old version are therefore the wrong answer for those days at canonical. Session OHLC is version-independent in principle, but recomputing both through the same scripts keeps one provenance (`backfill_run_id`) per column set.
+
+## The 2023-05-23 `na_data` flip — explained, accepted
+
+`[Certain]` Two canonical feature rows carry `implied_move_1d = 0.0` (not NULL): **2023-05-23** (magnet-above → outcome `na_data`) and **2024-04-26** (amplification → `na_regime`, outcome unaffected, σ-features wrong). Cause: `_OPEN_STRADDLE_SQL` guards `atmiv IS NOT NULL` but not `atmiv > 0`; on both dates the pinned 06:33 PT snapshot carries `atmiv = 0`. The first snapshot with `atmiv > 0` is 06:34 on 2024-04-26 but **09:33** on 2023-05-23 — three hours after the open, not an open straddle by any definition.
+
+**Decision:** accept 2023-05-23 as `na_data` for CR-AK. The `atmiv > 0` guard lives in `packages/shared/day_features.py`, which is a cron import → changing it means a cron redeploy → out of scope for an overnight run. Filed as a follow-on below. Cost: one magnet-above date out of 387.
+
+## Locked decisions
+
+| # | Decision | Value |
+|---|---|---|
+| 1 | Recompute vs copy | **Recompute** via the CR-G / CR-I scripts pointed at canonical. No cross-version column copy. |
+| 2 | Version selection | Both scripts gain `--feature-version` (argparse), **default = `CANONICAL_FEATURE_VERSION`** imported from `packages.shared.canonical_version`. The hardcoded `FEATURE_VERSION` constant is removed; every query (targets, `_load_implied_moves`, smoke) uses the resolved value. Version logged at start. |
+| 3 | WHERE clauses | Unchanged. Both scripts remain null-fill idempotent (`session_open_t1 IS NULL` / `position_t1_post_touch IS NULL`). |
+| 4 | Order | CR-G (OHLC, 773 targets) first, then CR-I (positions, 387 targets). Independent, but OHLC is the larger and simpler run — if it fails, CR-I doesn't run. |
+| 5 | Provenance | Commit the untracked `cr_g_backfill_session_ohlc.py` **as-is** before modifying it, so the diff of the version-arg change is reviewable against the file that actually ran in May. |
+| 6 | 2023-05-23 | Accepted as `na_data`. `atmiv > 0` guard deferred (touches cron import). |
+| 7 | Not in scope | `na_regime` outcome design (37/60 summer dates produce no outcome); holiday mis-stamps (06-19, 07-03, 09-07); orphans 06-22 / 07-06; `bt_backfill_runs` fidelity; CR-AH Step 4 re-run (that is a separate CR — CR-AK only makes it *possible*). |
+| 8 | Merge | PR opened, **not merged** overnight. Chat reviews diff + run records in the morning; user smoke on `/today-setup` badges before merge. |
+
+## Expected values (gates)
+
+Measured from the live DB 2026-09-05 03:50 UTC via read-only connector. No crons run Sat/Sun; Monday 09-07 is Labor Day (EOD cron will run and mis-stamp, but does not touch outcome rows). These should be exact at run time.
+
+| Gate | Expected | Tolerance | On miss |
+|---|---|---|---|
+| G0.1 — CR-G target count (`computed`+`na_regime`, `session_open_t1 IS NULL`, canonical) | **773** | exact | STOP |
+| G0.2 — CR-I target count (`reached_touch = TRUE`, `position_t1_post_touch IS NULL`, canonical) | **387** | exact | STOP |
+| G0.3 — canonical feature rows with `implied_move_1d <= 0` | **2** (2023-05-23, 2024-04-26) | exact | STOP |
+| G0.4 — both scripts import cleanly under the chosen interpreter (`python -c "import ..."` or `--help`) | clean | — | STOP |
+| G1.1 — CR-G `n_failed` | 0 | exact | STOP before CR-I |
+| G1.2 — CR-G `n_skipped` (no bars) | 0 | ≤ 2 | note, continue |
+| G1.3 — CR-G `high_lt_low_violations_t1` | 0 | exact | STOP |
+| G1.4 — CR-G `rows_t1_populated_t15_null` (corpus-end: 15th session after trade_date > 2026-09-04) | ~15 | 10–25 | note, continue |
+| G1.5 — CR-G rows updated | ≥ 770 | — | STOP if < 760 |
+| G2.1 — CR-I `n_failed` | 0 | exact | STOP |
+| G2.2 — CR-I `out_of_range` | 0 | exact | STOP |
+| G2.3 — CR-I `skip_reasons` | `{}` or only `no_bars` for touch dates whose T+1 is past 2026-09-04 | any `no_implied_move` or `no_drift_target` → STOP | |
+| G2.4 — CR-I `remaining_null_t1` | small (touches in late Aug/Sep) | ≤ 15 | STOP if larger |
+| G3 — live-path check (Step 4) | `post_touch.filter_mode` no longer `insufficient` for at least 3 of 5 probe dates; `pattern_label` non-null for ≥ 1 | — | note, continue (this is diagnostic, not a gate) |
+
+## Smoke tests (Step 5, all read-only SQL)
+
+1. `SELECT count(*) FROM bt_daily_outcomes WHERE feature_version = canonical AND active AND outcome_status IN ('computed','na_regime') AND session_open_t1 IS NOT NULL` → ≥ 770.
+2. Same with `session_close_t15 IS NOT NULL` → ≈ 758 (773 − corpus-end NULLs).
+3. `SELECT position_t1_post_touch, count(*) ... WHERE reached_touch GROUP BY 1` → all values in {−1, 0, 1, NULL}, NULL count = G2.4.
+4. Cross-version sanity on 5 dates where touch outcomes agree between versions (pick from the 722 agreeing dates): `session_close_t5` identical between `v0.5.0-rebuilt` and `v0.6.0-openiv` (OHLC is version-independent). Post-touch positions should also agree on those 5 unless tolerance differences flip a borderline — report, don't gate.
+5. `v0.5.0-rebuilt` rows untouched: 697 OHLC / 360 positions, unchanged.
+6. Two `bt_backfill_runs` rows (CR-G, CR-I) with `status = 'completed'`, `smoke_test_results` populated.
+
