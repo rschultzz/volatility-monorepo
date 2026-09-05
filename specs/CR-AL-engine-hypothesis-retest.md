@@ -413,3 +413,39 @@ Phase 7: skipped (--no-persist) — bt_edge_backtest_results untouched.
 Step 4 complete in 420s
 ======================================================================
 ```
+
+## What changed
+
+- `packages/shared/probability.py`: `compute_structural_probability` gains `before_date` (threaded to `_rank_analogues_with_outcomes` → `rank_analogues`) and `allow_lookahead`; raises `ValueError` naming both args and the ADR when `exclude_date` is set without either. Live calls unchanged.
+- Callers: `/api/setup/proposals` (`TodaySetup/routes.py`) passes `before_date = trade_date` for every request — a no-op for today, the walk-forward cutoff for a browsed past date. `scripts/cr_z_step4b_k_display.py` passes `before_date = anchor_date`. `scripts/cr_ah_posthoc_limit_entry.py` is untracked and unpatched (see Open questions).
+- Tests: four new cases in `packages/shared/tests/test_probability.py` (raise on omission, `allow_lookahead` keeps the full pool, `before_date` yields only prior-dated analogues, live call unchanged). Suites: 424 + 105 pass under Rosetta.
+- `scripts/cr_ah_step4_analysis.py`: `--universe-end`, `--train-only`, `--no-persist`, `--cr-id`, `--structural-prob-mode {full,walk-forward}`, `--seed`; labeled/unlabeled pair in the pattern table; bootstrap CI + decision-9 read in Summary D; mode tag in every header; selection counts printed for G1; provenance fields in the run's smoke dict.
+- Data: two `bt_backfill_runs` rows (CR-AL `2be34a8e` full, `05ec3e81` walk-forward). No other writes; `bt_edge_backtest_results` untouched; holdout not read.
+- Interpreter: `apps/web/.venv/bin/python` for the runs; Rosetta repo venv for the test suites.
+- Gates: G0.1–G0.3, G1, G3, G4, G5 pass; G2 within tolerance on the derived reference. No halts.
+
+### Result — decision-9 reads
+
+| Structure | full | walk-forward |
+|---|---|---|
+| DEBIT | −0.69 pts, CI [−3.89, +2.19] → **INCONCLUSIVE** | −0.88 pts, CI [−3.56, +1.72] → **INCONCLUSIVE** |
+| CREDIT | 0 pattern matches → **untestable** | 0 settled matches → **untestable** |
+
+The engine hypothesis (CR-AH decision #13) is now tested for the first time and is **not supported** at the train level: the debit direction gate's pattern (`stepping-stone`) under-performs the unmatched (`mixed`) dates by 0.7–0.9 pts in both modes, with CIs that span zero; the credit gate's patterns do not occur on magnet-above anchors at all.
+
+## Decisions
+
+- **Route passes `before_date` unconditionally** rather than branching on "is the requested date today": for today the cutoff excludes nothing that exists yet, so live behaviour is preserved, and the branch would have been a second place to get the leak wrong.
+- **Commit 4 touched one file.** The kickoff's "two files only" for commit 4 is read as the two code files across commits 3+4 (`probability.py`, the script); the caller/test edits the kickoff itself required live in commit 3.
+- **Legacy Summary D text left as-is** for the n=0-settled case; the decision-9 read added in this CR is the authoritative line. Fixing the old branch is a one-line change but is outside "flags only".
+- **Per-date label diff computed in a scratch script**, not added to the analysis script, to keep commit 4 to flags.
+- **Reported the result as "not supported" rather than "hurts"**: the direction is consistently negative in both modes, but decision #9 requires the CI to exclude zero for a "hurts" verdict, and it does not.
+
+## Open questions
+
+- **Credit-side patterns do not occur.** One `slow-revert` and one `overshoot-then-revert` in 396 magnet-above anchors; the credit gate (`touch-and-reject` / `slow-revert` / `overshoot-then-revert`) can essentially never open. Either the label thresholds in `_pattern_label_from_fractions` are miscalibrated for the current K, or reversion after an overhead-magnet touch is genuinely rare in this corpus. Decide whether `apply_direction_qualification` keeps a credit branch at all.
+- **Lookahead moves per-date signals materially** (41/105 labels, 59/105 touch rates by > 5 pp; 2023 anchors 21/33) even though the aggregate read is unchanged. CR-AM: walk-forward re-run of the CR-AH band/edge cells and the CR-AI DTE result before either is cited; consider a minimum walk-forward pool size below which the anchor is reported as `insufficient` rather than labeled `mixed`.
+- **Debit gate is directionally harmful in both modes.** With n≈33–55 per cell the CI is ±2.5–3 pts; a powered test needs roughly 4× the sample or a pooled regime. Until then, decide whether `apply_direction_qualification` should stop filtering live proposals (advisory badge only).
+- **Legacy Summary D "adds value" line** fires when the matched cell has no settled trades (mean None → 0). One-line guard; fold into CR-AM.
+- **Callers deferred to CR-AM:** `scripts/cr_ah_posthoc_limit_entry.py:317` (untracked; passes `exclude_date` only; will raise if run — intended).
+- **G3 measured the wrong cell.** "≥ 30 labeled per structure" passed while the decisive credit `pattern_match` cell was 0. Future gates on Summary D should be per-cell.
