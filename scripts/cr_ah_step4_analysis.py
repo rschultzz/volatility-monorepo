@@ -20,12 +20,19 @@ Output:
   - Aggregate stats written to bt_edge_backtest_results (needs CREATE TABLE first)
 
 Usage: PYTHONUNBUFFERED=1 python3 -u scripts/cr_ah_step4_analysis.py
-         [--universe-end YYYY-MM-DD] [--train-only] [--no-persist]
-         [--cr-id CR-AH] [--structural-prob-mode {full,walk-forward}] [--seed 20260905]
+         [--universe-end YYYY-MM-DD] [--split-date YYYY-MM-DD] [--train-only]
+         [--no-persist] [--cr-id CR-AH] [--structural-prob-mode {full,walk-forward}]
+         [--seed 20260905]
 
 CR-AL flags (2026-09-05):
   --universe-end          drop signal dates after this date before stratified
                           selection (pin the universe to reproduce June's train set)
+  --split-date            train/holdout split: partition = 'train' if trade_date
+                          <= split else 'holdout' (default 2026-06-05 per ADR
+                          "Holdout Split Moves to 2026-06-05"; June used 2025-08-12).
+                          With --universe-end == --split-date there is no holdout;
+                          every holdout print path says so and Phase 7 persists
+                          train cells only.
   --train-only            drop holdout entries after selection; by-band prints
                           train only; Summary A/B replaced by "holdout not read"
   --no-persist            skip Phase 7 (no bt_edge_backtest_results writes)
@@ -119,7 +126,8 @@ from packages.shared.strategy_templates import Leg
 TICKER     = "SPX"
 OPRA_ROOT  = "SPX"
 VERSION    = CANONICAL_FEATURE_VERSION
-SPLIT_DATE = date(2025, 8, 12)
+DEFAULT_SPLIT_DATE = date(2026, 6, 5)   # CR-AM / ADR 2026-09-05; June's run used 2025-08-12
+_NO_HOLDOUT_LINE = "holdout: none (split = universe end)"
 DTE_TARGET = 15
 
 # Threshold sweep: edge values in [0, 1] (e.g. 0.10 = 10 percentage points)
@@ -255,11 +263,17 @@ class TradeData:
 
 # ── DATA LOADING ──────────────────────────────────────────────────────────────
 
-def load_signal_entries(conn, universe_end: Optional[date] = None) -> list[dict]:
+def load_signal_entries(
+    conn,
+    universe_end: Optional[date] = None,
+    split_date: date = DEFAULT_SPLIT_DATE,
+) -> list[dict]:
     """All magnet-above signal dates with sigma/band/partition/drift_target.
 
     universe_end (CR-AL): drop signal dates after this date before anything
     else, so stratified selection reproduces an earlier run's universe.
+    split_date (CR-AM): partition = 'train' if trade_date <= split_date else
+    'holdout'.
     """
     rows = conn.execute(
         """
@@ -314,7 +328,7 @@ def load_signal_entries(conn, universe_end: Optional[date] = None) -> list[dict]
             "implied_move":  implied_move,
             "sigma":         sigma,
             "band":          distance_band(sigma),
-            "partition":     "train" if trade_date <= SPLIT_DATE else "holdout",
+            "partition":     "train" if trade_date <= split_date else "holdout",
         })
 
     print(f"  Loaded {len(result)}/{len(dates)} signal entries (skipped {skipped}).")
@@ -969,6 +983,9 @@ def print_by_band(all_data: list[TradeData], threshold: float, structure: str, l
           f"[lo–hi 95%]     {'base':>7}  {'beat':>7}")
     print(f"  {'─'*70}")
     for part in (("train",) if train_only else ("train", "holdout")):
+        if part == "holdout" and not any(td.partition == "holdout" for td in all_data):
+            print(f"  {_NO_HOLDOUT_LINE}")
+            continue
         for b in ("near", "mid", "far", "all"):
             if b == "all":
                 subset = [td for td in all_data if td.partition == part]
@@ -1107,6 +1124,8 @@ def build_summary(
     d_near_ho = None if train_only else get_cell(debit_data, "near", "holdout", debit_thresh)
     if train_only:
         lines.append("  holdout not read (--train-only).")
+    elif not any(td.partition == "holdout" for td in debit_data):
+        lines.append(f"  {_NO_HOLDOUT_LINE}")
     elif d_near_ho and d_near_ho["n"] >= 3:
         beat = d_near_ho.get("beat") or 0
         sign = "+" if beat > 0 else ""
@@ -1131,6 +1150,8 @@ def build_summary(
     c_near_ho = None if train_only else get_cell(credit_data, "near", "holdout", credit_thresh)
     if train_only:
         lines.append("  holdout not read (--train-only).")
+    elif not any(td.partition == "holdout" for td in credit_data):
+        lines.append(f"  {_NO_HOLDOUT_LINE}")
     elif c_near_ho and c_near_ho["n"] >= 3:
         beat = c_near_ho.get("beat") or 0
         sign = "+" if beat > 0 else ""
@@ -1295,6 +1316,7 @@ def ensure_catalog_table() -> bool:
 def persist_cell_stats(
     conn,
     run_id: str,
+    cr_id: str,
     structure: str,
     outcome: str,
     band: str,
@@ -1312,14 +1334,14 @@ def persist_cell_stats(
     conn.execute(
         """
         INSERT INTO bt_edge_backtest_results
-          (run_id, structure_type, outcome_type, distance_band, post_touch_pattern,
+          (run_id, cr_id, structure_type, outcome_type, distance_band, post_touch_pattern,
            partition, threshold, n_dates, n_filled, n_settled,
            fill_rate, mean_pnl, win_rate, wilson_lo, wilson_hi,
            baseline_mean, beat_baseline)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """,
         (
-            run_id, structure, outcome, band, pattern,
+            run_id, cr_id, structure, outcome, band, pattern,
             partition, threshold,
             r.get("n", 0), r.get("n_filled", 0), r["n"],
             r.get("fill_rate"), r.get("mean_pnl"), r.get("win_rate"),
@@ -1335,6 +1357,8 @@ def _parse_args(argv=None):
     p = argparse.ArgumentParser(description="CR-AH Step 4 — two-structure × two-axis analysis")
     p.add_argument("--universe-end", type=date.fromisoformat, default=None, metavar="YYYY-MM-DD",
                    help="drop signal dates after this date before stratified selection")
+    p.add_argument("--split-date", type=date.fromisoformat, default=DEFAULT_SPLIT_DATE, metavar="YYYY-MM-DD",
+                   help="train/holdout split; partition='train' if trade_date <= split (default 2026-06-05)")
     p.add_argument("--train-only", action="store_true",
                    help="drop holdout entries after selection; never read holdout P&L")
     p.add_argument("--no-persist", action="store_true",
@@ -1356,7 +1380,8 @@ def main(argv=None):
     print(f"\n{SEP}")
     print("CR-AH Step 4 — Two-structure × two-axis analysis")
     print(f"  cr_id={args.cr_id}  structural-prob {_MODE_TAG}  train_only={args.train_only}  "
-          f"no_persist={args.no_persist}  universe_end={args.universe_end}  seed={args.seed}")
+          f"no_persist={args.no_persist}  universe_end={args.universe_end}  "
+          f"split_date={args.split_date}  seed={args.seed}")
     print(SEP)
 
     conn = get_backfill_db_conn()
@@ -1369,7 +1394,8 @@ def main(argv=None):
         print(f"\n{SEP2}")
         print("Phase 1: Loading signal dates and selecting clean subset...")
 
-        all_entries = load_signal_entries(conn, universe_end=args.universe_end)
+        all_entries = load_signal_entries(conn, universe_end=args.universe_end,
+                                          split_date=args.split_date)
         selected    = select_clean_dates(all_entries)
 
         from collections import Counter as _Counter
@@ -1380,6 +1406,8 @@ def main(argv=None):
             selected = [e for e in selected if e["partition"] == "train"]
             print(f"  --train-only: kept {len(selected)}/{n_before} train entries; "
                   f"holdout not read.")
+        elif not any(e["partition"] == "holdout" for e in selected):
+            print(f"  {_NO_HOLDOUT_LINE}")
 
         print("\nFiltering to A-bucket clean dates for each structure...")
         print("  Credit (target + target+10)...")
@@ -1455,8 +1483,11 @@ def main(argv=None):
 
         # ── Phase 4: Full results ─────────────────────────────────────────────
         print(f"\n{SEP2}")
+        has_holdout = any(td.partition == "holdout" for td in debit_trades + credit_trades)
         if args.train_only:
             print("Phase 4: Full results (TRAIN only — holdout not read)")
+        elif not has_holdout:
+            print(f"Phase 4: Full results (all train; {_NO_HOLDOUT_LINE})")
         else:
             print("Phase 4: Full results (HOLDOUT READ ONCE at chosen threshold)")
 
@@ -1500,6 +1531,9 @@ def main(argv=None):
                 ("credit", credit_trades, credit_thresh),
             ]:
                 for part in ("train", "holdout"):
+                    if part == "holdout" and not any(td.partition == "holdout" for td in data):
+                        print(f"  {structure}: {_NO_HOLDOUT_LINE}")
+                        continue
                     for band in ("near", "mid", "far", "all"):
                         if band == "all":
                             subset = [td for td in data if td.partition == part]
@@ -1507,7 +1541,7 @@ def main(argv=None):
                             subset = [td for td in data if td.partition == part and td.band == band]
                         if not subset:
                             continue
-                        persist_cell_stats(conn, run_id, structure, "close",
+                        persist_cell_stats(conn, run_id, args.cr_id, structure, "close",
                                           band, None, part, thresh, subset)
             conn.commit()
             print("  ✓ Aggregate stats written.")
@@ -1529,6 +1563,7 @@ def main(argv=None):
             "train_only": args.train_only,
             "no_persist": args.no_persist,
             "universe_end": args.universe_end.isoformat() if args.universe_end else None,
+            "split_date": args.split_date.isoformat(),
             "seed": args.seed,
             "selection_by_band_partition": sel_counts,
             "debit_labeled_train": sum(1 for td in debit_trades if td.partition == "train" and td.pattern_label),
