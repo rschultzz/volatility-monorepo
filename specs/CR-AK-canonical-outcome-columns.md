@@ -68,3 +68,35 @@ Measured from the live DB 2026-09-05 03:50 UTC via read-only connector. No crons
 5. `v0.5.0-rebuilt` rows untouched: 697 OHLC / 360 positions, unchanged.
 6. Two `bt_backfill_runs` rows (CR-G, CR-I) with `status = 'completed'`, `smoke_test_results` populated.
 
+
+## Step 0 findings (read-only, 2026-09-05 04:23 UTC)
+
+Interpreter: `apps/web/.venv/bin/python` (native arm64; pandas 2.3.3, psycopg 3.2.13, dotenv all import cleanly — no Rosetta fallback needed).
+Branch: `feat/CR-AK-canonical-outcome-columns` off `origin/main` 7a63825. Backfill role check: `BACKFILL_DATABASE_URL` connects as `dash_backfill_writer`.
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G0.1 CR-G targets (canonical, computed+na_regime, `session_open_t1 IS NULL`) | 773 | **773** | PASS |
+| G0.2 CR-I targets (canonical, `reached_touch`, `position_t1_post_touch IS NULL`) | 387 | **387** | PASS |
+| G0.3 canonical feature rows with `implied_move_1d <= 0` | 2023-05-23, 2024-04-26 | **2023-05-23, 2024-04-26** | PASS |
+| G0.4 both scripts import under the chosen interpreter | clean | **clean** (both report `FEATURE_VERSION = v0.5.0-rebuilt` pre-change) | PASS |
+
+Context counts at canonical (active, SPX): computed 463 / na_data 13 / na_regime 310 / pending_history 18 = 804.
+`v0.5.0-rebuilt` baseline for smoke test 5: 697 rows with OHLC, 360 with positions.
+
+### Step 4 baseline — `compute_structural_probability` at canonical (k=200, exclude_date=trade_date, regime inferred from feature flags)
+
+Probe script: scratchpad `probe_sp.py`; JSON saved as `step0_baseline.json`. Badges are what `apply_direction_qualification` returns for a credit + debit magnet-spread pair at DTE 2 / 7 / 15 (t1 / t5 / t15 bands).
+
+| Date | Regime (canonical flags) | k / k_out | touch_rate | filter_mode | same_bucket_n / total_touchers | denominators t1/t5/t15 | pattern_label | Badge (all DTE bands) |
+|---|---|---|---|---|---|---|---|---|
+| 2026-09-03 | magnet-above | 20 / 18 | 0.611 | pooled-fallback | 5 / 11 | 0 / 0 / 0 | None | mixed pattern — no clear direction |
+| 2026-08-27 | magnet-above | 38 / 31 | 0.903 | strict | 9 / 28 | 0 / 0 / 0 | None | mixed pattern — no clear direction |
+| 2026-07-30 | amplification | 27 / 0 | None | insufficient | 0 / 0 | 0 / 0 / 0 | None | low-confidence — post-touch sample insufficient |
+| 2026-06-24 | amplification | 28 / 0 | None | insufficient | 0 / 0 | 0 / 0 / 0 | None | low-confidence — post-touch sample insufficient |
+| 2026-04-28 | magnetic-pin | 0 / 0 | None | insufficient | 0 / 0 | 0 / 0 / 0 | None | low-confidence — post-touch sample insufficient |
+
+Observations (recorded, not gated):
+
+- The two true magnet dates confirm the live-path diagnosis: `filter_mode` is `strict` / `pooled-fallback` (bucket filter works, touchers exist) but every denominator is 0 and `pattern_label` is None because `position_t*_post_touch` is NULL on all canonical rows. `apply_direction_qualification` falls through to "mixed pattern — no clear direction" on both proposals — neither credit nor debit ever qualifies.
+- The vault note labels all five probe dates "magnet". At canonical, 2026-07-30 and 2026-06-24 are amplification (`na_regime` outcome) and 2026-04-28 is magnetic-pin (computed, touched at day 0). `bt_audit_flags` rows for the five dates: (0,) — no promoted regime override changes this. Only 09-03 and 08-27 (both `pending_history` at canonical, so excluded from their own corpus anyway) exercise the direction gate; G3 "≥3 of 5 not insufficient" is therefore structurally capped at 2 of 5 unless the amplification/pin dates gain touchers. Recorded as a spec delta; G3 is diagnostic, run continues.
