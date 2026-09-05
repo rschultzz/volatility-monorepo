@@ -336,3 +336,40 @@ Phase 7: Persisting aggregate stats to bt_edge_backtest_results...
 Step 4 complete in 284s
 ======================================================================
 ```
+
+## What changed
+
+- `packages/shared/backtest/quote_validity.py` (new): leg rule, `QuoteMap` builder, spread-range rule (decision 2).
+- `packages/shared/backtest/harness.py` / `models.py`: invalid minutes skipped and persisted with `quote_valid=False`; baseline = first valid minute (decision 3); gated fill and touch-exit on valid minutes only (decision 4); `TradeResult` gains `n_minutes_total`, `n_minutes_valid`, `baseline_minute_offset`, `had_invalid_quote`, `excluded_reason` (decisions 6–7).
+- `scripts/cr_ah_step4_analysis.py`: the inline crawl (`build_entry_scan`, `get_touch_pos_val`) uses the same helpers; per-trade observability on `TradeData`; decision-6 exclusions listed; validity distributions, exclusions and the post-filter out-of-range count (G2) printed and written to the run's smoke dict.
+- Tests: `packages/shared/backtest/tests/test_quote_validity.py`, 13 cases. Suites 118 + 424.
+- Data: run `7d1efe38` persisted 8 rows `cr_id='CR-AN'` — the new walk-forward, clean-quote reference. CR-AH (full-corpus) and CR-AM (walk-forward, contaminated) rows remain as labeled comparison columns; readers (CR-Y) should take the latest `cr_id`.
+- Decision 5 (settlement from valid minutes) had nothing to act on: both the harness and the Step 4 script settle on the ES close, not on option quotes. Recorded, no code.
+- ORATS 404 classification: **(ii) strike/expiry not served on the signal date** — 5-point strikes at ~3-week non-monthly SPX expiries are listed later; dates and contracts are otherwise served. No fix (decision 10).
+- Duplicates not patched (decision 1): `scripts/cr_ai_stage2_backfill.py` (SQL mids, first/last quoted minute) and `packages/shared/options_cache/pricing.py` (live proposal-leg mids, no crossed-book check).
+- Gates: G0.1–G0.3, G1–G5, G7 pass; G6 noted and explained. No halts.
+
+### Result on clean quotes (walk-forward, all train ≤ 2026-06-05, T = 0.05 debit / 0.00 credit)
+
+| structure | near | mid | far | all |
+|---|---|---|---|---|
+| debit: n / close / beat | 39 / +2.12 / +0.07 | 36 / +1.17 / +0.30 | 31 / +2.00 / +0.03 | 106 / +1.76 / +0.13 |
+| credit: n / close / beat | 4 / −6.45 / −4.17 | 10 / −1.37 / −0.06 | 13 / −1.20 / −0.43 | 27 / −2.04 / −0.51 |
+
+Debit is positive in every band on close P&L but beats its own first-valid-minute baseline by ~0.1 pts (mid +0.3); credit is negative in every band. The "debit close-path edge" that June read as +2.26 on a contaminated holdout baseline is, on clean walk-forward train data, a **+0.13 pt beat over baseline** — i.e. the edge gate adds almost nothing over simply entering at the first valid minute; what remains is the structure's own P&L (+1.76), not the gate.
+
+## Decisions
+
+- **Skip minutes, keep trades** (decision 2) rather than exclude: 0 trades lost, and the 26 previously-flagged debit trades turn out to carry no beat once priced honestly — the clean-subset table had been optimistic by construction. The spec records that mechanism rather than hiding the G6 miss.
+- **Sign-aware range rule for verticals** (a debit spread may never be worth < 0, a credit spread never > 0 in the harness's signed convention), magnitude-only for multi-leg. Derived from the legs, so plugins need no change.
+- **Applied the harness change to the generic harness and to the Step 4 script's inline copy of the crawl** (two insertion points, one helper). The script is the run path; the harness is the shared path future callers inherit. CR-AI and live pricing listed, not patched.
+- **Persisted at the run's own chosen thresholds** (0.05 / 0.00); the restatement tables compare at each run's chosen T because the sweep is flat and both are the published cells.
+- **404s classified, not fixed**; the fix belongs in strike selection (nearest listed strike / chain query), not in capture or retention.
+
+## Open questions
+
+- **Strike-availability fallback in the leg builder.** `round5(target)` lands on an unlisted 5-point strike for ~⅓ of dates at 15 business days on weekly expiries (all 8 CR-AM holdout 404s, likely a share of CR-AH's original D-bucket). Fix: nearest listed strike from the chain for that expiry, or prefer 10-point strikes, then re-capture the 8 dates (they are recoverable, not lost). Feeds [[debit-edge-needs-powered-holdout]]; de-prioritises the retention argument in CR-AG.
+- **The edge gate adds ~0 over the first valid minute** on clean data (beat +0.13 all-train, +0.30 mid). Either the structural-probability signal is not informative at the entry-timing level, or mid-based pricing hides it. Before more edge work, decide whether "beat vs baseline" is the right objective at all versus absolute close P&L with a cost model. Cross-ref [[2026-06-07 - Options Data Retention and Capture Architecture]] (bid/ask-aware fills, out of scope here).
+- **CR-AI Stage 2 entries are first-quoted-minute SQL mids** — the minute class that carries most contamination. A CR-AI re-run on the shared filtered path is a candidate follow-on (not run: decision 11); the mid-band question ([[mid-band-drift-targets-lack-edge]]) should wait for it.
+- **Live pricing (`options_cache/pricing.py`) has no crossed-book or range check** — proposal cards can show a bad quote at the open. Follow-on CR.
+- **Baseline offset tail:** 34 debit / 33 credit trades have their first valid minute after 06:30 (max 9 / 17 min). Decision 3 handles it; a cap is not needed (p95 ≤ 3 min).
