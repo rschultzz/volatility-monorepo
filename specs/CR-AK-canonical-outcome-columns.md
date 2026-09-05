@@ -147,3 +147,33 @@ Command: `apps/web/.venv/bin/python -u scripts/cr_i_backfill_post_touch_position
 Notes: `rows_inserted` on both run rows reflects the last 50-row heartbeat (750 for CR-G, 350 for CR-I), not the final tally — the known `bt_backfill_runs` fidelity issue from CR-AJ, unchanged here. The six roll-Friday dates from Step 1 did not appear as skips: `_fetch_rth_daily_bars` returns the surrounding sessions, and `classify_post_touch_positions` indexes from `days_to_reach`, so positions were classified for any of them that touched (checked in Step 3 smoke 4 detail).
 
 No G2 STOP condition met → proceeding to Step 3.
+
+## Step 3 — smoke tests (read-only, 2026-09-05 05:48 UTC)
+
+Script: scratchpad `smoke_step3.py`. Smoke 4 dates picked by rank (35 / 105 / 175 / 245 / 315) from the 351 dates where touch outcome and `days_to_reach` agree between versions and the old version has both OHLC and t15 position.
+
+| # | Test | Expected | Actual | Result |
+|---|---|---|---|---|
+| 1 | canonical computed+na_regime with `session_open_t1` | ≥ 770 | **767** | FAIL |
+| 2 | same with `session_close_t15` | ≈ 758 (773 − corpus-end) | **756** (t15 NULL = 17) | PASS |
+| 3 | `position_t1_post_touch` over touched rows | values ⊂ {−1,0,1,NULL}, NULL = G2.4 | **{'-1': 101, '0': 90, '1': 196}**; t15: {'-1': 91, '0': 16, '1': 279, 'None': 1} | PASS |
+| 4 | cross-version on 5 agreeing dates: `session_close_t5` identical | 5/5 | **5/5** close equal; positions equal on 5/5 | PASS |
+| 5 | `v0.5.0-rebuilt` untouched (OHLC / positions) | 697 / 360 | **697 / 360** | PASS |
+| 6 | two `bt_backfill_runs` rows completed with smoke | CR-G + CR-I completed | **[('CR-G', 'd605b950', 'completed', True), ('CR-I', '4e55a538', 'completed', True)]** | PASS |
+| 7 | (extra) canonical rows carrying each new run_id | 773 / 387−skips | [('4e55a538', 387), ('d605b950', 386)] | info |
+
+Smoke 4 detail (old vs canonical):
+| date | close_t5 old | close_t5 canon | p1 old/new | p5 old/new | p15 old/new |
+|---|---|---|---|---|---|
+| 2023-07-17 | 4584.25 | 4584.25 | 1/1 | 1/1 | 0/0 |
+| 2024-02-08 | 5044.75 | 5044.75 | 1/1 | 1/1 | 1/1 |
+| 2024-07-23 | 5472.75 | 5472.75 | 1/1 | 1/1 | 1/1 |
+| 2025-05-16 | 5817.0 | 5817.0 | 0/0 | 1/1 | 1/1 |
+| 2025-12-01 | 6843.0 | 6843.0 | -1/-1 | -1/-1 | 1/1 |
+
+
+Smoke 1 reads **767**, three below the spec's ≥ 770. The shortfall is exactly the six roll-Friday rows from the Step 1 delta (no RTH bars on the trade date → all-NULL OHLC); 767 + 6 = 773. Not a STOP condition (G1.5 is measured on rows updated = 773, and 767 is above the 760 floor either way). Smoke 2's 17 t15 NULLs = 11 corpus-end + 6 roll Fridays.
+
+Provenance note (row 7): `backfill_run_id` is a single column, so CR-I's UPDATE overwrote CR-G's id on the 387 touched rows. Final split: 386 rows carry the CR-G run id, 387 the CR-I run id — every one of the 773 targets carries one of the two. The "one `backfill_run_id` per column set" framing in decision #1 is therefore only recoverable from `bt_backfill_runs` timestamps, not per row.
+
+Roll-Friday spot check (old vs canonical positions on the six dates): 2024-09-20 and 2025-09-19 touched under both versions and classify identically (d=6 → 1/1/1; d=3 → 1/1/1). 2023-09-15 is one of the eight IV-basis flips from the vault note (old: no touch; canonical: touch at day 0 → −1/−1/−1). 2024-03-15, 2024-06-21, 2025-03-21 are `na_regime` under both.
