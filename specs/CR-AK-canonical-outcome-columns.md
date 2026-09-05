@@ -196,3 +196,30 @@ After-run fractions for the two magnet dates:
 - 2026-08-27 (9 same-bucket touchers, strict): t1 0.11/0.44/0.44; t5 0.11/0.22/0.67; t15 0.11/0.22/0.67 → mixed.
 
 G3 (diagnostic): "`filter_mode` no longer `insufficient` for ≥ 3 of 5" — **not met, 2 of 5**, and structurally could not be: three of the five probe dates are not magnet at canonical (Step 0 delta), so they never had touchers to lose. "`pattern_label` non-null for ≥ 1" — **met, 2 of 2** magnet dates. The direction gate is live again: before CR-AK every magnet-day proposal pair fell through to "mixed pattern"; now the badge is data-driven, and on 09-03 it actually selects a direction.
+
+## What changed
+
+- `scripts/cr_g_backfill_session_ohlc.py`: committed as-is (untracked since the May run), then given `--feature-version` (argparse, default `CANONICAL_FEATURE_VERSION`); hardcoded `FEATURE_VERSION` removed; resolved version threaded through the targets query and all three version-scoped smoke queries; logged after role verification; docstring usage updated.
+- `scripts/cr_i_backfill_post_touch_positions.py`: same treatment; additionally threaded through `_load_implied_moves` and the UPDATE statement.
+- Data (canonical `v0.6.0-openiv`, SPX, `bt_daily_outcomes`): 773 rows gained session OHLC (767 with real values, 6 roll Fridays all-NULL — see Step 1 delta); 387 touched rows gained `position_t{1,5,15}_post_touch`. Two `bt_backfill_runs` rows: CR-G `d605b950` (completed 05:19 UTC), CR-I `4e55a538` (completed 05:45 UTC). `v0.5.0-rebuilt` untouched (697 / 360).
+- Interpreter: `apps/web/.venv/bin/python` throughout; no Rosetta fallback needed.
+- Halts: none. All STOP gates passed at their expected values (G0.1 773, G0.2 387, G0.3 the two dates, G1.1/G1.3 0, G1.5 773, G2.1–G2.4 0/0/{}/0).
+
+### Deltas from spec
+
+- Smoke 1 = 767, not ≥ 770 (six roll-Friday dates have no RTH bars on the trade date; identical gap under `v0.5.0-rebuilt`).
+- Three of the five Step 4 probe dates are amplification / magnetic-pin at canonical, not magnet; G3's "3 of 5" was unattainable. The two real magnet dates both moved from empty to populated post-touch blocks.
+- `backfill_run_id` is overwritten by the later script on the 387 touched rows (386 CR-G / 387 CR-I).
+
+## Decisions
+
+- Proceeded past smoke 1's 767 rather than halting: it is not a STOP gate, G1.5 (rows updated) read 773, and the shortfall is fully accounted for by a pre-existing bar gap that predates the CR and affects the old version identically.
+- Did not commit the run logs under `scripts/logs/` (nothing there is tracked upstream); paths are recorded in the spec instead.
+- Did not touch the roll-Friday rows, `bt_backfill_runs.rows_inserted` heartbeat fidelity, or `backfill_run_id` overwrite semantics — all out of scope per decision #7 and the unattended mandate.
+
+## Open questions
+
+- **Roll-Friday RTH bar gap.** `ironbeam_es_1m_bars` stops at 13:29 UTC on the six quarterly third Fridays 2023-09-15 → 2025-09-19 (both Databento and Ironbeam eras). Any per-session computation keyed on the trade date's own bars (OHLC here; possibly `session_open_t0`, outcomes runner touch detection on day 0) is blind on those dates. Decide: backfill the expiring-contract RTH bars for those sessions, or use the next contract's bars, or accept and document. Check whether 2025-12-19, 2026-03-20, 2026-06-19 (Ironbeam era) share the gap.
+- **`backfill_run_id` single column.** CR-I overwrote CR-G's id on the touched rows. If per-column-set provenance matters, either add `ohlc_backfill_run_id` / `post_touch_backfill_run_id` or accept "last writer wins" and rely on `bt_backfill_runs`. Adjacent to `bt-backfill-runs-audit-record-fidelity`.
+- **Direction gate calibration now that it is live.** On 2026-09-03 only the t5 band qualifies debit; t1/t15 fall to "mixed" on the same 11 touchers because the Wilson lower bound at n=11 rarely clears 0.40. With denominators of 9–11 the gate will flip on one analogue. Worth a look at whether `_WILSON_FLOOR` / `fallback_threshold` were tuned for the K=20 corpus and need revisiting at K=200 — separate CR, after the user smokes `/today-setup`.
+- Carried from the vault note, unchanged: `atmiv > 0` guard (2023-05-23 / 2024-04-26), CR-AH Step 4 post-touch re-run, `na_regime` outcome design.
