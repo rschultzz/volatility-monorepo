@@ -96,3 +96,32 @@ Other findings surfaced (not fixed here):
 2. Add `--skip-missing-snapshots` to `cr_ab_backfill_openiv.py`. No other edits.
 3. Data run Steps 1–5, each pasted and confirmed before the next.
 4. Smoke + wrap in the session note.
+
+## Smoke + wrap (2026-09-04, run 2026-09-05 03:44–03:49 UTC)
+
+Interpreter: `apps/web/.venv/bin/python` (native arm64; `python3` and the repo `.venv`
+carry x86_64 psycopg wheels and cannot connect on this machine).
+
+| Step | Run id | Locked | Actual |
+|---|---|---|---|
+| 1 dry run | a22509a6 | 60 dates 06-08 … 09-03 | 60 dates 06-08 … 09-03; 06-19 / 07-03 skipped; `skipped_missing_snapshot` present |
+| 2 real | c2d60482 | inserted=60 skipped=0 failed=0; 744 → 804 | inserted=60 skipped=0 failed=0; 744 → 804; 60 rows carry run_id |
+| regime parity | — | 0 mismatches | 0 mismatches (60/60); IM 26.4–120.2 pts, none NULL/zero |
+| 3 IV fill | b7e971e9 | fills 09-04 only | auto-detected 09-04, implied_move=68.22, n_features=35 |
+| 4 outcomes | 5847d6a8 | Target dates: 61 | Target dates: 61; inserted=61; computed 18 / pending 6 / na_regime 37 / na_data 0 |
+| 5 final | — | 804 rows, IM NULL 0 | `v0.6.0-openiv` 804, 2023-05-01 → 2026-09-04, IM NULL 0 |
+
+### Deltas from spec
+
+- None in scope. The 37 na_regime rows equal the 32 amplification + 2 bounded + 3 untethered dates from the dry run.
+
+### Deferred / surfaced (not fixed here)
+
+- `sweep_pending_outcomes` cron was redeployed from chat tonight (dep-dadov7vqj5pc7391rkq0, live on 9b77191). Verify Monday 2026-09-07 11:05 UTC smoke row reports the `v0.6.0-openiv` split (18 pending in scope), not the v0.5.0 457/13/273.
+- Outcomes runner counts holiday partial ES sessions (06-19, 07-03) as RTH sessions for horizon counting. Appended to vault open question `next-business-day-skips-holidays`.
+- `bt_backfill_runs` fidelity: dry-run opens a run row claiming "inserted N/N"; `rows_inserted` flushes every 50 and never at end. New vault open question `bt-backfill-runs-audit-record-fidelity`; fix in `backfill_safety.py` / callers, separate CR.
+- 06-22 / 07-06 orphan sessions (no landscape row) deferred to the holiday open question.
+- Labor Day 2026-09-07 will reproduce the mis-stamp pattern on 09-07 / 09-08.
+- `feature_config_hash='tampered'` row (2023-06-01, v0.5.0-rebuilt) is a test fossil; untouched, out of scope.
+
+Session note: `Dash/sessions/2026-09-04-cr-aj-openiv-gap-backfill.md`.
