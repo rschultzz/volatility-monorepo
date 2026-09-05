@@ -1181,20 +1181,22 @@ def build_summary(
     ]:
         matched   = [td for td in data if td.pattern_label in patterns_for]
         unmatched = [td for td in data if td.pattern_label not in patterns_for]
-        if not matched or not unmatched:
-            lines.append(
-                f"  {structure}: too few pattern-labeled trades to score engine hypothesis "
-                f"(pattern_match n={len(matched)}, no_match n={len(unmatched)})."
-            )
-            if summary_d_out is not None:
-                summary_d_out[structure] = {
-                    "n_match": len(matched), "n_no_match": len(unmatched), "read": "untestable",
-                }
-            continue
         pairs_m = [(td, compute_pnl(td, threshold)) for td in matched]
         pairs_u = [(td, compute_pnl(td, threshold)) for td in unmatched]
         sm = aggregate(pairs_m); su = aggregate(pairs_u)
         rm = fmt_stats(sm, "pattern_match"); ru = fmt_stats(su, "pattern_no_match")
+        # An empty cell — no labeled trades, or labeled trades with no settled
+        # close P&L — cannot be read. Never print "adds value" / "HURTS" on it.
+        if not matched or not unmatched or rm["n"] == 0 or ru["n"] == 0:
+            lines.append(
+                f"  {structure}: engine hypothesis UNTESTABLE "
+                f"(n_match={rm['n']}, n_no_match={ru['n']})"
+            )
+            if summary_d_out is not None:
+                summary_d_out[structure] = {
+                    "n_match": rm["n"], "n_no_match": ru["n"], "read": "untestable",
+                }
+            continue
         lines.append(
             f"  {structure.upper()} engine check:"
             f"  pattern_match (n={rm['n']}) pnl={pf(rm.get('mean_pnl'))}"
