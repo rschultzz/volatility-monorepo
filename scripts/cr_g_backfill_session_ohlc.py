@@ -26,10 +26,14 @@ Data safety class: null_fill_update — eligible for unattended execution.
 Pre-flight: SELECT current_user must return 'dash_backfill_writer'.
 
 Usage:
-    python -u scripts/cr_g_backfill_session_ohlc.py 2>&1 | tee scripts/logs/cr_g_ohlc_$(date +%Y%m%d_%H%M%S).log
+    python -u scripts/cr_g_backfill_session_ohlc.py [--feature-version V] 2>&1 | tee scripts/logs/cr_g_ohlc_$(date +%Y%m%d_%H%M%S).log
+
+--feature-version defaults to CANONICAL_FEATURE_VERSION, so the script follows
+canonical without edits (CR-AK).
 """
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import logging
 import os
@@ -52,6 +56,7 @@ from packages.shared.backfill_safety import (
     update_run_progress,
     update_run_smoke,
 )
+from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
 
 log = logging.getLogger(__name__)
 logging.basicConfig(
@@ -60,7 +65,6 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 
-FEATURE_VERSION         = "v0.5.0-rebuilt"
 TICKER                  = "SPX"
 BATCH_SIZE              = 50
 RTH_START_UTC           = dt.time(13, 30)   # 06:30 PT = 13:30 UTC
@@ -165,10 +169,11 @@ def _compute_session_ohlc(
     return result
 
 
-def main() -> None:
+def main(feature_version: str) -> None:
     conn = get_backfill_db_conn()
     assert_role_or_die(conn)
     log.info("Role verified: dash_backfill_writer ✓")
+    log.info("Feature version: %s", feature_version)
 
     with backfill_run(conn, "CR-G") as run_id:
         log.info("Run registered: run_id=%s", run_id)
@@ -184,7 +189,7 @@ def main() -> None:
               AND session_open_t1 IS NULL
             ORDER BY trade_date
             """,
-            (TICKER, FEATURE_VERSION),
+            (TICKER, feature_version),
         ).fetchall()
         total = len(targets)
         log.info("Target rows (NULL session_open_t1, computed+na_regime): %d", total)
@@ -277,7 +282,7 @@ def main() -> None:
             "WHERE ticker = %s AND feature_version = %s "
             "  AND outcome_status IN ('computed', 'na_regime') "
             "  AND session_open_t1 IS NOT NULL",
-            (TICKER, FEATURE_VERSION),
+            (TICKER, feature_version),
         ).fetchone()
         smoke["rows_with_t1_ohlc"] = row[0]
 
@@ -288,7 +293,7 @@ def main() -> None:
             "  AND outcome_status IN ('computed', 'na_regime') "
             "  AND session_open_t1 IS NOT NULL "
             "  AND session_open_t15 IS NULL",
-            (TICKER, FEATURE_VERSION),
+            (TICKER, feature_version),
         ).fetchone()
         smoke["rows_t1_populated_t15_null"] = row[0]
 
@@ -298,7 +303,7 @@ def main() -> None:
             "WHERE ticker = %s AND feature_version = %s "
             "  AND session_open_t1 IS NOT NULL "
             "GROUP BY outcome_status ORDER BY outcome_status",
-            (TICKER, FEATURE_VERSION),
+            (TICKER, feature_version),
         ).fetchall()
         smoke["by_outcome_status"] = {r[0]: r[1] for r in rows}
 
@@ -322,4 +327,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument(
+        "--feature-version",
+        default=CANONICAL_FEATURE_VERSION,
+        help=f"bt_daily_outcomes.feature_version to backfill (default: canonical = {CANONICAL_FEATURE_VERSION})",
+    )
+    args = parser.parse_args()
+    main(args.feature_version)

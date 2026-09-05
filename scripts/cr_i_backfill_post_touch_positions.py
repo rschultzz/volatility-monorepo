@@ -14,10 +14,14 @@ Data safety class: null_fill_update — eligible for unattended execution.
 Pre-flight: SELECT current_user must return 'dash_backfill_writer'.
 
 Usage:
-    python -u scripts/cr_i_backfill_post_touch_positions.py 2>&1 | tee scripts/logs/cr_i_pass1_$(date +%Y%m%d_%H%M%S).log
+    python -u scripts/cr_i_backfill_post_touch_positions.py [--feature-version V] 2>&1 | tee scripts/logs/cr_i_pass1_$(date +%Y%m%d_%H%M%S).log
+
+--feature-version defaults to CANONICAL_FEATURE_VERSION, so the script follows
+canonical without edits (CR-AK).
 """
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import logging
 import os
@@ -40,6 +44,7 @@ from packages.shared.backfill_safety import (
     update_run_progress,
     update_run_smoke,
 )
+from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
 from packages.shared.outcomes import pick_drift_target
 from packages.shared.probability import classify_post_touch_positions
 
@@ -50,7 +55,6 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 
-FEATURE_VERSION = "v0.5.0-rebuilt"
 TICKER          = "SPX"
 BATCH_SIZE      = 50           # rows per explicit conn.commit() heartbeat
 RTH_START_UTC   = dt.time(13, 30)   # 06:30 PT = 13:30 UTC
@@ -82,7 +86,7 @@ def _load_landscape(conn) -> dict[str, Optional[float]]:
     return result
 
 
-def _load_implied_moves(conn) -> dict[str, Optional[float]]:
+def _load_implied_moves(conn, feature_version: str) -> dict[str, Optional[float]]:
     """Return {trade_date_iso: implied_move_1d} from bt_daily_features_active."""
     rows = conn.execute(
         """
@@ -91,7 +95,7 @@ def _load_implied_moves(conn) -> dict[str, Optional[float]]:
         FROM bt_daily_features_active
         WHERE ticker = %s AND feature_version = %s
         """,
-        (TICKER, FEATURE_VERSION),
+        (TICKER, feature_version),
     ).fetchall()
     result = {r[0].isoformat(): r[1] for r in rows}
     log.info("Implied moves loaded: %d rows", len(result))
@@ -137,17 +141,18 @@ def _fetch_rth_daily_bars(conn, start_date: dt.date, end_date: dt.date) -> pd.Da
 # ── Main backfill ─────────────────────────────────────────────────────────────
 
 
-def main() -> None:
+def main(feature_version: str) -> None:
     conn = get_backfill_db_conn()
     assert_role_or_die(conn)
     log.info("Role verified: dash_backfill_writer ✓")
+    log.info("Feature version: %s", feature_version)
 
     with backfill_run(conn, "CR-I") as run_id:
         log.info("Run registered: run_id=%s", run_id)
 
         # ── Pre-load lookup tables (avoid per-row queries) ────────────────────
         landscape    = _load_landscape(conn)
-        implied_move = _load_implied_moves(conn)
+        implied_move = _load_implied_moves(conn, feature_version)
 
         # ── Target rows: touched analogues with NULL position columns ─────────
         targets = conn.execute(
@@ -160,7 +165,7 @@ def main() -> None:
               AND position_t1_post_touch IS NULL
             ORDER BY trade_date
             """,
-            (TICKER, FEATURE_VERSION),
+            (TICKER, feature_version),
         ).fetchall()
         total = len(targets)
         log.info("Target rows (NULL position_t1): %d", total)
@@ -245,7 +250,7 @@ def main() -> None:
                       AND trade_date = %s
                       AND position_t1_post_touch IS NULL
                     """,
-                    (pos_t1, pos_t5, pos_t15, run_id, TICKER, FEATURE_VERSION, trade_date),
+                    (pos_t1, pos_t5, pos_t15, run_id, TICKER, feature_version, trade_date),
                 )
             except Exception as e:
                 n_failed += 1
@@ -269,7 +274,7 @@ def main() -> None:
               AND reached_touch = TRUE
               AND position_t1_post_touch IS NULL
             """,
-            (TICKER, FEATURE_VERSION),
+            (TICKER, feature_version),
         ).fetchone()[0]
 
         out_of_range = conn.execute(
@@ -279,7 +284,7 @@ def main() -> None:
               AND position_t1_post_touch IS NOT NULL
               AND position_t1_post_touch NOT IN (-1, 0, 1)
             """,
-            (TICKER, FEATURE_VERSION),
+            (TICKER, feature_version),
         ).fetchone()[0]
 
         value_dist_t1 = conn.execute(
@@ -291,7 +296,7 @@ def main() -> None:
             GROUP BY 1
             ORDER BY 1
             """,
-            (TICKER, FEATURE_VERSION),
+            (TICKER, feature_version),
         ).fetchall()
 
         value_dist_t15 = conn.execute(
@@ -303,7 +308,7 @@ def main() -> None:
             GROUP BY 1
             ORDER BY 1
             """,
-            (TICKER, FEATURE_VERSION),
+            (TICKER, feature_version),
         ).fetchall()
 
         smoke = {
@@ -345,4 +350,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument(
+        "--feature-version",
+        default=CANONICAL_FEATURE_VERSION,
+        help=f"bt_daily_outcomes.feature_version to backfill (default: canonical = {CANONICAL_FEATURE_VERSION})",
+    )
+    args = parser.parse_args()
+    main(args.feature_version)
