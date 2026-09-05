@@ -311,3 +311,18 @@ Phase 7: Persisting aggregate stats to bt_edge_backtest_results...
 Step 4 complete in 339s
 ======================================================================
 ```
+
+## Step 2 — holdout leg capture (decision 9; no read)
+
+Command: `PYTHONUNBUFFERED=1 apps/web/.venv/bin/python -u scripts/cr_am_holdout_leg_capture.py` (defaults: split 2026-06-05, cr_id CR-AM-capture). Log: `scripts/logs/cr_am_capture_20260905_091438.log` (untracked). 57 min (ORATS per-gap calls, 84 in total). Run row: `1ea36351-9b4d-4d6d-a0eb-7e7d36841558`, `completed`, smoke dict = the counters below.
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G5 fetch exceptions other than ORATS 404 | 0 | **0** (8 × ORATS 404, all entry-day) | PASS (404s listed) |
+| G6 no holdout P&L in the capture log | none | grep `pnl\|net_price\|payoff\|p&l` → 0 hits; the script has no P&L code path | PASS |
+
+Counters: dates 21 (0 without target; wall and payload targets identical on all 21 → 63 legs, no union symbols) · entry-day windows fetched 13 · settlement windows fetched 15 · settlement windows deferred 6 (expiry after 2026-09-05: 08-18, 08-26, 08-27, 08-28, 09-03, 09-04) · bars_written 31,362 · cache_hits 0 · gaps_filled 84 · ORATS 404 8 · exceptions 0.
+
+Entry-day 404s (15-DTE legs not served by ORATS for that session): **2026-06-16, 07-01, 07-13, 08-12, 08-13, 08-28, 09-03, 09-04.** The last two may be ingestion lag rather than absence (one and two days old at capture time); a 404 raises before any window row is written, so they remain fetchable. Settlement windows for the 06-16 / 07-01 / 07-13 / 08-12 / 08-13 expiries were captured even though their entry days were not.
+
+Holdout stream state after capture: 21 dates; **10 fully captured** (entry + settlement), **3 entry-only pending expiry** (08-18, 08-26, 08-27), **2 nothing yet, expiry pending** (09-03, 09-04 — retry entry-day), **6 entry-day unavailable** (5 with settlement captured). Follow-up capture after 2026-09-28 fetches the deferred settlement windows; the script is idempotent (cache hits on already-fetched windows).
