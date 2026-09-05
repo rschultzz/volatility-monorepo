@@ -19,6 +19,14 @@ Usage:
     python scripts/cr_ab_backfill_openiv.py --from-date 2025-01-01
     python scripts/cr_ab_backfill_openiv.py --to-date 2025-06-30
     python scripts/cr_ab_backfill_openiv.py --limit 10
+    python scripts/cr_ab_backfill_openiv.py --skip-missing-snapshots
+
+--skip-missing-snapshots (CR-AJ): downgrade gate 0.6 from exit-1 to WARNING,
+exclude the affected dates from the target list, and record them in the run's
+smoke_test_results as skipped_missing_snapshot. This exists for the
+mis-stamped-holiday case (next_business_day() stamping a landscape onto a
+market holiday, e.g. 2026-06-19 / 2026-07-03) — it is NOT a general tolerance
+for missing data. Without the flag, behaviour is unchanged.
 
 Exit: 0 on success (or clean --limit run); 1 on gate failure or any date error.
 """
@@ -138,12 +146,15 @@ def _get_target_dates(
     from_date: dt.date | None,
     to_date: dt.date | None,
     limit: int | None,
+    exclude: set[dt.date] | None = None,
 ) -> list[dt.date]:
     rows = conn.execute(
         _TARGET_DATES_SQL,
         (ticker, SOURCE_VERSION, ticker, FEATURE_VERSION),
     ).fetchall()
     dates = [r[0] for r in rows]
+    if exclude:
+        dates = [d for d in dates if d not in exclude]
     if from_date:
         dates = [d for d in dates if d >= from_date]
     if to_date:
@@ -209,6 +220,9 @@ def main() -> None:
     ap.add_argument("--to-date",   help="Last trade_date to backfill (YYYY-MM-DD).")
     ap.add_argument("--limit",     type=int, help="Cap the number of dates to process.")
     ap.add_argument("--dry-run",   action="store_true", help="Show plan without writing.")
+    ap.add_argument("--skip-missing-snapshots", action="store_true",
+                    help="Gate 0.6: warn and exclude dates with no 06:33+ snapshot "
+                         "instead of exiting 1 (mis-stamped-holiday case only).")
     args = ap.parse_args()
 
     from_date = dt.date.fromisoformat(args.from_date) if args.from_date else None
@@ -222,7 +236,15 @@ def main() -> None:
 
     # ── Hard gate (0.6): confirm no corpus dates are missing the open straddle ──
     missing = _check_hard_gate(conn, TICKER)
-    if missing:
+    if missing and args.skip_missing_snapshots:
+        log.warning(
+            "GATE 0.6: %d corpus date(s) have no 06:33+ open straddle snapshot — "
+            "--skip-missing-snapshots set, excluding them from the target list.",
+            len(missing),
+        )
+        for d in missing:
+            log.warning("  skipping (no snapshot): %s", d)
+    elif missing:
         log.error(
             "GATE 0.6 FAIL: %d corpus date(s) have no 06:33+ open straddle snapshot "
             "— these would become NULL implied_move rows. Review before canonical flip.",
@@ -234,9 +256,13 @@ def main() -> None:
             log.error("  ... and %d more", len(missing) - 20)
         conn.close()
         sys.exit(1)
-    log.info("Gate 0.6 PASSED: all corpus dates have a 06:33+ open straddle snapshot.")
+    else:
+        log.info("Gate 0.6 PASSED: all corpus dates have a 06:33+ open straddle snapshot.")
 
-    dates = _get_target_dates(conn, TICKER, from_date, to_date, args.limit)
+    dates = _get_target_dates(
+        conn, TICKER, from_date, to_date, args.limit,
+        exclude=set(missing) if args.skip_missing_snapshots else None,
+    )
     if not dates:
         log.info("No dates to backfill — %s already complete for all corpus dates.", FEATURE_VERSION)
         conn.close()
@@ -275,6 +301,8 @@ def main() -> None:
             "last_date":         dates[-1].isoformat() if dates else None,
             "failures":          [(d.isoformat(), e) for d, e in failures[:10]],
         }
+        if args.skip_missing_snapshots:
+            smoke["skipped_missing_snapshot"] = [d.isoformat() for d in missing]
         update_run_smoke(
             conn, run_id, smoke,
             f"inserted {ok}/{len(dates)} {FEATURE_VERSION} rows; {skipped} skipped; {len(failures)} failed",
