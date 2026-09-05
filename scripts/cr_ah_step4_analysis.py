@@ -20,6 +20,19 @@ Output:
   - Aggregate stats written to bt_edge_backtest_results (needs CREATE TABLE first)
 
 Usage: PYTHONUNBUFFERED=1 python3 -u scripts/cr_ah_step4_analysis.py
+         [--universe-end YYYY-MM-DD] [--train-only] [--no-persist]
+         [--cr-id CR-AH] [--structural-prob-mode {full,walk-forward}] [--seed 20260905]
+
+CR-AL flags (2026-09-05):
+  --universe-end          drop signal dates after this date before stratified
+                          selection (pin the universe to reproduce June's train set)
+  --train-only            drop holdout entries after selection; by-band prints
+                          train only; Summary A/B replaced by "holdout not read"
+  --no-persist            skip Phase 7 (no bt_edge_backtest_results writes)
+  --cr-id                 cr_id for the bt_backfill_runs row (default CR-AH)
+  --structural-prob-mode  walk-forward (default): before_date=trade_date;
+                          full: allow_lookahead=True (as CR-AH ran in June)
+  --seed                  bootstrap seed for the Summary D CI
 
 Decision refs:
   #4  edge = structural_prob - abs(net_credit)/spread_width
@@ -33,9 +46,11 @@ Decision refs:
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import os
+import random
 import sys
 import time as _time
 from dataclasses import dataclass, field
@@ -110,6 +125,9 @@ DTE_TARGET = 15
 # Threshold sweep: edge values in [0, 1] (e.g. 0.10 = 10 percentage points)
 THRESHOLDS = [0.00, 0.05, 0.10, 0.15, 0.20]
 
+# CR-AL: structural-probability analogue-pool mode, shown in every section header
+_MODE_TAG = "mode=?"
+
 _UTC = ZoneInfo("UTC")
 _PT  = ZoneInfo("America/Los_Angeles")
 
@@ -171,6 +189,24 @@ def wilson_ci(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     margin = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
     return (max(0.0, center - margin), min(1.0, center + margin))
 
+def bootstrap_mean_diff_ci(
+    a: list[float], b: list[float], n_resamples: int = 1000, seed: int = 20260905,
+) -> tuple[Optional[float], Optional[float]]:
+    """Percentile bootstrap 95% CI of mean(a) - mean(b) (CR-AL decision #7)."""
+    if not a or not b:
+        return (None, None)
+    rng = random.Random(seed)
+    diffs = []
+    for _ in range(n_resamples):
+        ra = [rng.choice(a) for _ in a]
+        rb = [rng.choice(b) for _ in b]
+        diffs.append(sum(ra) / len(ra) - sum(rb) / len(rb))
+    diffs.sort()
+    lo = diffs[int(0.025 * (n_resamples - 1))]
+    hi = diffs[int(0.975 * (n_resamples - 1))]
+    return (lo, hi)
+
+
 # ── DATA STRUCTURES ───────────────────────────────────────────────────────────
 
 @dataclass
@@ -219,8 +255,12 @@ class TradeData:
 
 # ── DATA LOADING ──────────────────────────────────────────────────────────────
 
-def load_signal_entries(conn) -> list[dict]:
-    """All magnet-above signal dates with sigma/band/partition/drift_target."""
+def load_signal_entries(conn, universe_end: Optional[date] = None) -> list[dict]:
+    """All magnet-above signal dates with sigma/band/partition/drift_target.
+
+    universe_end (CR-AL): drop signal dates after this date before anything
+    else, so stratified selection reproduces an earlier run's universe.
+    """
     rows = conn.execute(
         """
         SELECT trade_date FROM bt_daily_features
@@ -231,6 +271,11 @@ def load_signal_entries(conn) -> list[dict]:
         (TICKER, VERSION),
     ).fetchall()
     dates = [r[0] for r in rows]
+    if universe_end is not None:
+        n_all = len(dates)
+        dates = [d for d in dates if d <= universe_end]
+        print(f"  Universe pinned to trade_date <= {universe_end.isoformat()}: "
+              f"{len(dates)}/{n_all} magnet-above dates kept.")
     result = []
     skipped = 0
 
@@ -545,11 +590,16 @@ def get_structural_prob(
     conn,
     trade_date: date,
     structure: str,
+    mode: str = "walk-forward",
 ) -> tuple[float, Optional[str], Optional[float], Optional[float]]:
     """Compute structural probability + post-touch tags for one date.
 
     Returns (structural_prob, pattern_label, reversion_wilson_lo, continuation_wilson_lo).
     structural_prob = touch_rate for debit, 1 - touch_rate for credit.
+
+    mode (CR-AL): 'walk-forward' passes before_date=trade_date (analogue pool
+    limited to prior dates); 'full' passes allow_lookahead=True (whole corpus,
+    as CR-AH ran in June). No mode passes neither — the ADR raise applies.
     """
     row = conn.execute(
         """
@@ -566,10 +616,18 @@ def get_structural_prob(
     if isinstance(fv, str):
         fv = json.loads(fv)
 
+    if mode == "walk-forward":
+        sp_kwargs = {"before_date": trade_date.isoformat()}
+    elif mode == "full":
+        sp_kwargs = {"allow_lookahead": True}
+    else:
+        raise ValueError(f"unknown structural-prob mode: {mode!r}")
+
     result = compute_structural_probability(
         fv, conn, ticker=TICKER,
         exclude_date=trade_date.isoformat(),
         regime_kind="magnet-above",
+        **sp_kwargs,
     )
 
     touch_rate = float(result.get("touch_rate") or 0.5)
@@ -613,7 +671,9 @@ def build_legs(short_strike: float, structure: str) -> tuple[list[Leg], float]:
     return legs, abs(short_strike - long_strike)  # spread_width = 10.0
 
 
-def collect_trade_data(conn, entry: dict, structure: str) -> Optional[TradeData]:
+def collect_trade_data(
+    conn, entry: dict, structure: str, mode: str = "walk-forward",
+) -> Optional[TradeData]:
     """Collect all raw data for one date × structure combination."""
     trade_date  = entry["trade_date"]
     band        = entry["band"]
@@ -635,7 +695,7 @@ def collect_trade_data(conn, entry: dict, structure: str) -> Optional[TradeData]
 
     # Structural probability + post-touch tags
     structural_prob, pattern_label, rev_lo, cont_lo = get_structural_prob(
-        conn, trade_date, structure
+        conn, trade_date, structure, mode
     )
 
     # Entry-day crawl
@@ -892,7 +952,7 @@ def fmt_row(r: dict) -> str:
 
 
 def print_sweep(sweep_rows: list[dict], chosen: float, structure: str):
-    print(f"\n{structure.upper()} — Threshold sweep (TRAIN only):")
+    print(f"\n{structure.upper()} — Threshold sweep (TRAIN only) [{_MODE_TAG}]:")
     print(f"  {'T':>6}  n_settled  fill_n  mean_pnl  win%   beat  chosen?")
     print(f"  {'─'*60}")
     for r in sweep_rows:
@@ -902,12 +962,13 @@ def print_sweep(sweep_rows: list[dict], chosen: float, structure: str):
               f"  {pf(r.get('beat')):>7}{marker}")
 
 
-def print_by_band(all_data: list[TradeData], threshold: float, structure: str, label: str):
-    print(f"\n{structure.upper()} — By distance band ({label}, T={threshold:.2f}):")
+def print_by_band(all_data: list[TradeData], threshold: float, structure: str, label: str,
+                  train_only: bool = False):
+    print(f"\n{structure.upper()} — By distance band ({label}, T={threshold:.2f}) [{_MODE_TAG}]:")
     print(f"  {'band':<6}  {'part':<8}  {'n':>3}  {'pnl':>7}  {'win%':>5}  "
           f"[lo–hi 95%]     {'base':>7}  {'beat':>7}")
     print(f"  {'─'*70}")
-    for part in ("train", "holdout"):
+    for part in (("train",) if train_only else ("train", "holdout")):
         for b in ("near", "mid", "far", "all"):
             if b == "all":
                 subset = [td for td in all_data if td.partition == part]
@@ -935,7 +996,7 @@ def print_by_band(all_data: list[TradeData], threshold: float, structure: str, l
 
 
 def print_by_pattern(train_data: list[TradeData], threshold: float, structure: str):
-    print(f"\n{structure.upper()} — By post-touch pattern (TRAIN only, T={threshold:.2f}):")
+    print(f"\n{structure.upper()} — By post-touch pattern (TRAIN only, T={threshold:.2f}) [{_MODE_TAG}]:")
     patterns = sorted({td.pattern_label for td in train_data if td.pattern_label})
     has_pattern = [td for td in train_data if td.pattern_label]
     null_count  = sum(1 for td in train_data if td.pattern_label is None)
@@ -960,10 +1021,23 @@ def print_by_pattern(train_data: list[TradeData], threshold: float, structure: s
             f"{pf(r.get('baseline_mean')):>7}  {pf(r.get('beat')):>7}"
         )
 
+    # CR-AL decision #7: labeled vs unlabeled (coverage effect)
+    print(f"  {'─'*70}")
+    for lab, subset in (("(labeled)", has_pattern),
+                        ("(unlabeled)", [td for td in train_data if td.pattern_label is None])):
+        pairs = [(td, compute_pnl(td, threshold)) for td in subset]
+        r = fmt_stats(aggregate(pairs), label=lab)
+        print(
+            f"  {lab:<30}  {r['n']:>3}  "
+            f"{pf(r.get('mean_pnl')):>7}  {pf(r.get('win_rate'), '.0%'):>5}  "
+            f"[{pf(r.get('wilson_lo'), '.0%'):>4}–{pf(r.get('wilson_hi'), '.0%'):>4}]  "
+            f"{pf(r.get('baseline_mean')):>7}  {pf(r.get('beat')):>7}"
+        )
+
 
 def print_debit_touch_breakdown(train_data: list[TradeData], threshold: float):
     """Debit-specific: touch-exit P&L vs close P&L by resolution and band."""
-    print(f"\nDEBIT — Touch resolution breakdown (TRAIN only, T={threshold:.2f}):")
+    print(f"\nDEBIT — Touch resolution breakdown (TRAIN only, T={threshold:.2f}) [{_MODE_TAG}]:")
     print(f"  {'resolution':<30}  n   touch_exit  close_pnl   base_close")
     print(f"  {'─'*65}")
     resolutions = ["rth_touch", "gap_touch", "afterhours_touch_retraced", "no_touch"]
@@ -987,7 +1061,7 @@ def print_debit_touch_breakdown(train_data: list[TradeData], threshold: float):
 
 def print_selection_bias(bias: dict):
     s = bias["structure"].upper()
-    print(f"\n{s} — Selection bias check (far band, decision #11):")
+    print(f"\n{s} — Selection bias check (far band, decision #11) [{_MODE_TAG}]:")
     print(f"  far/all: n={bias['far_n_all']}  "
           f"clean: n={bias['far_n_clean']} (mean σ={pf(bias['far_sigma_clean_mean'], '.2f')})"
           f"  dropped: n={bias['far_n_dropped']} (mean σ={pf(bias['far_sigma_dropped_mean'], '.2f')})")
@@ -1008,9 +1082,17 @@ def build_summary(
     credit_data: list[TradeData],
     debit_thresh: float,
     credit_thresh: float,
+    train_only: bool = False,
+    seed: int = 20260905,
+    summary_d_out: Optional[dict] = None,
 ) -> str:
-    """Build four plain-language summary reads."""
+    """Build four plain-language summary reads.
+
+    train_only (CR-AL): Summary A/B are replaced by a "holdout not read" line.
+    summary_d_out: if given, receives per-structure Summary D numbers.
+    """
     lines = []
+    lines.append(f"[{_MODE_TAG}]")
 
     def get_cell(data, band, partition, threshold):
         subset = [td for td in data if td.band == band and td.partition == partition]
@@ -1021,9 +1103,11 @@ def build_summary(
         return fmt_stats(s)
 
     # Summary A: Debit near/holdout
-    d_near_ho = get_cell(debit_data, "near", "holdout", debit_thresh)
     lines.append("\n── Summary A: Debit near-band holdout ──")
-    if d_near_ho and d_near_ho["n"] >= 3:
+    d_near_ho = None if train_only else get_cell(debit_data, "near", "holdout", debit_thresh)
+    if train_only:
+        lines.append("  holdout not read (--train-only).")
+    elif d_near_ho and d_near_ho["n"] >= 3:
         beat = d_near_ho.get("beat") or 0
         sign = "+" if beat > 0 else ""
         lines.append(
@@ -1043,9 +1127,11 @@ def build_summary(
         lines.append(f"  Insufficient holdout data (n={d_near_ho['n'] if d_near_ho else 0}). Directional only.")
 
     # Summary B: Credit near/holdout
-    c_near_ho = get_cell(credit_data, "near", "holdout", credit_thresh)
     lines.append("\n── Summary B: Credit near-band holdout ──")
-    if c_near_ho and c_near_ho["n"] >= 3:
+    c_near_ho = None if train_only else get_cell(credit_data, "near", "holdout", credit_thresh)
+    if train_only:
+        lines.append("  holdout not read (--train-only).")
+    elif c_near_ho and c_near_ho["n"] >= 3:
         beat = c_near_ho.get("beat") or 0
         sign = "+" if beat > 0 else ""
         lines.append(
@@ -1096,7 +1182,14 @@ def build_summary(
         matched   = [td for td in data if td.pattern_label in patterns_for]
         unmatched = [td for td in data if td.pattern_label not in patterns_for]
         if not matched or not unmatched:
-            lines.append(f"  {structure}: too few pattern-labeled trades to score engine hypothesis.")
+            lines.append(
+                f"  {structure}: too few pattern-labeled trades to score engine hypothesis "
+                f"(pattern_match n={len(matched)}, no_match n={len(unmatched)})."
+            )
+            if summary_d_out is not None:
+                summary_d_out[structure] = {
+                    "n_match": len(matched), "n_no_match": len(unmatched), "read": "untestable",
+                }
             continue
         pairs_m = [(td, compute_pnl(td, threshold)) for td in matched]
         pairs_u = [(td, compute_pnl(td, threshold)) for td in unmatched]
@@ -1115,6 +1208,32 @@ def build_summary(
             lines.append(f"  → Pattern filter HURTS {structure} (match performs WORSE). Engine rule may be wrong.")
         else:
             lines.append(f"  → No clear separation by pattern for {structure}. Engine hypothesis inconclusive.")
+
+        # CR-AL decision #7/#9: bootstrap CI on mean(match) − mean(no_match), pre-registered read
+        pnl_m = [r["close_pnl"] for _, r in pairs_m if r["close_pnl"] is not None]
+        pnl_u = [r["close_pnl"] for _, r in pairs_u if r["close_pnl"] is not None]
+        diff = (m_pnl - u_pnl) if (pnl_m and pnl_u) else None
+        ci_lo, ci_hi = bootstrap_mean_diff_ci(pnl_m, pnl_u, n_resamples=1000, seed=seed)
+        excludes_zero = ci_lo is not None and (ci_lo > 0 or ci_hi < 0)
+        if diff is None:
+            read = "untestable"
+        elif diff > 0.3 and excludes_zero:
+            read = "SUPPORTED"
+        elif diff < -0.3 and excludes_zero:
+            read = "HURTS"
+        else:
+            read = "INCONCLUSIVE"
+        lines.append(
+            f"  {structure.upper()} decision-9 read [{_MODE_TAG}]: "
+            f"match−no_match = {pf(diff, '+.2f')} pts, bootstrap 95% CI "
+            f"[{pf(ci_lo, '+.2f')}, {pf(ci_hi, '+.2f')}] (1000 resamples, seed={seed}) → {read}"
+        )
+        if summary_d_out is not None:
+            summary_d_out[structure] = {
+                "n_match": rm["n"], "n_no_match": ru["n"],
+                "mean_match": m_pnl, "mean_no_match": u_pnl,
+                "diff": diff, "ci_lo": ci_lo, "ci_hi": ci_hi, "read": read,
+            }
 
     return "\n".join(lines)
 
@@ -1210,24 +1329,55 @@ def persist_cell_stats(
 
 # ── MAIN ─────────────────────────────────────────────────────────────────────
 
-def main():
+def _parse_args(argv=None):
+    p = argparse.ArgumentParser(description="CR-AH Step 4 — two-structure × two-axis analysis")
+    p.add_argument("--universe-end", type=date.fromisoformat, default=None, metavar="YYYY-MM-DD",
+                   help="drop signal dates after this date before stratified selection")
+    p.add_argument("--train-only", action="store_true",
+                   help="drop holdout entries after selection; never read holdout P&L")
+    p.add_argument("--no-persist", action="store_true",
+                   help="skip Phase 7 (no writes to bt_edge_backtest_results)")
+    p.add_argument("--cr-id", default="CR-AH", help="cr_id for the bt_backfill_runs row")
+    p.add_argument("--structural-prob-mode", choices=("full", "walk-forward"), default="walk-forward",
+                   help="walk-forward: before_date=trade_date; full: allow_lookahead=True")
+    p.add_argument("--seed", type=int, default=20260905, help="bootstrap seed (Summary D)")
+    return p.parse_args(argv)
+
+
+def main(argv=None):
+    global _MODE_TAG
+    args = _parse_args(argv)
+    mode = args.structural_prob_mode
+    _MODE_TAG = f"mode={mode}"
+
     t0 = _time.perf_counter()
     print(f"\n{SEP}")
     print("CR-AH Step 4 — Two-structure × two-axis analysis")
+    print(f"  cr_id={args.cr_id}  structural-prob {_MODE_TAG}  train_only={args.train_only}  "
+          f"no_persist={args.no_persist}  universe_end={args.universe_end}  seed={args.seed}")
     print(SEP)
 
     conn = get_backfill_db_conn()
     assert_role_or_die(conn)
 
-    with backfill_run(conn, "CR-AH") as run_id:
+    with backfill_run(conn, args.cr_id) as run_id:
         print(f"\nRun ID: {run_id}")
 
         # ── Phase 1: Load and select dates ────────────────────────────────────
         print(f"\n{SEP2}")
         print("Phase 1: Loading signal dates and selecting clean subset...")
 
-        all_entries = load_signal_entries(conn)
+        all_entries = load_signal_entries(conn, universe_end=args.universe_end)
         selected    = select_clean_dates(all_entries)
+
+        from collections import Counter as _Counter
+        sel_counts = dict(sorted(_Counter(f"{e['band']}/{e['partition']}" for e in selected).items()))
+        print(f"  Selection by band/partition: {sel_counts}")
+        if args.train_only:
+            n_before = len(selected)
+            selected = [e for e in selected if e["partition"] == "train"]
+            print(f"  --train-only: kept {len(selected)}/{n_before} train entries; "
+                  f"holdout not read.")
 
         print("\nFiltering to A-bucket clean dates for each structure...")
         print("  Credit (target + target+10)...")
@@ -1257,7 +1407,7 @@ def main():
 
         print(f"  Processing {len(debit_clean)} debit dates...")
         for entry in debit_clean:
-            td = collect_trade_data(conn, entry, "debit")
+            td = collect_trade_data(conn, entry, "debit", mode)
             if td:
                 debit_trades.append(td)
             done += 1
@@ -1267,7 +1417,7 @@ def main():
 
         print(f"  Processing {len(credit_clean)} credit dates...")
         for entry in credit_clean:
-            td = collect_trade_data(conn, entry, "credit")
+            td = collect_trade_data(conn, entry, "credit", mode)
             if td:
                 credit_trades.append(td)
             done += 1
@@ -1303,10 +1453,14 @@ def main():
 
         # ── Phase 4: Full results ─────────────────────────────────────────────
         print(f"\n{SEP2}")
-        print("Phase 4: Full results (HOLDOUT READ ONCE at chosen threshold)")
+        if args.train_only:
+            print("Phase 4: Full results (TRAIN only — holdout not read)")
+        else:
+            print("Phase 4: Full results (HOLDOUT READ ONCE at chosen threshold)")
 
-        print_by_band(debit_trades,  debit_thresh,  "debit",  "all splits")
-        print_by_band(credit_trades, credit_thresh, "credit", "all splits")
+        band_label = "train only" if args.train_only else "all splits"
+        print_by_band(debit_trades,  debit_thresh,  "debit",  band_label, train_only=args.train_only)
+        print_by_band(credit_trades, credit_thresh, "credit", band_label, train_only=args.train_only)
 
         print_by_pattern(debit_train,  debit_thresh,  "debit")
         print_by_pattern(credit_train, credit_thresh, "credit")
@@ -1323,14 +1477,21 @@ def main():
         print(f"\n{SEP}")
         print("SUMMARY READS A/B/C/D")
         print(SEP)
-        summary = build_summary(debit_trades, credit_trades, debit_thresh, credit_thresh)
+        summary_d: dict = {}
+        summary = build_summary(
+            debit_trades, credit_trades, debit_thresh, credit_thresh,
+            train_only=args.train_only, seed=args.seed, summary_d_out=summary_d,
+        )
         print(summary)
 
         # ── Phase 7: DB persistence ───────────────────────────────────────────
         print(f"\n{SEP2}")
-        print("Phase 7: Persisting aggregate stats to bt_edge_backtest_results...")
-
-        table_ok = ensure_catalog_table()
+        if args.no_persist:
+            print("Phase 7: skipped (--no-persist) — bt_edge_backtest_results untouched.")
+            table_ok = False
+        else:
+            print("Phase 7: Persisting aggregate stats to bt_edge_backtest_results...")
+            table_ok = ensure_catalog_table()
         if table_ok:
             for structure, data, thresh in [
                 ("debit",  debit_trades,  debit_thresh),
@@ -1348,7 +1509,7 @@ def main():
                                           band, None, part, thresh, subset)
             conn.commit()
             print("  ✓ Aggregate stats written.")
-        else:
+        elif not args.no_persist:
             print("  Skipping DB persistence — table not available.")
 
         # ── Smoke summary ─────────────────────────────────────────────────────
@@ -1361,11 +1522,22 @@ def main():
             "debit_thresh": debit_thresh,
             "credit_thresh": credit_thresh,
             "elapsed_s": round(elapsed, 1),
+            # CR-AL provenance
+            "structural_prob_mode": mode,
+            "train_only": args.train_only,
+            "no_persist": args.no_persist,
+            "universe_end": args.universe_end.isoformat() if args.universe_end else None,
+            "seed": args.seed,
+            "selection_by_band_partition": sel_counts,
+            "debit_labeled_train": sum(1 for td in debit_trades if td.partition == "train" and td.pattern_label),
+            "credit_labeled_train": sum(1 for td in credit_trades if td.partition == "train" and td.pattern_label),
+            "summary_d": summary_d,
         }
         update_run_smoke(conn, run_id, smoke,
-                        f"Step 4 complete: debit={len(debit_trades)}, "
+                        f"Step 4 complete [{_MODE_TAG}]: debit={len(debit_trades)}, "
                         f"credit={len(credit_trades)}, T_d={debit_thresh}, "
-                        f"T_c={credit_thresh}, {elapsed:.0f}s")
+                        f"T_c={credit_thresh}, {elapsed:.0f}s; "
+                        f"summary_d={ {k: v.get('read') for k, v in summary_d.items()} }")
 
     print(f"\n{SEP}")
     print(f"Step 4 complete in {_time.perf_counter()-t0:.0f}s")
