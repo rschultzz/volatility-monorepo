@@ -261,3 +261,155 @@ Phase 7: skipped (--no-persist) — bt_edge_backtest_results untouched.
 Step 4 complete in 342s
 ======================================================================
 ```
+
+## Step 2 — walk-forward mode (`before_date = trade_date`), train only
+
+Command: same as Step 1 with `--structural-prob-mode walk-forward`. Log: `scripts/logs/cr_al_wf_20260905_072708.log` (untracked). 420 s. Run row: `(UUID('05ec3e81-5709-4baf-b6be-b30d05995943'), 'completed', datetime.datetime(2026, 9, 5, 14, 27, 9, 537272), datetime.datetime(2026, 9, 5, 14, 34, 8, 228883), "Step 4 complete [mode=walk-forward]: debit=87, credit=83, T_d=0.05, T_c=0.0, 419s; summary_d={'debit': 'INCONCLUSIVE', 'credit': 'untestable'}")`.
+
+Selection and clean counts identical to Step 1 (G1 near 34 / mid 31 / far 40; credit 83 / debit 87) — the mode only changes the analogue pool behind `structural_prob` and `pattern_label`.
+
+Chosen thresholds: **DEBIT 0.05** (was 0.00 in full mode and in June), CREDIT 0.00. The debit sweep is flat (beat −0.41 at 0.05 vs −0.43 at 0.00); the flip is noise-level but it is a visible consequence of the pool change.
+
+### Summary D (decision-9 read, walk-forward)
+
+- **DEBIT:** pattern_match (stepping-stone) n=33, 2.15 pts vs no_match (mixed) n=35, 3.04 → diff **−0.88 pts**, bootstrap 95% CI **[−3.56, +1.72]** → **INCONCLUSIVE** (direction "hurts", CI spans 0).
+- **CREDIT:** pattern_match n=0 settled (one train date labeled `overshoot-then-revert`, no settlement price), no_match n=18 → **untestable**. The legacy Summary D line above the decision-9 read prints "Pattern filter adds value for credit" because the June logic compares a None mean (→ 0) against −2.41; that line is a pre-existing artifact of the n=0 case and is not a finding. The decision-9 read is authoritative.
+
+### Side-by-side — full vs walk-forward (train only)
+
+| | full | walk-forward |
+|---|---|---|
+| run_id | 2be34a8e | 05ec3e81 |
+| debit train labeled / clean | 83 / 87 | 71 / 87 |
+| credit train labeled / clean | 79 / 83 | 67 / 83 |
+| debit threshold | 0.00 | 0.05 |
+| debit Summary D: match n / no_match n | 55 / 25 | 33 / 35 |
+| debit Summary D: mean match / no_match | 2.96 / 3.64 | 2.15 / 3.04 |
+| debit Summary D: diff, CI, read | −0.69, [−3.89, +2.19], INCONCLUSIVE | −0.88, [−3.56, +1.72], INCONCLUSIVE |
+| credit Summary D | match n=0 → untestable | match n=0 settled → untestable |
+| Summary C far band | DEBIT leads by 0.58 | CREDIT leads by 0.87 |
+
+Δ (wf − full) of the debit Summary D difference: −0.19 pts; both CIs span zero. **The engine-hypothesis read is the same in both modes: inconclusive for debit, untestable for credit.** Nothing here is lookahead-dependent in the decision-9 sense, because nothing was supported in either mode.
+
+### How much the analogue pool moves the labels (scratchpad `cr_al_label_diff.py`, same 105 train-selected dates, `label_diff.json`)
+
+- Label distribution, full: stepping-stone 64 / mixed 35 / None 6. Walk-forward: stepping-stone 43 / mixed 42 / None 19 / overshoot-then-revert 1.
+- **41 of 105 train dates change `pattern_label` between modes.** Transitions: stepping-stone→mixed 21, stepping-stone→None 6, mixed→None 7, mixed→stepping-stone 6, mixed→overshoot-then-revert 1.
+- By year: 2023 **21/33** changed, 2024 12/48, 2025 8/24. The 18 dates before 2023-09-01 are 15 mixed / 3 None under walk-forward — a thin pool defaults to "mixed".
+- `touch_rate` (the structural-probability input to `edge`): wf − full mean −0.014, median +0.009, range −0.34 … +0.27; |Δ| > 0.05 on **59 of 105** dates.
+
+The lookahead is real and large at the per-date level (39% of labels, 56% of touch rates move by more than 5 pp) even though the aggregate Summary D read does not change. Any per-date use of `pattern_label` or `structural_prob` from the June runs (CR-AH band cells, CR-AI DTE result) should be considered full-corpus numbers until CR-AM re-runs them walk-forward.
+
+### Full output (Phases 3–6)
+
+```
+  Chosen threshold — DEBIT: 0.05  CREDIT: 0.00
+
+DEBIT — Threshold sweep (TRAIN only) [mode=walk-forward]:
+       T  n_settled  fill_n  mean_pnl  win%   beat  chosen?
+  ────────────────────────────────────────────────────────────
+  0.00      83       86        2.90    64%    -0.43
+  0.05      83       86        2.92    64%    -0.41 ← CHOSEN
+  0.10      81       84        2.86    63%    -0.47
+  0.15      81       84        2.89    63%    -0.44
+  0.20      78       81        2.63    62%    -0.70
+
+CREDIT — Threshold sweep (TRAIN only) [mode=walk-forward]:
+       T  n_settled  fill_n  mean_pnl  win%   beat  chosen?
+  ────────────────────────────────────────────────────────────
+  0.00      30       32       -3.82    37%    -1.77 ← CHOSEN
+  0.05      22       23       -4.54    27%    -2.49
+  0.10      15       15       -4.76    20%    -2.71
+  0.15       9        9       -6.95    22%    -4.90
+  0.20       5        5       -4.56    40%    -2.51
+
+----------------------------------------------------------------------
+Phase 4: Full results (TRAIN only — holdout not read)
+
+DEBIT — By distance band (train only, T=0.05) [mode=walk-forward]:
+  band    part        n      pnl   win%  [lo–hi 95%]        base     beat
+  ──────────────────────────────────────────────────────────────────────
+  near    train      30     2.61    73%  [ 56%– 86%]     3.52    -0.92
+  mid     train      27     2.37    63%  [ 44%– 78%]     2.61    -0.24
+  far     train      26     3.85    54%  [ 35%– 71%]     3.84     0.00
+  all     train      83     2.92    64%  [ 53%– 73%]     3.33    -0.41
+
+CREDIT — By distance band (train only, T=0.00) [mode=walk-forward]:
+  band    part        n      pnl   win%  [lo–hi 95%]        base     beat
+  ──────────────────────────────────────────────────────────────────────
+  near    train      10    -7.97     0%  [  0%– 28%]    -2.34    -5.63
+  mid     train       7    -1.54    43%  [ 16%– 75%]    -1.16    -0.38
+  far     train      13    -1.87    62%  [ 36%– 82%]    -2.74     0.87
+  all     train      30    -3.82    37%  [ 22%– 54%]    -2.05    -1.77
+
+DEBIT — By post-touch pattern (TRAIN only, T=0.05) [mode=walk-forward]:
+  (n with pattern_label=71, n without=16)
+  pattern                           n      pnl   win%  [lo–hi 95%]        base     beat
+  ──────────────────────────────────────────────────────────────────────
+  mixed                            34     3.00    62%  [ 45%– 76%]     3.85    -0.85
+  overshoot-then-revert             1     4.35   100%  [ 21%–100%]   -26.90    31.25
+  stepping-stone                   33     2.15    58%  [ 41%– 73%]     3.76    -1.61
+  ──────────────────────────────────────────────────────────────────────
+  (labeled)                        68     2.61    60%  [ 48%– 71%]     3.35    -0.75
+  (unlabeled)                      15     4.33    80%  [ 55%– 93%]     3.23     1.10
+
+CREDIT — By post-touch pattern (TRAIN only, T=0.00) [mode=walk-forward]:
+  (n with pattern_label=67, n without=16)
+  pattern                           n      pnl   win%  [lo–hi 95%]        base     beat
+  ──────────────────────────────────────────────────────────────────────
+  mixed                             5    -2.68    40%  [ 12%– 77%]    -2.02    -0.66
+  overshoot-then-revert             0        —      —  [   —–   —]        —        —
+  stepping-stone                   13    -2.30    54%  [ 29%– 77%]    -0.57    -1.73
+  ──────────────────────────────────────────────────────────────────────
+  (labeled)                        18    -2.41    50%  [ 29%– 71%]    -1.33    -1.07
+  (unlabeled)                      12    -5.95    17%  [  5%– 45%]    -4.93    -1.02
+
+DEBIT — Touch resolution breakdown (TRAIN only, T=0.05) [mode=walk-forward]:
+  resolution                      n   touch_exit  close_pnl   base_close
+  ─────────────────────────────────────────────────────────────────
+  rth_touch                       37        1.74        4.18        4.30
+  gap_touch                       25        1.17        4.47        4.48
+  afterhours_touch_retraced        9           —        4.34        7.51
+  no_touch                        16           —       -2.87       -2.87
+
+DEBIT — Selection bias check (far band, decision #11) [mode=walk-forward]:
+  far/all: n=40  clean: n=28 (mean σ=3.27)  dropped: n=12 (mean σ=3.04)
+  ✓ No significant selection bias detected in far band.
+
+CREDIT — Selection bias check (far band, decision #11) [mode=walk-forward]:
+  far/all: n=40  clean: n=25 (mean σ=2.86)  dropped: n=15 (mean σ=3.77)
+  ⚠ BIAS: clean far trades are significantly CLOSER than dropped far trades.
+    The far-band result may be OPTIMISTICALLY SELECTED (closer to spot → easier trade).
+
+======================================================================
+SUMMARY READS A/B/C/D
+======================================================================
+[mode=walk-forward]
+
+── Summary A: Debit near-band holdout ──
+  holdout not read (--train-only).
+
+── Summary B: Credit near-band holdout ──
+  holdout not read (--train-only).
+
+── Summary C: Structure crossover by distance (TRAIN, close P&L beat) ──
+  near   debit_beat=  -0.92  credit_beat=  -5.63  → DEBIT leads by 4.72
+  mid    debit_beat=  -0.24  credit_beat=  -0.38  → DEBIT leads by 0.14
+  far    debit_beat=   0.00  credit_beat=   0.87  → CREDIT leads by 0.87
+  READ: Structure crossover = distance band where debit stops leading and credit starts.
+
+── Summary D: Engine hypothesis (decision #13) ──
+  DEBIT engine check:  pattern_match (n=33) pnl=2.15  vs no_match (n=35) pnl=3.04
+  → Pattern filter HURTS debit (match performs WORSE). Engine rule may be wrong.
+  DEBIT decision-9 read [mode=walk-forward]: match−no_match = -0.88 pts, bootstrap 95% CI [-3.56, +1.72] (1000 resamples, seed=20260905) → INCONCLUSIVE
+  CREDIT engine check:  pattern_match (n=0) pnl=—  vs no_match (n=18) pnl=-2.41
+  → Pattern filter adds value for credit (pattern_match outperforms).
+  CREDIT decision-9 read [mode=walk-forward]: match−no_match = — pts, bootstrap 95% CI [—, —] (1000 resamples, seed=20260905) → untestable
+
+----------------------------------------------------------------------
+Phase 7: skipped (--no-persist) — bt_edge_backtest_results untouched.
+
+======================================================================
+Step 4 complete in 420s
+======================================================================
+```
