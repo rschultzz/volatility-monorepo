@@ -100,3 +100,29 @@ Observations (recorded, not gated):
 
 - The two true magnet dates confirm the live-path diagnosis: `filter_mode` is `strict` / `pooled-fallback` (bucket filter works, touchers exist) but every denominator is 0 and `pattern_label` is None because `position_t*_post_touch` is NULL on all canonical rows. `apply_direction_qualification` falls through to "mixed pattern — no clear direction" on both proposals — neither credit nor debit ever qualifies.
 - The vault note labels all five probe dates "magnet". At canonical, 2026-07-30 and 2026-06-24 are amplification (`na_regime` outcome) and 2026-04-28 is magnetic-pin (computed, touched at day 0). `bt_audit_flags` rows for the five dates: (0,) — no promoted regime override changes this. Only 09-03 and 08-27 (both `pending_history` at canonical, so excluded from their own corpus anyway) exercise the direction gate; G3 "≥3 of 5 not insufficient" is therefore structurally capped at 2 of 5 unless the amplification/pin dates gain touchers. Recorded as a spec delta; G3 is diagnostic, run continues.
+
+## Step 1 — CR-G run (session OHLC at canonical)
+
+Command: `apps/web/.venv/bin/python -u scripts/cr_g_backfill_session_ohlc.py` (no args → resolved `v0.6.0-openiv`, logged on the line after role verification). Log: `scripts/logs/cr_ak_g_20260904_212611.log`. Wall time 04:26:12 → 05:19:23 UTC (53 min, ~4 s/row — each row fetches a 90-calendar-day 1-minute bar window).
+
+`bt_backfill_runs` row (latest CR-G):
+
+```
+(UUID('d605b950-b12b-4f3e-8f69-9579b6621c8d'), 'CR-G', 'completed', datetime.datetime(2026, 9, 5, 4, 26, 12, 252884), datetime.datetime(2026, 9, 5, 5, 19, 23, 973207), 750, "773/773 rows updated; 11 T+15 NULLs (corpus-end); by_status={'computed': 460, 'na_regime': 307}; high<low violations=0", {'by_outcome_status': {'computed': 460, 'na_regime': 307}, 'rows_with_t1_ohlc': 767, 'high_lt_low_violations_t1': 0, 'rows_t1_populated_t15_null': 11})
+```
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G1.1 `n_failed` | 0 | **0** | PASS |
+| G1.2 `n_skipped` (no bars in window) | 0, ≤ 2 | **0** | PASS |
+| G1.3 `high_lt_low_violations_t1` | 0 | **0** | PASS |
+| G1.4 `rows_t1_populated_t15_null` (corpus-end) | ~15, 10–25 | **11** | PASS (note) |
+| G1.5 rows updated | ≥ 770, STOP < 760 | **773 / 773** updated; **767** carry non-NULL `session_open_t1` | PASS (see delta) |
+
+Smoke dict: `rows_with_t1_ohlc = 767`, `rows_t1_populated_t15_null = 11`, `by_outcome_status = {computed: 460, na_regime: 307}`, `high_lt_low_violations_t1 = 0`. Script tally: 17 T+15 NULLs = 11 corpus-end + 6 below.
+
+### Delta — 6 quarterly roll Fridays have no RTH bars on the trade date
+
+`ironbeam_es_1m_bars` ends at 13:29 UTC on **2023-09-15, 2024-03-15, 2024-06-21, 2024-09-20, 2025-03-21, 2025-09-19** (third-Friday ES roll dates; the Databento-era continuous series has no RTH bars for the expiring session, and the 2025-09-19 Ironbeam-era gap is the same shape). For those rows the script finds `trade_date` absent from the session list and writes all twelve OHLC columns as NULL while still stamping `backfill_run_id` and counting the row as updated. The same six dates are NULL under `v0.5.0-rebuilt` (its remaining 27 NULL-t1 rows are 2026-03 → 06 rows created after the May run). Because the null-fill `WHERE session_open_t1 IS NULL` still matches them, they stay re-targetable and G0.1 will read 6, not 0, on any future run. This is a pre-existing bar-coverage gap, not a CR-AK regression; smoke test 1 will read 767 (< the spec's ≥ 770) for this reason. Not gated; recorded for the roll-date open question.
+
+G1.1 / G1.3 / G1.5 STOP conditions not met → proceeding to Step 2 (CR-I).
