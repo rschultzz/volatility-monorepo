@@ -52,3 +52,44 @@ Two things the script does that CR-AL must control:
 | G4 — 420 shared tests + 105 backtest tests pass after the `before_date` / `allow_lookahead` change and caller updates | pass | STOP |
 | G5 — caller inventory complete: every `compute_structural_probability` call site either untouched-live, patched, or listed as deferred | yes | STOP |
 
+
+## Step 0 findings (read-only, 2026-09-05 ~06:30 UTC)
+
+Interpreter: `apps/web/.venv/bin/python` (native arm64) for scripts and DB reads; Rosetta repo venv (`arch -x86_64 .venv/bin/python -m pytest`) for the test suites — it collects 420 (`packages/shared/tests`) + 105 (`packages/shared/backtest/tests`), matching G4's numbers. The apps venv has no pytest.
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G0.1 PR #43 merged; `main` HEAD contains CR-AK | yes | `origin/main` = 66d1257 = merge of PR #43; branch cut from it | PASS |
+| G0.2 canonical touched rows with `position_t15_post_touch` | ≥ 370 (STOP < 350) | **386** (387 touched − 1 corpus-end t15 NULL) | PASS |
+| G0.3 labeled fraction across canonical magnet-above dates (full mode) | ≥ 0.50 | **0.934** (370 / 396) | PASS |
+
+### G0.3 detail — `compute_structural_probability` in full mode (current code, `exclude_date` only), `regime_kind='magnet-above'`
+
+Universe: `bt_daily_features` at canonical with `regime_at_classification = 'magnet-above'` = **396** dates (the vault note said 375; CR-AJ's June–September gap fill added 21 post-split dates — same count on the active view). Script: scratchpad `cr_al_step0.py`; per-date JSON `step0_labels_full.json`.
+
+| Partition | n | stepping-stone | mixed | slow-revert | None | labeled | strict | pooled-fallback | insufficient | 0DTE-insufficient |
+|---|---|---|---|---|---|---|---|---|---|---|
+| train (≤ 2025-08-12) | 263 | 157 | 88 | 0 | 18 | 245 (0.932) | 236 | 9 | 16 | 2 |
+| holdout | 133 | 60 | 64 | 1 | 8 | 125 (0.940) | 111 | 14 | 7 | 1 |
+| **all** | **396** | 217 | 152 | 1 | 26 | 370 (0.934) | 347 | 23 | 23 | 3 |
+
+Observations (diagnostic only — holdout P&L not read):
+
+- Coverage is no longer the constraint. The label set is almost entirely `stepping-stone` (55%) and `mixed` (38%); the credit-side patterns (`touch-and-reject`, `slow-revert`, `overshoot-then-revert`) appear once in 396. Under `post_touch_qualification.py` that means the credit gate can essentially never open on magnet-above anchors, and Summary D's credit read will rest on 0–1 `pattern_match` rows — expect "too few pattern-labeled trades" for credit regardless of mode.
+- `touch-and-pin` never appears; the debit side is carried entirely by `stepping-stone`.
+
+### G2 reference — June train clean counts (derived)
+
+The June run log is not in the vault; the CR-AH spec records the A-bucket clean sample as near/train 30, mid/train 27, far/train 26 = **83 train** (credit legs), and the Step 4 note gives debit 110 / credit 106 including holdout with debit holdout n = 18. Derived: **credit train ≈ 83, debit train ≈ 92**. G2 tolerance ±3 applies to these derived figures; G2 is note-and-continue.
+
+### Caller inventory (pre-change grep, `compute_structural_probability(` call sites)
+
+| File:line | Kind | Plan for commit 3 |
+|---|---|---|
+| `apps/web/modules/TodaySetup/routes.py:287` | `/api/setup/proposals` — passes `exclude_date=trade_date` for every requested date, today included | pass `before_date=trade_date.isoformat()` unconditionally: for today it excludes nothing that exists yet (live behaviour preserved); for a browsed past date it is the ADR's walk-forward cutoff |
+| `scripts/cr_ah_step4_analysis.py:569` | CR-AH Step 4 | commit 4: `--structural-prob-mode` (walk-forward → `before_date`; full → `allow_lookahead=True`) |
+| `scripts/cr_z_step4b_k_display.py:41` | CR-031 k-display verifier, `exclude_date=anchor_date` | trivial: add `before_date=anchor_date` |
+| `scripts/cr_ah_posthoc_limit_entry.py:317` | **untracked** file (never committed), `exclude_date` only | not in the repo; listed under "Callers deferred to CR-AM" — will raise if run, by design |
+| `scripts/cr_z_step4_sanity.py:3` | docstring mention only, no call | untouched |
+| `packages/shared/tests/test_probability.py:6` | docstring mention only | untouched; new tests added here |
+| `packages/shared/knn_coherence.py` | calls `rank_analogues` directly with its own `before_date` guard | not a caller; untouched |
