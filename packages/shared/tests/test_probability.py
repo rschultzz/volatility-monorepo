@@ -16,8 +16,10 @@ import unittest
 from packages.shared.stats import wilson_ci
 from packages.shared.probability import (
     _aggregate_outcomes,
+    _rank_analogues_with_outcomes,
     classify_post_touch_positions,
     aggregate_post_touch_distribution,
+    compute_structural_probability,
 )
 
 
@@ -510,3 +512,123 @@ class TestAggregatePostTouchDistribution(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ─── compute_structural_probability cutoff contract (CR-AL / ADR 2026-09-05) ─
+
+import datetime as _dt
+
+from packages.shared.day_features import FEATURE_NAMES as _FEATURE_NAMES
+
+
+def _sparse_vec(**kwargs) -> dict:
+    """Sparse feature vector: only supplied keys are non-None (see test_knn)."""
+    base = {k: None for k in _FEATURE_NAMES}
+    base.update(kwargs)
+    return base
+
+
+class _FakeCursor:
+    """Answers the two queries _rank_analogues_with_outcomes issues.
+
+    Corpus query (bt_daily_features_active) → the injected corpus rows.
+    Outcome query (bt_daily_outcomes_active) → no rows, but the requested
+    trade_date list (the ranked analogue pool) is recorded on the conn.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._rows = []
+
+    def execute(self, sql, params=None):
+        if "bt_daily_features_active" in sql:
+            self._rows = self._conn.corpus_rows
+        elif "bt_daily_outcomes_active" in sql:
+            self._conn.requested_dates = [d.isoformat() for d in params[2]]
+            self._rows = []
+        else:
+            self._rows = []
+
+    def fetchall(self):
+        return self._rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakeConn:
+    def __init__(self, corpus_rows):
+        self.corpus_rows = corpus_rows
+        self.requested_dates = None
+
+    def cursor(self):
+        return _FakeCursor(self)
+
+
+def _corpus(dates):
+    """Identical sparse vectors on the given ISO dates → distance 0 for all."""
+    return [
+        (_dt.date.fromisoformat(d), _sparse_vec(cluster_1_signed_distance_sigma=1.0))
+        for d in dates
+    ]
+
+
+_ANCHOR_DATE = "2024-01-15"
+_CORPUS_DATES = [
+    "2024-01-10", "2024-01-11", "2024-01-12",   # before the anchor
+    "2024-01-15",                               # the anchor itself
+    "2024-01-16", "2024-01-17",                 # after the anchor (lookahead)
+]
+
+
+class TestStructuralProbabilityCutoffContract(unittest.TestCase):
+
+    def setUp(self):
+        self.anchor = _sparse_vec(cluster_1_signed_distance_sigma=1.0)
+
+    def test_exclude_date_without_before_date_raises(self):
+        conn = _FakeConn(_corpus(_CORPUS_DATES))
+        with self.assertRaises(ValueError) as cm:
+            compute_structural_probability(self.anchor, conn, exclude_date=_ANCHOR_DATE)
+        msg = str(cm.exception)
+        self.assertIn("before_date", msg)
+        self.assertIn("allow_lookahead", msg)
+        self.assertIn("Declare a Cutoff", msg)
+        # Raised before any DB work
+        self.assertIsNone(conn.requested_dates)
+
+    def test_allow_lookahead_does_not_raise_and_uses_full_pool(self):
+        conn = _FakeConn(_corpus(_CORPUS_DATES))
+        result = compute_structural_probability(
+            self.anchor, conn, exclude_date=_ANCHOR_DATE, allow_lookahead=True,
+        )
+        self.assertIsInstance(result, dict)
+        self.assertIsNotNone(conn.requested_dates)
+        self.assertNotIn(_ANCHOR_DATE, conn.requested_dates)          # self-excluded
+        self.assertTrue(any(d > _ANCHOR_DATE for d in conn.requested_dates))  # lookahead pool
+
+    def test_before_date_restricts_pool_to_prior_dates(self):
+        conn = _FakeConn(_corpus(_CORPUS_DATES))
+        compute_structural_probability(
+            self.anchor, conn, exclude_date=_ANCHOR_DATE, before_date=_ANCHOR_DATE,
+        )
+        self.assertIsNotNone(conn.requested_dates)
+        self.assertGreater(len(conn.requested_dates), 0)
+        self.assertTrue(all(d < _ANCHOR_DATE for d in conn.requested_dates))
+
+        # Same guarantee on the returned analogue rows themselves
+        rows = _rank_analogues_with_outcomes(
+            self.anchor, _FakeConn(_corpus(_CORPUS_DATES)), 200, "v-test",
+            exclude_date=_ANCHOR_DATE, before_date=_ANCHOR_DATE,
+        )
+        self.assertGreater(len(rows), 0)
+        self.assertTrue(all(r["trade_date"] < _ANCHOR_DATE for r in rows))
+
+    def test_live_call_without_exclude_date_is_unchanged(self):
+        conn = _FakeConn(_corpus(_CORPUS_DATES))
+        result = compute_structural_probability(self.anchor, conn)
+        self.assertIsInstance(result, dict)
+        self.assertIsNotNone(conn.requested_dates)

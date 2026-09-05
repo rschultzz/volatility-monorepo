@@ -290,6 +290,11 @@ def register_today_setup_routes(server) -> None:
                     k=200,   # CR-031: safety bound; ceiling is the real gate
                     ticker=ticker,
                     exclude_date=trade_date.isoformat(),
+                    # ADR 2026-09-05: analogue pool limited to what was knowable
+                    # on the requested date. For today this excludes nothing
+                    # that exists yet; for a browsed past date it is the
+                    # walk-forward cutoff.
+                    before_date=trade_date.isoformat(),
                     regime_kind=effective_regime,
                 )
             except Exception as e:

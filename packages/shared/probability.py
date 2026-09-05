@@ -677,8 +677,18 @@ def compute_structural_probability(
     ticker: str = "SPX",
     exclude_date: Optional[str] = None,
     regime_kind: Optional[str] = None,
+    before_date: Optional[str] = None,
+    allow_lookahead: bool = False,
 ) -> dict:
     """Given today's feature vector, compute structural probability.
+
+    Historical anchors must declare a cutoff (ADR 2026-09-05 "Historical
+    Structural-Probability Calls Must Declare a Cutoff"): when exclude_date
+    is set — the marker that the anchor is already in the corpus — the call
+    must also pass before_date (walk-forward pool: analogues with
+    trade_date < before_date only) or explicitly opt in to the full-corpus
+    pool with allow_lookahead=True. Omitting both raises ValueError. Live
+    calls (no exclude_date) are unchanged.
 
     Calls _rank_analogues_with_outcomes (DB) → _aggregate_outcomes (math)
     and adds request-level context fields (regime_kind, k).
@@ -705,6 +715,17 @@ def compute_structural_probability(
                          lookups where today IS in the corpus).
         regime_kind:     Regime label for the response ('magnet-above', etc.).
                          If None, derived from the boolean flags in today_features.
+        before_date:     ISO date string; restricts the analogue pool to
+                         trade_date < before_date (passed through to
+                         _rank_analogues_with_outcomes / rank_analogues).
+                         Required whenever exclude_date is set, unless
+                         allow_lookahead=True.
+        allow_lookahead: Explicit opt-in to the full-corpus pool for a
+                         historical anchor (comparison runs only). Never the
+                         default; never obtained by omission.
+
+    Raises:
+        ValueError: exclude_date set, before_date None, allow_lookahead False.
 
     Returns:
         Dict with outcome_status, k (real within-ceiling analogue count,
@@ -713,9 +734,18 @@ def compute_structural_probability(
         touch_ci_lower/upper, close_rate, mean_days_to_reach,
         mean_excursion_pct, regime_kind, note, post_touch.
     """
+    if exclude_date is not None and before_date is None and not allow_lookahead:
+        raise ValueError(
+            "compute_structural_probability: exclude_date is set (historical "
+            "anchor) but before_date is None. Pass before_date=<cutoff ISO date> "
+            "for a walk-forward analogue pool, or allow_lookahead=True to opt in "
+            "to the full corpus explicitly. See ADR 2026-09-05 \"Historical "
+            "Structural-Probability Calls Must Declare a Cutoff\"."
+        )
+
     rows   = _rank_analogues_with_outcomes(
         today_features, conn, k, feature_version,
-        ticker=ticker, exclude_date=exclude_date,
+        ticker=ticker, exclude_date=exclude_date, before_date=before_date,
     )
     result = _aggregate_outcomes(rows)
     result["k"]           = len(rows)   # real within-ceiling count, not the safety bound

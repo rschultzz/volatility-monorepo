@@ -38,7 +38,9 @@ def main():
         fv = corpus.get(anchor_date)
         if fv is None:
             print(f"{anchor_date}: not in corpus"); continue
-        result = compute_structural_probability(fv, conn, exclude_date=anchor_date)
+        result = compute_structural_probability(
+            fv, conn, exclude_date=anchor_date, before_date=anchor_date,
+        )
         k_displayed = result["k"]
         k_outcomes  = result["k_with_outcomes"]
         ci_lo = result.get("touch_ci_lower")
