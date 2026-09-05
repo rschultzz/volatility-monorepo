@@ -126,3 +126,24 @@ Smoke dict: `rows_with_t1_ohlc = 767`, `rows_t1_populated_t15_null = 11`, `by_ou
 `ironbeam_es_1m_bars` ends at 13:29 UTC on **2023-09-15, 2024-03-15, 2024-06-21, 2024-09-20, 2025-03-21, 2025-09-19** (third-Friday ES roll dates; the Databento-era continuous series has no RTH bars for the expiring session, and the 2025-09-19 Ironbeam-era gap is the same shape). For those rows the script finds `trade_date` absent from the session list and writes all twelve OHLC columns as NULL while still stamping `backfill_run_id` and counting the row as updated. The same six dates are NULL under `v0.5.0-rebuilt` (its remaining 27 NULL-t1 rows are 2026-03 → 06 rows created after the May run). Because the null-fill `WHERE session_open_t1 IS NULL` still matches them, they stay re-targetable and G0.1 will read 6, not 0, on any future run. This is a pre-existing bar-coverage gap, not a CR-AK regression; smoke test 1 will read 767 (< the spec's ≥ 770) for this reason. Not gated; recorded for the roll-date open question.
 
 G1.1 / G1.3 / G1.5 STOP conditions not met → proceeding to Step 2 (CR-I).
+
+## Step 2 — CR-I run (post-touch positions at canonical)
+
+Command: `apps/web/.venv/bin/python -u scripts/cr_i_backfill_post_touch_positions.py` (no args → resolved `v0.6.0-openiv`). Log: `scripts/logs/cr_ak_i_20260904_221959.log` (untracked, like all `scripts/logs/`). Wall time 05:20:02 → 05:45:53 UTC (26 min). Landscape 811 rows, implied moves 804 rows (canonical), targets 387.
+
+`bt_backfill_runs` row (latest CR-I):
+
+```
+(UUID('4e55a538-bb9b-42d0-853f-6383430b7c39'), 'CR-I', 'completed', datetime.datetime(2026, 9, 5, 5, 20, 1, 593544), datetime.datetime(2026, 9, 5, 5, 45, 53, 910843), 350, 'Pass 1 complete. updated=387, skipped=0, failed=0. remaining_null_t1=0 (expected: rows where T+1 bar unavailable). out_of_range=0 (expect 0). Status: clean.', {'n_failed': 0, 'n_skipped': 0, 'n_updated': 387, 'out_of_range': 0, 'skip_reasons': {}, 'value_dist_t1': {'0': 90, '1': 196, '-1': 101}, 'value_dist_t15': {'0': 16, '1': 279, '-1': 91, 'None': 1}, 'remaining_null_t1': 0})
+```
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G2.1 `n_failed` | 0 | **0** | PASS |
+| G2.2 `out_of_range` | 0 | **0** | PASS |
+| G2.3 `skip_reasons` | `{}` or only `no_bars`; any `no_implied_move` / `no_drift_target` → STOP | **`{}`** | PASS |
+| G2.4 `remaining_null_t1` | ≤ 15 | **0** | PASS |
+
+Notes: `rows_inserted` on both run rows reflects the last 50-row heartbeat (750 for CR-G, 350 for CR-I), not the final tally — the known `bt_backfill_runs` fidelity issue from CR-AJ, unchanged here. The six roll-Friday dates from Step 1 did not appear as skips: `_fetch_rth_daily_bars` returns the surrounding sessions, and `classify_post_touch_positions` indexes from `days_to_reach`, so positions were classified for any of them that touched (checked in Step 3 smoke 4 detail).
+
+No G2 STOP condition met → proceeding to Step 3.
