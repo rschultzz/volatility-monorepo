@@ -69,6 +69,7 @@ Every CR follows the same commit pattern:
 2. **Step-0 diagnosis findings** (second commit): append diagnostic findings to the spec file. If the CR has a diagnosis gate in its kickoff prompt, all gate questions must be answered in this commit before any implementation code lands.
 3. **One commit per implementation step.** No squashing. Step boundaries are defined in the kickoff prompt's "Implementation order" section.
 4. **Smoke + wrap** (last commit before PR): document deltas, decisions, and any deferred follow-ups in the session note's `## What changed`, `## Decisions`, `## Open questions` sections.
+5. **"Merged" means on origin.** A CR is not complete until the merge commit is reachable from `origin/main` (`git branch -r --contains <sha>`). Session notes must record the origin merge SHA, not a local one.
 
 ### Visible-change discipline
 
