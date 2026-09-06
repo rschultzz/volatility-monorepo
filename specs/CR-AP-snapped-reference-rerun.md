@@ -412,3 +412,26 @@ Phase 7: Persisting aggregate stats to bt_edge_backtest_results...
 Step 4 complete in 321s
 ======================================================================
 ```
+
+## What changed
+
+- Halted at G1 on the first attempt (snapped legs never fetched), resumed with a spec amendment: **Step 1a** captures the snapped legs for the 21 affected trades; G1 corrected to debit 110 / credit 106 with a −3 tolerance for listed 404s; **G1b** added (0 unlisted legs).
+- `scripts/cr_ap_capture_snapped_legs.py` (new): explicit date list, snapped legs via `snap_vertical_legs`, entry-day + settlement + the harness's 90-minute touch window for debit dates, backfill role, `cr_id='CR-AP-capture'`, no read. Run: 14 entry + 13 settlement + 7 touch windows, 20,898 bars, 0 exceptions, 1 404 (2025-06-11 settlement window on the 2025-07-03 half-day; ES-settled, no effect).
+- `scripts/cr_ah_step4_analysis.py`: one-line `Counter` import (CR-AO's Phase 1 report aborted every run without it) — the only code change to the analysis path; a scope deviation from "run-only", recorded.
+- Run `ad221de1` persisted as `cr_id='CR-AP'` — **the citable walk-forward, clean-quote, listed-strike reference.** All gates pass; G1 exact. Two earlier CR-AP run rows remain: `d774351b` aborted (NameError), `bb39a829` stuck `running` (killed before persistence; see [[bt-backfill-runs-audit-record-fidelity]]).
+- Result: debit reference unchanged in substance (all-train mean +1.70, beat +0.10; mid +0.30 is still the only band with a beat); credit mean P&L negative in every band; the credit beat cells are not readable while widths are pooled.
+
+## Decisions
+
+- **Resumed rather than re-planned** when the halt cause was a missing data step: the spec amendment landed before any code, the capture is a sibling of the existing path, and Step 1 ran unchanged.
+- **Touch window taken from the harness, not guessed**: `get_touch_pos_val` reads `[touch_datetime_pt, +90 min]`; `detect_touch` supplies the RTH touch minute or the next 06:30 PT open. The capture calls the same functions.
+- **The `Counter` hotfix stays in this branch** (needed for any Step 4 run); flagged as the one code change.
+- **Reported the credit reversals as a width-pooling artifact** with the per-trade evidence rather than as a finding; per decision 2 the persisted cells pool widths, and the spec carries the subset counts so the pooling decision can be revisited.
+- **Left the stuck `running` row alone** and documented the gap; no out-of-band UPDATE from the backfill role.
+
+## Open questions
+
+- **Width normalisation for beat.** With `width_actual ∈ {5, 10, 25, 50}` in one cell, `mean − baseline` mixes scales; the credit mid/all sign flips come from 4 wide spreads. Either report beat per unit of width (or per max-loss), or keep `width_actual = 10` as the reference cell and the rest as a labelled subset. Decide before CR-Y shows CR-AP cells.
+- **Snapping produces 5-wide spreads** when the 5-point wing exists but the 10-point one does not (the tie rule picks the strike nearer the anchor). A 5-wide is a different trade; consider preferring the wider side when the two candidates are equidistant from the nominal wing, or requiring `width_actual ≥ width_nominal`.
+- **Half-day settlement windows**: the 12:50–13:00 PT settlement window does not exist on early-close sessions (2025-07-03); harmless here (ES-settled) but any option-quote settlement path would 404. Cross-ref the holiday open question.
+- CR-AI re-run with clean quotes + snapping (carried from CR-AO); `TodaySetup` display `strike_spx` (carried); the attended web deploy (carried).
