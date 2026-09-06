@@ -121,3 +121,30 @@ Per date (target → snapped debit-other / anchor / credit-other, chain date; th
 | 2026-09-04 | pending_history | 7823.95 | 7820/7825/7830 (w 5/5) | 2026-09-03 | 2026-09-28 | bars 2328 | deferred (future expiry) | 7815/7825/7835 |
 
 All eight dates snap to a 10-wide pair on both sides (the anchor moved to the listed 10-point strike; on 2026-09-04 the 5-point strikes were already listed, so the anchor stayed at 7825 and the wings became 7820 / 7830). Holdout stream after CR-AO: **21 / 21 dates have entry-day quotes**; settlement windows captured for 20 (the three deferred here plus CR-AM's six deferrals overlap: expiries 09-09, 09-17, 09-18, 09-21, 09-25, 09-28 still to come — re-run the capture with `--dates` after 2026-09-28). 19,080 bars written; the CR-AM captures for the same dates' old legs remain in `orats_options_minute` and are harmless (different OPRAs).
+
+## What changed
+
+- `packages/shared/options_cache/strikes.py` (new): `prior_close`, `listed_strikes` (from `orats_oi_gamma` at the prior close), `snap_to_candidates` (nearest; ties toward spot), `snap_to_listed_strike`, `snap_vertical_legs` (anchor + second leg strictly on its side; `width_actual` / `width_nominal`), `StrikeNotListed`. One implementation for psycopg and SQLAlchemy connections.
+- Wired (decision 2): `scripts/cr_ah_step4_analysis.py` (harness leg builder: snapped legs, `width_actual` on `TradeData`, `UNLISTABLE` exclusions reported), `scripts/cr_am_holdout_leg_capture.py` (snapped legs, `--dates`), `scripts/cr_ai_stage2_backfill.py` (snapped legs, `width_actual` replaces the constant; not re-run), `packages/shared/options_cache/pricing.py::price_proposal_legs` (snap after ES→SPX conversion; vertical pairs as a pair; `listed`, `spx_strike_raw`, `width_actual`), `apps/web/modules/Proposals/routes.py` (surfaces `strike_spx_raw`, `listed`, `quote_valid`, `stale_quote`, `quote_minute`).
+- Live quote sanity (decision 4): CR-AN's leg rule at the entry minute; invalid → last valid cached quote within 30 min flagged `stale_quote`, else unpriced; a two-leg spread outside `[0, width_actual]` is suppressed (`spread_valid=False`). Condor `_bar_to_quote` reports `valid`; `build_real_strike_band` skips invalid bars.
+- CR-AI SQL mids (decision 5): `get_net_credit_at` / `get_settlement_cost` select bid/ask, apply the leg rule and a `[−width, 0]` range check; width from the snapped entry. Not re-run.
+- Tests: 11 (`test_strikes.py`) + 8 (`test_pricing.py`, snapping and quote sanity); the pricing tests now stub the chain lookup. Suites: options_cache 184, backtest + shared 542, Proposals 58.
+- Data: capture run `09cdcbff`: 8 / 8 entry-day windows, 5 settlement windows (3 deferred), 0 404s, 0 exceptions, 19,080 bars. `bt_edge_backtest_results` untouched. **Nothing deployed** (decision 8).
+- Gates: G0.1–G0.3 pass; **G0.4: credit 11.3 % > 10 % → CR-AP required**; G1, G2 pass; G3 pass (0 remaining 404s); G4 pass. No halts.
+
+## Decisions
+
+- **Snap to the prior-close chain** (decision 1) and record the listing schedule as documentation only; the chain reproduced both CR-AM 404s to the day, so it is the ground truth.
+- **Verticals snap as a pair, other structures per leg** in the live path: for a two-leg same-flag spread the short leg is the anchor and the long leg snaps strictly on its own side, so a coarse grid widens the spread rather than collapsing it; the width the user sees is the width that exists.
+- **`compute_spx_strike` stays pure**; snapping happens in `price_proposal_legs` where the chain is reachable. `TodaySetup/service.py`'s display-only `strike_spx` is outside G2's file list and is listed as a follow-on.
+- **Stale-quote fallback reads only the cache** (no extra ORATS call) and looks back 30 minutes; in a live poll the previous minutes are usually cached by earlier polls, otherwise the leg is unpriced rather than guessed.
+- **CR-AI patched, not re-run**, per decision 5; the Step 0 contamination rate (CR-AN: 20/106 credit-type first-minute baselines out of range on the CR-AH sample) is the justification recorded for the follow-on.
+- **G0.4 flag honoured as written**: the CR-AN reference is not re-run here; CR-AP is queued.
+
+## Open questions
+
+- **CR-AP required.** 12 / 106 credit (11.3 %) and 9 / 110 debit (8.2 %) CR-AN trades used at least one leg absent from the prior-close chain, and every one of them has entry-day minute rows — i.e. the backtest priced legs that were not listed at the open. Re-run the CR-AN configuration with snapping (this code) and persist as `cr_id='CR-AP'` before the reference is cited; expect some `width_actual ≠ 10` trades — decide pooled vs separate cell.
+- **CR-AI Stage 2 re-run with clean quotes + snapping** (follow-on): its entries are first-quoted-minute SQL mids; the mid-band question waits for it.
+- **`TodaySetup` display `strike_spx`** (`apps/web/modules/TodaySetup/service.py`) still uses `compute_spx_strike` alone; the `/today-setup` card can name an unlisted strike. Follow-on (needs a DB call in `routes.py`).
+- **Deploy** (decision 8, attended): first web deploy since 2026-08-23 carries CR-AH…CR-AO; pre-deploy grep is clean (all tracked callers pass `before_date`). `render.yaml` still says `autoDeploy: true` for the services it lists while the vault records the web service as dashboard-managed with autoDeploy off — reconcile before the deploy.
+- Holdout dates still without entry-day quotes after re-capture: none — all 21 holdout dates now have entry-day quotes; six settlement windows await expiry (09-09 … 09-28).
