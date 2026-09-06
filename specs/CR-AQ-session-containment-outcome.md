@@ -75,3 +75,143 @@ Canonical outcome rows: 804 active; `session_open_t0` non-null on 795 (the 9 NUL
 ### Design consequence found in Step 0 — when the cron can fill these
 
 The nightly `backfill_outcomes` cron (`scripts/cr_b_backfill_outcomes.py`) runs at 13:40 UTC on D and inserts D's outcome row with `session_open_t0` from bars that are still accumulating; D's high / low / close are not final until 20:00 UTC. Computing containment at that insert would stamp a partial session as final. Therefore: `compute_session_containment` is called (a) by the CR-AQ backfill (null-fill over completed sessions), (b) by `cr_b` at insert **only when `trade_date` is before the run date** (catch-up dates), and (c) as a null-fill pass in the 11:05 UTC sweep (`cr_aa_sweep_pending_outcomes.py`) for rows whose `session_close_t0` is still NULL and whose session has closed — that is the path that makes new dates fill automatically after the redeploy. Both scripts already build the same `daily_bars` frame.
+
+## Step 1 — migration applied (owner role) · Step 2 — checksum
+
+**Step 2 (taken first, before any DDL):** `SELECT md5(string_agg(session_open_t0::text, ',' ORDER BY trade_date)) FROM bt_daily_outcomes WHERE feature_version='v0.6.0-openiv' AND active` → `29a56df6abab8f0691d8e05232e22b40`.
+
+**Step 1:** `apps/web/.venv/bin/python -u scripts/cr_aq_run_migration.py` under `DATABASE_URL` (connected as the table owner `rschultz`). File: `infra/sql/bt_daily_outcomes_session_containment.sql` (ALTER TABLE … ADD 11 columns; GRANT UPDATE on them to `dash_backfill_writer`; COMMIT; CREATE OR REPLACE VIEW `bt_daily_outcomes_active` with the 35 existing columns in their ordinal order plus the 11 new ones). Runner output (statement as executed, then `\d`-style column list, grants, view columns, pre-backfill non-null count):
+
+```
+Connected as rschultz; bt_daily_outcomes owner = rschultz
+
+Applying infra/sql/bt_daily_outcomes_session_containment.sql (3824 bytes)
+--- statement ---
+BEGIN;
+ALTER TABLE bt_daily_outcomes
+  ADD COLUMN session_high_t0    REAL,
+  ADD COLUMN session_low_t0     REAL,
+  ADD COLUMN session_close_t0   REAL,
+  ADD COLUMN wall_above_price   REAL,
+  ADD COLUMN wall_below_price   REAL,
+  ADD COLUMN contained_close    BOOLEAN,
+  ADD COLUMN contained_range    BOOLEAN,
+  ADD COLUMN close_pos_in_band  REAL,
+  ADD COLUMN range_over_im      REAL,
+  ADD COLUMN close_move_over_im REAL,
+  ADD COLUMN breach_side        VARCHAR(8);
+GRANT UPDATE (
+  session_high_t0, session_low_t0, session_close_t0,
+  wall_above_price, wall_below_price,
+  contained_close, contained_range, close_pos_in_band,
+  range_over_im, close_move_over_im, breach_side
+) ON bt_daily_outcomes TO dash_backfill_writer;
+COMMIT;
+CREATE OR REPLACE VIEW bt_daily_outcomes_active AS
+SELECT ticker,
+       trade_date,
+       feature_version,
+       regime_kind_at_classification,
+       dominant_bucket_at_classification,
+       horizon_sessions,
+       horizon_end_date,
+       outcome_status,
+       reached_touch,
+       reached_close,
+       days_to_reach,
+       max_excursion_in_direction,
+       final_close_distance_from_target,
+       actual_realized_em_pct,
+       active,
+       deactivated_at,
+       deactivated_reason,
+       backfill_run_id,
+       computed_at,
+       position_t1_post_touch,
+       position_t5_post_touch,
+       position_t15_post_touch,
+       session_open_t1,
+       session_high_t1,
+       session_low_t1,
+       session_close_t1,
+       session_open_t5,
+       session_high_t5,
+       session_low_t5,
+       session_close_t5,
+       session_open_t15,
+       session_high_t15,
+       session_low_t15,
+       session_close_t15,
+       session_open_t0,
+       session_high_t0,
+       session_low_t0,
+       session_close_t0,
+       wall_above_price,
+       wall_below_price,
+       contained_close,
+       contained_range,
+       close_pos_in_band,
+       range_over_im,
+       close_move_over_im,
+       breach_side
+FROM bt_daily_outcomes
+WHERE active = true;
+--- end ---
+applied ✓
+
+\d bt_daily_outcomes — 46 columns:
+  ticker                               character varying            nullable=NO
+  trade_date                           date                         nullable=NO
+  feature_version                      character varying            nullable=NO
+  regime_kind_at_classification        character varying            nullable=YES
+  dominant_bucket_at_classification    character varying            nullable=YES
+  horizon_sessions                     integer                      nullable=YES
+  horizon_end_date                     date                         nullable=YES
+  outcome_status                       character varying            nullable=NO
+  reached_touch                        boolean                      nullable=YES
+  reached_close                        boolean                      nullable=YES
+  days_to_reach                        integer                      nullable=YES
+  max_excursion_in_direction           double precision             nullable=YES
+  final_close_distance_from_target     double precision             nullable=YES
+  actual_realized_em_pct               double precision             nullable=YES
+  active                               boolean                      nullable=NO
+  deactivated_at                       timestamp without time zone  nullable=YES
+  deactivated_reason                   text                         nullable=YES
+  backfill_run_id                      uuid                         nullable=YES
+  computed_at                          timestamp without time zone  nullable=YES
+  position_t1_post_touch               smallint                     nullable=YES
+  position_t5_post_touch               smallint                     nullable=YES
+  position_t15_post_touch              smallint                     nullable=YES
+  session_open_t1                      real                         nullable=YES
+  session_high_t1                      real                         nullable=YES
+  session_low_t1                       real                         nullable=YES
+  session_close_t1                     real                         nullable=YES
+  session_open_t5                      real                         nullable=YES
+  session_high_t5                      real                         nullable=YES
+  session_low_t5                       real                         nullable=YES
+  session_close_t5                     real                         nullable=YES
+  session_open_t15                     real                         nullable=YES
+  session_high_t15                     real                         nullable=YES
+  session_low_t15                      real                         nullable=YES
+  session_close_t15                    real                         nullable=YES
+  session_open_t0                      real                         nullable=YES
+  session_high_t0                      real                         nullable=YES
+  session_low_t0                       real                         nullable=YES
+  session_close_t0                     real                         nullable=YES
+  wall_above_price                     real                         nullable=YES
+  wall_below_price                     real                         nullable=YES
+  contained_close                      boolean                      nullable=YES
+  contained_range                      boolean                      nullable=YES
+  close_pos_in_band                    real                         nullable=YES
+  range_over_im                        real                         nullable=YES
+  close_move_over_im                   real                         nullable=YES
+  breach_side                          character varying            nullable=YES
+
+GRANT UPDATE on new columns to dash_backfill_writer: 11/11
+bt_daily_outcomes_active columns: 46
+non-null new-column rows before backfill: 0 (expect 0)
+```
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G2 migration applied; columns present; 0 non-null before backfill | yes | 11 columns added (46 total), 11/11 column grants, view at 46 columns, 0 non-null | PASS |
