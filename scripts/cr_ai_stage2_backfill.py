@@ -75,6 +75,8 @@ from packages.shared.gex_landscape import compute_implied_move
 from packages.shared.options_cache.fetcher import fetch_option_bars
 from packages.shared.options_cache.http_client import OratsPermanentError
 from packages.shared.options_cache.opra import format_opra
+from packages.shared.options_cache.strikes import StrikeNotListed, snap_vertical_legs
+from packages.shared.backtest.quote_validity import leg_quote_is_valid
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 DRY_RUN: bool = False       # flip to True for planning-only run
@@ -240,11 +242,19 @@ def load_clean_dates(conn) -> list[dict]:
     selected.sort(key=lambda x: x["trade_date"])
 
     clean = []
+    n_unlistable = 0
     for e in selected:
         td = e["trade_date"]
-        ss = float(round5(e["drift_target"]))
-        ls = ss - 10.0
         expiry = nth_business_day(td, DTE_BASE)
+        # CR-AO: snap both legs to the strikes listed at the prior close
+        try:
+            snapped = snap_vertical_legs(e["drift_target"], -10, expiry, td, conn, toward=e.get("spot"))
+        except StrikeNotListed as exc:
+            n_unlistable += 1
+            print(f"  unlistable {td}: {exc}", flush=True)
+            continue
+        ss = float(snapped.anchor)
+        ls = float(snapped.other)
         so = format_opra(OPRA_ROOT, expiry, "C", ss)
         lo = format_opra(OPRA_ROOT, expiry, "C", ls)
         entry_start = datetime(td.year, td.month, td.day, 6, 30)
@@ -257,8 +267,11 @@ def load_clean_dates(conn) -> list[dict]:
             (so, lo, [so, lo], entry_start, entry_end),
         ).fetchone()
         if row and bool(row[0]) and bool(row[1]):
-            clean.append({**e, "short_strike": ss, "long_strike": ls})
+            clean.append({**e, "short_strike": ss, "long_strike": ls,
+                          "width_actual": snapped.width_actual, "width_nominal": snapped.width_nominal})
 
+    if n_unlistable:
+        print(f"  unlistable entries (StrikeNotListed): {n_unlistable}", flush=True)
     return clean
 
 
@@ -325,62 +338,70 @@ def detect_touch(
 
 # ── NET MID QUOTE ──────────────────────────────────────────────────────────────
 
+def _valid_mids_by_minute(rows) -> dict:
+    """CR-AO decision 5 (CR-AN leg rule): keep only legs with bid >= 0, ask > 0,
+    bid <= ask; mid from those. Rows are (opra, snapshot_pt, bid, ask)."""
+    by_min: dict[datetime, dict[str, float]] = {}
+    for opra, snap, bid, ask in rows:
+        if leg_quote_is_valid(bid, ask):
+            by_min.setdefault(snap, {})[opra] = (float(bid) + float(ask)) / 2.0
+    return by_min
+
+
+def _spread_in_range(value: float, width: float) -> bool:
+    """Debit (long target-10 / short target): mid(short) - mid(long) must lie in [-width, 0]."""
+    return -width - 1e-9 <= value <= 1e-9
+
+
 def get_net_credit_at(conn, short_opra: str, long_opra: str,
-                       start_pt: datetime, end_pt: datetime) -> Optional[float]:
-    """Net credit = mid(short) - mid(long) at first minute both are quoted."""
+                       start_pt: datetime, end_pt: datetime,
+                       width: float = SPREAD_WIDTH) -> Optional[float]:
+    """Net credit = mid(short) - mid(long) at the first minute both legs are
+    VALIDLY quoted and the spread value is in range (CR-AO decision 5)."""
     rows = conn.execute(
         """
-        SELECT opra_symbol,
-               snapshot_pt,
-               (bid_price + ask_price) / 2.0 AS mid
+        SELECT opra_symbol, snapshot_pt, bid_price, ask_price
         FROM orats_options_minute
         WHERE opra_symbol = ANY(%s)
           AND snapshot_pt >= %s AND snapshot_pt < %s
-          AND bid_price IS NOT NULL AND ask_price IS NOT NULL
         ORDER BY snapshot_pt ASC
         """,
         ([short_opra, long_opra], start_pt, end_pt),
     ).fetchall()
-
-    by_min: dict[datetime, dict[str, float]] = {}
-    for opra, snap, mid in rows:
-        by_min.setdefault(snap, {})[opra] = float(mid)
-
+    by_min = _valid_mids_by_minute(rows)
     for snap in sorted(by_min):
         m = by_min[snap]
         if short_opra in m and long_opra in m:
-            return m[short_opra] - m[long_opra]   # positive = net credit
+            v = m[short_opra] - m[long_opra]   # positive = net credit
+            if _spread_in_range(v, width):
+                return v
     return None
 
 
 def get_settlement_cost(conn, short_opra: str, long_opra: str,
-                         expiry_date: date) -> Optional[float]:
-    """Settlement cost = mid(short) - mid(long) at last quoted minute on expiry day."""
+                         expiry_date: date, width: float = SPREAD_WIDTH) -> Optional[float]:
+    """Settlement cost = mid(short) - mid(long) at the last VALIDLY quoted,
+    in-range minute of the settlement window (CR-AO decision 5)."""
     settle_start_pt = datetime(expiry_date.year, expiry_date.month, expiry_date.day, 12, 50)
     settle_end_pt   = datetime(expiry_date.year, expiry_date.month, expiry_date.day, 13, 1)
 
     rows = conn.execute(
         """
-        SELECT opra_symbol,
-               snapshot_pt,
-               (bid_price + ask_price) / 2.0 AS mid
+        SELECT opra_symbol, snapshot_pt, bid_price, ask_price
         FROM orats_options_minute
         WHERE opra_symbol = ANY(%s)
           AND snapshot_pt >= %s AND snapshot_pt <= %s
-          AND bid_price IS NOT NULL AND ask_price IS NOT NULL
         ORDER BY snapshot_pt DESC
         """,
         ([short_opra, long_opra], settle_start_pt, settle_end_pt),
     ).fetchall()
-
-    by_min: dict[datetime, dict[str, float]] = {}
-    for opra, snap, mid in rows:
-        by_min.setdefault(snap, {})[opra] = float(mid)
-
+    by_min = _valid_mids_by_minute(rows)
     for snap in sorted(by_min, reverse=True):
         m = by_min[snap]
         if short_opra in m and long_opra in m:
-            return m[short_opra] - m[long_opra]
+            v = m[short_opra] - m[long_opra]
+            if _spread_in_range(v, width):
+                return v
     return None
 
 
@@ -400,6 +421,7 @@ def backfill_one(
     sigma        = entry["sigma"]
     ss           = entry["short_strike"]
     ls           = entry["long_strike"]
+    width        = float(entry.get("width_actual", SPREAD_WIDTH))   # CR-AO decision 3
 
     expiry = nth_business_day(td, dte)
     short_opra = format_opra(OPRA_ROOT, expiry, "C", ss)
@@ -438,7 +460,7 @@ def backfill_one(
         return result  # 404 — no data; result.filled = False
 
     # Entry credit
-    entry_credit = get_net_credit_at(conn, short_opra, long_opra, entry_start_pt, entry_end_pt)
+    entry_credit = get_net_credit_at(conn, short_opra, long_opra, entry_start_pt, entry_end_pt, width)
     if entry_credit is None:
         return result  # no quote found
 
@@ -457,7 +479,7 @@ def backfill_one(
     except OratsPermanentError:
         pass  # settlement missing; P&L will be None
 
-    settlement_cost = get_settlement_cost(conn, short_opra, long_opra, expiry)
+    settlement_cost = get_settlement_cost(conn, short_opra, long_opra, expiry, width)
     result.settlement_cost = settlement_cost
 
     if settlement_cost is not None:
@@ -496,7 +518,7 @@ def backfill_one(
         # For a credit spread: max_loss = spread_width - net_credit_received
         # Since this is debit: max_loss = -entry_credit (if entry_credit < 0, i.e., we paid a debit)
         # If entry_credit > 0 (rare edge case where we received credit on a "debit" spread), clamp to 0.01
-        max_loss = max(-entry_credit, 0.01) if entry_credit is not None else SPREAD_WIDTH
+        max_loss = max(-entry_credit, 0.01) if entry_credit is not None else width
         if max_loss > 0:
             result.pct_return_on_premium = (close_pnl / max_loss) * 100
 

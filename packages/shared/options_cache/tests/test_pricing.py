@@ -10,7 +10,7 @@ Run with:
 from __future__ import annotations
 
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 from packages.shared.options_cache import pricing
@@ -255,7 +255,23 @@ def _mock_bars_for(opra: str) -> list:
     return []
 
 
-class TestPriceProposalLegs(unittest.TestCase):
+class _ChainStub:
+    """CR-AO: unit tests must not reach orats_oi_gamma. Every 5-point strike is
+    "listed", so snapping is a no-op for the pre-CR-AO assertions."""
+
+    def setUp(self):
+        self._p_listed = patch(
+            "packages.shared.options_cache.pricing.listed_strikes",
+            side_effect=lambda conn, expiry, trade_date, ticker="SPX": (trade_date, [float(k) for k in range(1000, 12000, 5)]),
+        )
+        self._p_conn = patch("packages.shared.options_cache.pricing.repo._conn")
+        self._p_listed.start(); self._p_conn.start()
+
+    def tearDown(self):
+        self._p_listed.stop(); self._p_conn.stop()
+
+
+class TestPriceProposalLegs(_ChainStub, unittest.TestCase):
     """price_proposal_legs — mock-based unit tests (no DB, no network)."""
 
     def _run(self, legs, bars_fn=None):
@@ -486,7 +502,7 @@ class TestNearestSpxExpiration(unittest.TestCase):
                           f"target={target_days}: weekday {result.weekday()} not Mon/Wed/Fri")
 
 
-class TestPriceProposalLegsDelta(unittest.TestCase):
+class TestPriceProposalLegsDelta(_ChainStub, unittest.TestCase):
     """Tests that price_proposal_legs now surfaces bar.delta (CR-V Step 2)."""
 
     _TD = date(2026, 5, 19)
@@ -622,3 +638,106 @@ class TestLiveFlagThreading(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPriceProposalLegsSnapping(unittest.TestCase):
+    """CR-AO decisions 1–3 in the live leg builder: strikes snap to the listed
+    grid at the prior close; width_actual is the snapped width."""
+
+    _LEGS = [
+        {"flag": "c", "strike": 7655.0, "expiration": date(2026, 8, 3), "qty": 1, "side": "short"},
+        {"flag": "c", "strike": 7665.0, "expiration": date(2026, 8, 3), "qty": 1, "side": "long"},
+    ]
+
+    def _run(self, chain, r=0.0, q=0.0):
+        def fake_listed(conn, expiry, trade_date, ticker="SPX"):
+            return (date(2026, 7, 10), sorted(chain))
+        bars = {}
+        def get_bars(opra, a, b):
+            return [_bar(opra, a, 1.0, 1.2)]
+        with patch("packages.shared.options_cache.pricing.listed_strikes", side_effect=fake_listed), \
+             patch("packages.shared.options_cache.pricing.repo._conn"), \
+             patch("packages.shared.options_cache.pricing.fetch_option_bars", return_value=_summary()), \
+             patch("packages.shared.options_cache.pricing.repo.get_bars_for_contract", side_effect=get_bars):
+            return pricing.price_proposal_legs(self._LEGS, trade_date=date(2026, 7, 13),
+                                               entry_pt=datetime(2026, 7, 13, 7, 0), r=r, q=q)
+
+    def test_vertical_snaps_as_a_pair_and_reports_width_actual(self):
+        res = self._run([7600, 7610, 7620, 7650, 7700, 7750])   # coarse 15-DTE grid, no 7655/7665
+        short, long_ = res["legs"]
+        self.assertEqual(short["spx_strike_raw"], 7655)
+        self.assertEqual(short["spx_strike"], 7650)         # nearest listed to the anchor
+        self.assertEqual(long_["spx_strike"], 7700)         # nearest listed to 7665 strictly above 7650
+        self.assertEqual(res["width_actual"], 50.0)
+        self.assertEqual(res["width_nominal"], 10.0)
+        self.assertTrue(short["listed"] and long_["listed"])
+        self.assertIn("SPX260803C07650000", short["opra"])
+        self.assertTrue(any("snapped to 7650" in w for w in res["warnings"]))
+
+    def test_full_grid_leaves_strikes_unchanged(self):
+        res = self._run(list(range(7600, 7705, 5)))
+        self.assertEqual([l["spx_strike"] for l in res["legs"]], [7655, 7665])
+        self.assertEqual(res["width_actual"], 10.0)
+        self.assertFalse(any("snapped" in w for w in res["warnings"]))
+
+    def test_unlisted_expiry_marks_legs_unlisted(self):
+        res = self._run([])
+        self.assertEqual([l["listed"] for l in res["legs"]], [False, False])
+        self.assertEqual([l["spx_strike"] for l in res["legs"]], [None, None])
+        self.assertIsNone(res["net_debit"])
+        self.assertTrue(any("no listed strikes" in w for w in res["warnings"]))
+
+
+class TestPriceProposalLegsQuoteSanity(_ChainStub, unittest.TestCase):
+    """CR-AO decision 4: CR-AN's minute rule in the live leg builder."""
+
+    _LEGS = [
+        {"flag": "c", "strike": 5100.0, "expiration": date(2026, 5, 19), "qty": 1, "side": "short"},
+        {"flag": "c", "strike": 5110.0, "expiration": date(2026, 5, 19), "qty": 1, "side": "long"},
+    ]
+    _EP = datetime(2026, 5, 19, 7, 0)
+
+    def _run(self, bars_by_opra):
+        def get_bars(opra, a, b):
+            return [x for x in bars_by_opra.get(opra, []) if a <= x.snapshot_pt <= b]
+        with patch("packages.shared.options_cache.pricing.fetch_option_bars", return_value=_summary()), \
+             patch("packages.shared.options_cache.pricing.repo.get_bars_for_contract", side_effect=get_bars):
+            return pricing.price_proposal_legs(self._LEGS, trade_date=date(2026, 5, 19), entry_pt=self._EP, r=0.0, q=0.0)
+
+    def test_valid_quotes_pass_through(self):
+        so, lo = "SPX260519C05100000", "SPX260519C05110000"
+        res = self._run({so: [_bar(so, self._EP, 5.0, 5.2)], lo: [_bar(lo, self._EP, 2.0, 2.2)]})
+        self.assertAlmostEqual(res["net_debit"], -3.0)          # short 5.1 − long 2.1 → credit
+        self.assertFalse(res["stale_quote"]); self.assertTrue(res["spread_valid"])
+        self.assertTrue(all(l["quote_valid"] for l in res["legs"]))
+
+    def test_crossed_quote_uses_last_valid_and_flags_stale(self):
+        so, lo = "SPX260519C05100000", "SPX260519C05110000"
+        earlier = self._EP - timedelta(minutes=3)
+        res = self._run({so: [_bar(so, earlier, 5.0, 5.2), _bar(so, self._EP, 9.0, 4.0)],   # crossed at entry
+                         lo: [_bar(lo, self._EP, 2.0, 2.2)]})
+        short = res["legs"][0]
+        self.assertTrue(short["stale_quote"]); self.assertEqual(short["quote_minute"], "06:57")
+        self.assertAlmostEqual(short["mid"], 5.1)
+        self.assertTrue(res["stale_quote"])
+        self.assertAlmostEqual(res["net_debit"], -3.0)
+
+    def test_crossed_quote_with_no_valid_history_suppresses_price(self):
+        so, lo = "SPX260519C05100000", "SPX260519C05110000"
+        res = self._run({so: [_bar(so, self._EP, 9.0, 4.0)], lo: [_bar(lo, self._EP, 2.0, 2.2)]})
+        self.assertIsNone(res["legs"][0]["mid"]); self.assertFalse(res["legs"][0]["quote_valid"])
+        self.assertIsNone(res["net_debit"])
+        self.assertTrue(any("no valid quote" in w for w in res["warnings"]))
+
+    def test_out_of_range_spread_is_suppressed(self):
+        so, lo = "SPX260519C05100000", "SPX260519C05110000"
+        # both legs individually valid, but the credit spread prices at −42 on a 10-wide
+        res = self._run({so: [_bar(so, self._EP, 45.0, 45.2)], lo: [_bar(lo, self._EP, 3.0, 3.2)]})
+        self.assertIsNone(res["net_debit"]); self.assertFalse(res["spread_valid"])
+        self.assertTrue(any("outside [0, 10]" in w for w in res["warnings"]))
+
+    def test_condor_leg_quote_marks_invalid(self):
+        q = pricing._bar_to_quote(_bar("SPX260519P05000000", self._EP, 3.0, 2.5))
+        self.assertFalse(q["valid"]); self.assertIsNone(q["mid"])
+        q2 = pricing._bar_to_quote(_bar("SPX260519P05000000", self._EP, 2.5, 3.0))
+        self.assertTrue(q2["valid"]); self.assertAlmostEqual(q2["mid"], 2.75)

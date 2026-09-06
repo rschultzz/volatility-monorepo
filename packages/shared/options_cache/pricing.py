@@ -19,7 +19,14 @@ from .fetcher import fetch_option_bars
 from .http_client import OratsError, OratsPermanentError
 from .opra import format_opra
 from . import repository as repo
+from .strikes import StrikeNotListed, snap_to_candidates, listed_strikes
+from packages.shared.backtest.quote_validity import leg_quote_is_valid, spread_value_is_valid
 from packages.shared.forward_math import compute_spx_strike
+from packages.shared.strategy_templates import Leg
+
+# CR-AO decision 4: when the entry-minute quote is invalid, look back this
+# far in the cache for the last valid quote (no extra fetch) and flag it stale.
+_STALE_LOOKBACK_MIN = 30
 
 # SPX expirations occur on Mon (0), Wed (2), Fri (4)
 _SPX_EXPIRY_WEEKDAYS = frozenset({0, 2, 4})
@@ -70,13 +77,16 @@ def _resolve_eval_minute(trade_date: date, eval_pt: str, now_pt: Optional[dateti
 
 
 def _bar_to_quote(bar) -> dict:
-    """Project an OptionMinuteBar into the {bid, ask, mid} response shape."""
+    """Project an OptionMinuteBar into the {bid, ask, mid, valid} response shape.
+
+    CR-AO decision 4 (CR-AN's leg rule): a crossed, negative or one-sided
+    quote yields mid=None and valid=False so no downstream sum uses it.
+    """
     bid = bar.bid_price
     ask = bar.ask_price
-    mid = None
-    if bid is not None and ask is not None:
-        mid = round((float(bid) + float(ask)) / 2.0, 4)
-    return {"bid": bid, "ask": ask, "mid": mid}
+    valid = leg_quote_is_valid(bid, ask)
+    mid = round((float(bid) + float(ask)) / 2.0, 4) if valid else None
+    return {"bid": bid, "ask": ask, "mid": mid, "valid": valid}
 
 
 def _net_credit(legs: dict) -> Optional[float]:
@@ -279,25 +289,36 @@ def price_proposal_legs(
     if not legs:
         return {"legs": [], "net_debit": None, "warnings": []}
 
-    # ── 1. ES→SPX conversion + OPRA construction ──────────────────────────
-    opra_list: list[str] = []
-    leg_meta: list[dict] = []
+    # ── 1. ES→SPX conversion + listed-strike snapping + OPRA construction ──
+    # CR-AO decisions 1–3: the 5-point rounding from compute_spx_strike is the
+    # *intent*; the tradable strike is the nearest one listed for that expiry
+    # at the prior close (orats_oi_gamma). A two-leg same-flag vertical is
+    # snapped as a pair (anchor = short leg; other leg strictly on its side)
+    # so the width is a real listed width; other structures snap per leg.
+    raw_meta: list[dict] = []
     for leg in legs:
         expir_d: date = leg["expiration"]
         dte = (expir_d - trade_date).days
-        spx_strike = compute_spx_strike(leg["strike"], dte, r, q)
-        flag_upper = leg["flag"].upper()   # 'C' or 'P'
-        opra = format_opra("SPX", expir_d, flag_upper, spx_strike)
-        opra_list.append(opra)
-        leg_meta.append({
+        raw_meta.append({
             "flag":       leg["flag"],
             "side":       leg["side"],
             "qty":        leg.get("qty", 1),
             "strike_es":  leg["strike"],
-            "spx_strike": spx_strike,
-            "opra":       opra,
+            "spx_strike_raw": compute_spx_strike(leg["strike"], dte, r, q),
             "expiration": expir_d,
         })
+    snapped, width_actual, width_nominal = _snap_leg_strikes(raw_meta, trade_date, warnings_out)
+
+    opra_list: list[str] = []
+    leg_meta: list[dict] = []
+    for meta in snapped:
+        flag_upper = meta["flag"].upper()   # 'C' or 'P'
+        if meta["spx_strike"] is None:
+            leg_meta.append({**meta, "opra": None})
+            continue
+        opra = format_opra("SPX", meta["expiration"], flag_upper, meta["spx_strike"])
+        opra_list.append(opra)
+        leg_meta.append({**meta, "opra": opra})
 
     # ── 2. Batched fetch (writes to cache; idempotent on cache hit) ────────
     unique_opras = list(dict.fromkeys(opra_list))   # dedup, preserve order
@@ -314,6 +335,11 @@ def price_proposal_legs(
     # ── 3. Read per-leg mids from cache ────────────────────────────────────
     net_debit: Optional[float] = 0.0
     for meta in leg_meta:
+        if meta.get("opra") is None:
+            # CR-AO: no listed strike for this expiry — the card shows "no listed strike"
+            priced_legs.append({**meta, "bid": None, "ask": None, "mid": None, "delta": None})
+            net_debit = None
+            continue
         bars = repo.get_bars_for_contract(meta["opra"], entry_pt, entry_pt)
         if not bars:
             warnings_out.append(
@@ -326,9 +352,36 @@ def price_proposal_legs(
         bar = bars[0]
         bid = bar.bid_price
         ask = bar.ask_price
-        mid = round((float(bid) + float(ask)) / 2.0, 4) if (bid is not None and ask is not None) else None
+        stale_quote = False
+        quote_minute = entry_pt
+        if not leg_quote_is_valid(bid, ask):
+            # CR-AO decision 4: never show an invalid quote; use the last valid
+            # one in the cache (no extra fetch) and flag it stale.
+            prev = repo.get_bars_for_contract(meta["opra"], entry_pt - timedelta(minutes=_STALE_LOOKBACK_MIN), entry_pt)
+            valid_prev = [b for b in (prev or []) if b.snapshot_pt < entry_pt and leg_quote_is_valid(b.bid_price, b.ask_price)]
+            if valid_prev:
+                bar = max(valid_prev, key=lambda b: b.snapshot_pt)
+                bid, ask = bar.bid_price, bar.ask_price
+                stale_quote = True
+                quote_minute = bar.snapshot_pt
+                warnings_out.append(
+                    f"invalid quote for {meta['opra']} at {entry_pt.strftime('%H:%M')} PT "
+                    f"(bid={bid!r} ask={ask!r}); using last valid at {quote_minute.strftime('%H:%M')}"
+                )
+            else:
+                warnings_out.append(
+                    f"invalid quote for {meta['opra']} at {entry_pt.strftime('%H:%M')} PT "
+                    f"(bid={bid!r} ask={ask!r}); no valid quote in the last {_STALE_LOOKBACK_MIN} min"
+                )
+                priced_legs.append({**meta, "bid": bid, "ask": ask, "mid": None, "delta": bar.delta,
+                                    "quote_valid": False, "stale_quote": False, "quote_minute": None})
+                net_debit = None
+                continue
+        mid = round((float(bid) + float(ask)) / 2.0, 4)
 
-        priced_legs.append({**meta, "bid": bid, "ask": ask, "mid": mid, "delta": bar.delta})
+        priced_legs.append({**meta, "bid": bid, "ask": ask, "mid": mid, "delta": bar.delta,
+                            "quote_valid": True, "stale_quote": stale_quote,
+                            "quote_minute": quote_minute.strftime("%H:%M")})
 
         if net_debit is not None and mid is not None:
             sign = 1.0 if meta["side"] == "long" else -1.0
@@ -336,14 +389,101 @@ def price_proposal_legs(
         else:
             net_debit = None
 
+    spread_valid: Optional[bool] = None
     if net_debit is not None:
         net_debit = round(net_debit, 4)
+        # CR-AO decision 4 (CR-AN range rule): a two-leg vertical's price must
+        # lie in [0, width_actual] in the structure's direction; otherwise the
+        # card must not show it.
+        if width_actual is not None and len(priced_legs) == 2:
+            leg_objs = [
+                Leg(side=l["side"], type=("call" if l["flag"].lower() == "c" else "put"), strike=float(l["spx_strike"]))
+                for l in priced_legs
+            ]
+            spread_valid = spread_value_is_valid(net_debit, width_actual, leg_objs)
+            if not spread_valid:
+                warnings_out.append(
+                    f"spread price {net_debit:+.4f} outside [0, {width_actual:g}] for this structure; suppressed"
+                )
+                net_debit = None
 
     return {
         "legs":      priced_legs,
         "net_debit": net_debit,
+        "width_actual":  width_actual,
+        "width_nominal": width_nominal,
+        "stale_quote": any(l.get("stale_quote") for l in priced_legs),
+        "spread_valid": spread_valid,
         "warnings":  warnings_out,
     }
+
+
+def _snap_leg_strikes(raw_meta: list[dict], trade_date: date, warnings_out: list) -> tuple[list[dict], Optional[float], Optional[float]]:
+    """CR-AO: snap each leg's spx_strike_raw to the listed grid at the prior close.
+
+    Returns (legs with spx_strike / listed, width_actual, width_nominal). For a
+    two-leg same-flag vertical the pair is snapped together (anchor = short
+    leg; the long leg on its own side of the anchor). A leg whose expiry is
+    absent from the chain gets spx_strike=None and listed=False plus a warning.
+    """
+    out = [dict(m, spx_strike=m["spx_strike_raw"], listed=True) for m in raw_meta]
+    if not raw_meta:
+        return out, None, None
+    try:
+        with repo._conn() as conn:
+            chains: dict[date, list[float]] = {}
+            for m in raw_meta:
+                if m["expiration"] not in chains:
+                    _, chains[m["expiration"]] = listed_strikes(conn, m["expiration"], trade_date)
+    except Exception as exc:  # chain unavailable → keep the 5-point rounding, say so
+        warnings_out.append(f"listed-strike chain unavailable ({exc}); using 5-point rounding")
+        return out, None, None
+
+    is_vertical = (
+        len(raw_meta) == 2
+        and raw_meta[0]["flag"] == raw_meta[1]["flag"]
+        and raw_meta[0]["expiration"] == raw_meta[1]["expiration"]
+        and {raw_meta[0]["side"], raw_meta[1]["side"]} == {"short", "long"}
+    )
+    width_nominal = abs(raw_meta[0]["spx_strike_raw"] - raw_meta[1]["spx_strike_raw"]) if len(raw_meta) == 2 else None
+    width_actual: Optional[float] = None
+
+    if is_vertical:
+        cands = chains.get(raw_meta[0]["expiration"], [])
+        si = 0 if raw_meta[0]["side"] == "short" else 1
+        li = 1 - si
+        if not cands:
+            for o in out:
+                o["spx_strike"] = None; o["listed"] = False
+            warnings_out.append(f"no listed strikes for expiry {raw_meta[0]['expiration']} at the prior close before {trade_date}")
+            return out, None, width_nominal
+        anchor = snap_to_candidates(raw_meta[si]["spx_strike_raw"], cands)
+        direction = raw_meta[li]["spx_strike_raw"] - raw_meta[si]["spx_strike_raw"]
+        side = [c for c in cands if (c > anchor if direction > 0 else c < anchor)]
+        if not side:
+            out[si]["spx_strike"] = anchor
+            out[li]["spx_strike"] = None; out[li]["listed"] = False
+            warnings_out.append(f"no listed strike on the required side of {anchor:g} for expiry {raw_meta[0]['expiration']}")
+            return out, None, width_nominal
+        other = snap_to_candidates(raw_meta[li]["spx_strike_raw"], side, toward=anchor)
+        out[si]["spx_strike"] = anchor
+        out[li]["spx_strike"] = other
+        width_actual = abs(other - anchor)
+    else:
+        for m, o in zip(raw_meta, out):
+            cands = chains.get(m["expiration"], [])
+            if not cands:
+                o["spx_strike"] = None; o["listed"] = False
+                warnings_out.append(f"no listed strikes for expiry {m['expiration']} at the prior close before {trade_date}")
+                continue
+            o["spx_strike"] = snap_to_candidates(m["spx_strike_raw"], cands)
+        if len(out) == 2 and all(o["spx_strike"] is not None for o in out):
+            width_actual = abs(out[0]["spx_strike"] - out[1]["spx_strike"])
+
+    for m, o in zip(raw_meta, out):
+        if o["spx_strike"] is not None and o["spx_strike"] != m["spx_strike_raw"]:
+            warnings_out.append(f"strike {m['spx_strike_raw']:g} not listed for {m['expiration']}; snapped to {o['spx_strike']:g}")
+    return out, width_actual, width_nominal
 
 
 # ── Real implied-distribution strike band (CR-T Step 2) ──────────────────────
@@ -419,7 +559,7 @@ def build_real_strike_band(
         if not bars:
             continue
         bar = bars[0]
-        if bar.bid_price is None or bar.ask_price is None:
+        if not leg_quote_is_valid(bar.bid_price, bar.ask_price):   # CR-AO decision 4
             continue
         mid = (float(bar.bid_price) + float(bar.ask_price)) / 2.0
         if mid > 0:

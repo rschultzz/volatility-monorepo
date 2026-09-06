@@ -119,6 +119,7 @@ from packages.shared.day_features import (
 )
 from packages.shared.gex_landscape import compute_implied_move
 from packages.shared.options_cache.opra import format_opra
+from packages.shared.options_cache.strikes import StrikeNotListed, snap_vertical_legs
 from packages.shared.probability import compute_structural_probability
 from packages.shared.strategy_templates import Leg
 
@@ -261,6 +262,11 @@ class TradeData:
     # Settlement underlying price (ES close at expiry RTH end)
     settlement_price: Optional[float]
 
+    # CR-AO decision 3: legs snapped to the listed grid at the prior close
+    width_nominal: float = 10.0
+    width_actual: float = 10.0
+    other_strike: float = 0.0
+
     # CR-AN decision 7 observability (entry window) + decision 6 exclusion
     n_minutes_total: int = 0
     n_minutes_valid: int = 0
@@ -357,20 +363,36 @@ def select_clean_dates(all_entries: list[dict]) -> tuple[list[dict], list[dict]]
     return selected
 
 
+UNLISTABLE: list[dict] = []   # CR-AO: entries whose legs could not be snapped (StrikeNotListed)
+
+
 def filter_clean_for_structure(conn, entries: list[dict], structure: str) -> list[dict]:
     """Return entries where BOTH legs for this structure have entry-day bars.
 
     Credit (structure='credit'): needs target OPRA + target+10 OPRA
     Debit  (structure='debit') : needs target OPRA + target-10 OPRA
+
+    CR-AO decisions 1–3: both legs are snapped to the strikes listed for the
+    expiry at the prior close (orats_oi_gamma) — anchor leg nearest the
+    target (ties toward spot), second leg nearest ±10 strictly on that side.
+    width_actual = |other − short|; width_nominal = 10. Entries whose expiry
+    is absent from the chain are collected in UNLISTABLE with the reason.
     """
     offset = +10 if structure == "credit" else -10
     clean = []
 
     for e in entries:
         trade_date  = e["trade_date"]
-        short_strike = float(round5(e["drift_target"]))
-        other_strike = short_strike + offset
         expiry_date  = nth_business_day(trade_date, DTE_TARGET)
+        try:
+            snapped = snap_vertical_legs(
+                e["drift_target"], offset, expiry_date, trade_date, conn, toward=e.get("spot"),
+            )
+        except StrikeNotListed as exc:
+            UNLISTABLE.append({"structure": structure, "trade_date": trade_date, "band": e["band"], "reason": str(exc)})
+            continue
+        short_strike = float(snapped.anchor)
+        other_strike = float(snapped.other)
 
         short_opra = format_opra(OPRA_ROOT, expiry_date, "C", short_strike)
         other_opra = format_opra(OPRA_ROOT, expiry_date, "C", other_strike)
@@ -395,6 +417,8 @@ def filter_clean_for_structure(conn, entries: list[dict], structure: str) -> lis
         if has_short and has_other:
             clean.append({**e, "expiry_date": expiry_date,
                           "short_strike": short_strike, "other_strike": other_strike,
+                          "width_actual": snapped.width_actual, "width_nominal": snapped.width_nominal,
+                          "listed_prior_close": snapped.prior_close,
                           "short_opra": short_opra, "other_opra": other_opra})
 
     return clean
@@ -690,21 +714,28 @@ def get_structural_prob(
 
 # ── PER-DATE COLLECTION ───────────────────────────────────────────────────────
 
-def build_legs(short_strike: float, structure: str) -> tuple[list[Leg], float]:
-    """Build leg list and other_strike for one structure."""
+def build_legs(
+    short_strike: float, structure: str, other_strike: Optional[float] = None,
+) -> tuple[list[Leg], float]:
+    """Build leg list and spread width for one structure.
+
+    CR-AO decision 3: other_strike is the snapped second leg; the returned
+    width is |short − other| (width_actual), not a constant 10. Without
+    other_strike the legacy ±10 is used.
+    """
     if structure == "credit":
-        long_strike = short_strike + 10.0
+        long_strike = float(other_strike) if other_strike is not None else short_strike + 10.0
         legs = [
             Leg(side="short", type="call", strike=short_strike),
             Leg(side="long",  type="call", strike=long_strike),
         ]
     else:  # debit
-        long_strike = short_strike - 10.0
+        long_strike = float(other_strike) if other_strike is not None else short_strike - 10.0
         legs = [
             Leg(side="long",  type="call", strike=long_strike),
             Leg(side="short", type="call", strike=short_strike),
         ]
-    return legs, abs(short_strike - long_strike)  # spread_width = 10.0
+    return legs, abs(short_strike - long_strike)  # width_actual
 
 
 def collect_trade_data(
@@ -719,7 +750,7 @@ def collect_trade_data(
     short_strike = float(entry["short_strike"])
     expiry_date  = entry["expiry_date"]
 
-    legs, spread_width = build_legs(short_strike, structure)
+    legs, spread_width = build_legs(short_strike, structure, entry.get("other_strike"))
 
     # OPRAs for both legs
     if structure == "credit":
@@ -779,6 +810,9 @@ def collect_trade_data(
         touch_datetime_pt=touch_datetime_pt,
         touch_pos_val=touch_pos_val,
         settlement_price=settlement_price,
+        width_nominal=float(entry.get("width_nominal", 10.0)),
+        width_actual=spread_width,
+        other_strike=float(entry.get("other_strike", 0.0)),
         n_minutes_total=obs["n_minutes_total"],
         n_minutes_valid=obs["n_minutes_valid"],
         baseline_minute_offset=obs["baseline_minute_offset"],
@@ -1454,6 +1488,17 @@ def main(argv=None):
         print(f"\n  Credit by band/partition: {dict(band_part_counts(credit_clean))}")
         print(f"  Debit  by band/partition: {dict(band_part_counts(debit_clean))}")
 
+        # CR-AO decisions 1–3: listed-strike snapping report
+        print(f"  Unlistable (StrikeNotListed, excluded before the clean filter): {len(UNLISTABLE)}")
+        for u in UNLISTABLE:
+            print(f"    {u['structure']} {u['trade_date']} {u['band']}: {u['reason']}")
+        snap_summary = {}
+        for s_, clean_ in (("credit", credit_clean), ("debit", debit_clean)):
+            widths = Counter(float(e.get("width_actual", 10.0)) for e in clean_)
+            snap_summary[s_] = {"n": len(clean_), "width_actual_dist": {str(k): v for k, v in sorted(widths.items())},
+                                "n_width_not_nominal": sum(1 for e in clean_ if float(e.get("width_actual", 10.0)) != float(e.get("width_nominal", 10.0)))}
+            print(f"  Snapped legs [{s_}]: {snap_summary[s_]}")
+
         # ── Phase 2: Collect per-date data ───────────────────────────────────
         print(f"\n{SEP2}")
         print("Phase 2: Collecting per-date trade data...")
@@ -1643,6 +1688,8 @@ def main(argv=None):
             "seed": args.seed,
             "selection_by_band_partition": sel_counts,
             "quote_validity": obs_summary,
+            "snapping": snap_summary,
+            "unlistable": [f"{u['structure']} {u['trade_date']} {u['band']}" for u in UNLISTABLE],
             "decision6_excluded": [f"{s_} {d_} {b_}" for s_, d_, b_, _ in excluded],
             "post_filter_out_of_range": oor,
             "debit_labeled_train": sum(1 for td in debit_trades if td.partition == "train" and td.pattern_label),
