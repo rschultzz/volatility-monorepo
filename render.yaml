@@ -6,7 +6,7 @@ services:
     rootDir: apps/web
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:server
-    autoDeploy: true
+    autoDeploy: false
     envVars:
       - key: DATABASE_URL
         sync: false   # or use fromDatabase in the dashboard
