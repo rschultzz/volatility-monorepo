@@ -121,3 +121,55 @@ Rationale: G1's original "exact" assumed snapping only relabels legs that alread
 ### Run-record note
 
 Run `bb39a829` (the stopped second run) is stuck at `status = 'running'`: `backfill_run` only marks `aborted` on an exception inside the context manager, and the backfill role has no path to close a row from outside (no UPDATE from a different session is part of the protocol; the script is the only writer). Appended to [[bt-backfill-runs-audit-record-fidelity]] as a third fidelity gap (stuck-running on external kill), alongside the dry-run and `rows_inserted` issues from CR-AJ.
+
+## Step 1a — snapped-leg capture (result)
+
+Command: `PYTHONUNBUFFERED=1 apps/web/.venv/bin/python -u scripts/cr_ap_capture_snapped_legs.py --dates <14 dates> --debit-dates <9> --credit-dates <12>`. Log: `scripts/logs/cr_ap_capture_20260906_081643.log` (untracked). Run row: `(UUID('8022295f-c7c5-453d-8b63-7b7dc3c95931'), 'completed', datetime.datetime(2026, 9, 6, 15, 16, 58, 506635), datetime.datetime(2026, 9, 6, 15, 59, 4, 876473))` (cr_id CR-AP-capture).
+
+**Summary:** captured 14 entry-day + 13 settlement + 7 touch windows over 14 dates (0 unlistable; 2 debit dates without an actionable touch: 2024-12-13 afterhours-retraced, 2025-03-26 no-touch); 20,898 bars written; **1 ORATS 404, 0 exceptions**. The 404 is the **settlement** window of 2025-06-11 (expiry 2025-07-03, a half-day session that closed before 12:50 PT — the window does not exist); the harness settles on the ES close, so it does not affect the clean filter or P&L. Entry-day windows: 14 / 14.
+
+Snapped legs (from the plan; width_actual in parentheses): 2023-11-10 debit 4490/4500 (10) · 2023-12-22 debit 4790/4800, credit 4800/4810 (10) · 2024-03-05 credit 5175/5180 (5) · 2024-07-11 debit 5670/5675, credit 5675/5680 (5) · 2024-09-17 debit 5675/5700 (25), credit 5700/5750 (50) · 2024-09-23 debit 5740/5750 (10), credit 5750/5775 (25) · 2024-11-12 debit 6050/6060 (10) · 2024-11-25 credit 6070/6075 (5) · 2024-12-13 debit 6090/6100, credit 6100/6110 (10) · 2025-03-26 debit 5825/5850, credit 5850/5875 (25) · 2025-05-16 credit 6000/6025 (25) · 2025-06-11 debit 6070/6075, credit 6075/6080 (5) · 2025-06-24 credit 6100/6125 (25) · 2026-04-07 credit 6700/6725 (25). Touch windows fetched for 7 debit dates (5 gap_touch at the next 06:30 PT open — cache hits where the touch day is the entry day — and 2 rth_touch).
+
+### G1b-pre — every snapped leg has entry-day rows
+
+| date | leg | entry-day rows | settlement rows |
+|---|---|---|---|
+| 2023-11-10 | SPX231204C04490000 | 390 | 11 |
+| 2023-11-10 | SPX231204C04500000 | 390 | 11 |
+| 2023-12-22 | SPX240117C04790000 | 390 | 11 |
+| 2023-12-22 | SPX240117C04800000 | 390 | 11 |
+| 2023-12-22 | SPX240117C04810000 | 390 | 11 |
+| 2024-03-05 | SPX240326C05175000 | 390 | 11 |
+| 2024-03-05 | SPX240326C05180000 | 390 | 11 |
+| 2024-07-11 | SPX240801C05670000 | 381 | 11 |
+| 2024-07-11 | SPX240801C05675000 | 381 | 11 |
+| 2024-07-11 | SPX240801C05680000 | 381 | 11 |
+| 2024-09-17 | SPX241008C05675000 | 390 | 11 |
+| 2024-09-17 | SPX241008C05700000 | 390 | 11 |
+| 2024-09-17 | SPX241008C05750000 | 390 | 11 |
+| 2024-09-23 | SPX241014C05740000 | 390 | 11 |
+| 2024-09-23 | SPX241014C05750000 | 390 | 11 |
+| 2024-09-23 | SPX241014C05775000 | 390 | 11 |
+| 2024-11-12 | SPX241204C06050000 | 390 | 11 |
+| 2024-11-12 | SPX241204C06060000 | 390 | 11 |
+| 2024-11-25 | SPX241217C06070000 | 390 | 11 |
+| 2024-11-25 | SPX241217C06075000 | 390 | 11 |
+| 2024-12-13 | SPX250107C06090000 | 390 | 11 |
+| 2024-12-13 | SPX250107C06100000 | 390 | 11 |
+| 2024-12-13 | SPX250107C06110000 | 390 | 11 |
+| 2025-03-26 | SPX250416C05825000 | 390 | 11 |
+| 2025-03-26 | SPX250416C05850000 | 390 | 11 |
+| 2025-03-26 | SPX250416C05875000 | 390 | 11 |
+| 2025-05-16 | SPX250609C06000000 | 390 | 11 |
+| 2025-05-16 | SPX250609C06025000 | 390 | 11 |
+| 2025-06-11 | SPX250703C06070000 | 390 | 0 |
+| 2025-06-11 | SPX250703C06075000 | 390 | 0 |
+| 2025-06-11 | SPX250703C06080000 | 390 | 0 |
+| 2025-06-24 | SPX250716C06100000 | 390 | 11 |
+| 2025-06-24 | SPX250716C06125000 | 390 | 11 |
+| 2026-04-07 | SPX260428C06700000 | 390 | 11 |
+| 2026-04-07 | SPX260428C06725000 | 390 | 11 |
+
+legs checked: 35; legs with NO entry-day rows: 0
+
+Result: **PASS** — all legs have entry-day rows; the only missing settlement rows are the 2025-07-03 half-day (listed 404).
