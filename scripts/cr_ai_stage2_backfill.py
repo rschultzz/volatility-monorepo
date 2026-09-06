@@ -75,6 +75,7 @@ from packages.shared.gex_landscape import compute_implied_move
 from packages.shared.options_cache.fetcher import fetch_option_bars
 from packages.shared.options_cache.http_client import OratsPermanentError
 from packages.shared.options_cache.opra import format_opra
+from packages.shared.options_cache.strikes import StrikeNotListed, snap_vertical_legs
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 DRY_RUN: bool = False       # flip to True for planning-only run
@@ -240,11 +241,19 @@ def load_clean_dates(conn) -> list[dict]:
     selected.sort(key=lambda x: x["trade_date"])
 
     clean = []
+    n_unlistable = 0
     for e in selected:
         td = e["trade_date"]
-        ss = float(round5(e["drift_target"]))
-        ls = ss - 10.0
         expiry = nth_business_day(td, DTE_BASE)
+        # CR-AO: snap both legs to the strikes listed at the prior close
+        try:
+            snapped = snap_vertical_legs(e["drift_target"], -10, expiry, td, conn, toward=e.get("spot"))
+        except StrikeNotListed as exc:
+            n_unlistable += 1
+            print(f"  unlistable {td}: {exc}", flush=True)
+            continue
+        ss = float(snapped.anchor)
+        ls = float(snapped.other)
         so = format_opra(OPRA_ROOT, expiry, "C", ss)
         lo = format_opra(OPRA_ROOT, expiry, "C", ls)
         entry_start = datetime(td.year, td.month, td.day, 6, 30)
@@ -257,8 +266,11 @@ def load_clean_dates(conn) -> list[dict]:
             (so, lo, [so, lo], entry_start, entry_end),
         ).fetchone()
         if row and bool(row[0]) and bool(row[1]):
-            clean.append({**e, "short_strike": ss, "long_strike": ls})
+            clean.append({**e, "short_strike": ss, "long_strike": ls,
+                          "width_actual": snapped.width_actual, "width_nominal": snapped.width_nominal})
 
+    if n_unlistable:
+        print(f"  unlistable entries (StrikeNotListed): {n_unlistable}", flush=True)
     return clean
 
 
@@ -400,6 +412,7 @@ def backfill_one(
     sigma        = entry["sigma"]
     ss           = entry["short_strike"]
     ls           = entry["long_strike"]
+    width        = float(entry.get("width_actual", SPREAD_WIDTH))   # CR-AO decision 3
 
     expiry = nth_business_day(td, dte)
     short_opra = format_opra(OPRA_ROOT, expiry, "C", ss)
@@ -496,7 +509,7 @@ def backfill_one(
         # For a credit spread: max_loss = spread_width - net_credit_received
         # Since this is debit: max_loss = -entry_credit (if entry_credit < 0, i.e., we paid a debit)
         # If entry_credit > 0 (rare edge case where we received credit on a "debit" spread), clamp to 0.01
-        max_loss = max(-entry_credit, 0.01) if entry_credit is not None else SPREAD_WIDTH
+        max_loss = max(-entry_credit, 0.01) if entry_credit is not None else width
         if max_loss > 0:
             result.pct_return_on_premium = (close_pnl / max_loss) * 100
 

@@ -255,7 +255,23 @@ def _mock_bars_for(opra: str) -> list:
     return []
 
 
-class TestPriceProposalLegs(unittest.TestCase):
+class _ChainStub:
+    """CR-AO: unit tests must not reach orats_oi_gamma. Every 5-point strike is
+    "listed", so snapping is a no-op for the pre-CR-AO assertions."""
+
+    def setUp(self):
+        self._p_listed = patch(
+            "packages.shared.options_cache.pricing.listed_strikes",
+            side_effect=lambda conn, expiry, trade_date, ticker="SPX": (trade_date, [float(k) for k in range(1000, 12000, 5)]),
+        )
+        self._p_conn = patch("packages.shared.options_cache.pricing.repo._conn")
+        self._p_listed.start(); self._p_conn.start()
+
+    def tearDown(self):
+        self._p_listed.stop(); self._p_conn.stop()
+
+
+class TestPriceProposalLegs(_ChainStub, unittest.TestCase):
     """price_proposal_legs — mock-based unit tests (no DB, no network)."""
 
     def _run(self, legs, bars_fn=None):
@@ -486,7 +502,7 @@ class TestNearestSpxExpiration(unittest.TestCase):
                           f"target={target_days}: weekday {result.weekday()} not Mon/Wed/Fri")
 
 
-class TestPriceProposalLegsDelta(unittest.TestCase):
+class TestPriceProposalLegsDelta(_ChainStub, unittest.TestCase):
     """Tests that price_proposal_legs now surfaces bar.delta (CR-V Step 2)."""
 
     _TD = date(2026, 5, 19)
@@ -622,3 +638,51 @@ class TestLiveFlagThreading(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPriceProposalLegsSnapping(unittest.TestCase):
+    """CR-AO decisions 1–3 in the live leg builder: strikes snap to the listed
+    grid at the prior close; width_actual is the snapped width."""
+
+    _LEGS = [
+        {"flag": "c", "strike": 7655.0, "expiration": date(2026, 8, 3), "qty": 1, "side": "short"},
+        {"flag": "c", "strike": 7665.0, "expiration": date(2026, 8, 3), "qty": 1, "side": "long"},
+    ]
+
+    def _run(self, chain, r=0.0, q=0.0):
+        def fake_listed(conn, expiry, trade_date, ticker="SPX"):
+            return (date(2026, 7, 10), sorted(chain))
+        bars = {}
+        def get_bars(opra, a, b):
+            return [_bar(opra, a, 1.0, 1.2)]
+        with patch("packages.shared.options_cache.pricing.listed_strikes", side_effect=fake_listed), \
+             patch("packages.shared.options_cache.pricing.repo._conn"), \
+             patch("packages.shared.options_cache.pricing.fetch_option_bars", return_value=_summary()), \
+             patch("packages.shared.options_cache.pricing.repo.get_bars_for_contract", side_effect=get_bars):
+            return pricing.price_proposal_legs(self._LEGS, trade_date=date(2026, 7, 13),
+                                               entry_pt=datetime(2026, 7, 13, 7, 0), r=r, q=q)
+
+    def test_vertical_snaps_as_a_pair_and_reports_width_actual(self):
+        res = self._run([7600, 7610, 7620, 7650, 7700, 7750])   # coarse 15-DTE grid, no 7655/7665
+        short, long_ = res["legs"]
+        self.assertEqual(short["spx_strike_raw"], 7655)
+        self.assertEqual(short["spx_strike"], 7650)         # nearest listed to the anchor
+        self.assertEqual(long_["spx_strike"], 7700)         # nearest listed to 7665 strictly above 7650
+        self.assertEqual(res["width_actual"], 50.0)
+        self.assertEqual(res["width_nominal"], 10.0)
+        self.assertTrue(short["listed"] and long_["listed"])
+        self.assertIn("SPX260803C07650000", short["opra"])
+        self.assertTrue(any("snapped to 7650" in w for w in res["warnings"]))
+
+    def test_full_grid_leaves_strikes_unchanged(self):
+        res = self._run(list(range(7600, 7705, 5)))
+        self.assertEqual([l["spx_strike"] for l in res["legs"]], [7655, 7665])
+        self.assertEqual(res["width_actual"], 10.0)
+        self.assertFalse(any("snapped" in w for w in res["warnings"]))
+
+    def test_unlisted_expiry_marks_legs_unlisted(self):
+        res = self._run([])
+        self.assertEqual([l["listed"] for l in res["legs"]], [False, False])
+        self.assertEqual([l["spx_strike"] for l in res["legs"]], [None, None])
+        self.assertIsNone(res["net_debit"])
+        self.assertTrue(any("no listed strikes" in w for w in res["warnings"]))

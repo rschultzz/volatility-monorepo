@@ -640,6 +640,8 @@ def register_proposals_routes(server) -> None:
                 legs_out.append({
                     "strike":        raw["strike"],
                     "strike_spx":    spx_strike_i,
+                    "strike_spx_raw": rleg.get("spx_strike_raw"),   # CR-AO: 5-point rounding before snapping
+                    "listed":        rleg.get("listed", True),        # CR-AO: False → no listed strike for this expiry
                     "opra":          rleg.get("opra"),
                     "expiration":    raw["expiration"].isoformat(),
                     "flag":          raw["flag"],

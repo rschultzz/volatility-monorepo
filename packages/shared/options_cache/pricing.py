@@ -19,6 +19,7 @@ from .fetcher import fetch_option_bars
 from .http_client import OratsError, OratsPermanentError
 from .opra import format_opra
 from . import repository as repo
+from .strikes import StrikeNotListed, snap_to_candidates, listed_strikes
 from packages.shared.forward_math import compute_spx_strike
 
 # SPX expirations occur on Mon (0), Wed (2), Fri (4)
@@ -279,25 +280,36 @@ def price_proposal_legs(
     if not legs:
         return {"legs": [], "net_debit": None, "warnings": []}
 
-    # ── 1. ES→SPX conversion + OPRA construction ──────────────────────────
-    opra_list: list[str] = []
-    leg_meta: list[dict] = []
+    # ── 1. ES→SPX conversion + listed-strike snapping + OPRA construction ──
+    # CR-AO decisions 1–3: the 5-point rounding from compute_spx_strike is the
+    # *intent*; the tradable strike is the nearest one listed for that expiry
+    # at the prior close (orats_oi_gamma). A two-leg same-flag vertical is
+    # snapped as a pair (anchor = short leg; other leg strictly on its side)
+    # so the width is a real listed width; other structures snap per leg.
+    raw_meta: list[dict] = []
     for leg in legs:
         expir_d: date = leg["expiration"]
         dte = (expir_d - trade_date).days
-        spx_strike = compute_spx_strike(leg["strike"], dte, r, q)
-        flag_upper = leg["flag"].upper()   # 'C' or 'P'
-        opra = format_opra("SPX", expir_d, flag_upper, spx_strike)
-        opra_list.append(opra)
-        leg_meta.append({
+        raw_meta.append({
             "flag":       leg["flag"],
             "side":       leg["side"],
             "qty":        leg.get("qty", 1),
             "strike_es":  leg["strike"],
-            "spx_strike": spx_strike,
-            "opra":       opra,
+            "spx_strike_raw": compute_spx_strike(leg["strike"], dte, r, q),
             "expiration": expir_d,
         })
+    snapped, width_actual, width_nominal = _snap_leg_strikes(raw_meta, trade_date, warnings_out)
+
+    opra_list: list[str] = []
+    leg_meta: list[dict] = []
+    for meta in snapped:
+        flag_upper = meta["flag"].upper()   # 'C' or 'P'
+        if meta["spx_strike"] is None:
+            leg_meta.append({**meta, "opra": None})
+            continue
+        opra = format_opra("SPX", meta["expiration"], flag_upper, meta["spx_strike"])
+        opra_list.append(opra)
+        leg_meta.append({**meta, "opra": opra})
 
     # ── 2. Batched fetch (writes to cache; idempotent on cache hit) ────────
     unique_opras = list(dict.fromkeys(opra_list))   # dedup, preserve order
@@ -314,6 +326,11 @@ def price_proposal_legs(
     # ── 3. Read per-leg mids from cache ────────────────────────────────────
     net_debit: Optional[float] = 0.0
     for meta in leg_meta:
+        if meta.get("opra") is None:
+            # CR-AO: no listed strike for this expiry — the card shows "no listed strike"
+            priced_legs.append({**meta, "bid": None, "ask": None, "mid": None, "delta": None})
+            net_debit = None
+            continue
         bars = repo.get_bars_for_contract(meta["opra"], entry_pt, entry_pt)
         if not bars:
             warnings_out.append(
@@ -342,8 +359,78 @@ def price_proposal_legs(
     return {
         "legs":      priced_legs,
         "net_debit": net_debit,
+        "width_actual":  width_actual,
+        "width_nominal": width_nominal,
         "warnings":  warnings_out,
     }
+
+
+def _snap_leg_strikes(raw_meta: list[dict], trade_date: date, warnings_out: list) -> tuple[list[dict], Optional[float], Optional[float]]:
+    """CR-AO: snap each leg's spx_strike_raw to the listed grid at the prior close.
+
+    Returns (legs with spx_strike / listed, width_actual, width_nominal). For a
+    two-leg same-flag vertical the pair is snapped together (anchor = short
+    leg; the long leg on its own side of the anchor). A leg whose expiry is
+    absent from the chain gets spx_strike=None and listed=False plus a warning.
+    """
+    out = [dict(m, spx_strike=m["spx_strike_raw"], listed=True) for m in raw_meta]
+    if not raw_meta:
+        return out, None, None
+    try:
+        with repo._conn() as conn:
+            chains: dict[date, list[float]] = {}
+            for m in raw_meta:
+                if m["expiration"] not in chains:
+                    _, chains[m["expiration"]] = listed_strikes(conn, m["expiration"], trade_date)
+    except Exception as exc:  # chain unavailable → keep the 5-point rounding, say so
+        warnings_out.append(f"listed-strike chain unavailable ({exc}); using 5-point rounding")
+        return out, None, None
+
+    is_vertical = (
+        len(raw_meta) == 2
+        and raw_meta[0]["flag"] == raw_meta[1]["flag"]
+        and raw_meta[0]["expiration"] == raw_meta[1]["expiration"]
+        and {raw_meta[0]["side"], raw_meta[1]["side"]} == {"short", "long"}
+    )
+    width_nominal = abs(raw_meta[0]["spx_strike_raw"] - raw_meta[1]["spx_strike_raw"]) if len(raw_meta) == 2 else None
+    width_actual: Optional[float] = None
+
+    if is_vertical:
+        cands = chains.get(raw_meta[0]["expiration"], [])
+        si = 0 if raw_meta[0]["side"] == "short" else 1
+        li = 1 - si
+        if not cands:
+            for o in out:
+                o["spx_strike"] = None; o["listed"] = False
+            warnings_out.append(f"no listed strikes for expiry {raw_meta[0]['expiration']} at the prior close before {trade_date}")
+            return out, None, width_nominal
+        anchor = snap_to_candidates(raw_meta[si]["spx_strike_raw"], cands)
+        direction = raw_meta[li]["spx_strike_raw"] - raw_meta[si]["spx_strike_raw"]
+        side = [c for c in cands if (c > anchor if direction > 0 else c < anchor)]
+        if not side:
+            out[si]["spx_strike"] = anchor
+            out[li]["spx_strike"] = None; out[li]["listed"] = False
+            warnings_out.append(f"no listed strike on the required side of {anchor:g} for expiry {raw_meta[0]['expiration']}")
+            return out, None, width_nominal
+        other = snap_to_candidates(raw_meta[li]["spx_strike_raw"], side, toward=anchor)
+        out[si]["spx_strike"] = anchor
+        out[li]["spx_strike"] = other
+        width_actual = abs(other - anchor)
+    else:
+        for m, o in zip(raw_meta, out):
+            cands = chains.get(m["expiration"], [])
+            if not cands:
+                o["spx_strike"] = None; o["listed"] = False
+                warnings_out.append(f"no listed strikes for expiry {m['expiration']} at the prior close before {trade_date}")
+                continue
+            o["spx_strike"] = snap_to_candidates(m["spx_strike_raw"], cands)
+        if len(out) == 2 and all(o["spx_strike"] is not None for o in out):
+            width_actual = abs(out[0]["spx_strike"] - out[1]["spx_strike"])
+
+    for m, o in zip(raw_meta, out):
+        if o["spx_strike"] is not None and o["spx_strike"] != m["spx_strike_raw"]:
+            warnings_out.append(f"strike {m['spx_strike_raw']:g} not listed for {m['expiration']}; snapped to {o['spx_strike']:g}")
+    return out, width_actual, width_nominal
 
 
 # ── Real implied-distribution strike band (CR-T Step 2) ──────────────────────

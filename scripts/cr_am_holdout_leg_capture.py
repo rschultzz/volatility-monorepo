@@ -7,8 +7,9 @@ whose outcome_status is computed or pending_history:
      also logs the CR-AH-style target (_materialize_payload(...)['regime']['drift_target'])
      and fetches the union of strikes when the two round to different 5-pt strikes.
   2. expiry  = nth_business_day(trade_date, 15)  (holiday-aware, from cr_ah_step4_analysis)
-  3. legs    = round5(target) - 10 / + 0 / + 10  SPX calls  (debit: target-10/target;
-               credit: target/target+10)
+  3. legs    = SPX calls snapped to the strikes listed for the expiry at the
+               prior close (CR-AO): anchor nearest the target, debit leg nearest
+               −10 strictly below, credit leg nearest +10 strictly above
   4. fetch_option_bars for the entry-day RTH window (06:30-13:00 PT) and the
      expiry settlement window (12:50-13:00 PT). A settlement window that has not
      happened yet is SKIPPED (not fetched, not recorded as empty) so it can be
@@ -19,7 +20,7 @@ This script never computes net_price, payoff, or P&L (ADR 2026-09-05
 "Holdout Split Moves to 2026-06-05": capture is a data step, not a read).
 
 Usage:
-    PYTHONUNBUFFERED=1 python -u scripts/cr_am_holdout_leg_capture.py [--dry-run] [--split-date 2026-06-05] [--cr-id CR-AM-capture]
+    PYTHONUNBUFFERED=1 python -u scripts/cr_am_holdout_leg_capture.py [--dry-run] [--split-date 2026-06-05] [--cr-id CR-AM-capture] [--dates 2026-06-16,2026-07-01]
 """
 from __future__ import annotations
 
@@ -68,8 +69,9 @@ from packages.shared.gex_landscape import compute_implied_move
 from packages.shared.options_cache.fetcher import fetch_option_bars
 from packages.shared.options_cache.http_client import OratsPermanentError
 from packages.shared.options_cache.opra import format_opra
+from packages.shared.options_cache.strikes import StrikeNotListed, snap_vertical_legs
 from packages.shared.outcomes import pick_drift_target
-from scripts.cr_ah_step4_analysis import DTE_TARGET, nth_business_day, round5
+from scripts.cr_ah_step4_analysis import DTE_TARGET, nth_business_day
 
 TICKER = "SPX"
 OPRA_ROOT = "SPX"
@@ -131,7 +133,9 @@ def main(argv=None) -> None:
     ap.add_argument("--split-date", type=date.fromisoformat, default=date(2026, 6, 5))
     ap.add_argument("--cr-id", default="CR-AM-capture")
     ap.add_argument("--dry-run", action="store_true", help="plan only: list dates/legs/windows, no fetch, no run row")
+    ap.add_argument("--dates", default=None, help="comma-separated ISO dates to restrict the capture to (CR-AO re-capture)")
     args = ap.parse_args(argv)
+    only = {date.fromisoformat(x) for x in args.dates.split(",")} if args.dates else None
 
     today = date.today()
     conn = get_backfill_db_conn()
@@ -139,6 +143,9 @@ def main(argv=None) -> None:
     print(f"CR-AM holdout leg capture  split_date={args.split_date}  cr_id={args.cr_id}  dry_run={args.dry_run}  today={today}")
 
     dates = _load_dates(conn, args.split_date)
+    if only is not None:
+        dates = [(d, s) for d, s in dates if d in only]
+        print(f"--dates: restricted to {len(dates)} of the requested {len(only)}")
     print(f"Holdout stream: {len(dates)} magnet-above dates > {args.split_date} "
           f"({sum(1 for _, s in dates if s == 'computed')} computed, "
           f"{sum(1 for _, s in dates if s == 'pending_history')} pending)")
@@ -147,25 +154,39 @@ def main(argv=None) -> None:
     for trade_date, status in dates:
         t_wall = _wall_target(conn, trade_date)
         t_payload = _payload_target(conn, trade_date)
-        strikes: set[float] = set()
-        for t in (t_wall, t_payload):
-            if t is not None:
-                base = float(round5(t))
-                strikes.update({base - 10.0, base, base + 10.0})
         expiry = nth_business_day(trade_date, DTE_TARGET)
+        spot_row = conn.execute("SELECT table_spot FROM orats_gex_landscape WHERE ticker=%s AND trade_date=%s", (TICKER, trade_date)).fetchone()
+        spot = float(spot_row[0]) if spot_row and spot_row[0] is not None else None
+        strikes: set[float] = set()
+        snapped_note = []
+        unlistable = None
+        for t in (t_wall, t_payload):
+            if t is None:
+                continue
+            try:
+                d_ = snap_vertical_legs(t, -10, expiry, trade_date, conn, toward=spot)   # debit: anchor + leg below
+                c_ = snap_vertical_legs(t, +10, expiry, trade_date, conn, toward=spot)   # credit: anchor + leg above
+            except StrikeNotListed as exc:
+                unlistable = str(exc)
+                continue
+            strikes.update({d_.other, d_.anchor, c_.other})
+            snapped_note.append(f"target {t:.2f} → {int(d_.other)}/{int(d_.anchor)}/{int(c_.other)} "
+                                f"(debit width {d_.width_actual:g}, credit width {c_.width_actual:g}, chain {d_.prior_close})")
         plans.append({
             "trade_date": trade_date, "status": status, "target_wall": t_wall,
             "target_payload": t_payload, "strikes": sorted(strikes), "expiry": expiry,
-            "settlement_in_future": expiry > today,
+            "settlement_in_future": expiry > today, "unlistable": unlistable,
         })
         note = ""
-        if t_wall is not None and t_payload is not None and round5(t_wall) != round5(t_payload):
-            note = "  (targets round to different strikes → union fetched)"
+        if unlistable:
+            note = f"  (UNLISTABLE: {unlistable})"
         elif t_wall is None:
             note = "  (no positive-GEX wall → wall target None)"
         print(f"  {trade_date} {status:<15} wall={t_wall} payload={t_payload} "
-              f"strikes={[int(s) for s in sorted(strikes)]} expiry={expiry}"
+              f"snapped={[int(s) for s in sorted(strikes)]} expiry={expiry}"
               f"{' settlement-in-future' if expiry > today else ''}{note}")
+        for n_ in dict.fromkeys(snapped_note):
+            print(f"      {n_}")
 
     if args.dry_run:
         print("dry-run: no fetches, no run row.")
@@ -183,7 +204,7 @@ def main(argv=None) -> None:
             td = p["trade_date"]
             if not p["strikes"]:
                 counters["dates_no_target"] += 1
-                print(f"  {td}: no target — skipped")
+                print(f"  {td}: no target{' — ' + p['unlistable'] if p.get('unlistable') else ''} — skipped")
                 continue
             opras = [format_opra(OPRA_ROOT, p["expiry"], "C", s) for s in p["strikes"]]
             counters["legs_planned"] += len(opras)
