@@ -12,6 +12,7 @@ from packages.shared.backtest.models import (
     TradeResult,
 )
 from packages.shared.backtest.plugins.protocol import BacktestPlugin
+from packages.shared.backtest.quote_validity import spread_value_is_valid
 
 
 @dataclass
@@ -58,9 +59,12 @@ class BacktestHarness:
             TradeResult with ALL minutes in entry_scan (invariant #3), regardless
             of whether a fill occurred or quotes were present.
         """
-        scan_rows, baseline_snap, fill_snap = self._run_entry_crawl(trade_input, entry_day_scan)
+        scan_rows, baseline_snap, fill_snap, obs = self._run_entry_crawl(trade_input, entry_day_scan)
 
         filled = fill_snap is not None
+        # CR-AN decision 6: a window with no valid minute cannot be traded or
+        # baselined; the trade is excluded with a reason (never silently).
+        excluded_reason = "no_valid_entry_minute" if obs["n_minutes_valid"] == 0 else None
 
         touch_exit_pnl, touch_exit_minute = self._touch_exit(
             filled, fill_snap, touch_datetime, touch_window_scan, trade_input
@@ -91,6 +95,11 @@ class BacktestHarness:
             baseline_net_credit=baseline_snap[1] if baseline_snap else None,
             baseline_touch_exit_pnl=baseline_touch_exit_pnl,
             baseline_close_pnl=baseline_close_pnl,
+            n_minutes_total=obs["n_minutes_total"],
+            n_minutes_valid=obs["n_minutes_valid"],
+            baseline_minute_offset=obs["baseline_minute_offset"],
+            had_invalid_quote=obs["had_invalid_quote"],
+            excluded_reason=excluded_reason,
         )
 
     # ── private helpers ──────────────────────────────────────────────────────
@@ -103,22 +112,29 @@ class BacktestHarness:
         list[EntryMinuteScan],
         Optional[tuple[datetime, float]],       # baseline: (time, net_credit)
         Optional[tuple[datetime, float, float]], # fill:     (time, net_credit, edge)
+        dict,                                    # CR-AN decision 7 observability
     ]:
         scan_rows: list[EntryMinuteScan] = []
         baseline_snap: Optional[tuple[datetime, float]] = None
         fill_snap: Optional[tuple[datetime, float, float]] = None
+        n_valid = 0
+        window_open = entry_day_scan[0][0] if entry_day_scan else None
+        baseline_offset: Optional[int] = None
 
         for snap_pt, qmap in entry_day_scan:
             pos_val = self.plugin.net_price(trade_input.legs, qmap)
-            if pos_val is None:
-                # Invariant #1: missing quote → skip this minute. Still persisted.
+            # CR-AN decision 2: a missing leg or an out-of-range spread value
+            # makes the minute invalid → skipped, still persisted (invariant #3).
+            if not spread_value_is_valid(pos_val, trade_input.spread_width, trade_input.legs):
                 scan_rows.append(EntryMinuteScan(
                     snapshot_pt=snap_pt,
                     net_position_value=None,
                     net_credit=None,
                     edge=None,
+                    quote_valid=False,
                 ))
                 continue
+            n_valid += 1
 
             net_credit = -pos_val
             # abs(): market-implied P(win) = |net_credit| / width for both structures.
@@ -132,13 +148,21 @@ class BacktestHarness:
             ))
 
             if baseline_snap is None and self.baseline == "first_quoted_minute":
+                # CR-AN decision 3: first VALID minute (invalid ones were skipped above)
                 baseline_snap = (snap_pt, net_credit)
+                baseline_offset = int(round((snap_pt - window_open).total_seconds() / 60.0))
 
             if fill_snap is None and self.fill_rule == "first_above_threshold":
                 if edge >= self.edge_threshold:
                     fill_snap = (snap_pt, net_credit, edge)
 
-        return scan_rows, baseline_snap, fill_snap
+        obs = {
+            "n_minutes_total": len(entry_day_scan),
+            "n_minutes_valid": n_valid,
+            "baseline_minute_offset": baseline_offset,
+            "had_invalid_quote": n_valid < len(entry_day_scan),
+        }
+        return scan_rows, baseline_snap, fill_snap, obs
 
     def _touch_exit(
         self,
@@ -158,7 +182,8 @@ class BacktestHarness:
         for snap_pt, qmap in touch_window_scan:
             if snap_pt >= touch_datetime:
                 pos_val = self.plugin.net_price(trade_input.legs, qmap)
-                if pos_val is not None:
+                # CR-AN decision 4: exit only on a valid minute
+                if spread_value_is_valid(pos_val, trade_input.spread_width, trade_input.legs):
                     # P&L = entry_credit + position_value_at_close
                     # pos_val is negative for credit spread; adding to entry_credit
                     # gives the round-trip P&L correctly.
@@ -201,7 +226,7 @@ class BacktestHarness:
             for snap_pt, qmap in touch_window_scan:
                 if snap_pt >= touch_datetime:
                     pos_val = self.plugin.net_price(trade_input.legs, qmap)
-                    if pos_val is not None:
+                    if spread_value_is_valid(pos_val, trade_input.spread_width, trade_input.legs):
                         baseline_touch_exit_pnl = base_credit + pos_val
                         break
 

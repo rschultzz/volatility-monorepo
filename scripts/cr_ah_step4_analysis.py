@@ -110,6 +110,7 @@ from packages.shared.backtest.models import QuoteMap, distance_band
 from packages.shared.backtest.net_price import net_price_from_real_quotes
 from packages.shared.backtest.plugins.debit_vertical import DebitVerticalPlugin
 from packages.shared.backtest.plugins.vertical import VerticalPlugin
+from packages.shared.backtest.quote_validity import build_quote_map, spread_value_is_valid
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
 from packages.shared.day_features import (
     _LANDSCAPE_ROW_SQL,
@@ -260,6 +261,13 @@ class TradeData:
     # Settlement underlying price (ES close at expiry RTH end)
     settlement_price: Optional[float]
 
+    # CR-AN decision 7 observability (entry window) + decision 6 exclusion
+    n_minutes_total: int = 0
+    n_minutes_valid: int = 0
+    baseline_minute_offset: Optional[int] = None
+    had_invalid_quote: bool = False
+    excluded_reason: Optional[str] = None
+
 
 # ── DATA LOADING ──────────────────────────────────────────────────────────────
 
@@ -402,11 +410,15 @@ def build_entry_scan(
     legs: list[Leg],
     structural_prob: float,
     spread_width: float,
-) -> tuple[list[MinuteScan], Optional[float]]:
+) -> tuple[list[MinuteScan], Optional[float], dict]:
     """Query entry-day RTH quotes and build per-minute scan.
 
-    Returns (entry_scan, baseline_net_credit).
-    baseline_net_credit = net_credit at the first quoted minute (no edge gate).
+    Returns (entry_scan, baseline_net_credit, observability).
+    baseline_net_credit = net_credit at the first VALID minute (no edge gate)
+    — CR-AN decisions 2/3: a minute is valid only when both legs' bid/ask
+    pass the leg rule and the spread value is in [0, width] in the
+    structure's direction; invalid minutes are recorded with net_credit=None
+    and never fill or baseline.
     """
     start_pt = datetime(trade_date.year, trade_date.month, trade_date.day, 6, 30)
     end_pt   = datetime(trade_date.year, trade_date.month, trade_date.day, 13, 0)
@@ -421,33 +433,42 @@ def build_entry_scan(
         ([short_opra, other_opra], start_pt, end_pt),
     ).fetchall()
 
-    # Build per-minute quote map: {snapshot_pt → {(strike, 'C'/'P') → mid}}
-    by_minute: dict[datetime, QuoteMap] = {}
+    # Group raw (strike, type, bid, ask) per minute; the shared validity helper
+    # builds the QuoteMap (invalid legs dropped) — CR-AN decision 2.
+    raw_by_minute: dict[datetime, list[tuple]] = {}
     for snap_pt, bid, ask, opra in rows:
-        mid = (float(bid) + float(ask)) / 2.0
         strike_key = _opra_to_quote_key(opra)
         if strike_key is None:
             continue
-        if snap_pt not in by_minute:
-            by_minute[snap_pt] = {}
-        by_minute[snap_pt][strike_key] = mid
+        raw_by_minute.setdefault(snap_pt, []).append((strike_key[0], strike_key[1], bid, ask))
 
     scan: list[MinuteScan] = []
     baseline_net_credit: Optional[float] = None
+    minutes = sorted(raw_by_minute.keys())
+    n_valid = 0
+    baseline_offset: Optional[int] = None
 
-    for snap_pt in sorted(by_minute.keys()):
-        qmap = by_minute[snap_pt]
+    for snap_pt in minutes:
+        qmap, _n_bad_legs = build_quote_map(raw_by_minute[snap_pt])
         pos_val = net_price_from_real_quotes(legs, qmap)
-        if pos_val is None:
+        if not spread_value_is_valid(pos_val, spread_width, legs):
             scan.append(MinuteScan(snapshot_pt=snap_pt, net_credit=None, edge=None))
             continue
+        n_valid += 1
         net_credit = -pos_val
         edge = structural_prob - abs(net_credit) / spread_width
         scan.append(MinuteScan(snapshot_pt=snap_pt, net_credit=net_credit, edge=edge))
         if baseline_net_credit is None:
             baseline_net_credit = net_credit
+            baseline_offset = int(round((snap_pt - start_pt).total_seconds() / 60.0))
 
-    return scan, baseline_net_credit
+    obs = {
+        "n_minutes_total": len(minutes),
+        "n_minutes_valid": n_valid,
+        "baseline_minute_offset": baseline_offset,
+        "had_invalid_quote": n_valid < len(minutes),
+    }
+    return scan, baseline_net_credit, obs
 
 
 def _opra_to_quote_key(opra: str) -> Optional[tuple[float, str]]:
@@ -558,19 +579,20 @@ def get_touch_pos_val(
         ([short_opra, other_opra], touch_datetime_pt, window_end_pt),
     ).fetchall()
 
-    # Group by minute
-    by_minute: dict[datetime, QuoteMap] = {}
+    # Group raw quotes by minute; CR-AN decision 4: exit only on a valid minute
+    raw_by_minute: dict[datetime, list[tuple]] = {}
     for snap_pt, bid, ask, opra in rows:
-        mid = (float(bid) + float(ask)) / 2.0
         key = _opra_to_quote_key(opra)
         if key is None:
             continue
-        if snap_pt not in by_minute:
-            by_minute[snap_pt] = {}
-        by_minute[snap_pt][key] = mid
+        raw_by_minute.setdefault(snap_pt, []).append((key[0], key[1], bid, ask))
 
-    for snap_pt in sorted(by_minute.keys()):
-        pos_val = net_price_from_real_quotes(legs, by_minute[snap_pt])
+    width = abs(legs[0].strike - legs[1].strike) if len(legs) == 2 else None
+    for snap_pt in sorted(raw_by_minute.keys()):
+        qmap, _ = build_quote_map(raw_by_minute[snap_pt])
+        pos_val = net_price_from_real_quotes(legs, qmap)
+        if width is not None and not spread_value_is_valid(pos_val, width, legs):
+            continue
         if pos_val is not None:
             return pos_val
 
@@ -712,11 +734,13 @@ def collect_trade_data(
         conn, trade_date, structure, mode
     )
 
-    # Entry-day crawl
-    entry_scan, baseline_net_credit = build_entry_scan(
+    # Entry-day crawl (CR-AN: valid minutes only; observability returned)
+    entry_scan, baseline_net_credit, obs = build_entry_scan(
         conn, trade_date, short_opra, other_opra,
         legs, structural_prob, spread_width,
     )
+    # CR-AN decision 6: exclude only when the entry window has no valid minute
+    excluded_reason = "no_valid_entry_minute" if obs["n_minutes_valid"] == 0 else None
 
     # Touch detection
     touch_resolution, touch_datetime_pt = detect_touch(
@@ -755,6 +779,11 @@ def collect_trade_data(
         touch_datetime_pt=touch_datetime_pt,
         touch_pos_val=touch_pos_val,
         settlement_price=settlement_price,
+        n_minutes_total=obs["n_minutes_total"],
+        n_minutes_valid=obs["n_minutes_valid"],
+        baseline_minute_offset=obs["baseline_minute_offset"],
+        had_invalid_quote=obs["had_invalid_quote"],
+        excluded_reason=excluded_reason,
     )
 
 
@@ -1455,6 +1484,37 @@ def main(argv=None):
                 elapsed = _time.perf_counter() - t0
                 print(f"  [{done}/{total}] {elapsed:.0f}s elapsed", flush=True)
 
+        # ── CR-AN decision 6: trades whose entry window had no valid minute ──
+        excluded = [(td.structure, td.trade_date, td.band, td.excluded_reason)
+                    for td in debit_trades + credit_trades if td.excluded_reason]
+        debit_trades  = [td for td in debit_trades  if not td.excluded_reason]
+        credit_trades = [td for td in credit_trades if not td.excluded_reason]
+        print(f"\n  Decision-6 exclusions (no valid entry minute): {len(excluded)}")
+        for s_, d_, b_, r_ in excluded:
+            print(f"    {s_} {d_} {b_}: {r_}")
+
+        # ── CR-AN decision 7: quote-validity observability per structure ──
+        def _pct(vals, p):
+            if not vals:
+                return None
+            v = sorted(vals); i = int(round((len(v) - 1) * p))
+            return v[i]
+        obs_summary: dict = {}
+        for s_, data_ in (("debit", debit_trades), ("credit", credit_trades)):
+            valid_frac = [td.n_minutes_valid / td.n_minutes_total for td in data_ if td.n_minutes_total]
+            offs = [td.baseline_minute_offset for td in data_ if td.baseline_minute_offset is not None]
+            obs_summary[s_] = {
+                "n": len(data_),
+                "had_invalid_quote": sum(1 for td in data_ if td.had_invalid_quote),
+                "valid_minute_fraction_median": round(_pct(valid_frac, 0.5), 4) if valid_frac else None,
+                "valid_minute_fraction_p05": round(_pct(valid_frac, 0.05), 4) if valid_frac else None,
+                "baseline_minute_offset_median": _pct(offs, 0.5),
+                "baseline_minute_offset_p95": _pct(offs, 0.95),
+                "baseline_minute_offset_max": max(offs) if offs else None,
+                "baseline_offset_gt0": sum(1 for o in offs if o > 0),
+            }
+            print(f"  Quote validity [{s_}]: {obs_summary[s_]}")
+
         print(f"\n  Collected: debit={len(debit_trades)}, credit={len(credit_trades)}")
 
         # Coverage summary
@@ -1466,6 +1526,22 @@ def main(argv=None):
               f"credit={c_settle}/{len(credit_trades)}")
         print(f"  Actionable touches: debit={d_touch}/{len(debit_trades)}, "
               f"credit={c_touch}/{len(credit_trades)}")
+
+        # ── CR-AN G2: post-filter, no accepted spread value may be out of range ──
+        oor = 0
+        for td in debit_trades + credit_trades:
+            r0 = compute_pnl(td, 0.0)
+            w = td.spread_width
+            debit_ = td.structure == "debit"
+            for key in ("fill_net_credit", "baseline_net_credit"):
+                v = r0.get(key)
+                if v is not None and (abs(v) > w + 1e-9 or (v > 1e-9 if debit_ else v < -1e-9)):
+                    oor += 1
+            for key in ("close_pnl", "baseline_close_pnl", "touch_exit_pnl", "baseline_touch_exit_pnl"):
+                v = r0.get(key)
+                if v is not None and abs(v) > w + 1e-9:
+                    oor += 1
+        print(f"  Post-filter out-of-range accepted values (G2, expect 0): {oor}")
 
         # ── Phase 3: Threshold sweep (train only) ─────────────────────────────
         print(f"\n{SEP2}")
@@ -1566,6 +1642,9 @@ def main(argv=None):
             "split_date": args.split_date.isoformat(),
             "seed": args.seed,
             "selection_by_band_partition": sel_counts,
+            "quote_validity": obs_summary,
+            "decision6_excluded": [f"{s_} {d_} {b_}" for s_, d_, b_, _ in excluded],
+            "post_filter_out_of_range": oor,
             "debit_labeled_train": sum(1 for td in debit_trades if td.partition == "train" and td.pattern_label),
             "credit_labeled_train": sum(1 for td in credit_trades if td.partition == "train" and td.pattern_label),
             "summary_d": summary_d,

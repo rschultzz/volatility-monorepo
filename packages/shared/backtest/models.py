@@ -47,6 +47,10 @@ class EntryMinuteScan:
     net_position_value: Optional[float]  # negative = net credit position
     net_credit: Optional[float]          # = -net_position_value; positive = credit received
     edge: Optional[float]                # structural_prob - (net_credit / spread_width)
+    # CR-AN decision 2: False when the minute had a price that failed the
+    # quote-sanity rule (out of [0, width] in the structure's direction) or a
+    # leg was missing/invalid. Such minutes carry net_credit=None / edge=None.
+    quote_valid: bool = True
 
 
 @dataclass
@@ -84,3 +88,10 @@ class TradeResult:
     pattern_label: Optional[str] = None
     reversion_wilson_lo: Optional[float] = None
     continuation_wilson_lo: Optional[float] = None
+
+    # CR-AN decision 7 observability + decision 6 exclusion
+    n_minutes_total: int = 0
+    n_minutes_valid: int = 0
+    baseline_minute_offset: Optional[int] = None   # minutes from window open to first valid minute
+    had_invalid_quote: bool = False
+    excluded_reason: Optional[str] = None          # 'no_valid_entry_minute' when the window has no valid minute
