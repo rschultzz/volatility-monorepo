@@ -97,3 +97,27 @@ Every unlisted leg nevertheless has entry-day minute rows in `orats_options_minu
 ### Pre-deploy check (decision 8)
 
 CR-AL's route fix: `apps/web/modules/TodaySetup/routes.py` l.287 passes `before_date=trade_date.isoformat()` alongside `exclude_date`. Grep of every tracked `compute_structural_probability(` call site: `TodaySetup/routes.py` (before_date ✓), `scripts/cr_ah_step4_analysis.py` (mode → before_date or allow_lookahead ✓), `scripts/cr_z_step4b_k_display.py` (before_date ✓). The only call with `exclude_date` and neither kwarg is `scripts/cr_ah_posthoc_limit_entry.py`, which is untracked and not deployed. **Expect none → none.** Note: `render.yaml` still says `autoDeploy: true` for both services it lists; the vault records the web service as dashboard-managed with autoDeploy off and `render.yaml` as stale — nothing here deploys either way.
+
+## Step 1 — holdout re-capture with snapping (decision 7)
+
+Command: `PYTHONUNBUFFERED=1 apps/web/.venv/bin/python -u scripts/cr_am_holdout_leg_capture.py --cr-id CR-AO-capture --dates 2026-06-16,2026-07-01,2026-07-13,2026-08-12,2026-08-13,2026-08-28,2026-09-03,2026-09-04`. Log: `scripts/logs/cr_ao_recapture_20260905_205959.log` (untracked). Run row: `(UUID('09cdcbff-339a-422e-a214-d1e4205dd119'), 'completed', datetime.datetime(2026, 9, 6, 4, 0, 12, 871628), datetime.datetime(2026, 9, 6, 4, 40, 42, 978431), '8', '5', '3', '0', '0', '19080')` (columns: run_id, status, started, completed, entry windows, settlement windows, deferred, 404s, exceptions, bars).
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G3 re-capture: 8 dates attempted, 404s remaining | 0 (≤ 2 with reason) | **8 / 8 entry-day windows captured, 0 ORATS 404s, 0 exceptions**; 5 settlement windows captured, 3 deferred (expiries 09-21, 09-25, 09-28 after today) | PASS |
+| G4 no holdout P&L in the log | none | grep `pnl\|net_price\|payoff\|p&l` → **0** hits beyond the script's own "no P&L computed" line; no post-split P&L exists anywhere in this CR | PASS |
+
+Per date (target → snapped debit-other / anchor / credit-other, chain date; the CR-AM legs that 404'd are in the last column):
+
+| date | status | target | snapped legs | chain | expiry | entry-day | settlement | CR-AM legs (404) |
+|---|---|---|---|---|---|---|---|---|
+| 2026-06-16 | computed | 7596.73 | 7590/7600/7610 (w 10/10) | 2026-06-15 | 2026-07-09 | bars 2346 | bars 66 | 7585/7595/7605 |
+| 2026-07-01 | computed | 7545.00 | 7530/7540/7550 (w 10/10) | 2026-06-30 | 2026-07-23 | bars 2346 | bars 66 | 7535/7545/7555 |
+| 2026-07-13 | computed | 7653.10 | 7640/7650/7660 (w 10/10) | 2026-07-10 | 2026-08-03 | bars 2346 | bars 66 | 7645/7655/7665 |
+| 2026-08-12 | pending_history | 7806.12 | 7800/7810/7820 (w 10/10) | 2026-08-11 | 2026-09-02 | bars 2346 | bars 66 | 7795/7805/7815 |
+| 2026-08-13 | pending_history | 7805.00 | 7790/7800/7810 (w 10/10) | 2026-08-12 | 2026-09-03 | bars 2346 | bars 66 | 7795/7805/7815 |
+| 2026-08-28 | computed | 7804.07 | 7790/7800/7810 (w 10/10) | 2026-08-27 | 2026-09-21 | bars 2346 | deferred (future expiry) | 7795/7805/7815 |
+| 2026-09-03 | pending_history | 7806.18 | 7800/7810/7820 (w 10/10) | 2026-09-02 | 2026-09-25 | bars 2346 | deferred (future expiry) | 7795/7805/7815 |
+| 2026-09-04 | pending_history | 7823.95 | 7820/7825/7830 (w 5/5) | 2026-09-03 | 2026-09-28 | bars 2328 | deferred (future expiry) | 7815/7825/7835 |
+
+All eight dates snap to a 10-wide pair on both sides (the anchor moved to the listed 10-point strike; on 2026-09-04 the 5-point strikes were already listed, so the anchor stayed at 7825 and the wings became 7820 / 7830). Holdout stream after CR-AO: **21 / 21 dates have entry-day quotes**; settlement windows captured for 20 (the three deferred here plus CR-AM's six deferrals overlap: expiries 09-09, 09-17, 09-18, 09-21, 09-25, 09-28 still to come — re-run the capture with `--dates` after 2026-09-28). 19,080 bars written; the CR-AM captures for the same dates' old legs remain in `orats_options_minute` and are harmless (different OPRAs).
