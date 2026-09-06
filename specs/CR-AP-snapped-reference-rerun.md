@@ -173,3 +173,242 @@ Snapped legs (from the plan; width_actual in parentheses): 2023-11-10 debit 4490
 legs checked: 35; legs with NO entry-day rows: 0
 
 Result: **PASS** — all legs have entry-day rows; the only missing settlement rows are the 2025-07-03 half-day (listed 404).
+
+## Step 1 — snapped clean-quote walk-forward run, persisted as `cr_id='CR-AP'`
+
+Command: `PYTHONUNBUFFERED=1 apps/web/.venv/bin/python -u scripts/cr_ah_step4_analysis.py --universe-end 2026-06-05 --split-date 2026-06-05 --cr-id CR-AP --structural-prob-mode walk-forward` (identical to CR-AN; snapping on by construction). Log: `scripts/logs/cr_ap_step4_20260906_085953.log` (untracked). 321 s. Run row: `(UUID('ad221de1-28fb-4222-b7d4-7474d73a16e3'), 'completed', datetime.datetime(2026, 9, 6, 15, 59, 54, 871649), datetime.datetime(2026, 9, 6, 16, 5, 14, 923789), "Step 4 complete [mode=walk-forward]: debit=110, credit=106, T_d=0.05, T_c=0.0, 320s; summary_d={'debit': 'INCONCLUSIVE', 'credit': 'untestable'}")`. Persisted: 8 rows `cr_id='CR-AP'`. **CR-AP is now the citable reference** (decision 4); CR-AH / CR-AM / CR-AN rows kept.
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G1 (corrected) selection; clean counts after Step 1a | 50/50/50; debit 110 / credit 106 (−3 tolerance for listed 404s) | **50 / 50 / 50; debit 110 / credit 106** — exact, tolerance unused (bands 41/36/33, 40/36/30 as CR-AN) | PASS |
+| G1b trades with an unlisted leg after snapping | 0 | **0** (0 `StrikeNotListed`; every leg from the prior-close chain) | PASS |
+| G2 post-filter out-of-range accepted values | 0 | **0** | PASS |
+| G3 trades with `width_actual ≠ 10` | ≤ 21 | **14** — debit 4 (5-wide ×2, 25-wide ×2), credit 10 (5 ×4, 25 ×5, 50 ×1) | PASS (note) |
+| G4 the 195 unaffected trades identical to CR-AN to the cent | yes | **yes** — 195 / 195 identical on fill, close and baseline at T = 0 and close at T = 0.05; 20 of the 21 affected trades changed (the 21st, 2025-06-11 credit, has no fill in either) | PASS |
+| G5 no holdout P&L in the log | none | grep of the 21 post-split dates: **0** hits | PASS |
+
+Chosen thresholds: DEBIT 0.05 (sweep flat: +0.09 / +0.10 / +0.08 / +0.08 / −0.05), CREDIT 0.00. Quote validity unchanged in character (debit p95 baseline offset 1 min, credit 1 min; 0 decision-6 exclusions).
+
+### The 21 affected trades — CR-AN legs → snapped legs (P&L at T = 0.00; "—" = no fill or no settlement)
+
+| structure | date | band | old short/other | snapped short/other (width) | old close / base | new close / base |
+|---|---|---|---|---|---|---|
+| credit | 2023-12-22 | mid | 4805/4815 [short,other unlisted] | 4800/4810 (10) | — / +4.35 | — / +4.30 |
+| credit | 2024-03-05 | near | 5175/5185 [other unlisted] | 5175/5180 (5) | — / -6.45 | — / -3.25 |
+| credit | 2024-07-11 | near | 5675/5685 [other unlisted] | 5675/5680 (5) | — / +4.25 | — / +2.15 |
+| credit | 2024-09-17 | mid | 5710/5720 [short,other unlisted] | 5700/5750 (50) | — / -5.26 | — / -27.69 |
+| credit | 2024-09-23 | near | 5755/5765 [short,other unlisted] | 5750/5775 (25) | -5.20 / -4.98 | -12.71 / -12.71 |
+| credit | 2024-11-25 | far | 6070/6080 [other unlisted] | 6070/6075 (5) | — / +4.25 | — / +2.10 |
+| credit | 2024-12-13 | near | 6105/6115 [short,other unlisted] | 6100/6110 (10) | — / +4.87 | — / +5.07 |
+| credit | 2025-03-26 | mid | 5850/5860 [other unlisted] | 5850/5875 (25) | +2.90 / +2.90 | +7.65 / +8.95 |
+| credit | 2025-05-16 | mid | 6000/6010 [other unlisted] | 6000/6025 (25) | -4.65 / -4.65 | +0.95 / +10.20 |
+| credit | 2025-06-11 | near | 6075/6085 [other unlisted] | 6075/6080 (5) | — / — | — / — |
+| credit | 2025-06-24 | mid | 6100/6110 [other unlisted] | 6100/6125 (25) | — / -4.45 | — / -13.70 |
+| credit | 2026-04-07 | near | 6700/6710 [other unlisted] | 6700/6725 (25) | -9.30 / -5.20 | — / -16.15 |
+| debit | 2023-11-10 | far | 4510/4500 [short unlisted] | 4500/4490 (10) | +8.50 / +8.50 | +8.20 / +8.20 |
+| debit | 2023-12-22 | mid | 4805/4795 [short,other unlisted] | 4800/4790 (10) | -4.65 / -4.65 | -4.60 / -4.60 |
+| debit | 2024-07-11 | near | 5675/5665 [other unlisted] | 5675/5670 (5) | -3.45 / -3.45 | -2.45 / -2.45 |
+| debit | 2024-09-17 | mid | 5710/5700 [short unlisted] | 5700/5675 (25) | +4.96 / +4.96 | +11.19 / +11.19 |
+| debit | 2024-09-23 | near | 5755/5745 [short,other unlisted] | 5750/5740 (10) | +5.00 / +4.72 | +5.00 / +4.57 |
+| debit | 2024-11-12 | near | 6055/6045 [short,other unlisted] | 6060/6050 (10) | +5.50 / +5.50 | +5.65 / +5.65 |
+| debit | 2024-12-13 | near | 6105/6095 [short unlisted] | 6100/6090 (10) | -5.27 / -5.27 | -5.47 / -5.47 |
+| debit | 2025-03-26 | mid | 5850/5840 [other unlisted] | 5850/5825 (25) | -4.85 / -4.85 | -13.60 / -13.60 |
+| debit | 2025-06-11 | near | 6075/6065 [other unlisted] | 6075/6070 (5) | — / — | — / — |
+
+
+Reading the list: where the anchor was listed and only the 10-point wing was missing, the wing snapped to the nearest listed strike on its side — 5 away when the 5-point strike existed (2024-03-05, 07-11, 11-25, 2025-06-11) and 25 away when the grid was 25-point that day (2025-03-26, 05-16, 06-24, 2026-04-07); 2024-09-17 credit landed on a 50-wide because the chain for the 10-08 expiry had no strike between 5700 and 5750 on 09-16. Debit P&L moves by cents where the pair merely shifted 5 points (2023-11-10, 12-22, 2024-09-23, 11-12, 12-13) and by points where the width changed (2024-09-17 +4.96 → +11.19 on a 25-wide; 2025-03-26 −4.85 → −13.60).
+
+### \`width_actual ≠ 10\` subset (decision 2)
+
+| structure | n ≠ 10 | widths | settled in subset | mean close P&L (T = 0) | mean baseline |
+|---|---|---|---|---|---|
+| debit | 4 | 5 ×2, 25 ×2 | 3 | −1.62 | −1.62 |
+| credit | 10 | 5 ×4, 25 ×5, 50 ×1 | 3 (at T = 0 only 3 of the 10 fill) | −1.37 | −5.57 |
+
+The persisted band cells pool all widths (decision 2). The subsets are too small to read on their own, but the credit one matters for the restatement below because a 25- or 50-wide credit spread's baseline is several times a 10-wide's.
+
+### Restatement — CR-AP vs CR-AN (decision 3; persisted cells at each run's chosen T)
+
+| structure | band | CR-AN | CR-AP (snapped) | Δ beat | restatement |
+|---|---|---|---|---|---|
+| debit | near | n=39 / +2.12 / 69% [54–81] / base +2.05 / beat +0.07 | n=38 / +2.04 / 68% [53–81] / base +2.07 / beat -0.03 | -0.10 | **reverses** |
+| debit | mid | n=36 / +1.17 / 56% [40–70] / base +0.87 / beat +0.30 | n=36 / +1.10 / 56% [40–70] / base +0.80 / beat +0.30 | -0.00 | **holds** |
+| debit | far | n=31 / +2.00 / 48% [32–65] / base +1.97 / beat +0.03 | n=31 / +1.99 / 48% [32–65] / base +1.96 / beat +0.03 | -0.00 | **holds** |
+| debit | all | n=106 / +1.76 / 58% [49–67] / base +1.63 / beat +0.13 | n=105 / +1.70 / 58% [49–67] / base +1.61 / beat +0.10 | -0.04 | **holds** |
+| credit | near | n=4 / -6.45 / 0% [0–49] / base -2.28 / beat -4.17 | n=3 / -8.00 / 0% [0–56] / base -2.73 / beat -5.28 | -1.11 | **holds** |
+| credit | mid | n=10 / -1.37 / 60% [31–83] / base -1.31 / beat -0.06 | n=10 / -0.34 / 70% [40–89] / base -1.61 / beat +1.27 | +1.34 | **reverses** |
+| credit | far | n=13 / -1.20 / 69% [42–87] / base -0.76 / beat -0.43 | n=13 / -1.20 / 69% [42–87] / base -0.84 / beat -0.36 | +0.08 | **holds** |
+| credit | all | n=27 / -2.04 / 56% [37–72] / base -1.53 / beat -0.51 | n=26 / -1.65 / 62% [43–78] / base -1.82 / beat +0.17 | +0.68 | **reverses** |
+
+
+Per cell:
+
+- **debit near — reverses** (+0.07 → −0.03): a 0.10-pt move across zero on n = 38; both values are noise around zero. Mean close P&L +2.12 → +2.04.
+- **debit mid / far / all — hold** (Δ beat −0.00 / −0.00 / −0.04). All-train: +1.76 → +1.70 mean P&L, beat +0.13 → +0.10. The debit reference is essentially CR-AN with five trades re-priced on their listed neighbours.
+- **credit near — holds** (−4.17 → −5.28; n = 3).
+- **credit mid — reverses** (−0.06 → +1.27) and **credit all — reverses** (−0.51 → +0.17): this is the width-pooling artifact decision 2 anticipated, not a change in the fade's merit. The mid cell now contains 2025-03-26 (25-wide, baseline +8.95) and 2025-05-16 (25-wide, baseline +10.20 → close +0.95) and the credit pool includes 2024-09-17 (50-wide, baseline −27.69) and 2026-04-07 (25-wide, baseline −16.15). Beat = mean − baseline, so a handful of wide spreads with baselines an order of magnitude larger than a 10-wide's dominate the cell. **Mean close P&L stays negative in every credit band** (near −8.00, mid −0.34, far −1.20, all −1.65); the credit fade is not rehabilitated. Beat on a pooled-width cell is not a like-for-like number until widths are normalised (see Open questions).
+
+Summary C now shows "CREDIT leads by 0.97" at mid — same artifact. Summary D: debit match − no_match = +0.12 pts, CI [−2.06, +2.29] → INCONCLUSIVE; credit UNTESTABLE — consistent with CR-AL / CR-AM / CR-AN. Touch resolution: rth_touch touch-exit +1.11 vs close +3.47; gap_touch +1.07 vs +3.25 — hold-to-close still beats touch-exit on both.
+
+### Full output (Phases 1–7)
+
+```
+
+======================================================================
+CR-AH Step 4 — Two-structure × two-axis analysis
+  cr_id=CR-AP  structural-prob mode=walk-forward  train_only=False  no_persist=False  universe_end=2026-06-05  split_date=2026-06-05  seed=20260905
+======================================================================
+
+Run ID: ad221de1-28fb-4222-b7d4-7474d73a16e3
+
+----------------------------------------------------------------------
+Phase 1: Loading signal dates and selecting clean subset...
+  Universe pinned to trade_date <= 2026-06-05: 375/396 magnet-above dates kept.
+  Loaded 374/375 signal entries (skipped 1).
+  Stratified selection: 150 dates
+  Selection by band/partition: {'far/train': 50, 'mid/train': 50, 'near/train': 50}
+  holdout: none (split = universe end)
+
+Filtering to A-bucket clean dates for each structure...
+  Credit (target + target+10)...
+    Credit clean: 106
+  Debit (target + target-10)...
+    Debit clean:  110
+
+  Credit by band/partition: {'far/train': 30, 'mid/train': 36, 'near/train': 40}
+  Debit  by band/partition: {'far/train': 33, 'mid/train': 36, 'near/train': 41}
+  Unlistable (StrikeNotListed, excluded before the clean filter): 0
+  Snapped legs [credit]: {'n': 106, 'width_actual_dist': {'5.0': 4, '10.0': 96, '25.0': 5, '50.0': 1}, 'n_width_not_nominal': 10}
+  Snapped legs [debit]: {'n': 110, 'width_actual_dist': {'5.0': 2, '10.0': 106, '25.0': 2}, 'n_width_not_nominal': 4}
+
+----------------------------------------------------------------------
+Phase 2: Collecting per-date trade data...
+  Processing 110 debit dates...
+  Processing 106 credit dates...
+
+  Decision-6 exclusions (no valid entry minute): 0
+  Quote validity [debit]: {'n': 110, 'had_invalid_quote': 49, 'valid_minute_fraction_median': 1.0, 'valid_minute_fraction_p05': 0.9974, 'baseline_minute_offset_median': 0, 'baseline_minute_offset_p95': 1, 'baseline_minute_offset_max': 9, 'baseline_offset_gt0': 32}
+  Quote validity [credit]: {'n': 106, 'had_invalid_quote': 47, 'valid_minute_fraction_median': 1.0, 'valid_minute_fraction_p05': 0.9949, 'baseline_minute_offset_median': 0, 'baseline_minute_offset_p95': 1, 'baseline_minute_offset_max': 9, 'baseline_offset_gt0': 29}
+
+  Collected: debit=110, credit=106
+  Settlement available: debit=107/110, credit=103/106
+  Actionable touches: debit=70/110, credit=67/106
+  Post-filter out-of-range accepted values (G2, expect 0): 0
+
+----------------------------------------------------------------------
+Phase 3: Threshold sweep on TRAIN only...
+
+  Chosen threshold — DEBIT: 0.05  CREDIT: 0.00
+
+DEBIT — Threshold sweep (TRAIN only) [mode=walk-forward]:
+       T  n_settled  fill_n  mean_pnl  win%   beat  chosen?
+  ────────────────────────────────────────────────────────────
+  0.00     106      109        1.70    58%     0.09
+  0.05     105      108        1.70    58%     0.10 ← CHOSEN
+  0.10     104      107        1.69    58%     0.08
+  0.15     103      106        1.69    57%     0.08
+  0.20     100      103        1.56    56%    -0.05
+
+CREDIT — Threshold sweep (TRAIN only) [mode=walk-forward]:
+       T  n_settled  fill_n  mean_pnl  win%   beat  chosen?
+  ────────────────────────────────────────────────────────────
+  0.00      26       27       -1.65    62%     0.17 ← CHOSEN
+  0.05      19       19       -2.39    58%    -0.57
+  0.10      12       12       -2.20    58%    -0.37
+  0.15       6        6       -3.09    50%    -1.26
+  0.20       3        3       -1.89    67%    -0.07
+
+----------------------------------------------------------------------
+Phase 4: Full results (all train; holdout: none (split = universe end))
+
+DEBIT — By distance band (all splits, T=0.05) [mode=walk-forward]:
+  band    part        n      pnl   win%  [lo–hi 95%]        base     beat
+  ──────────────────────────────────────────────────────────────────────
+  near    train      38     2.04    68%  [ 53%– 81%]     2.07    -0.03
+  mid     train      36     1.10    56%  [ 40%– 70%]     0.80     0.30
+  far     train      31     1.99    48%  [ 32%– 65%]     1.96     0.03
+  all     train     105     1.70    58%  [ 49%– 67%]     1.61     0.10
+  holdout: none (split = universe end)
+
+CREDIT — By distance band (all splits, T=0.00) [mode=walk-forward]:
+  band    part        n      pnl   win%  [lo–hi 95%]        base     beat
+  ──────────────────────────────────────────────────────────────────────
+  near    train       3    -8.00     0%  [  0%– 56%]    -2.73    -5.28
+  mid     train      10    -0.34    70%  [ 40%– 89%]    -1.61     1.27
+  far     train      13    -1.20    69%  [ 42%– 87%]    -0.84    -0.36
+  all     train      26    -1.65    62%  [ 43%– 78%]    -1.82     0.17
+  holdout: none (split = universe end)
+
+DEBIT — By post-touch pattern (TRAIN only, T=0.05) [mode=walk-forward]:
+  (n with pattern_label=93, n without=17)
+  pattern                           n      pnl   win%  [lo–hi 95%]        base     beat
+  ──────────────────────────────────────────────────────────────────────
+  mixed                            43     1.31    56%  [ 41%– 70%]     1.05     0.26
+  overshoot-then-revert             1     4.35   100%  [ 21%–100%]     4.35     0.00
+  stepping-stone                   46     1.50    54%  [ 40%– 68%]     1.43     0.06
+  ──────────────────────────────────────────────────────────────────────
+  (labeled)                        90     1.44    56%  [ 45%– 65%]     1.28     0.16
+  (unlabeled)                      15     3.30    73%  [ 48%– 89%]     3.35    -0.05
+
+CREDIT — By post-touch pattern (TRAIN only, T=0.00) [mode=walk-forward]:
+  (n with pattern_label=89, n without=17)
+  pattern                           n      pnl   win%  [lo–hi 95%]        base     beat
+  ──────────────────────────────────────────────────────────────────────
+  mixed                             7     1.29    86%  [ 49%– 97%]    -1.01     2.30
+  overshoot-then-revert             0        —      —  [   —–   —]        —        —
+  stepping-stone                   10    -1.65    70%  [ 40%– 89%]    -1.99     0.34
+  ──────────────────────────────────────────────────────────────────────
+  (labeled)                        17    -0.44    76%  [ 53%– 90%]    -1.67     1.23
+  (unlabeled)                       9    -3.95    33%  [ 12%– 65%]    -2.61    -1.33
+
+DEBIT — Touch resolution breakdown (TRAIN only, T=0.05) [mode=walk-forward]:
+  resolution                      n   touch_exit  close_pnl   base_close
+  ─────────────────────────────────────────────────────────────────
+  rth_touch                       41        1.11        3.47        3.44
+  gap_touch                       29        1.07        3.25        3.20
+  afterhours_touch_retraced       15           —        3.36        3.36
+  no_touch                        25           —       -3.65       -4.08
+
+DEBIT — Selection bias check (far band, decision #11) [mode=walk-forward]:
+  far/all: n=50  clean: n=33 (mean σ=3.16)  dropped: n=17 (mean σ=2.90)
+  ✓ No significant selection bias detected in far band.
+
+CREDIT — Selection bias check (far band, decision #11) [mode=walk-forward]:
+  far/all: n=50  clean: n=30 (mean σ=2.81)  dropped: n=20 (mean σ=3.47)
+  ⚠ BIAS: clean far trades are significantly CLOSER than dropped far trades.
+    The far-band result may be OPTIMISTICALLY SELECTED (closer to spot → easier trade).
+
+======================================================================
+SUMMARY READS A/B/C/D
+======================================================================
+[mode=walk-forward]
+
+── Summary A: Debit near-band holdout ──
+  holdout: none (split = universe end)
+
+── Summary B: Credit near-band holdout ──
+  holdout: none (split = universe end)
+
+── Summary C: Structure crossover by distance (TRAIN, close P&L beat) ──
+  near   debit_beat=  -0.03  credit_beat=  -5.28  → DEBIT leads by 5.25
+  mid    debit_beat=   0.30  credit_beat=   1.27  → CREDIT leads by 0.97
+  far    debit_beat=   0.03  credit_beat=  -0.36  → DEBIT leads by 0.39
+  READ: Structure crossover = distance band where debit stops leading and credit starts.
+
+── Summary D: Engine hypothesis (decision #13) ──
+  DEBIT engine check:  pattern_match (n=46) pnl=1.50  vs no_match (n=44) pnl=1.38
+  → No clear separation by pattern for debit. Engine hypothesis inconclusive.
+  DEBIT decision-9 read [mode=walk-forward]: match−no_match = +0.12 pts, bootstrap 95% CI [-2.06, +2.29] (1000 resamples, seed=20260905) → INCONCLUSIVE
+  credit: engine hypothesis UNTESTABLE (n_match=0, n_no_match=17)
+
+----------------------------------------------------------------------
+Phase 7: Persisting aggregate stats to bt_edge_backtest_results...
+  ✓ bt_edge_backtest_results created/verified.
+  debit: holdout: none (split = universe end)
+  credit: holdout: none (split = universe end)
+  ✓ Aggregate stats written.
+
+======================================================================
+Step 4 complete in 321s
+======================================================================
+```
