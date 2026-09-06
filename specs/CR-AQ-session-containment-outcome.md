@@ -262,3 +262,26 @@ Smoke dict: rows 804 · `session_close_t0` non-null **795** · `contained_close`
 | 2026-09-03 | magnet-above | pending | 7704.25 | 7766.50 | 7700.00 | 7751.25 | 7602.18 | 7806.18 | true | true | 0.731 | 1.247 | 0.881 | — |
 
 2026-07-14 is the first `na_regime` (amplification) date with an outcome; 2026-08-13 shows a clean breach above (close 1.065 of the band).
+
+## What changed
+
+- Schema: 11 nullable containment columns on `bt_daily_outcomes` (`infra/sql/bt_daily_outcomes_session_containment.sql`, applied under the owner role via `scripts/cr_aq_run_migration.py`); column-level UPDATE granted to `dash_backfill_writer`; `bt_daily_outcomes_active` recreated with 46 columns.
+- `packages/shared/outcomes_runner.py`: `nearest_walls`, `compute_session_containment`, `CONTAINMENT_COLUMNS` — reads the runner's `daily_bars` frame (the `session_open_t0` source), walls from the trade-date landscape, `implied_move_1d` from the feature row. 12 tests.
+- Cron wiring (decision 3): `cr_b_backfill_outcomes.py` writes the columns at insert for sessions that have closed; `cr_aa_sweep_pending_outcomes.py` gains a null-fill pass (`fill_session_containment`) for rows the same-day insert left NULL. Both take effect after the cron redeploy.
+- `scripts/cr_aq_backfill_containment.py`: null-fill over all active canonical rows regardless of `outcome_status`; run `e2c402a9` filled 795 / 804 (the 9 roll Fridays have no bars). `session_open_t0` and `backfill_run_id` untouched.
+- Gates: G0.1–G0.3, G1, G2, G3, G5, G6 pass; G4 and G7 are notes with a wall-geometry explanation. No halts.
+- 310 `na_regime` dates now have an outcome (their `session_*_t0`, `range_over_im`, `close_move_over_im` are filled; containment where two walls exist). First corpus description in the new open question `containment-outcome-first-read`.
+
+## Decisions
+
+- **Computed nothing at same-day insert time.** `cr_b` runs at 13:40 UTC with a partial session; containment there would stamp a half-day as final. Insert fills only closed sessions; the sweep fills the rest next morning. This is what "the nightly cron fills these automatically" means in practice.
+- **Did not overwrite `backfill_run_id`.** The column is single-valued and already carries CR-G / CR-I provenance; this run is recorded in `bt_backfill_runs` only.
+- **Kept the locked wall rule** (nearest wall on each side of the *open*, any sign) even though it leaves 509 rows NULL and does not express 2026-05-06; the alternative (walls around the pre-open spot, or a wider wall source) is the mining pass's question, not a schema change.
+- **Migration file generated from the live view's column order** so the `CREATE OR REPLACE VIEW` appends exactly and cannot reorder existing columns.
+
+## Open questions
+
+- **Wall selection for containment** (now with numbers): the `walls` array averages ~1.4 walls per date; only 286 / 795 sessions have a wall on each side of the open. Candidates: walls around the pre-open `table_spot` instead of the open (would give 2026-05-06 a ceiling? — no: its only wall is still one-sided); a second wall source (`peaks_by_bucket`, or the `landscape` profile's local maxima); or a synthetic far wall at open ± k·IM. Each is derivable at analysis time from the stored JSON; no schema change.
+- **Open-gaps-through-wall days** (2026-05-06 pattern): the pre-open magnet is below the open, so "above" has no wall. Worth a flag column later if the mining pass needs it; for now `wall_above_price IS NULL AND wall_below_price IS NOT NULL` identifies them.
+- **Cron redeploy** (decision 6): `backfill_outcomes` and the 11:05 UTC sweep must be redeployed from chat for the wiring to take effect; until then re-run `cr_aq_backfill_containment.py` to fill new dates.
+- **Half-day sessions**: `range_over_im` on early-close days uses a shorter session; not flagged in the data. Cross-ref the holiday open question.
