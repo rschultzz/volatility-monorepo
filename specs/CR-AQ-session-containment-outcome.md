@@ -215,3 +215,50 @@ non-null new-column rows before backfill: 0 (expect 0)
 | Gate | Expected | Actual | Result |
 |---|---|---|---|
 | G2 migration applied; columns present; 0 non-null before backfill | yes | 11 columns added (46 total), 11/11 column grants, view at 46 columns, 0 non-null | PASS |
+
+## Step 3 — backfill
+
+Dry run: 804 targets (computed 463 / na_regime 310 / na_data 13 / pending_history 18), 2023-05-01 → 2026-09-04, all sessions closed. Real run: `PYTHONUNBUFFERED=1 apps/web/.venv/bin/python -u scripts/cr_aq_backfill_containment.py` (log untracked under `scripts/logs/cr_aq_*.log`). Run `e2c402a9-706f-4fdd-a07a-ed94da26c58e`, `completed`, 82 s. 856 RTH sessions loaded through the runner callers' `_fetch_daily_bars`; walls for 804 dates.
+
+Smoke dict: rows 804 · `session_close_t0` non-null **795** · `contained_close` non-null **286** · `range_over_im` non-null 793 · ohlc_violations **0** · n_updated 795 · n_no_bars 9 · n_no_wall_side 509 · n_failed 0 · `session_open_t0` checksum `29a56df6abab8f0691d8e05232e22b40` · breach_side above 43 / below 37 / both 2.
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G3 rows updated | ≥ 795 (STOP < 780) | **795** — the 9 unfilled are the quarterly roll Fridays with no RTH bars (2023-09-15, 2023-12-15, 2024-03-15, 2024-06-21, 2024-09-20, 2024-12-20, 2025-03-21, 2025-09-19, 2025-12-19; same set that is NULL in `session_open_t0`) | PASS |
+| G4 `contained_close` non-null | ≥ 700 | **286** | note — see below |
+| G5 `session_open_t0` unchanged | identical checksum | `29a56df6…` before and after | PASS |
+| G6 low ≤ open ≤ high and low ≤ close ≤ high | 0 violations | **0** | PASS |
+| G7 2026-05-06: `contained_close = false`, `breach_side = 'above'` | yes | **NULL / NULL** — see below | note |
+
+**G4.** Containment needs a wall strictly on each side of the session open. Only 360 of 811 landscape dates carry ≥ 2 walls at all, and of the 795 filled rows only 286 have one wall below and one above the open; 509 have a single-sided or empty wall set. The ≥ 700 expectation assumed the `walls` array is dense; it is not (mean ~1.4 walls per date). The mining pass can widen the wall source without a schema change (`landscape` profile peaks or `peaks_by_bucket`), per the note's own open question.
+
+**G7.** 2026-05-06 has one wall, 7306.2, the pre-open magnet above the pre-open spot 7271.2 — but the RTH session **opened at 7331.0**, above it, so the wall is `wall_below_price` and there is no wall above → containment NULL by the locked definition. The trade's short call at ~7356 (wall + 50) was breached (close 7385.75, high 7395.75): the column cannot express that day because the band has no ceiling. This is the wall-selection question, not a computation bug: "nearest wall on each side of the *open*" and "nearest wall on each side of the *pre-open spot*" differ whenever the open gaps through a wall. Recorded for the mining pass; the column as defined is trustworthy for the 286 two-sided rows.
+
+### Corpus description (allowed: not a P&L read)
+
+`contained_close` rate over the 286 two-sided rows: **0.839** (240 / 286); `contained_range` 0.713 (204 / 286).
+
+| regime | n (two-sided) | contained_close | rate | contained_range |
+|---|---|---|---|---|
+| magnet-above | 166 | 144 | **0.868** | 130 |
+| amplification | 87 | 69 | **0.793** | 54 |
+| untethered | 23 | 20 | 0.870 | 16 |
+| bounded | 7 | 5 | 0.714 | 3 |
+| magnetic-pin | 3 | 2 | 0.667 | 1 |
+
+### 10-row sample
+
+| date | regime | status | open | high | low | close | wall_below | wall_above | cont_close | cont_range | pos_in_band | range/IM | close_move/IM | breach |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2023-06-13 | magnetic-pin | computed | 4357.50 | 4377.75 | 4350.75 | 4369.50 | 4327.90 | — | — | — | — | 0.563 | 0.250 | — |
+| 2023-11-10 | magnet-above | computed | 4383.75 | 4435.50 | 4367.75 | 4432.25 | 4206.93 | 4508.93 | true | true | 0.746 | 1.754 | 1.255 | — |
+| 2024-09-17 | magnet-above | computed | 5660.75 | 5675.50 | 5617.00 | 5640.00 | — | 5708.23 | — | — | — | 1.366 | −0.485 | — |
+| 2025-12-01 | magnet-above | computed | 6813.50 | 6855.75 | 6812.75 | 6829.25 | — | 6901.83 | — | — | — | 1.510 | 0.553 | — |
+| 2026-04-28 | magnetic-pin | computed | 7171.50 | 7183.00 | 7146.25 | 7169.25 | — | 7201.95 | — | — | — | 0.356 | −0.022 | — |
+| **2026-05-06** | magnet-above | computed | 7331.00 | 7395.75 | 7327.25 | 7385.75 | 7306.20 | — | — | — | — | 1.690 | 1.351 | — |
+| **2026-06-02** | magnetic-pin | pending | 7599.50 | 7632.00 | 7595.50 | 7623.75 | — | 7629.68 | — | — | — | 0.725 | 0.482 | — |
+| **2026-07-14** | amplification | na_regime | 7579.25 | 7603.75 | 7556.50 | 7590.00 | 7451.83 | 7652.83 | true | true | 0.687 | 0.743 | 0.169 | — |
+| **2026-08-13** | magnet-above | pending | 7793.25 | 7838.50 | 7785.50 | 7823.00 | 7526.00 | 7805.00 | **false** | false | 1.065 | 1.143 | 0.641 | above |
+| 2026-09-03 | magnet-above | pending | 7704.25 | 7766.50 | 7700.00 | 7751.25 | 7602.18 | 7806.18 | true | true | 0.731 | 1.247 | 0.881 | — |
+
+2026-07-14 is the first `na_regime` (amplification) date with an outcome; 2026-08-13 shows a clean breach above (close 1.065 of the band).
