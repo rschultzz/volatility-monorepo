@@ -57,3 +57,21 @@ The Q-side (straddle-implied probability of containment) is **not stored** — i
 | G6 — sanity: `session_low_t0 ≤ session_open_t0 ≤ session_high_t0` and same for close | 0 violations | STOP |
 | G7 — 2026-05-06 (known condor loss, magnet-above): `contained_close = false`, `breach_side = 'above'` | yes | note — if not, check wall selection before trusting the column |
 
+
+## Step 0 findings (read-only, 2026-09-06)
+
+Interpreter: `apps/web/.venv/bin/python` for DB reads, the migration and the backfill; Rosetta repo venv for the suites.
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G0.1 migrations convention; owner URL | yes | **`infra/sql/<table>_<change>.sql`**: dated SQL with its own `BEGIN … COMMIT`, an `-- Applied: <date>` note, column-level `GRANT UPDATE (…) TO dash_backfill_writer` (column grants do not auto-extend — CR-I lesson), and a `CREATE OR REPLACE VIEW bt_daily_outcomes_active` refresh because views snapshot their column list (CR-G ran it as `scripts/cr_g_ddl_step0a.sql` + `cr_g_run_ddl_step0a.py` under `DATABASE_URL`). `DATABASE_URL` connects as `rschultz`, which is `pg_tables.tableowner` for `bt_daily_outcomes` → DDL allowed | PASS |
+| G0.2 landscape under `trade_date` D is the pre-open landscape for D | pre-open | **confirmed**: `apps/cron/job_orats_eod.py` computes from `api_trade_date` = previous business day with data and stores under `store_trade_date = next_business_day(api_trade_date)` (l.142–150); the classifier reads `_LANDSCAPE_ROW_SQL` with `trade_date = D` (`day_features.py` l.276–281, used by `compute_and_upsert_daily_features` l.437) | PASS |
+| G0.3 session logic reused from the runner | yes | **`packages/shared/outcomes_runner.py::compute_outcome_for_date`** takes `daily_bars` (RTH daily OHLC, index = session date) and sets `session_open_t0 = daily_bars.loc[trade_date, "open"]`. The same frame carries high / low / close for `trade_date`, so the containment function reads `daily_bars.loc[trade_date]` — one source. The frame is built by `_fetch_daily_bars` in `scripts/cr_b_backfill_outcomes.py` (duplicated in `cr_aa_sweep_pending_outcomes.py`) from `_RTH_BARS_SQL`: 1-minute `ironbeam_es_1m_bars` aggregated per session with RTH bounded in UTC (bounds recorded below) | PASS |
+
+`orats_gex_landscape` (SPX, ≤ 2026-09-04): 811 dates; **807 with ≥ 1 wall, 360 with ≥ 2 walls.** A containment value needs a wall on each side of the open, so the upper bound on `contained_*` non-null is ~360 — G4's "≥ 700" cannot be met by the locked wall source (`walls`, any sign); recorded as a note gate. 2026-05-06 (G7) has a single wall (7306.2, above spot 7271.2): by the locked definition `wall_below_price` is NULL and `contained_close` is NULL, not false — G7 will read as a note with that explanation.
+
+Canonical outcome rows: 804 active; `session_open_t0` non-null on 795 (the 9 NULLs: 6 roll Fridays with no RTH bars + 3 others). Existing columns end at `session_open_t0` (35 columns); none of the CR-AQ columns exist yet.
+
+### Design consequence found in Step 0 — when the cron can fill these
+
+The nightly `backfill_outcomes` cron (`scripts/cr_b_backfill_outcomes.py`) runs at 13:40 UTC on D and inserts D's outcome row with `session_open_t0` from bars that are still accumulating; D's high / low / close are not final until 20:00 UTC. Computing containment at that insert would stamp a partial session as final. Therefore: `compute_session_containment` is called (a) by the CR-AQ backfill (null-fill over completed sessions), (b) by `cr_b` at insert **only when `trade_date` is before the run date** (catch-up dates), and (c) as a null-fill pass in the 11:05 UTC sweep (`cr_aa_sweep_pending_outcomes.py`) for rows whose `session_close_t0` is still NULL and whose session has closed — that is the path that makes new dates fill automatically after the redeploy. Both scripts already build the same `daily_bars` frame.
