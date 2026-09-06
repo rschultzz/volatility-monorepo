@@ -99,3 +99,25 @@ Capture the snapped legs for the 21 dates (entry-day RTH window; the ES touch wi
 - Branch `feat/CR-AP-snapped-reference-rerun`: spec freeze, Step 0, the Counter hotfix, this halt. Pushed.
 - `bt_backfill_runs`: `d774351b` aborted (NameError), `bb39a829` running (killed). No CR-AP results rows. CR-AN remains the latest `cr_id` in `bt_edge_backtest_results` and remains non-citable per CR-AO's G0.4 until CR-AP completes.
 - The Counter hotfix is needed on `main` regardless of CR-AP: without it every future Step 4 run aborts in Phase 1.
+
+## Spec amendment (resume, 2026-09-06) — Step 1a and corrected gates
+
+Authority: resume instruction 2026-09-06 after the G1 halt. Amended before any code.
+
+### Step 1a — snapped-leg capture (new, precedes Step 1)
+
+For the 21 (structure, date) trades in `## Halt` (14 distinct dates; 9 debit, 12 credit), fetch into `orats_options_minute` for both **snapped** legs (via `snap_vertical_legs`, the same call the harness makes): the entry-day RTH window (06:30–13:00 PT), the settlement window at expiry (12:50–13:00 PT), and — for the 9 debit dates — the touch-day window the harness reads for exit-on-touch: `get_touch_pos_val` queries `[touch_datetime_pt, touch_datetime_pt + 90 min]` where `detect_touch` gives the RTH touch minute (`rth_touch`) or the next 06:30 PT open (`gap_touch`); no window when there is no actionable touch. Script `scripts/cr_ap_capture_snapped_legs.py` (sibling of the CR-AM/CR-AO capture path: same fetcher, backfill role, `backfill_run` `cr_id='CR-AP-capture'`, logs dates / legs / 404s only, no P&L). Precondition for Step 1 (**G1b-pre**): every snapped leg for the 21 trades has entry-day rows in `orats_options_minute`, or is a listed ORATS 404.
+
+### Corrected gates
+
+| Gate | Expected | On miss |
+|---|---|---|
+| G1 (corrected) — selection 50/50/50; clean counts **after Step 1a** | debit 110 / credit 106; tolerance **−3 per structure** for ORATS 404s on listed 10-point strikes, each 404 listed by date / leg | beyond −3, or any shortfall not explained by a listed 404 → STOP |
+| G1b (new) — trades with an unlisted leg after snapping | **0** | STOP |
+| G2 — G5 | unchanged | unchanged |
+
+Rationale: G1's original "exact" assumed snapping only relabels legs that already had quotes; the honest legs on the 21 dates had never been fetched. A listed 10-point strike can itself 404 at ORATS on a given day (CR-AO's re-capture saw none, but CR-AH's original D-bucket did), hence the small tolerance with every miss named.
+
+### Run-record note
+
+Run `bb39a829` (the stopped second run) is stuck at `status = 'running'`: `backfill_run` only marks `aborted` on an exception inside the context manager, and the backfill role has no path to close a row from outside (no UPDATE from a different session is part of the protocol; the script is the only writer). Appended to [[bt-backfill-runs-audit-record-fidelity]] as a third fidelity gap (stuck-running on external kill), alongside the dry-run and `rows_inserted` issues from CR-AJ.
