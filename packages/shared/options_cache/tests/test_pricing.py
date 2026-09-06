@@ -10,7 +10,7 @@ Run with:
 from __future__ import annotations
 
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 from packages.shared.options_cache import pricing
@@ -686,3 +686,58 @@ class TestPriceProposalLegsSnapping(unittest.TestCase):
         self.assertEqual([l["spx_strike"] for l in res["legs"]], [None, None])
         self.assertIsNone(res["net_debit"])
         self.assertTrue(any("no listed strikes" in w for w in res["warnings"]))
+
+
+class TestPriceProposalLegsQuoteSanity(_ChainStub, unittest.TestCase):
+    """CR-AO decision 4: CR-AN's minute rule in the live leg builder."""
+
+    _LEGS = [
+        {"flag": "c", "strike": 5100.0, "expiration": date(2026, 5, 19), "qty": 1, "side": "short"},
+        {"flag": "c", "strike": 5110.0, "expiration": date(2026, 5, 19), "qty": 1, "side": "long"},
+    ]
+    _EP = datetime(2026, 5, 19, 7, 0)
+
+    def _run(self, bars_by_opra):
+        def get_bars(opra, a, b):
+            return [x for x in bars_by_opra.get(opra, []) if a <= x.snapshot_pt <= b]
+        with patch("packages.shared.options_cache.pricing.fetch_option_bars", return_value=_summary()), \
+             patch("packages.shared.options_cache.pricing.repo.get_bars_for_contract", side_effect=get_bars):
+            return pricing.price_proposal_legs(self._LEGS, trade_date=date(2026, 5, 19), entry_pt=self._EP, r=0.0, q=0.0)
+
+    def test_valid_quotes_pass_through(self):
+        so, lo = "SPX260519C05100000", "SPX260519C05110000"
+        res = self._run({so: [_bar(so, self._EP, 5.0, 5.2)], lo: [_bar(lo, self._EP, 2.0, 2.2)]})
+        self.assertAlmostEqual(res["net_debit"], -3.0)          # short 5.1 − long 2.1 → credit
+        self.assertFalse(res["stale_quote"]); self.assertTrue(res["spread_valid"])
+        self.assertTrue(all(l["quote_valid"] for l in res["legs"]))
+
+    def test_crossed_quote_uses_last_valid_and_flags_stale(self):
+        so, lo = "SPX260519C05100000", "SPX260519C05110000"
+        earlier = self._EP - timedelta(minutes=3)
+        res = self._run({so: [_bar(so, earlier, 5.0, 5.2), _bar(so, self._EP, 9.0, 4.0)],   # crossed at entry
+                         lo: [_bar(lo, self._EP, 2.0, 2.2)]})
+        short = res["legs"][0]
+        self.assertTrue(short["stale_quote"]); self.assertEqual(short["quote_minute"], "06:57")
+        self.assertAlmostEqual(short["mid"], 5.1)
+        self.assertTrue(res["stale_quote"])
+        self.assertAlmostEqual(res["net_debit"], -3.0)
+
+    def test_crossed_quote_with_no_valid_history_suppresses_price(self):
+        so, lo = "SPX260519C05100000", "SPX260519C05110000"
+        res = self._run({so: [_bar(so, self._EP, 9.0, 4.0)], lo: [_bar(lo, self._EP, 2.0, 2.2)]})
+        self.assertIsNone(res["legs"][0]["mid"]); self.assertFalse(res["legs"][0]["quote_valid"])
+        self.assertIsNone(res["net_debit"])
+        self.assertTrue(any("no valid quote" in w for w in res["warnings"]))
+
+    def test_out_of_range_spread_is_suppressed(self):
+        so, lo = "SPX260519C05100000", "SPX260519C05110000"
+        # both legs individually valid, but the credit spread prices at −42 on a 10-wide
+        res = self._run({so: [_bar(so, self._EP, 45.0, 45.2)], lo: [_bar(lo, self._EP, 3.0, 3.2)]})
+        self.assertIsNone(res["net_debit"]); self.assertFalse(res["spread_valid"])
+        self.assertTrue(any("outside [0, 10]" in w for w in res["warnings"]))
+
+    def test_condor_leg_quote_marks_invalid(self):
+        q = pricing._bar_to_quote(_bar("SPX260519P05000000", self._EP, 3.0, 2.5))
+        self.assertFalse(q["valid"]); self.assertIsNone(q["mid"])
+        q2 = pricing._bar_to_quote(_bar("SPX260519P05000000", self._EP, 2.5, 3.0))
+        self.assertTrue(q2["valid"]); self.assertAlmostEqual(q2["mid"], 2.75)

@@ -642,6 +642,9 @@ def register_proposals_routes(server) -> None:
                     "strike_spx":    spx_strike_i,
                     "strike_spx_raw": rleg.get("spx_strike_raw"),   # CR-AO: 5-point rounding before snapping
                     "listed":        rleg.get("listed", True),        # CR-AO: False → no listed strike for this expiry
+                    "quote_valid":   rleg.get("quote_valid"),          # CR-AO: CR-AN leg rule at the entry minute
+                    "stale_quote":   rleg.get("stale_quote", False),   # CR-AO: mid is the last valid quote, not the entry minute
+                    "quote_minute":  rleg.get("quote_minute"),
                     "opra":          rleg.get("opra"),
                     "expiration":    raw["expiration"].isoformat(),
                     "flag":          raw["flag"],

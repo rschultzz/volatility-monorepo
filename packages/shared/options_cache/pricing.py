@@ -20,7 +20,13 @@ from .http_client import OratsError, OratsPermanentError
 from .opra import format_opra
 from . import repository as repo
 from .strikes import StrikeNotListed, snap_to_candidates, listed_strikes
+from packages.shared.backtest.quote_validity import leg_quote_is_valid, spread_value_is_valid
 from packages.shared.forward_math import compute_spx_strike
+from packages.shared.strategy_templates import Leg
+
+# CR-AO decision 4: when the entry-minute quote is invalid, look back this
+# far in the cache for the last valid quote (no extra fetch) and flag it stale.
+_STALE_LOOKBACK_MIN = 30
 
 # SPX expirations occur on Mon (0), Wed (2), Fri (4)
 _SPX_EXPIRY_WEEKDAYS = frozenset({0, 2, 4})
@@ -71,13 +77,16 @@ def _resolve_eval_minute(trade_date: date, eval_pt: str, now_pt: Optional[dateti
 
 
 def _bar_to_quote(bar) -> dict:
-    """Project an OptionMinuteBar into the {bid, ask, mid} response shape."""
+    """Project an OptionMinuteBar into the {bid, ask, mid, valid} response shape.
+
+    CR-AO decision 4 (CR-AN's leg rule): a crossed, negative or one-sided
+    quote yields mid=None and valid=False so no downstream sum uses it.
+    """
     bid = bar.bid_price
     ask = bar.ask_price
-    mid = None
-    if bid is not None and ask is not None:
-        mid = round((float(bid) + float(ask)) / 2.0, 4)
-    return {"bid": bid, "ask": ask, "mid": mid}
+    valid = leg_quote_is_valid(bid, ask)
+    mid = round((float(bid) + float(ask)) / 2.0, 4) if valid else None
+    return {"bid": bid, "ask": ask, "mid": mid, "valid": valid}
 
 
 def _net_credit(legs: dict) -> Optional[float]:
@@ -343,9 +352,36 @@ def price_proposal_legs(
         bar = bars[0]
         bid = bar.bid_price
         ask = bar.ask_price
-        mid = round((float(bid) + float(ask)) / 2.0, 4) if (bid is not None and ask is not None) else None
+        stale_quote = False
+        quote_minute = entry_pt
+        if not leg_quote_is_valid(bid, ask):
+            # CR-AO decision 4: never show an invalid quote; use the last valid
+            # one in the cache (no extra fetch) and flag it stale.
+            prev = repo.get_bars_for_contract(meta["opra"], entry_pt - timedelta(minutes=_STALE_LOOKBACK_MIN), entry_pt)
+            valid_prev = [b for b in (prev or []) if b.snapshot_pt < entry_pt and leg_quote_is_valid(b.bid_price, b.ask_price)]
+            if valid_prev:
+                bar = max(valid_prev, key=lambda b: b.snapshot_pt)
+                bid, ask = bar.bid_price, bar.ask_price
+                stale_quote = True
+                quote_minute = bar.snapshot_pt
+                warnings_out.append(
+                    f"invalid quote for {meta['opra']} at {entry_pt.strftime('%H:%M')} PT "
+                    f"(bid={bid!r} ask={ask!r}); using last valid at {quote_minute.strftime('%H:%M')}"
+                )
+            else:
+                warnings_out.append(
+                    f"invalid quote for {meta['opra']} at {entry_pt.strftime('%H:%M')} PT "
+                    f"(bid={bid!r} ask={ask!r}); no valid quote in the last {_STALE_LOOKBACK_MIN} min"
+                )
+                priced_legs.append({**meta, "bid": bid, "ask": ask, "mid": None, "delta": bar.delta,
+                                    "quote_valid": False, "stale_quote": False, "quote_minute": None})
+                net_debit = None
+                continue
+        mid = round((float(bid) + float(ask)) / 2.0, 4)
 
-        priced_legs.append({**meta, "bid": bid, "ask": ask, "mid": mid, "delta": bar.delta})
+        priced_legs.append({**meta, "bid": bid, "ask": ask, "mid": mid, "delta": bar.delta,
+                            "quote_valid": True, "stale_quote": stale_quote,
+                            "quote_minute": quote_minute.strftime("%H:%M")})
 
         if net_debit is not None and mid is not None:
             sign = 1.0 if meta["side"] == "long" else -1.0
@@ -353,14 +389,31 @@ def price_proposal_legs(
         else:
             net_debit = None
 
+    spread_valid: Optional[bool] = None
     if net_debit is not None:
         net_debit = round(net_debit, 4)
+        # CR-AO decision 4 (CR-AN range rule): a two-leg vertical's price must
+        # lie in [0, width_actual] in the structure's direction; otherwise the
+        # card must not show it.
+        if width_actual is not None and len(priced_legs) == 2:
+            leg_objs = [
+                Leg(side=l["side"], type=("call" if l["flag"].lower() == "c" else "put"), strike=float(l["spx_strike"]))
+                for l in priced_legs
+            ]
+            spread_valid = spread_value_is_valid(net_debit, width_actual, leg_objs)
+            if not spread_valid:
+                warnings_out.append(
+                    f"spread price {net_debit:+.4f} outside [0, {width_actual:g}] for this structure; suppressed"
+                )
+                net_debit = None
 
     return {
         "legs":      priced_legs,
         "net_debit": net_debit,
         "width_actual":  width_actual,
         "width_nominal": width_nominal,
+        "stale_quote": any(l.get("stale_quote") for l in priced_legs),
+        "spread_valid": spread_valid,
         "warnings":  warnings_out,
     }
 
@@ -506,7 +559,7 @@ def build_real_strike_band(
         if not bars:
             continue
         bar = bars[0]
-        if bar.bid_price is None or bar.ask_price is None:
+        if not leg_quote_is_valid(bar.bid_price, bar.ask_price):   # CR-AO decision 4
             continue
         mid = (float(bar.bid_price) + float(bar.ask_price)) / 2.0
         if mid > 0:
