@@ -11,6 +11,8 @@ compute_outcome_for_date(trade_date, regime, feature_vector, landscape, daily_ba
 
 derive_dominant_bucket(feature_vector) -> str | None
 direction_sanity(regime, drift_target, table_spot, trade_date) -> bool
+compute_session_containment(trade_date, walls, daily_bars, implied_move_1d) -> dict   (CR-AQ)
+nearest_walls(walls, ref_price) -> (wall_below, wall_above)                            (CR-AQ)
 """
 from __future__ import annotations
 
@@ -142,3 +144,87 @@ def compute_outcome_for_date(
         )
 
     return outcome, session_open_t0
+
+
+# ── CR-AQ: session containment outcome (regime-agnostic) ─────────────────────
+
+CONTAINMENT_COLUMNS = (
+    "session_high_t0", "session_low_t0", "session_close_t0",
+    "wall_above_price", "wall_below_price",
+    "contained_close", "contained_range", "close_pos_in_band",
+    "range_over_im", "close_move_over_im", "breach_side",
+)
+
+
+def nearest_walls(walls: list, ref_price: float) -> tuple[Optional[float], Optional[float]]:
+    """Nearest landscape wall strictly below and strictly above ref_price, any sign.
+
+    walls: orats_gex_landscape.walls entries ({"price", "gex", "sign", ...}).
+    Returns (wall_below, wall_above); either is None when no wall lies on that side.
+    """
+    below: Optional[float] = None
+    above: Optional[float] = None
+    for w in walls or []:
+        try:
+            px = float(w["price"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if px < ref_price and (below is None or px > below):
+            below = px
+        elif px > ref_price and (above is None or px < above):
+            above = px
+    return below, above
+
+
+def compute_session_containment(
+    trade_date: dt.date,
+    walls: list,
+    daily_bars: pd.DataFrame,
+    implied_move_1d: Optional[float],
+) -> dict:
+    """CR-AQ outcome definition. One dict with the CONTAINMENT_COLUMNS keys.
+
+    Session OHLC for trade_date comes from the same daily_bars frame that
+    compute_outcome_for_date reads session_open_t0 from (one session source;
+    RTH bounds live in the callers' _RTH_BARS_SQL). Walls are the trade-date
+    landscape (pre-open for D). All keys are None when trade_date has no bar
+    row; the wall-dependent keys are None when either side has no wall.
+
+    breach_side is set only when contained_range is False:
+    'above' / 'below' / 'both'.
+    """
+    out: dict = {k: None for k in CONTAINMENT_COLUMNS}
+    if trade_date not in daily_bars.index:
+        return out
+    row = daily_bars.loc[trade_date]
+    try:
+        o, h, l, c = (float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]))
+    except (KeyError, TypeError, ValueError):
+        return out
+    if any(pd.isna(v) for v in (o, h, l, c)):
+        return out
+    out["session_high_t0"] = h
+    out["session_low_t0"] = l
+    out["session_close_t0"] = c
+
+    below, above = nearest_walls(walls, o)
+    out["wall_below_price"] = below
+    out["wall_above_price"] = above
+    if below is not None and above is not None:
+        out["contained_close"] = bool(below < c < above)
+        out["contained_range"] = bool(below < l and h < above)
+        out["close_pos_in_band"] = (c - below) / (above - below)
+        if not out["contained_range"]:
+            hit_above = h >= above
+            hit_below = l <= below
+            out["breach_side"] = "both" if (hit_above and hit_below) else ("above" if hit_above else "below")
+
+    im: Optional[float]
+    try:
+        im = float(implied_move_1d) if implied_move_1d is not None else None
+    except (TypeError, ValueError):
+        im = None
+    if im is not None and im > 0:
+        out["range_over_im"] = (h - l) / im
+        out["close_move_over_im"] = (c - o) / im
+    return out

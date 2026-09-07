@@ -49,7 +49,11 @@ from packages.shared.backfill_safety import (
 )
 from packages.shared.buckets import bucket_sessions
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
-from packages.shared.outcomes_runner import compute_outcome_for_date
+from packages.shared.outcomes_runner import (
+    CONTAINMENT_COLUMNS,
+    compute_outcome_for_date,
+    compute_session_containment,
+)
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -194,6 +198,59 @@ def _fetch_landscape(conn, ticker: str, dates: list[dt.date]) -> dict[dt.date, d
             "table_spot": float(table_spot) if table_spot is not None else None,
         }
     return result
+
+
+_CONTAINMENT_TARGETS_SQL = """
+    SELECT o.trade_date, o.feature_version, f.feature_vector
+    FROM bt_daily_outcomes o
+    JOIN bt_daily_features f
+      ON f.ticker = o.ticker AND f.trade_date = o.trade_date
+     AND f.feature_version = o.feature_version AND f.active = TRUE
+    WHERE o.ticker = %s AND o.feature_version = %s AND o.active = TRUE
+      AND o.session_close_t0 IS NULL
+      AND o.trade_date >= %s AND o.trade_date <= %s
+    ORDER BY o.trade_date
+"""
+
+_UPDATE_CONTAINMENT_SQL = """
+    UPDATE bt_daily_outcomes
+    SET session_high_t0 = %s, session_low_t0 = %s, session_close_t0 = %s,
+        wall_above_price = %s, wall_below_price = %s,
+        contained_close = %s, contained_range = %s, close_pos_in_band = %s,
+        range_over_im = %s, close_move_over_im = %s, breach_side = %s
+    WHERE ticker = %s AND trade_date = %s AND feature_version = %s
+      AND session_close_t0 IS NULL
+"""
+
+
+def fill_session_containment(conn, ticker: str, feature_version: str,
+                             daily_bars: pd.DataFrame, landscape_by_date: dict,
+                             bar_from: dt.date, bar_to: dt.date) -> dict:
+    """CR-AQ null-fill: rows with session_close_t0 IS NULL whose session has closed.
+
+    Runs after the promotion loop on the same daily_bars / landscape the sweep
+    already loaded (bounded to [bar_from, bar_to]); this is what makes the
+    containment columns fill automatically for dates the 13:40 UTC insert saw
+    as a partial session. Rows whose trade_date has no bar row stay NULL and
+    are retried on the next sweep.
+    """
+    with conn.cursor() as cur:
+        cur.execute(_CONTAINMENT_TARGETS_SQL, (ticker, feature_version, bar_from, bar_to))
+        rows = cur.fetchall()
+    n_filled = n_no_bars = 0
+    for trade_date, fv_version, fv in rows:
+        if trade_date not in daily_bars.index:
+            n_no_bars += 1
+            continue
+        c = compute_session_containment(
+            trade_date, (landscape_by_date.get(trade_date) or {}).get("walls") or [], daily_bars,
+            (fv or {}).get("implied_move_1d"),
+        )
+        with conn.cursor() as cur:
+            cur.execute(_UPDATE_CONTAINMENT_SQL,
+                        tuple(c[k] for k in CONTAINMENT_COLUMNS) + (ticker, trade_date, fv_version))
+            n_filled += cur.rowcount
+    return {"containment_targets": len(rows), "containment_filled": n_filled, "containment_no_bars": n_no_bars}
 
 
 def _fetch_daily_bars(conn, bar_from: dt.date, bar_to: dt.date) -> pd.DataFrame:
@@ -422,7 +479,18 @@ def main() -> None:
                 print(f"  [{i}/{len(matured)}] "
                       f"promoted={n_promoted} skipped={n_skipped} failed={n_failed}")
 
+        # CR-AQ: fill session containment for closed sessions still NULL (bounded to the loaded bars)
+        try:
+            containment_stats = fill_session_containment(
+                conn, ticker, FEATURE_VERSION, daily_bars, landscape_by_date, bar_from, bar_to,
+            )
+            print(f"  containment null-fill: {containment_stats}")
+        except Exception as exc:   # never let the new pass break the promotion sweep
+            log.error("containment null-fill failed: %s", exc, exc_info=True)
+            containment_stats = {"containment_error": str(exc)}
+
         smoke = _run_smoke(conn, ticker, n_promoted)
+        smoke.update(containment_stats)   # CR-AQ null-fill counters
         smoke.update({
             "n_matured":     len(matured),
             "n_skipped":     n_skipped,

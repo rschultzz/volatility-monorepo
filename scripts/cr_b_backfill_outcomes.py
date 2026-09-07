@@ -46,7 +46,12 @@ from packages.shared.backfill_safety import (
 )
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
 from packages.shared.outcomes import pick_drift_target
-from packages.shared.outcomes_runner import compute_outcome_for_date, derive_dominant_bucket
+from packages.shared.outcomes_runner import (
+    CONTAINMENT_COLUMNS,
+    compute_outcome_for_date,
+    compute_session_containment,
+    derive_dominant_bucket,
+)
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -127,12 +132,17 @@ _INSERT_OUTCOME_SQL = """
         final_close_distance_from_target,
         actual_realized_em_pct,
         session_open_t0,
-        backfill_run_id
+        backfill_run_id,
+        session_high_t0, session_low_t0, session_close_t0,
+        wall_above_price, wall_below_price,
+        contained_close, contained_range, close_pos_in_band,
+        range_over_im, close_move_over_im, breach_side
     ) VALUES (
         %s, %s, %s,
         %s, %s, %s, %s, %s,
         %s, %s, %s, %s, %s, %s,
-        %s, %s
+        %s, %s,
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
     )
     ON CONFLICT (ticker, trade_date, feature_version) DO NOTHING
 """
@@ -189,6 +199,12 @@ def _fetch_landscape(conn, ticker: str, dates: list[dt.date]) -> dict[dt.date, d
             "table_spot": float(table_spot) if table_spot is not None else None,
         }
     return result
+
+
+def _today_pt() -> dt.date:
+    """Session date 'today' in Pacific time (the RTH session calendar)."""
+    from zoneinfo import ZoneInfo
+    return dt.datetime.now(ZoneInfo("America/Los_Angeles")).date()
 
 
 def _fetch_daily_bars(conn, bar_from: dt.date, bar_to: dt.date) -> pd.DataFrame:
@@ -357,6 +373,18 @@ def main() -> None:
                     daily_bars     = daily_bars,
                 )
 
+                # CR-AQ: session containment only for sessions that have closed.
+                # The nightly run inserts today's row at 13:40 UTC with a partial
+                # session in daily_bars; today's containment is filled later by
+                # the sweep's null-fill pass (cr_aa_sweep_pending_outcomes.py).
+                if trade_date < _today_pt():
+                    containment = compute_session_containment(
+                        trade_date, landscape.get("walls") or [], daily_bars,
+                        feature_vector.get("implied_move_1d"),
+                    )
+                else:
+                    containment = {k: None for k in CONTAINMENT_COLUMNS}
+
                 with conn.cursor() as cur:
                     cur.execute(_INSERT_OUTCOME_SQL, (
                         ticker,
@@ -375,6 +403,7 @@ def main() -> None:
                         outcome["actual_realized_em_pct"],
                         session_open_t0,
                         run_id,
+                        *[containment[k] for k in CONTAINMENT_COLUMNS],
                     ))
                     if cur.rowcount == 1:
                         n_inserted += 1
