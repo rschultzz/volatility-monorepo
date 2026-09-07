@@ -53,3 +53,53 @@ Read rule: report each with sign, magnitude, CI. "Supported" only if CI excludes
 | G4 — settlement sanity violations | 0 | STOP |
 | G5 — no date > 2026-06-05 in any log | yes | STOP and redact |
 
+## Step 0 findings (2026-09-06 ~21:00 PT)
+
+Interpreter: `apps/web/.venv/bin/python` for DB reads, the ORATS probes and the capture; Rosetta repo venv (`arch -x86_64 .venv/bin/python -m pytest`) for the suites. Branch cut from `origin/main` a076d49 (the CR-AQ merge).
+
+Universe (decision 1): **732 dates** ≤ 2026-06-05 (743 canonical rows minus 9 no-bar roll Fridays and 2 zero-IM dates). By `regime_kind_at_classification`: magnet-above 373, amplification 169, magnetic-pin 91, untethered 79, bounded 20. Existing 0DTE coverage in `orats_options_minute` for the 06:30–06:45 window on these dates: **3 dates** (the 837k "0DTE" rows in the cache are earlier CRs' 12:50–13:00 settlement windows), so every entry window is a fresh fetch.
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G0.1 capture path reusable with a date list + arbitrary contract list | yes | **yes** — `fetch_option_bars([opra], start_pt, end_pt)` (CR-AP's pattern), one contract per call so a 404 on one leg cannot abort the others; no new fetcher | PASS |
+| G0.2 one-date timing | recorded | **~46 s per date** (8 legs, 5.8 s per fetch, 256 bars = 8 contracts × 16 minutes × call+put rows): 47.6 / 46.6 / 48.7 / 43.7 / 45.0 s over 5 dates, run `80e2bc37-5fa5-446d-99f5-e6538aaa45c0` (`cr_id='CR-AS-step0'`, 40 legs, 0 404s, 1280 bars) | PASS |
+| G0.3 SPX close field named; ES–SPX basis measured | recorded | **`orats_monies_minute.spot_price`** at the last snapshot ≤ 13:00 PT (`stock_price` is the per-expiry discounted level — differs from spot by 1–3 pts; not used). Basis measured on **all 732** dates (table below), not 10 | PASS |
+| G0.4 ORATS serves 0DTE on a 2023 and a 2025 date | 200 | **200 / 200** — 2023-06-13 (magnetic-pin) and 2025-06-05 (magnet-above): all 8 legs each, 16 minutes each, `dte=1`, `expiry_tod='pm'` | PASS |
+
+### ES–SPX basis (`session_open_t0` / `session_close_t0` vs `orats_monies_minute.spot_price`), 732 dates
+
+| quantity | median | p01 | p05 | p95 | p99 | min | max |
+|---|---|---|---|---|---|---|---|
+| ES open − SPX spot @ 06:30 snapshot | +27.4 | −22.9 | −0.7 | +60.9 | +85.0 | −178.3 | +1134.5 |
+| ES open − SPX spot @ **06:33** snapshot | **+26.4** | −11.1 | −1.1 | +58.3 | +83.7 | −32.7 | +645.7 |
+| ES close − SPX spot @ last ≤ 13:00 | +25.4 | −7.5 | +1.6 | +56.0 | +67.7 | −43.7 | +100.9 |
+| \|basis@06:33 − basis@close\| | 5.6 | 0.05 | 0.6 | 25.0 | 39.7 | 0.0 | 603.9 |
+
+Median IM is 45 pts (p05 21, p95 111). On **547 / 732** dates the open basis exceeds IM/4: centring the strikes on the ES open would shift the box by ~0.6 IM on a median day — the ±0.5 IM condor would have its short call ~0.1 IM from the SPX open. The 06:30 snapshot is stale at the bell (p99 +85, max +1134); the 06:33 snapshot — the one CR-037 pins the implied move to — is clean except three dates. Outliers at 06:33: 2023-09-21 (+646), 2023-11-29 (+570), 2024-07-31 (+128) — bad monies spot; 2023-12-04 (−32.7) is a legitimate negative-basis day. Close outliers: 2026-04-07 (+100.9), 2026-05-19 (−43.7). Dates whose first ≥ 06:33 snapshot is later than 06:40: one (2025-11-26, 09:27). Bar `spot_price` in the captured 0DTE rows equals the monies 06:33 `spot_price` exactly on all three dates inspected.
+
+### Listing (decision 3) — the prior-close chain under-lists next-day expiries
+
+`orats_oi_gamma` at the prior close carries the 0DTE expiry on **732 / 732** dates, but the 5-point grid near spot is incomplete on some: 2025-05-13 → expiry 05-14 lacks 5835, 5845, 5855, 5865, 5885, 5895, 5905, 5910, 5915, 5920 within ±100 of spot (10 of 41), while the dry-run plan flagged 2025-05-02 (5735) and 2025-05-13 (5915) too. Strikes for a same-day expiry are added on the morning of expiry, after the EOD chain. Probe: 2025-05-14 fetched with the chain check bypassed — **all 8 legs served, 16 minutes each**, including 5835 / 5845 / 5930 / 5940 / 5960 / 5970 that the prior-close chain lacks. Over the first 10 bounded dates the chain rule would have discarded 2 boxes and one whole date for no reason.
+
+### Third Fridays
+
+26 universe dates are monthly (3rd-Friday) expiries, where the AM-settled SPX and the PM-settled SPXW share the date and ORATS keys both under root `SPX`. Probe 2025-05-16: the option endpoint returned **one contract per strike, `expiry_tod='pm'`**, 16 minutes each — the PM SPXW, which is the instrument decision 2 names. No ambiguity in the response; included.
+
+### Fees (decision 8)
+
+The brokerage export (Schwab transactions CSV, 2026-09-06) could not be read in this session — the sandbox classifier refused every read of the file, including a column-filtered one. Fee used: the note's stated convention, **$1.30 per contract per side** ($0.65 commission + exchange/OCC/regulatory fees) → per condor round trip 4 legs × 2 sides × $1.30 = **$10.40 = 0.104 SPX points** (`CONDOR_ROUND_TRIP_FEE_PTS`). If Schwab does not charge on expiring legs the true figure is $5.20 = 0.052 pts; gross is reported next to net so either reading is available. **Ryan to confirm against the CSV.**
+
+### Spec amendments (Step 0, before any implementation commit)
+
+| # | Was | Now | Why |
+|---|---|---|---|
+| 2 | `open` = `session_open_t0` (ES) | `open` = SPX `spot_price` at the first `orats_monies_minute` snapshot ≥ 06:33 PT (must be ≤ 06:40, else `no_spx_open_snapshot`); sanity **ES open − SPX open ∈ [−40, +100]**, else `bad_spx_open` (3 dates) | +26 pt median basis vs 45 pt median IM; strikes must be in SPX space |
+| 3 | `round5` per leg; absent from the chain for that date → `unlistable` | Listing truth is the ORATS response: a leg that 404s **or returns no bars** makes its box `unlistable`. The prior-close chain is recorded per box as `chain_missing` (information only) | `orats_oi_gamma` lacks strikes added on the expiry morning; ORATS served all of them |
+| 5 | SPX close within 30 pts of `session_close_t0` ± basis; Step 0 sets the tolerance | Settlement = `spot_price` at the last monies snapshot ≤ 13:00 PT. Sanity (G4): **\|basis@close − basis@06:33\| ≤ 50 pts and basis@close ∈ [−50, +110]** | p99 of the drift is 39.7; the only dates over 50 are the three `bad_spx_open` dates, which never enter |
+| 8 | fee from the CSV | $1.30/contract/side from the note; CSV unreadable here | see Fees |
+| — | 3rd Fridays unspecified | included (ORATS returns the PM contract) | probe |
+| — | files | `packages/shared/backtest/condor_0dte.py` (box / dedupe / credit / payoff / sampling, shared by both scripts + tests) and `scripts/run_cr_as_capture_watchdog.sh` added to files touched | one box definition for capture and analysis |
+
+### Sample plan (decision 6, from G0.2)
+
+46 s per date → 8 h ≈ **620 dates** of the 728 eligible (732 − 3 `bad_spx_open` − 1 `no_spx_open_snapshot`); the 5 Step 0 dates are cached. Pre-registered order (`sample_order`): all 20 `bounded`; then magnetic-pin / magnet-above / amplification / untethered round-robin over 40 stride-selected dates each (160 dates, ≈ 2.3 h in — G2 met there); then round-robin over the remaining 552 until the budget is spent. Expected achieved: bounded 20, ≥ 40 in each other regime, ~600 dates total; the cut, if any, lands in the remainder phase and leaves the four regimes within one date of each other.
