@@ -100,48 +100,6 @@ def snap_to_listed_strike(
     return snap_to_candidates(target, cands, toward=toward)
 
 
-@dataclass(frozen=True)
-class SnappedVertical:
-    anchor: float          # the snapped anchor leg (the leg placed at the target)
-    other: float           # the snapped second leg, strictly on the offset side of anchor
-    width_actual: float    # abs(other - anchor)
-    width_nominal: float   # abs(offset_pts) — the structure's intent
-    prior_close: Optional[date]
-
-
-def snap_vertical_legs(
-    target: float,
-    offset_pts: float,
-    expiry: date,
-    trade_date: date,
-    conn,
-    *,
-    ticker: str = "SPX",
-    toward: Optional[float] = None,
-) -> SnappedVertical:
-    """Decision 3: snap the anchor leg to the listed grid, then the second leg
-    to the listed strike nearest `anchor + offset_pts` that lies strictly on
-    that side of the anchor. width_actual is what was actually traded;
-    width_nominal keeps the 10-point intent. Raises StrikeNotListed when the
-    expiry is absent or no strike exists on the required side."""
-    pc, cands = listed_strikes(conn, expiry, trade_date, ticker)
-    if not cands:
-        raise StrikeNotListed(
-            f"expiry {expiry} not in the {ticker} chain at prior close {pc} (trade_date {trade_date})"
-        )
-    anchor = snap_to_candidates(target, cands, toward=toward)
-    side = [c for c in cands if (c > anchor if offset_pts > 0 else c < anchor)]
-    if not side:
-        raise StrikeNotListed(
-            f"no listed strike {'above' if offset_pts > 0 else 'below'} {anchor} for expiry {expiry} at {pc}"
-        )
-    other = snap_to_candidates(anchor + offset_pts, side, toward=anchor)
-    return SnappedVertical(
-        anchor=anchor, other=other, width_actual=abs(other - anchor),
-        width_nominal=abs(float(offset_pts)), prior_close=pc,
-    )
-
-
 # ── CR-AR: pair snapping with width cap (decisions 1–2) ──────────────────────
 
 @dataclass(frozen=True)

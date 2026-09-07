@@ -69,7 +69,7 @@ from packages.shared.gex_landscape import compute_implied_move
 from packages.shared.options_cache.fetcher import fetch_option_bars
 from packages.shared.options_cache.http_client import OratsPermanentError
 from packages.shared.options_cache.opra import format_opra
-from packages.shared.options_cache.strikes import StrikeNotListed, snap_vertical_legs
+from packages.shared.options_cache.strikes import StructureNotListed, snap_vertical_pair
 from packages.shared.outcomes import pick_drift_target
 from scripts.cr_ah_step4_analysis import DTE_TARGET, nth_business_day
 
@@ -164,9 +164,9 @@ def main(argv=None) -> None:
             if t is None:
                 continue
             try:
-                d_ = snap_vertical_legs(t, -10, expiry, trade_date, conn, toward=spot)   # debit: anchor + leg below
-                c_ = snap_vertical_legs(t, +10, expiry, trade_date, conn, toward=spot)   # credit: anchor + leg above
-            except StrikeNotListed as exc:
+                d_ = snap_vertical_pair(t, 10.0, "debit", expiry, trade_date, conn, toward=spot)    # debit: short at target + long below (CR-AR pair, cap 20)
+                c_ = snap_vertical_pair(t, 10.0, "credit", expiry, trade_date, conn, toward=spot)   # credit: short at target + long above
+            except StructureNotListed as exc:
                 unlistable = str(exc)
                 continue
             strikes.update({d_.other, d_.anchor, c_.other})

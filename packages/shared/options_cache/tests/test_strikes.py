@@ -16,7 +16,6 @@ from packages.shared.options_cache.strikes import (
     snap_spread_to_listed,
     snap_to_candidates,
     snap_to_listed_strike,
-    snap_vertical_legs,
     snap_vertical_pair,
 )
 
@@ -100,34 +99,6 @@ class TestSnapToListedStrike(unittest.TestCase):
         conn = _SQLAlchemyLikeConn(_PC, {(_PC, _EXP): _GRID_15D})
         self.assertEqual(snap_to_listed_strike(7655, _EXP, _TD, conn), 7650)
         self.assertTrue(getattr(conn, "_via_driver", False))
-
-
-class TestSnapVerticalLegs(unittest.TestCase):
-    def test_debit_legs_and_width_actual(self):
-        # debit: anchor at target, other leg 10 below → nearest listed below 7650 is 7620 → width 30
-        conn = _FakeConn(_PC, {(_PC, _EXP): _GRID_15D})
-        v = snap_vertical_legs(7655, -10, _EXP, _TD, conn, toward=7580)
-        self.assertEqual((v.anchor, v.other), (7650, 7620))
-        self.assertEqual(v.width_actual, 30.0)
-        self.assertEqual(v.width_nominal, 10.0)
-        self.assertEqual(v.prior_close, _PC)
-
-    def test_credit_legs_when_grid_is_complete(self):
-        full = list(range(7600, 7705, 5))
-        conn = _FakeConn(_PC, {(_PC, _EXP): full})
-        v = snap_vertical_legs(7655, +10, _EXP, _TD, conn)
-        self.assertEqual((v.anchor, v.other, v.width_actual), (7655, 7665, 10.0))
-
-    def test_other_leg_is_strictly_beyond_anchor(self):
-        # anchor 7650; +10 side candidates are 7700, 7750 → 7700 (never 7650 itself)
-        conn = _FakeConn(_PC, {(_PC, _EXP): _GRID_15D})
-        v = snap_vertical_legs(7650, +10, _EXP, _TD, conn)
-        self.assertEqual((v.anchor, v.other, v.width_actual), (7650, 7700, 50.0))
-
-    def test_no_strike_on_required_side_raises(self):
-        conn = _FakeConn(_PC, {(_PC, _EXP): [7650]})
-        with self.assertRaises(StrikeNotListed):
-            snap_vertical_legs(7650, -10, _EXP, _TD, conn)
 
 
 class TestSnapSpreadToListed(unittest.TestCase):

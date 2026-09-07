@@ -120,7 +120,7 @@ from packages.shared.day_features import (
 )
 from packages.shared.gex_landscape import compute_implied_move
 from packages.shared.options_cache.opra import format_opra
-from packages.shared.options_cache.strikes import StrikeNotListed, snap_vertical_legs
+from packages.shared.options_cache.strikes import StructureNotListed, snap_vertical_pair
 from packages.shared.probability import compute_structural_probability
 from packages.shared.strategy_templates import Leg
 
@@ -364,33 +364,38 @@ def select_clean_dates(all_entries: list[dict]) -> tuple[list[dict], list[dict]]
     return selected
 
 
-UNLISTABLE: list[dict] = []   # CR-AO: entries whose legs could not be snapped (StrikeNotListed)
+UNLISTABLE: list[dict] = []   # CR-AR decision 3: entries with status 'unlistable' (StructureNotListed), with reason
+WIDTH_NOMINAL = 10.0          # the structure's intent; width_actual ∈ [10, 20] after CR-AR's cap
 
 
 def filter_clean_for_structure(conn, entries: list[dict], structure: str) -> list[dict]:
     """Return entries where BOTH legs for this structure have entry-day bars.
 
-    Credit (structure='credit'): needs target OPRA + target+10 OPRA
-    Debit  (structure='debit') : needs target OPRA + target-10 OPRA
+    Credit (structure='credit'): short call at the target + long call above
+    Debit  (structure='debit') : short call at the target + long call below
 
-    CR-AO decisions 1–3: both legs are snapped to the strikes listed for the
-    expiry at the prior close (orats_oi_gamma) — anchor leg nearest the
-    target (ties toward spot), second leg nearest ±10 strictly on that side.
-    width_actual = |other − short|; width_nominal = 10. Entries whose expiry
-    is absent from the chain are collected in UNLISTABLE with the reason.
+    CR-AR decisions 1–3 (replacing CR-AO's per-leg snap): the vertical is
+    snapped as a *pair* from the strikes listed for the expiry at the prior
+    close (orats_oi_gamma) — the pair whose anchor (the short leg) is nearest
+    the target with width_actual ∈ [10, 20]; ties → width closest to 10, then
+    toward spot. Never wider than 20; narrower than 10 only when nothing at
+    ≥ 10 exists within the cap (recorded as width_narrower). Entries with no
+    listed pair get status 'unlistable' and are collected in UNLISTABLE with
+    the reason (excluded before the clean filter, counted in the smoke dict).
     """
-    offset = +10 if structure == "credit" else -10
     clean = []
 
     for e in entries:
         trade_date  = e["trade_date"]
         expiry_date  = nth_business_day(trade_date, DTE_TARGET)
         try:
-            snapped = snap_vertical_legs(
-                e["drift_target"], offset, expiry_date, trade_date, conn, toward=e.get("spot"),
+            snapped = snap_vertical_pair(
+                e["drift_target"], WIDTH_NOMINAL, structure, expiry_date, trade_date, conn,
+                toward=e.get("spot"),
             )
-        except StrikeNotListed as exc:
-            UNLISTABLE.append({"structure": structure, "trade_date": trade_date, "band": e["band"], "reason": str(exc)})
+        except StructureNotListed as exc:
+            UNLISTABLE.append({"structure": structure, "trade_date": trade_date, "band": e["band"],
+                               "status": "unlistable", "reason": str(exc)})
             continue
         short_strike = float(snapped.anchor)
         other_strike = float(snapped.other)
@@ -419,6 +424,7 @@ def filter_clean_for_structure(conn, entries: list[dict], structure: str) -> lis
             clean.append({**e, "expiry_date": expiry_date,
                           "short_strike": short_strike, "other_strike": other_strike,
                           "width_actual": snapped.width_actual, "width_nominal": snapped.width_nominal,
+                          "width_narrower": snapped.narrower_than_nominal,
                           "listed_prior_close": snapped.prior_close,
                           "short_opra": short_opra, "other_opra": other_opra})
 
@@ -1489,16 +1495,21 @@ def main(argv=None):
         print(f"\n  Credit by band/partition: {dict(band_part_counts(credit_clean))}")
         print(f"  Debit  by band/partition: {dict(band_part_counts(debit_clean))}")
 
-        # CR-AO decisions 1–3: listed-strike snapping report
-        print(f"  Unlistable (StrikeNotListed, excluded before the clean filter): {len(UNLISTABLE)}")
-        for u in UNLISTABLE:
+        # CR-AR decisions 1–3: pair-snapping report (width cap 2× nominal; unlistable by date)
+        print(f"  Unlistable (StructureNotListed, status='unlistable', excluded before the clean filter): {len(UNLISTABLE)}")
+        for u in sorted(UNLISTABLE, key=lambda u: (u["trade_date"], u["structure"])):
             print(f"    {u['structure']} {u['trade_date']} {u['band']}: {u['reason']}")
         snap_summary = {}
         for s_, clean_ in (("credit", credit_clean), ("debit", debit_clean)):
-            widths = Counter(float(e.get("width_actual", 10.0)) for e in clean_)
+            widths = Counter(float(e.get("width_actual", WIDTH_NOMINAL)) for e in clean_)
             snap_summary[s_] = {"n": len(clean_), "width_actual_dist": {str(k): v for k, v in sorted(widths.items())},
-                                "n_width_not_nominal": sum(1 for e in clean_ if float(e.get("width_actual", 10.0)) != float(e.get("width_nominal", 10.0)))}
-            print(f"  Snapped legs [{s_}]: {snap_summary[s_]}")
+                                "n_width_not_nominal": sum(1 for e in clean_ if float(e.get("width_actual", WIDTH_NOMINAL)) != float(e.get("width_nominal", WIDTH_NOMINAL))),
+                                "n_width_narrower": sum(1 for e in clean_ if e.get("width_narrower")),
+                                "width_actual_max": max((float(e.get("width_actual", WIDTH_NOMINAL)) for e in clean_), default=None),
+                                "n_unlistable": sum(1 for u in UNLISTABLE if u["structure"] == s_)}
+            print(f"  Snapped pairs [{s_}]: {snap_summary[s_]}")
+        _w_max = max((v["width_actual_max"] or 0.0 for v in snap_summary.values()), default=0.0)
+        print(f"  max(width_actual) across structures (G4, expect ≤ {2 * WIDTH_NOMINAL:g}): {_w_max:g}")
 
         # ── Phase 2: Collect per-date data ───────────────────────────────────
         print(f"\n{SEP2}")
@@ -1690,7 +1701,9 @@ def main(argv=None):
             "selection_by_band_partition": sel_counts,
             "quote_validity": obs_summary,
             "snapping": snap_summary,
-            "unlistable": [f"{u['structure']} {u['trade_date']} {u['band']}" for u in UNLISTABLE],
+            "width_actual_max": _w_max,
+            "n_unlistable": len(UNLISTABLE),
+            "unlistable": [f"{u['structure']} {u['trade_date']} {u['band']}: {u['reason']}" for u in UNLISTABLE],
             "decision6_excluded": [f"{s_} {d_} {b_}" for s_, d_, b_, _ in excluded],
             "post_filter_out_of_range": oor,
             "debit_labeled_train": sum(1 for td in debit_trades if td.partition == "train" and td.pattern_label),

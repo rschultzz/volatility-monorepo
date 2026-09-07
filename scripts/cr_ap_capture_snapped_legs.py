@@ -10,7 +10,7 @@ sample (CR-AP halt at G1).
 For each date:
   1. target  = CR-AH's drift_target for the date (payload path), spot = table_spot
   2. expiry  = nth_business_day(date, 15)
-  3. legs    = snap_vertical_legs(target, -10) for a debit date, (+10) for a
+  3. legs    = snap_vertical_pair(target, 10, 'debit') for a debit date, 'credit' for a
                credit date — exactly what the harness's leg builder does
   4. windows = entry-day RTH 06:30-13:00 PT for every snapped leg;
                settlement 12:50-13:00 PT at expiry;
@@ -70,7 +70,7 @@ from packages.shared.backfill_safety import (
 from packages.shared.options_cache.fetcher import fetch_option_bars
 from packages.shared.options_cache.http_client import OratsPermanentError
 from packages.shared.options_cache.opra import format_opra
-from packages.shared.options_cache.strikes import StrikeNotListed, snap_vertical_legs
+from packages.shared.options_cache.strikes import StructureNotListed, snap_vertical_pair
 from scripts.cr_ah_step4_analysis import DTE_TARGET, detect_touch, nth_business_day
 from scripts.cr_am_holdout_leg_capture import _payload_target
 
@@ -115,14 +115,14 @@ def main(argv=None) -> None:
         else:
             try:
                 if td in debit_dates:
-                    d_ = snap_vertical_legs(target, -10, expiry, td, conn, toward=spot)
+                    d_ = snap_vertical_pair(target, 10.0, "debit", expiry, td, conn, toward=spot)
                     plan["debit_pair"] = (d_.other, d_.anchor, d_.width_actual, d_.prior_close)
                     plan["strikes"].update({d_.other, d_.anchor})
                 if td in credit_dates:
-                    c_ = snap_vertical_legs(target, +10, expiry, td, conn, toward=spot)
+                    c_ = snap_vertical_pair(target, 10.0, "credit", expiry, td, conn, toward=spot)
                     plan["credit_pair"] = (c_.anchor, c_.other, c_.width_actual, c_.prior_close)
                     plan["strikes"].update({c_.anchor, c_.other})
-            except StrikeNotListed as exc:
+            except StructureNotListed as exc:
                 plan["unlistable"] = str(exc)
         if td in debit_dates and target is not None:
             res, touch_pt = detect_touch(conn, td, expiry, target)

@@ -149,6 +149,28 @@ function ExpiryLine({ pricedLegs }) {
   );
 }
 
+/** CR-AR decision 4: the structure could not be listed within the width cap
+ *  at this expiry — shown instead of the leg table, never a widened spread. */
+function NoListedStructure() {
+  return (
+    <div className="no-listed-structure" data-testid="no-listed-structure">
+      No listed structure at this expiry
+    </div>
+  );
+}
+
+/** CR-AR decision 4: a listed width other than the intent is shown prominently. */
+function WidthLine({ widthActual, widthNominal }) {
+  if (widthActual == null || widthNominal == null || widthActual === widthNominal) return null;
+  const atCap = widthActual >= 2 * widthNominal;
+  return (
+    <div className="width-line" data-testid="width-line" style={{ color: atCap ? '#f59e0b' : '#fbbf24' }}>
+      Width <strong>{widthActual}</strong> pts (intent {widthNominal})
+      {atCap ? ' — at the 2× cap' : widthActual < widthNominal ? ' — narrower: nothing at intent within the cap' : ''}
+    </div>
+  );
+}
+
 /** Render net debit or net credit from the pl-data response. */
 function NetCostLine({ netCost }) {
   if (netCost === undefined) return null;   // not yet loaded
@@ -593,6 +615,13 @@ export default function ProposalCard({
   // net_cost: undefined = not yet fetched, null = unavailable (leg missing mid)
   const netCost    = defaultData?.ok ? defaultData.net_cost   : undefined;
   const todaysEdge = defaultData?.ok ? defaultData.todays_edge : null;
+  // CR-AR decision 4: listed === false → "no listed structure at this expiry" instead of legs;
+  // width_actual ≠ width_nominal → shown prominently; at 2× the width goes into the card title.
+  const unlistable   = !!defaultData?.ok && defaultData.listed === false;
+  const widthActual  = defaultData?.ok ? (defaultData.width_actual ?? null) : null;
+  const widthNominal = defaultData?.ok ? (defaultData.width_nominal ?? null) : null;
+  const widthAtCap   = widthActual != null && widthNominal != null && widthActual >= 2 * widthNominal;
+  const titleLabel   = widthAtCap ? `${label} — ${widthActual}-wide` : label;
 
   function handleTimeframeChange(tf) {
     if (tf === timeframe) return;
@@ -612,17 +641,21 @@ export default function ProposalCard({
         <span className={`kind-badge kind-${template_kind}`}>
           {template_kind.replace('_', ' ')}
         </span>
-        {label}
+        {titleLabel}
       </div>
 
       {isNoTrade ? (
         <div className="no-trade-headline">NO TRADE</div>
+      ) : unlistable ? (
+        <NoListedStructure />
       ) : (
         // netCost passed so LegTable renders it as a tfoot total under the Mid column.
         // SourceLine and EdgeBlock removed: source info is in rationale/label;
         // B-L edge ratio is superseded by the per-horizon edge table below.
         <LegTable legs={legs} pricedLegs={pricedLegs} netCost={netCost} />
       )}
+
+      {!isNoTrade && !unlistable && <WidthLine widthActual={widthActual} widthNominal={widthNominal} />}
 
       {/* Expiry: real calendar date from payload (Step 9) + DTE/bucket context */}
       {pricedLegs
