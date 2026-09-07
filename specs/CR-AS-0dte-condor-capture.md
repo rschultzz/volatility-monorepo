@@ -103,3 +103,16 @@ The brokerage export (Schwab transactions CSV, 2026-09-06) could not be read in 
 ### Sample plan (decision 6, from G0.2)
 
 46 s per date → 8 h ≈ **620 dates** of the 728 eligible (732 − 3 `bad_spx_open` − 1 `no_spx_open_snapshot`); the 5 Step 0 dates are cached. Pre-registered order (`sample_order`): all 20 `bounded`; then magnetic-pin / magnet-above / amplification / untethered round-robin over 40 stride-selected dates each (160 dates, ≈ 2.3 h in — G2 met there); then round-robin over the remaining 552 until the budget is spent. Expected achieved: bounded 20, ≥ 40 in each other regime, ~600 dates total; the cut, if any, lands in the remainder phase and leaves the four regimes within one date of each other.
+
+## Step 1 — capture (2026-09-06 21:17 → 2026-09-07 05:18 PT, watchdog, `--max-hours 8`)
+
+Command: `MAX_HOURS=8 bash scripts/run_cr_as_capture_watchdog.sh` (one attempt, no restarts). Run **`2abf9ff7-d367-4454-b8ba-d21a53c9cc38`** (`cr_id='CR-AS-capture'`), `completed`, 28 810 s. Log `scripts/logs/cr_as_capture_watchdog.log`, checkpoint `scripts/logs/cr_as_capture_checkpoint.json` (both untracked). Step 0's 5 dates (run `80e2bc37`) were cache hits (40 legs).
+
+Budget exhausted at 05:18:01 before 2025-10-10, in the remainder phase: **658 dates checkpointed** (3 `bad_spx_open` skips, 655 fetched), 5128 legs planned, 5109 fetched, **19 × 404 (0.37 %)**, 0 exceptions, 160 756 bars written, median 44.8 s per date (max 112.7 s). 72 universe dates not reached (all in the remainder phase, so the regime groups stayed balanced). The 404s are all 5-mod-10 strikes on a handful of dates (2024-08-05 P 5085/5095, 2024-08-06 P 5065, 2025-05-09 C 5720, 2025-05-12 C 5845/5855/5885, 2026-04-09 C 6815/6845/6855, …): 13 boxes `unlistable` (pm0.5 5, pm1 8), decision 3 as amended.
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G1 capture: 0 exceptions other than 404; 404 rate < 10 % of legs | yes | **0 exceptions; 19 / 5128 = 0.37 %** | PASS |
+| G2 sample achieved: bounded 20, ≥ 40 in each other regime | yes | **bounded 19** (2026-04-09: the short call 6815 / 6845 and long call 6855 404 — both boxes unlistable, not a budget cut), **magnetic-pin 90, magnet-above 297, amplification 166, untethered 79** (651 dates with ≥ 1 captured box) | note (bounded 19 / 20) |
+
+Sample achieved by regime (dates with at least one fully captured box): bounded 19 / 20, magnetic-pin 90 / 91, magnet-above 297 / 373, amplification 166 / 169, untethered 79 / 79.
