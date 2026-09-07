@@ -116,3 +116,86 @@ Budget exhausted at 05:18:01 before 2025-10-10, in the remainder phase: **658 da
 | G2 sample achieved: bounded 20, ≥ 40 in each other regime | yes | **bounded 19** (2026-04-09: the short call 6815 / 6845 and long call 6855 404 — both boxes unlistable, not a budget cut), **magnetic-pin 90, magnet-above 297, amplification 166, untethered 79** (651 dates with ≥ 1 captured box) | note (bounded 19 / 20) |
 
 Sample achieved by regime (dates with at least one fully captured box): bounded 19 / 20, magnetic-pin 90 / 91, magnet-above 297 / 373, amplification 166 / 169, untethered 79 / 79.
+
+## Step 2 — priced read (2026-09-07 05:21 PT, read-only)
+
+Command: `apps/web/.venv/bin/python -u scripts/cr_as_condor_analysis.py --cr-id CR-AS-analysis --out scripts/logs/cr_as_analysis_final.md`. Run **`b5152407-5742-4760-bf3e-183c79a4a438`** (`cr_id='CR-AS-analysis'`), `completed`. (A code-path smoke run mid-capture is recorded as `0d6babc8…`, `cr_id='CR-AS-analysis-smoke'`, 11 boxes; not a read.) Nothing persisted except the run row and the report file.
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G3 boxes with `no_valid_entry` | < 15 % | **0 / 1297 = 0.0 %** — every attempted box had all four legs valid with credit ∈ (0, 10] at 06:33 (entry offset p95 = 0 min) | PASS |
+| G4 settlement sanity violations | 0 | **0** (656 dates; rule: \|basis@close − basis@06:33\| ≤ 50 and basis@close ∈ [−50, +110]) | PASS |
+| G5 no date > 2026-06-05 in any log | yes | max date in results **2026-06-03**; universe assertion and results assertion both hold; checkpoint max 2026-06-03 | PASS |
+
+### Tables (verbatim from the analysis report)
+
+#### Per regime × box (net P&L in IM units at settlement; mean [95 % bootstrap CI])
+
+| box | regime | n | credit (IM) | realized loss (IM) | gross P&L (IM) | net P&L (IM) | net / max loss | win % | breach below / above | put-wing loss (IM) | call-wing loss (IM) | entry offset p50/p95 (min) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| pm0.5 | pooled | 650 | 0.101 | 0.099 | +0.003 | +0.000 [-0.009, +0.009] | -0.025 | 59 | 136 / 189 | 0.042 | 0.057 | 0 / 0 |
+| pm0.5 | magnetic-pin | 90 | 0.137 | 0.108 | +0.029 | +0.026 [-0.005, +0.056] | +0.106 | 68 | 17 / 18 | 0.055 | 0.053 | 0 / 0 |
+| pm0.5 | magnet-above | 296 | 0.106 | 0.110 | -0.004 | -0.006 [-0.021, +0.007] | -0.059 | 57 | 62 / 99 | 0.044 | 0.066 | 0 / 0 |
+| pm0.5 | amplification | 166 | 0.081 | 0.088 | -0.007 | -0.009 [-0.023, +0.005] | -0.099 | 53 | 36 / 52 | 0.033 | 0.054 | 0 / 0 |
+| pm0.5 | untethered | 79 | 0.089 | 0.079 | +0.010 | +0.007 [-0.016, +0.030] | +0.053 | 61 | 20 / 15 | 0.047 | 0.032 | 0 / 0 |
+| pm0.5 | bounded | 19 | 0.094 | 0.059 | +0.035 | +0.033 [-0.015, +0.079] | +0.212 | 74 | 1 / 5 | 0.009 | 0.050 | 0 / 0 |
+| pm1 | pooled | 647 | 0.043 | 0.037 | +0.005 | +0.003 [-0.004, +0.010] | +0.006 | 83 | 50 / 63 | 0.015 | 0.022 | 0 / 0 |
+| pm1 | magnetic-pin | 89 | 0.064 | 0.061 | +0.004 | +0.000 [-0.028, +0.027] | -0.015 | 81 | 7 / 10 | 0.027 | 0.033 | 0 / 1 |
+| pm1 | magnet-above | 296 | 0.043 | 0.036 | +0.008 | +0.005 [-0.005, +0.015] | +0.022 | 83 | 20 / 31 | 0.012 | 0.024 | 0 / 0 |
+| pm1 | amplification | 165 | 0.033 | 0.035 | -0.002 | -0.004 [-0.016, +0.007] | -0.031 | 80 | 15 / 17 | 0.014 | 0.021 | 0 / 0 |
+| pm1 | untethered | 79 | 0.036 | 0.023 | +0.013 | +0.011 [-0.004, +0.024] | +0.040 | 87 | 8 / 3 | 0.019 | 0.003 | 0 / 0 |
+| pm1 | bounded | 18 | 0.042 | 0.034 | +0.007 | +0.005 [-0.041, +0.042] | +0.014 | 89 | 0 / 2 | 0.000 | 0.034 | 0 / 0 |
+
+#### P-side (ES, `bt_daily_outcomes`) vs priced (SPX quotes) on the same dates — ±0.5 IM box
+
+| regime | n | P-side breach cost beyond ±0.5 IM (uncapped, IM) | beyond ±1.0 IM | wing-capped ±0.5 (IM) | priced realized loss ±0.5 (IM) | priced credit ±0.5 (IM) |
+|---|---|---|---|---|---|---|
+| pooled | 650 | 0.206 | 0.066 | 0.088 | 0.099 | 0.101 |
+| magnetic-pin | 90 | 0.194 | 0.087 | 0.084 | 0.108 | 0.137 |
+| magnet-above | 296 | 0.212 | 0.066 | 0.099 | 0.110 | 0.106 |
+| amplification | 166 | 0.221 | 0.069 | 0.079 | 0.088 | 0.081 |
+| untethered | 79 | 0.200 | 0.049 | 0.082 | 0.079 | 0.089 |
+| bounded | 19 | 0.069 | 0.013 | 0.049 | 0.059 | 0.094 |
+
+#### Hypotheses (pre-registered; read rule: supported only if the CI excludes the threshold in the stated direction)
+
+| # | statement | estimate [95 % CI] | read |
+|---|---|---|---|
+| H1 | ±0.5 IM condor, pooled mean **net** P&L (IM) > 0 (n=650) | +0.000 [-0.009, +0.009] | directional (sign agrees) |
+| H1 (gross) | same, gross (n=650) | +0.003 [-0.006, +0.012] | directional (sign agrees) |
+| H2 | magnetic-pin − magnet-above mean net P&L (±0.5) ≥ 0.03 IM (n=90 / 296) | +0.032 [-0.001, +0.065] | directional (sign agrees) |
+| H3 | credit / realized breach cost ≥ 1.5, pooled ±0.5 (n=650) | +1.03 [+0.94, +1.13] | directional (sign disagrees) |
+| H4 magnet-above | put-wing loss − call-wing loss > 0 (±0.5, n=296) | -0.022 [-0.040, -0.004] | directional (sign disagrees) |
+| H4 untethered | put-wing loss − call-wing loss > 0 (±0.5, n=79) | +0.015 [-0.012, +0.043] | directional (sign agrees) |
+| H5 | ±1.0 minus ±0.5 mean net P&L per unit max loss < 0 (paired dates n=646) | +0.032 [-0.019, +0.083] | directional (sign disagrees) |
+| H5 (levels) | net / max loss: ±0.5 -0.026 [-0.087, +0.034] · ±1.0 +0.005 [-0.026, +0.036] |  |  |
+| H6 | rule (pin + bounded) − all days, mean net P&L per trade (±0.5) > 0 (n=109 / 650) | +0.027 [-0.001, +0.054] | directional (sign agrees) |
+| H6 opportunity cost | total net P&L (IM): rule +2.95 over 109 trades vs all-days +0.15 over 650 (17% of days); rule captures +1994% of the all-days total |  |  |
+| H6 secondary amplification | amplification − pooled mean net P&L (±0.5) < 0, i.e. individually worse (n=166) | -0.009 [-0.025, +0.007] | directional (sign agrees) |
+| H6 secondary magnet-above | magnet-above − pooled mean net P&L (±0.5) < 0, i.e. individually worse (n=296) | -0.007 [-0.023, +0.010] | directional (sign agrees) |
+
+#### 10 sample rows (±0.5 box)
+
+| date | regime | strikes | entry | credit (pts) | SPX close | put loss | call loss | net (pts) | net (IM) | breach |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2023-05-01 | magnet-above | 4145/4155/4175/4185 | 06:33 | 4.75 | 4167.35 | 0.00 | 0.00 | +4.65 | +0.218 | — |
+| 2023-08-09 | amplification | 4470/4480/4515/4525 | 06:33 | 3.43 | 4482.20 | 0.00 | 0.00 | +3.32 | +0.096 | — |
+| 2023-11-14 | magnet-above | 4445/4455/4505/4515 | 06:33 | 2.60 | 4492.97 | 0.00 | 0.00 | +2.50 | +0.051 | — |
+| 2024-02-29 | magnet-above | 5060/5070/5115/5125 | 06:33 | 3.12 | 5099.96 | 0.00 | 0.00 | +3.02 | +0.067 | — |
+| 2024-06-07 | magnet-above | 5305/5315/5370/5380 | 06:33 | 3.07 | 5347.58 | 0.00 | 0.00 | +2.97 | +0.057 | — |
+| 2024-09-19 | magnet-above | 5670/5680/5750/5760 | 06:33 | 2.18 | 5711.83 | 0.00 | 0.00 | +2.07 | +0.031 | — |
+| 2024-12-30 | amplification | 5860/5870/5910/5920 | 06:33 | 6.05 | 5911.43 | 0.00 | 1.43 | +4.52 | +0.120 | above |
+| 2025-04-14 | amplification | 5390/5400/5510/5520 | 06:33 | 4.60 | 5412.88 | 0.00 | 0.00 | +4.50 | +0.041 | — |
+| 2025-07-29 | untethered | 6375/6385/6415/6425 | 06:33 | 3.50 | 6372.82 | 10.00 | 0.00 | -6.60 | -0.213 | below |
+| 2025-11-19 | amplification | 6565/6575/6670/6680 | 06:33 | 3.70 | 6641.98 | 0.00 | 0.00 | +3.60 | +0.038 | — |
+
+### Hypothesis reads (pre-registered; CI = 95 % bootstrap, B = 10 000, seed 20260906; "supported" only if the CI excludes the threshold in the stated direction)
+
+- **H1 — not supported; directional, sign agrees, magnitude nil.** Pooled ±0.5 IM condor net P&L +0.000 IM [−0.009, +0.009] (n = 650); gross +0.003 [−0.006, +0.012]. The condor sold at the first valid 06:33 minute breaks even after fees. The VRP the note guessed (~2× breach cost) is not there at this entry.
+- **H2 — not supported; directional, sign agrees.** magnetic-pin − magnet-above = +0.032 IM [−0.001, +0.065] (n = 90 / 296): the point estimate meets the ≥ 0.03 threshold; the CI does not clear it (or zero).
+- **H3 — not supported; sign disagrees.** Credit / realized breach cost = **1.03** [0.94, 1.13] pooled ±0.5. The market prices the ±0.5 IM box at almost exactly its realized breach cost. The P-side table explains why the note's guess was wrong: the *uncapped* breach cost beyond ±0.5 IM is 0.206 IM (matching CR-AQ's 0.19–0.23), but the condor's loss is wing-capped, 0.088 IM on ES / 0.099 IM priced on SPX — and the credit is 0.101 IM. The 2× ratio compared credit to the wrong (uncapped) cost.
+- **H4 — magnet-above: reverses (sign disagrees, CI excludes 0):** put-wing − call-wing loss = −0.022 IM [−0.040, −0.004] (n = 296) — magnet-above days lose on the **call** wing (99 breaches above vs 62 below). Untethered: +0.015 [−0.012, +0.043] (n = 79), directional, sign agrees. CR-AQ's downside asymmetry does not carry to the priced condor on magnet-above days; the reverse is supported there.
+- **H5 — not supported; sign disagrees.** ±1.0 minus ±0.5 net P&L per unit max loss = +0.032 [−0.019, +0.083] (paired n = 646); levels ±0.5 −0.026 [−0.087, +0.034], ±1.0 +0.005 [−0.026, +0.036]. The wider box is not worse per unit of risk; if anything slightly better.
+- **H6 (Ryan's rule) — not supported; directional, sign agrees.** Trading only magnetic-pin + bounded days: mean net P&L per trade +0.027 IM [−0.001, +0.054] above all-days (n = 109 / 650). **Opportunity cost:** the rule's 109 trades sum to **+2.95 IM** versus **+0.15 IM** for all 650 trades — the rule captures essentially the entire pooled total on 17 % of the days because the other 541 days net to ≈ −2.8 IM. Per-trade the improvement is +0.027, in line with the P-side expectation (+0.03–0.04). Secondary: amplification − pooled −0.009 [−0.025, +0.007] (n = 166), magnet-above − pooled −0.007 [−0.023, +0.010] (n = 296): both individually worse than pooled in sign, neither supported — as the P-side predicted (within 0.01 IM). Prices do not reverse that.
+
+Per-regime (n ≥ 40) net P&L, ±0.5 box: magnetic-pin **+0.026** [−0.005, +0.056] (68 % wins), untethered +0.007 [−0.016, +0.030], magnet-above −0.006 [−0.021, +0.007], amplification −0.009 [−0.023, +0.005]. Bounded (n = 19, no claim) +0.033 [−0.015, +0.079]. No per-regime CI excludes zero.
