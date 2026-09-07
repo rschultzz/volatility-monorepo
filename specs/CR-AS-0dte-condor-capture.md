@@ -199,3 +199,31 @@ Command: `apps/web/.venv/bin/python -u scripts/cr_as_condor_analysis.py --cr-id 
 - **H6 (Ryan's rule) — not supported; directional, sign agrees.** Trading only magnetic-pin + bounded days: mean net P&L per trade +0.027 IM [−0.001, +0.054] above all-days (n = 109 / 650). **Opportunity cost:** the rule's 109 trades sum to **+2.95 IM** versus **+0.15 IM** for all 650 trades — the rule captures essentially the entire pooled total on 17 % of the days because the other 541 days net to ≈ −2.8 IM. Per-trade the improvement is +0.027, in line with the P-side expectation (+0.03–0.04). Secondary: amplification − pooled −0.009 [−0.025, +0.007] (n = 166), magnet-above − pooled −0.007 [−0.023, +0.010] (n = 296): both individually worse than pooled in sign, neither supported — as the P-side predicted (within 0.01 IM). Prices do not reverse that.
 
 Per-regime (n ≥ 40) net P&L, ±0.5 box: magnetic-pin **+0.026** [−0.005, +0.056] (68 % wins), untethered +0.007 [−0.016, +0.030], magnet-above −0.006 [−0.021, +0.007], amplification −0.009 [−0.023, +0.005]. Bounded (n = 19, no claim) +0.033 [−0.015, +0.079]. No per-regime CI excludes zero.
+
+## What changed
+
+- `packages/shared/backtest/condor_0dte.py` — box construction (`round5(open ± k·IM)`, 10-wide wings), contract dedupe, listing check, CR-AN leg rule → mids, condor credit and its (0, wing] validity, `first_valid_entry`, intrinsic settlement payoff, gross / net P&L in points and IM units, breach side, decision-6 sampling order (`stride_select`, `sample_order`). 24 tests in `packages/shared/backtest/tests/test_condor_0dte.py`; backtest + shared suites 577 pass.
+- `scripts/cr_as_capture_0dte_condor_legs.py` + `scripts/run_cr_as_capture_watchdog.sh` — capture under the backfill role, one `fetch_option_bars` call per contract over 06:30–06:45 PT, per-date JSON checkpoint, `--max-hours` measured from the first start in the checkpoint (restart-safe), `--dry-run`, `--dates`, `--skip-third-friday`. Runs: `80e2bc37` (Step 0, 5 dates) and **`2abf9ff7-d367-4454-b8ba-d21a53c9cc38`** (Step 1, 658 dates, 160 756 bars).
+- `scripts/cr_as_condor_analysis.py` — read-only priced read; run **`b5152407-5742-4760-bf3e-183c79a4a438`**; report `scripts/logs/cr_as_analysis_final.md` (+ `.json`, untracked).
+- Data: 0DTE SPX quotes for 655 train dates × ≤ 8 contracts × 16 minutes in `orats_options_minute` / `orats_options_fetched_windows`. No other table touched. No results table (decision 9).
+- Gates: G0.1–G0.4, G1, G3, G4, G5 PASS; G2 note (bounded 19 / 20, one date unlistable). No halts.
+- Reads: H1–H6 all **directional**, none supported; H3 sign disagrees (credit ≈ 1.03 × wing-capped breach cost, not ≥ 1.5), H4 reverses on magnet-above (call-wing losses dominate; CI excludes 0 in the opposite direction), H5 sign disagrees. Ryan's rule (H6) +0.027 IM per trade, CI touches zero; the rule's 109 trades carry the whole pooled total (+2.95 vs +0.15 IM).
+
+## Decisions
+
+- **Centre the box on the SPX 06:33 spot, not the ES open (amended decision 2).** Measured basis +26 pts median against a 45 pt median IM. The IM itself is pinned to the same 06:33 snapshot (CR-037), so open and IM now share one source; bar `spot_price` matches it exactly.
+- **Listing is what ORATS serves, not what the prior-close chain lists (amended decision 3).** The chain in `orats_oi_gamma` lacks strikes added on expiry morning; using it would have dropped ~20 % of bounded boxes for no reason. A 404 / empty leg → box `unlistable` (13 boxes in the run).
+- **Third Fridays included.** ORATS's option endpoint returns the PM SPXW (`expiry_tod='pm'`) on monthly dates.
+- **Settlement sanity from the measured basis drift (amended decision 5):** \|drift\| ≤ 50 pts, close basis ∈ [−50, +110]; 0 violations because the three bad-spot dates are excluded at the open.
+- **Fee from the note's convention, not the CSV.** The sandbox refused to read the brokerage export; $1.30/contract/side → 0.104 pts per condor. Gross is reported next to net; at $5.20 (no charge on expiring legs) net moves +0.001 IM — no read changes.
+- **Kept the pre-registered entry (first valid 06:33+ minute)** even though 0 % of boxes needed a later minute: the 06:30–06:32 minutes were fetched and are in the cache, but not read.
+- **One shared module for geometry and payoff** so capture and analysis cannot disagree about a box; the note's files list gained `condor_0dte.py` and the watchdog.
+
+## Open questions
+
+- **The ±0.5 IM condor at the open has no VRP at this entry (H3 = 1.03).** The 2× guess compared credit to the uncapped breach cost; wing-capped it is ≈ 1×. Whether a later entry (post-09:00 ET vol crush), a wider wing, or a wall-conditioned short strike changes that is the follow-on the note already names (CR-AR pair snapping). The 06:30–06:45 cache now supports an entry-time sweep within the window without new fetches.
+- **Magnet-above days lose on the call wing (H4 reversed, CI excludes 0).** CR-AQ's ES-based asymmetry (breach below > above) does not describe the condor's realized loss on those days — the magnet pulls price *through* the +0.5 IM short call. A condor with the call side placed at the wall (not at +0.5 IM) is the obvious test; needs CR-AR.
+- **Ryan's rule carries the whole P&L on 17 % of days.** +2.95 IM over 109 trades vs +0.15 over 650; per-trade CI [−0.001, +0.054]. This is the strongest pattern in the read and it is exactly what the P-side predicted, so it is not a surprise to be over-weighted — but it is the first priced number for the live rule. A holdout read (post-2026-06-05, 21+ dates) is the next honest step; the capture script takes `--universe-end` but hard-caps at the split, so the holdout needs an explicit decision, not a flag flip.
+- **72 universe dates not captured** (budget). Re-running the watchdog resumes from the checkpoint (`started_at` must be reset or `--max-hours` raised) — ~1 h more. The regime groups are balanced without them.
+- **Fee line unverified against the CSV** (sandbox). Ryan to confirm $0.65 vs $1.30 per contract per side; the read does not move either way.
+- **`orats_oi_gamma` under-lists next-day expiries.** CR-AO's "completeness 1.0 at ≤ 7 DTE" is not true for the 0DTE expiry at the prior close; any listing check for same-day expiries must use the response, not the chain.
