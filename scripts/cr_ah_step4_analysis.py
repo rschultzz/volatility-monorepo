@@ -913,6 +913,9 @@ class CellStats:
     baseline_sum: float = 0.0
     baseline_wins: int = 0
     baseline_n: int = 0
+    # CR-AR decision 5: width sums for the width-weighted per-point statistics
+    pnl_width_sum: float = 0.0        # Σ width_actual over the settled filled trades
+    baseline_width_sum: float = 0.0   # Σ width_actual over the baseline trades
 
 
 def aggregate(trades: list[tuple[TradeData, dict]]) -> CellStats:
@@ -926,12 +929,14 @@ def aggregate(trades: list[tuple[TradeData, dict]]) -> CellStats:
             s.n_settlement += 1
             s.pnl_sum += r["close_pnl"]
             s.pnl_sq_sum += r["close_pnl"] ** 2
+            s.pnl_width_sum += float(td.width_actual)
             if r["close_pnl"] > 0:
                 s.n_wins += 1
         if r["baseline_close_pnl"] is not None:
             s.baseline_sum += r["baseline_close_pnl"]
             s.baseline_wins += (1 if r["baseline_close_pnl"] > 0 else 0)
             s.baseline_n += 1
+            s.baseline_width_sum += float(td.width_actual)
     return s
 
 
@@ -942,13 +947,20 @@ def fmt_stats(s: CellStats, label: str = "") -> dict:
         return {"label": label, "n": 0, "n_filled": s.n_filled,
                 "mean_pnl": None, "win_rate": None,
                 "wilson_lo": None, "wilson_hi": None,
-                "baseline_mean": None, "beat": None}
+                "baseline_mean": None, "beat": None,
+                "mean_pnl_per_point": None, "baseline_per_point": None,
+                "beat_per_point": None, "mean_width": None}
 
     mean_pnl = s.pnl_sum / n
     win_rate = s.n_wins / n
     wlo, whi = wilson_ci(s.n_wins, n)
     baseline_mean = s.baseline_sum / s.baseline_n if s.baseline_n else None
     beat = (mean_pnl - baseline_mean) if baseline_mean is not None else None
+    # CR-AR decision 5: width-weighted per-point statistics —
+    # Σ x_i / Σ w_i is the width-weighted mean of x_i / w_i; equals x / 10 when every width is 10.
+    mean_pnl_pp = s.pnl_sum / s.pnl_width_sum if s.pnl_width_sum else None
+    baseline_pp = s.baseline_sum / s.baseline_width_sum if s.baseline_width_sum else None
+    beat_pp = (mean_pnl_pp - baseline_pp) if (mean_pnl_pp is not None and baseline_pp is not None) else None
     return {
         "label": label,
         "n": n,
@@ -960,6 +972,10 @@ def fmt_stats(s: CellStats, label: str = "") -> dict:
         "wilson_hi": whi,
         "baseline_mean": baseline_mean,
         "beat": beat,
+        "mean_pnl_per_point": mean_pnl_pp,
+        "baseline_per_point": baseline_pp,
+        "beat_per_point": beat_pp,
+        "mean_width": s.pnl_width_sum / n,
     }
 
 
@@ -1037,21 +1053,21 @@ def fmt_row(r: dict) -> str:
 
 def print_sweep(sweep_rows: list[dict], chosen: float, structure: str):
     print(f"\n{structure.upper()} — Threshold sweep (TRAIN only) [{_MODE_TAG}]:")
-    print(f"  {'T':>6}  n_settled  fill_n  mean_pnl  win%   beat  chosen?")
-    print(f"  {'─'*60}")
+    print(f"  {'T':>6}  n_settled  fill_n  mean_pnl  win%   beat  beat/pt  chosen?")
+    print(f"  {'─'*70}")
     for r in sweep_rows:
         marker = " ← CHOSEN" if abs(r["threshold"] - chosen) < 0.001 else ""
         print(f"  {r['threshold']:.2f}     {r['n']:>3}      {r['n_filled']:>3}"
               f"     {pf(r.get('mean_pnl')):>7}  {pf(r.get('win_rate'), '.0%'):>5}"
-              f"  {pf(r.get('beat')):>7}{marker}")
+              f"  {pf(r.get('beat')):>7}  {pf(r.get('beat_per_point'), '.3f'):>7}{marker}")
 
 
 def print_by_band(all_data: list[TradeData], threshold: float, structure: str, label: str,
                   train_only: bool = False):
     print(f"\n{structure.upper()} — By distance band ({label}, T={threshold:.2f}) [{_MODE_TAG}]:")
     print(f"  {'band':<6}  {'part':<8}  {'n':>3}  {'pnl':>7}  {'win%':>5}  "
-          f"[lo–hi 95%]     {'base':>7}  {'beat':>7}")
-    print(f"  {'─'*70}")
+          f"[lo–hi 95%]     {'base':>7}  {'beat':>7}  {'pnl/pt':>7}  {'beat/pt':>7}  {'width':>5}")
+    print(f"  {'─'*96}")
     for part in (("train",) if train_only else ("train", "holdout")):
         if part == "holdout" and not any(td.partition == "holdout" for td in all_data):
             print(f"  {_NO_HOLDOUT_LINE}")
@@ -1077,7 +1093,9 @@ def print_by_band(all_data: list[TradeData], threshold: float, structure: str, l
                 f"  {b:<6}  {part:<8}  {r['n']:>3}  "
                 f"{pf(r.get('mean_pnl')):>7}  {pf(r.get('win_rate'), '.0%'):>5}  "
                 f"[{pf(r.get('wilson_lo'), '.0%'):>4}–{pf(r.get('wilson_hi'), '.0%'):>4}]  "
-                f"{pf(r.get('baseline_mean')):>7}  {pf(r.get('beat')):>7}"
+                f"{pf(r.get('baseline_mean')):>7}  {pf(r.get('beat')):>7}  "
+                f"{pf(r.get('mean_pnl_per_point'), '.3f'):>7}  {pf(r.get('beat_per_point'), '.3f'):>7}  "
+                f"{pf(r.get('mean_width'), '.1f'):>5}"
                 f"{band_note}"
             )
 
@@ -1094,8 +1112,8 @@ def print_by_pattern(train_data: list[TradeData], threshold: float, structure: s
         return
 
     print(f"  {'pattern':<30}  {'n':>3}  {'pnl':>7}  {'win%':>5}  "
-          f"[lo–hi 95%]     {'base':>7}  {'beat':>7}")
-    print(f"  {'─'*70}")
+          f"[lo–hi 95%]     {'base':>7}  {'beat':>7}  {'beat/pt':>7}")
+    print(f"  {'─'*80}")
     for pat in patterns:
         subset = [td for td in train_data if td.pattern_label == pat]
         pairs = [(td, compute_pnl(td, threshold)) for td in subset]
@@ -1105,11 +1123,11 @@ def print_by_pattern(train_data: list[TradeData], threshold: float, structure: s
             f"  {pat:<30}  {r['n']:>3}  "
             f"{pf(r.get('mean_pnl')):>7}  {pf(r.get('win_rate'), '.0%'):>5}  "
             f"[{pf(r.get('wilson_lo'), '.0%'):>4}–{pf(r.get('wilson_hi'), '.0%'):>4}]  "
-            f"{pf(r.get('baseline_mean')):>7}  {pf(r.get('beat')):>7}"
+            f"{pf(r.get('baseline_mean')):>7}  {pf(r.get('beat')):>7}  {pf(r.get('beat_per_point'), '.3f'):>7}"
         )
 
     # CR-AL decision #7: labeled vs unlabeled (coverage effect)
-    print(f"  {'─'*70}")
+    print(f"  {'─'*80}")
     for lab, subset in (("(labeled)", has_pattern),
                         ("(unlabeled)", [td for td in train_data if td.pattern_label is None])):
         pairs = [(td, compute_pnl(td, threshold)) for td in subset]
@@ -1118,7 +1136,7 @@ def print_by_pattern(train_data: list[TradeData], threshold: float, structure: s
             f"  {lab:<30}  {r['n']:>3}  "
             f"{pf(r.get('mean_pnl')):>7}  {pf(r.get('win_rate'), '.0%'):>5}  "
             f"[{pf(r.get('wilson_lo'), '.0%'):>4}–{pf(r.get('wilson_hi'), '.0%'):>4}]  "
-            f"{pf(r.get('baseline_mean')):>7}  {pf(r.get('beat')):>7}"
+            f"{pf(r.get('baseline_mean')):>7}  {pf(r.get('beat')):>7}  {pf(r.get('beat_per_point'), '.3f'):>7}"
         )
 
 
@@ -1248,10 +1266,13 @@ def build_summary(
         c_cell = get_cell(credit_data, b, "train", credit_thresh)
         d_beat = (d_cell.get("beat") or 0) if d_cell else 0
         c_beat = (c_cell.get("beat") or 0) if c_cell else 0
+        d_bpp = (d_cell.get("beat_per_point") or 0) if d_cell else 0
+        c_bpp = (c_cell.get("beat_per_point") or 0) if c_cell else 0
         winner = "DEBIT" if d_beat >= c_beat else "CREDIT"
         diff = abs(d_beat - c_beat)
         lines.append(
             f"  {b:<5}  debit_beat={pf(d_beat):>7}  credit_beat={pf(c_beat):>7}"
+            f"  (per point: {pf(d_bpp, '.3f')} / {pf(c_bpp, '.3f')})"
             f"  → {winner} leads by {pf(diff)}"
         )
     lines.append("  READ: Structure crossover = distance band where debit stops leading and credit starts.")
@@ -1354,8 +1375,22 @@ CREATE TABLE IF NOT EXISTS bt_edge_backtest_results (
     wilson_hi        FLOAT,
     baseline_mean    FLOAT,
     beat_baseline    FLOAT,
-    created_at       TIMESTAMP DEFAULT NOW()
+    created_at       TIMESTAMP DEFAULT NOW(),
+    -- CR-AR decision 5 (infra/sql/bt_edge_backtest_results_per_point.sql)
+    close_pnl_per_point FLOAT,
+    baseline_per_point  FLOAT,
+    beat_per_point      FLOAT,
+    mean_width_actual   FLOAT
 );
+"""
+
+# CR-AR: idempotent column add so an un-migrated DB never fails the INSERT
+_PER_POINT_COLUMNS_SQL = """
+ALTER TABLE bt_edge_backtest_results
+  ADD COLUMN IF NOT EXISTS close_pnl_per_point FLOAT,
+  ADD COLUMN IF NOT EXISTS baseline_per_point  FLOAT,
+  ADD COLUMN IF NOT EXISTS beat_per_point      FLOAT,
+  ADD COLUMN IF NOT EXISTS mean_width_actual   FLOAT;
 """
 
 _GRANT_SQL = "GRANT SELECT, INSERT ON bt_edge_backtest_results TO dash_backfill_writer;"
@@ -1373,6 +1408,7 @@ def ensure_catalog_table() -> bool:
         admin_url = _admin_url.replace("postgresql+psycopg://", "postgresql://")
         with psycopg.connect(admin_url) as conn:
             conn.execute(_CREATE_TABLE_SQL)
+            conn.execute(_PER_POINT_COLUMNS_SQL)
             conn.execute(_GRANT_SQL)
             conn.execute("GRANT USAGE, SELECT ON SEQUENCE bt_edge_backtest_results_id_seq TO dash_backfill_writer;")
             conn.commit()
@@ -1407,8 +1443,9 @@ def persist_cell_stats(
           (run_id, cr_id, structure_type, outcome_type, distance_band, post_touch_pattern,
            partition, threshold, n_dates, n_filled, n_settled,
            fill_rate, mean_pnl, win_rate, wilson_lo, wilson_hi,
-           baseline_mean, beat_baseline)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+           baseline_mean, beat_baseline,
+           close_pnl_per_point, baseline_per_point, beat_per_point, mean_width_actual)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """,
         (
             run_id, cr_id, structure, outcome, band, pattern,
@@ -1417,6 +1454,9 @@ def persist_cell_stats(
             r.get("fill_rate"), r.get("mean_pnl"), r.get("win_rate"),
             r.get("wilson_lo"), r.get("wilson_hi"),
             r.get("baseline_mean"), r.get("beat"),
+            # CR-AR decision 5: width-weighted per-point statistics
+            r.get("mean_pnl_per_point"), r.get("baseline_per_point"),
+            r.get("beat_per_point"), r.get("mean_width"),
         ),
     )
 

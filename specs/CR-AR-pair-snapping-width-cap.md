@@ -175,3 +175,24 @@ Expected clean sample: **debit 108 / credit 104** (2 unlistable each) — inside
 **G3 restated** (no change to the tolerance): selection 50/50/50; clean debit 110 ± 3 / credit 106 ± 3 with the unlistable trades listed by date; expected 108 / 104.
 
 **Decision 5 reading recorded here so the run is reviewable:** the per-cell `beat_per_point` is the *width-weighted* mean of per-trade `beat_i / width_i`, i.e. `Σ(close_pnl_i) / Σ(width_i) − Σ(baseline_i) / Σ(width_i)` (each sum over the trades that carry that value), which equals `beat / 10` exactly when every width is 10. The threshold sweep (Phase 3) keeps choosing on points-`beat` so CR-AP's configuration is re-run unchanged; both columns print, and the cells persist both.
+
+## Commit 5 — `beat_per_point` / `close_pnl_per_point` (decision 5)
+
+Migration `infra/sql/bt_edge_backtest_results_per_point.sql` applied 2026-09-07 under the owner URL via `scripts/cr_ar_run_migration.py` (schema_change class; `DATABASE_URL`, role `rschultz` = table owner). Log:
+
+```
+Connected as rschultz; bt_edge_backtest_results owner = rschultz
+new columns already present before migration: none
+Applying infra/sql/bt_edge_backtest_results_per_point.sql (1933 bytes)
+ALTER TABLE bt_edge_backtest_results
+  ADD COLUMN IF NOT EXISTS close_pnl_per_point FLOAT,
+  ADD COLUMN IF NOT EXISTS baseline_per_point  FLOAT,
+  ADD COLUMN IF NOT EXISTS beat_per_point      FLOAT,
+  ADD COLUMN IF NOT EXISTS mean_width_actual   FLOAT;
+applied ✓
+\d bt_edge_backtest_results — 24 columns (… beat_baseline, created_at, close_pnl_per_point, baseline_per_point, beat_per_point, mean_width_actual)
+dash_backfill_writer table privileges: ['INSERT', 'SELECT']
+rows by cr_id: [('CR-AH', 16), ('CR-AM', 8), ('CR-AN', 8), ('CR-AP', 8)]
+```
+
+Harness: `CellStats` carries `Σ width_actual` over the settled-filled and the baseline trades; `fmt_stats` adds `mean_pnl_per_point = Σ close_pnl / Σ width`, `baseline_per_point = Σ baseline / Σ width`, `beat_per_point` (their difference — the width-weighted mean of `beat_i / width_i`, exactly `beat / 10` when every width is 10) and `mean_width`. The sweep table prints `beat/pt`; the by-band table prints `pnl/pt`, `beat/pt` and mean `width`; the pattern tables print `beat/pt`; Summary C shows both. `persist_cell_stats` writes the four new columns; `ensure_catalog_table` also runs the idempotent `ADD COLUMN IF NOT EXISTS` so an un-migrated DB never fails the INSERT. Threshold choice unchanged (points-`beat`, decision 5 reading in Step 0). Pre-CR-AR rows keep NULLs. Unit check: uniform 10-wides → `beat_per_point == beat / 10`; a 10-wide (+1) with a 20-wide (−2) → `beat = −0.5`, `beat_per_point = −1/30`.
