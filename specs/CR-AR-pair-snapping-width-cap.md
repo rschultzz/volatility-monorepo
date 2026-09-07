@@ -494,3 +494,27 @@ Phase 7: Persisting aggregate stats to bt_edge_backtest_results...
 Step 4 complete in 1884s
 ======================================================================
 ```
+
+## What changed
+
+- `packages/shared/options_cache/strikes.py`: `snap_spread_to_listed` (pure; candidate pairs within `[nominal, 2 × nominal]` whose anchor lies within `2 × nominal` of the target; nearest anchor → width closest to nominal → toward the magnet; narrower-than-nominal fallback flagged), `snap_vertical_pair` (prior-close chain), `SnappedSpread`, `StructureNotListed` (subclass of `StrikeNotListed`). `snap_vertical_legs` / `SnappedVertical` removed; `snap_to_listed_strike` stays for single-leg callers (none today). 18 new tests (`test_strikes.py`), including the CR-AP 25/50-wide cases and the A1 tolerance.
+- Wired: harness `filter_clean_for_structure` (status `unlistable` with reason, listed by date, `n_unlistable` / `width_actual_max` / `n_width_narrower` in the smoke dict), `cr_ap_capture_snapped_legs.py`, `cr_am_holdout_leg_capture.py`, `cr_ai_stage2_backfill.py` (it does snap; not re-run), `pricing._snap_leg_strikes` (vertical branch through the pair function; `listed=False` / `listed_reason='no_listed_structure'` → no OPRAs, nothing priced; widened / narrower structures warned), Proposals route (`listed`, `listed_reason`, `width_actual`, `width_nominal`; unlistable → `legs: []`), `ProposalCard.jsx` ("No listed structure at this expiry" instead of the leg table; width line when `width_actual ≠ width_nominal`; width in the card title at the 2× cap) + `styles.css` hooks. Tests: pricing 5 (unlistable, 2× cap, far anchor), routes 2 (G2), card 4.
+- Decision 5: `infra/sql/bt_edge_backtest_results_per_point.sql` applied under the owner URL (`scripts/cr_ar_run_migration.py`, logged above); harness `CellStats` / `fmt_stats` / tables / INSERT carry `close_pnl_per_point`, `baseline_per_point`, `beat_per_point`, `mean_width_actual`.
+- Data: capture run `65c24600` (`CR-AR-capture`, 3986 bars, 1 known 404); analysis run `b07972a5` persisted as **`cr_id='CR-AR'` — the citable walk-forward, clean-quote, pair-snapped, width-capped reference**. Prior rows kept.
+- Gates: G0 ✓ · G1 suites (options_cache 201, backtest 118, shared 435, Proposals 60, card 30) ✓ · G2 ✓ · G1a-pre ✓ · G3 108 / 106 ✓ · G4 20 ✓ · G5 202 / 202 ✓ · G6 0 ✓. No halts.
+- Result: debit reference unchanged in substance (all-train +1.71, beat +0.10 = +0.010 / pt; mid +0.32 the only band with a beat); credit negative on P&L and on beat in every band once widths are like-for-like — CR-AP's credit mid / all sign flips are gone. `max(width_actual)` = 20.
+
+## Decisions
+
+- **A1 — anchor tolerance = 2 × nominal.** Step 0 showed the literal rule relocating a spread 68 points from its wall (2024-09-17) rather than refusing. Bounding the anchor by the same tolerance as the width cap keeps "the same trade" symmetric in both dimensions; it is a parameter (`max_anchor_shift`) so the harness can be re-run at 10 or unbounded if the user prefers. Not run at other values here.
+- **Step 1a capture before Step 1**, as CR-AP did, rather than accepting G3's tolerance: three of the five re-snapped legs would otherwise have dropped from the clean sample and the run would have been a different sample, not a re-run.
+- **Threshold choice stays on points-`beat`** so the configuration is CR-AP's; `beat_per_point` is persisted and printed alongside. With every cell at mean width 10.0 the two agree; the column earns its keep only when widths mix again (e.g. an expiry-aware nominal width).
+- **Live path: refuse, don't relocate.** An unlistable vertical returns no legs and no price; a widened one shows its width; the anchor may move ≤ 20 points (the warnings list the snap).
+- **CR-AI re-wired, not re-run** (decision 7 as written).
+
+## Open questions
+
+- **Is 2 × nominal the right anchor tolerance?** Two credit trades (2023-09-11, 2023-11-10) entered the sample because the anchor moved 9 / 19 points to a listed 10-wide; 2024-09-23 and 2025-06-24 credit moved 14 / 12. A 10-point tolerance would have made those four unlistable and put credit at 102 (outside G3). The cell numbers barely move either way, but the *definition* of the reference is the user's call — re-run with `max_anchor_shift=10` is one flag.
+- **Ten of the 150 selected dates are unlistable for both structures at the 15-bday expiry** (2024-08-14, 2024-10-31, 2025-05-09, 2025-05-12, plus credit-only 2025-06-04 and 2025-11-14) — the 10-point grid itself is incomplete far from the money on some non-monthly expiries. This is the concrete input to the note's deferred question (expiry-aware nominal width: 20 at ≥ 10 DTE non-monthly).
+- **Live cards for these dates would show "no listed structure"** — the Proposals engine has no fallback expiry. Whether it should retry the next listed expiry is a product decision, not taken here.
+- Carried: CR-AI Stage 2 re-run with clean quotes + pair snapping; `TodaySetup` display `strike_spx`; the attended web deploy (this CR must be on `main` before it, per the note); half-day settlement windows 404.
