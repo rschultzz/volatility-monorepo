@@ -11,6 +11,11 @@ One implementation, shared by the backtest harness, the capture scripts,
 CR-AI Stage 2 and the live proposal leg pricing. Accepts either a psycopg
 connection (`conn.execute(sql, params)`) or a SQLAlchemy connection
 (`conn.exec_driver_sql(sql, params)`).
+
+CR-AR (decisions 1–2): verticals are snapped as a *pair* with a hard width
+cap — `snap_spread_to_listed` / `snap_vertical_pair` — never wider than
+2 × the nominal width, narrower only when nothing at ≥ nominal exists within
+the cap. Per-leg `snap_to_listed_strike` stays for single-leg callers only.
 """
 from __future__ import annotations
 
@@ -22,6 +27,13 @@ from typing import Iterable, Optional
 class StrikeNotListed(Exception):
     """No listed strike satisfies the request (expiry absent from the prior-close
     chain, or no strike on the required side of the anchor leg)."""
+
+
+class StructureNotListed(StrikeNotListed):
+    """CR-AR decision 1: no listed pair of strikes forms the requested vertical
+    within the width cap (expiry absent from the prior-close chain, or every
+    listed pair is wider than 2 × nominal). Subclass of StrikeNotListed so
+    callers that only know the per-leg error still stop cleanly."""
 
 
 _PRIOR_CLOSE_SQL = (
@@ -128,3 +140,150 @@ def snap_vertical_legs(
         anchor=anchor, other=other, width_actual=abs(other - anchor),
         width_nominal=abs(float(offset_pts)), prior_close=pc,
     )
+
+
+# ── CR-AR: pair snapping with width cap (decisions 1–2) ──────────────────────
+
+@dataclass(frozen=True)
+class SnappedSpread:
+    """A vertical snapped as a pair. `anchor` is the leg placed at the target
+    (the short leg in both harness structures: debit → k_high, credit → k_low);
+    `other` is the wing. width_actual ≤ 2 × width_nominal always;
+    narrower_than_nominal is True only when no pair at ≥ nominal existed
+    within the cap (decision 2, recorded)."""
+    k_low: float
+    k_high: float
+    anchor: float
+    other: float
+    width_actual: float
+    width_nominal: float
+    side: str
+    narrower_than_nominal: bool = False
+    prior_close: Optional[date] = None
+
+    @property
+    def widened(self) -> bool:
+        return self.width_actual > self.width_nominal
+
+    @property
+    def at_cap(self) -> bool:
+        return abs(self.width_actual - 2.0 * self.width_nominal) < 1e-9
+
+
+def _anchor_of(pair: tuple[float, float], direction: int) -> float:
+    """direction = sign(other − anchor): +1 → anchor is k_low, −1 → anchor is k_high."""
+    return pair[0] if direction > 0 else pair[1]
+
+
+def snap_spread_to_listed(
+    target: float,
+    width_nominal: float,
+    side: str,
+    direction,
+    chain: Iterable[float],
+    *,
+    toward: Optional[float] = None,
+    max_anchor_shift: Optional[float] = None,
+) -> SnappedSpread:
+    """CR-AR decisions 1–2 (+ Step 0 amendment A1). Choose the listed pair
+    (k_low, k_high) for a vertical.
+
+    target        — intended anchor strike (the leg placed at the drift target).
+    width_nominal — the structure's intent (10 for the harness).
+    side          — 'debit' | 'credit' (recorded; fixes the anchor for call
+                    verticals: debit anchors k_high, credit anchors k_low).
+    direction     — magnet direction / geometry of the wing relative to the
+                    anchor: +1 → wing above the anchor (credit call spread),
+                    −1 → wing below (debit call spread). None → derived from
+                    `side` for call verticals (credit +1, debit −1).
+    chain         — the strikes listed for the expiry at the prior close.
+    toward        — spot (or any price) for tie-break (b): prefer the anchor
+                    nearer it; None → the lower anchor.
+    max_anchor_shift — amendment A1: the anchor may move at most this far from
+                    `target` (default 2 × width_nominal, the same tolerance as
+                    the width cap); a pair whose anchor is further away is not
+                    the same trade and is never chosen.
+
+    Candidates: every pair with k_high − k_low in [width_nominal, 2 × width_nominal]
+    (decision 2's hard cap) whose anchor lies within max_anchor_shift of the
+    target. Choose the pair minimising |anchor − target|; ties → (a) width
+    closest to nominal, (b) anchor nearer `toward`, then the lower anchor. If
+    no pair exists at ≥ nominal within the cap, fall back to the same rule over
+    pairs narrower than nominal and flag it. Nothing at all → StructureNotListed.
+    """
+    if side not in ("debit", "credit"):
+        raise ValueError(f"side must be 'debit' or 'credit', got {side!r}")
+    w = float(width_nominal)
+    if w <= 0:
+        raise ValueError(f"width_nominal must be positive, got {width_nominal!r}")
+    if direction is None:
+        direction = +1 if side == "credit" else -1
+    direction = 1 if float(direction) > 0 else -1
+    shift_cap = 2.0 * w if max_anchor_shift is None else float(max_anchor_shift)
+
+    cands = sorted(set(float(c) for c in chain))
+    if not cands:
+        raise StructureNotListed(f"no listed strikes for the expiry (target {target}, side {side})")
+
+    pairs: list[tuple[float, float]] = []
+    for i, lo in enumerate(cands):
+        for hi in cands[i + 1:]:
+            if hi - lo > 2.0 * w + 1e-9:
+                break                      # cands sorted: wider from here on
+            if abs(_anchor_of((lo, hi), direction) - float(target)) > shift_cap + 1e-9:
+                continue                   # amendment A1: anchor too far from the target
+            pairs.append((lo, hi))
+
+    def rank(p: tuple[float, float]):
+        a = _anchor_of(p, direction)
+        width = p[1] - p[0]
+        tb = abs(a - toward) if toward is not None else 0.0
+        return (abs(a - float(target)), abs(width - w), tb, a)
+
+    within = [p for p in pairs if p[1] - p[0] >= w - 1e-9]
+    narrower = False
+    if within:
+        best = min(within, key=rank)
+    else:
+        below = [p for p in pairs if p[1] - p[0] < w - 1e-9]
+        if not below:
+            raise StructureNotListed(
+                f"no listed pair within [{w:g}, {2 * w:g}] points with its anchor within {shift_cap:g} of "
+                f"target {target} (side {side}; {len(cands)} strikes listed)"
+            )
+        best = min(below, key=rank)
+        narrower = True
+
+    anchor = _anchor_of(best, direction)
+    other = best[1] if anchor == best[0] else best[0]
+    return SnappedSpread(
+        k_low=best[0], k_high=best[1], anchor=anchor, other=other,
+        width_actual=best[1] - best[0], width_nominal=w, side=side,
+        narrower_than_nominal=narrower,
+    )
+
+
+def snap_vertical_pair(
+    target: float,
+    width_nominal: float,
+    side: str,
+    expiry: date,
+    trade_date: date,
+    conn,
+    *,
+    ticker: str = "SPX",
+    toward: Optional[float] = None,
+    direction=None,
+    max_anchor_shift: Optional[float] = None,
+) -> SnappedSpread:
+    """DB-backed `snap_spread_to_listed` against the prior-close chain for
+    `expiry` (decision 1). Raises StructureNotListed when the expiry is absent
+    from the chain or no pair exists within the cap."""
+    pc, cands = listed_strikes(conn, expiry, trade_date, ticker)
+    if not cands:
+        raise StructureNotListed(
+            f"expiry {expiry} not in the {ticker} chain at prior close {pc} (trade_date {trade_date})"
+        )
+    snapped = snap_spread_to_listed(target, width_nominal, side, direction, cands, toward=toward,
+                                    max_anchor_shift=max_anchor_shift)
+    return SnappedSpread(**{**snapped.__dict__, "prior_close": pc})
