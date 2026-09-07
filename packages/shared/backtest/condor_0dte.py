@@ -250,3 +250,24 @@ def is_third_friday(d: date) -> bool:
     """Monthly SPX expiry (AM-settled) shares the date with the PM SPXW; ORATS
     keys both under root SPX, so the option endpoint is ambiguous there."""
     return d.weekday() == 4 and 15 <= d.day <= 21
+
+
+# ── Entry selection (decision 4) ─────────────────────────────────────────────
+
+def first_valid_entry(box: CondorBox, minutes: Sequence[tuple], floor=None) -> Optional[dict]:
+    """First minute ≥ `floor` where all four legs pass the leg rule and the
+    credit is in (0, min wing width]. `minutes` is [(snapshot_pt, quotes)] in
+    time order, quotes = [(strike, type, bid, ask), ...] for that minute.
+    Returns {"snapshot_pt", "credit", "mids", "n_minutes_seen", "n_minutes_invalid"} or None."""
+    seen = invalid = 0
+    for snap, quotes in minutes:
+        if floor is not None and (snap.time() if hasattr(snap, "time") else snap) < floor:
+            continue
+        seen += 1
+        mids, _ = minute_mids(quotes)
+        credit = condor_credit(box, mids)
+        if credit_is_valid(credit, box):
+            return {"snapshot_pt": snap, "credit": credit, "mids": mids,
+                    "n_minutes_seen": seen, "n_minutes_invalid": invalid}
+        invalid += 1
+    return None

@@ -210,3 +210,43 @@ def test_settlement_exactly_at_short_strike_is_no_loss():
 def test_fee_convention():
     assert CONDOR_ROUND_TRIP_FEE_USD == pytest.approx(1.30 * 4 * 2)
     assert CONDOR_ROUND_TRIP_FEE_PTS == pytest.approx(0.104)
+
+
+# ── entry selection (decision 4) ─────────────────────────────────────────────
+
+from datetime import datetime, time as _t
+from packages.shared.backtest.condor_0dte import first_valid_entry
+
+
+def _minute(hh, mm, mids, bad=None):
+    # box 5975/5985/6015/6025; bid/ask around each mid, optionally corrupt one leg
+    rows = []
+    for (k, t), m in mids.items():
+        b, a = m - 0.05, m + 0.05
+        if bad and (k, t) == bad:
+            b, a = a, b            # crossed
+        rows.append((k, t, b, a))
+    return (datetime(2025, 6, 5, hh, mm), rows)
+
+
+def test_first_valid_entry_skips_floor_and_invalid_minutes():
+    b = build_box(D, 6000.0, 30.0, 0.5)
+    good = {(5975, "P"): 1.0, (5985, "P"): 2.5, (6015, "C"): 2.0, (6025, "C"): 0.8}
+    minutes = [
+        _minute(6, 30, good),                       # before the 06:33 floor
+        _minute(6, 33, good, bad=(6015, "C")),      # crossed leg → invalid
+        _minute(6, 34, {(5975, "P"): 1.0, (5985, "P"): 2.5, (6015, "C"): 2.0}),   # missing leg
+        _minute(6, 35, good),
+        _minute(6, 36, good),
+    ]
+    e = first_valid_entry(b, minutes, floor=_t(6, 33))
+    assert e["snapshot_pt"] == datetime(2025, 6, 5, 6, 35)
+    assert e["credit"] == pytest.approx(2.7)
+    assert e["n_minutes_seen"] == 3 and e["n_minutes_invalid"] == 2
+
+
+def test_first_valid_entry_rejects_credit_out_of_range():
+    b = build_box(D, 6000.0, 30.0, 0.5)
+    over = {(5975, "P"): 0.0, (5985, "P"): 8.0, (6015, "C"): 8.0, (6025, "C"): 0.0}   # credit 16 > 10
+    zero = {(5975, "P"): 1.0, (5985, "P"): 1.0, (6015, "C"): 1.0, (6025, "C"): 1.0}   # credit 0
+    assert first_valid_entry(b, [_minute(6, 33, over), _minute(6, 34, zero)], floor=_t(6, 33)) is None
