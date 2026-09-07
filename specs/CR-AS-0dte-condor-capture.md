@@ -227,3 +227,58 @@ Per-regime (n ≥ 40) net P&L, ±0.5 box: magnetic-pin **+0.026** [−0.005, +0.
 - **72 universe dates not captured** (budget). Re-running the watchdog resumes from the checkpoint (`started_at` must be reset or `--max-hours` raised) — ~1 h more. The regime groups are balanced without them.
 - **Fee line unverified against the CSV** (sandbox). Ryan to confirm $0.65 vs $1.30 per contract per side; the read does not move either way.
 - **`orats_oi_gamma` under-lists next-day expiries.** CR-AO's "completeness 1.0 at ≤ 7 DTE" is not true for the 0DTE expiry at the prior close; any listing check for same-day expiries must use the response, not the chain.
+
+## Step 1b — capture resumed to the full universe (2026-09-07 07:11 → 09:49 PT)
+
+`MAX_HOURS=24 bash scripts/run_cr_as_capture_watchdog.sh`, resumed from the checkpoint (deadline = first start + 24 h). Run **`384a3c95-bd10-4dac-afb8-ef3a6fda518b`** (`CR-AS-capture`), `completed`, 9 463 s: 74 dates, 580 / 583 legs, 3 × 404, 0 exceptions, 18 464 bars. Checkpoint now **732 / 732 dates** (3 `bad_spx_open`, 1 `no_spx_open_snapshot`), 5689 / 5711 legs fetched, **22 × 404 (0.39 %)**, 15 boxes unlistable (pm0.5 6, pm1 9).
+
+**Sample achieved (full):** bounded 19 / 20, magnetic-pin 90 / 91, magnet-above **369** / 373, amplification 166 / 169, untethered 79 / 79 — 723 dates with ≥ 1 captured box. G1 PASS (0.39 %); G2 unchanged (bounded 19, one date unlistable).
+
+## Step 2b — priced read on the full sample, with the 650-sample prior and a fee-sensitivity column
+
+Runs (`cr_id='CR-AS-analysis'`): **`32f8de0b-74f0-473f-8d4f-756ae81ff6b4`** at $1.30 / contract / side (0.104 pts per condor) and **`85b690ec-55ac-487b-9c8d-815d3982ffee`** at **$0.65** (commission only, 0.052 pts). Reports `scripts/logs/cr_as_analysis_full_fee1.30.md` / `_fee0.65.md` (untracked). 722 ±0.5 boxes and 719 ±1.0 boxes over 728 dates. G3 `no_valid_entry` **0 / 1441**, G4 **0** violations, G5 max date **2026-06-05**. Gross figures are fee-independent; only the net columns differ.
+
+### Per regime × box, full sample (net at $1.30; the $0.65 net is shown in the last column)
+
+| box | regime | n | credit (IM) | realized loss (IM) | gross P&L (IM) | net P&L (IM) @ $1.30 [95 % CI] | net / max loss | win % | breach below / above | put-wing loss (IM) | call-wing loss (IM) | net @ $0.65 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| pm0.5 | pooled | 722 | 0.098 | 0.098 | +0.000 | −0.002 [−0.011, +0.006] | −0.042 | 58 | 153 / 213 | 0.042 | 0.056 | −0.001 [−0.009, +0.007] |
+| pm0.5 | magnetic-pin | 90 | 0.137 | 0.108 | +0.029 | +0.026 [−0.005, +0.056] | +0.106 | 68 | 17 / 18 | 0.055 | 0.053 | +0.028 [−0.003, +0.058] |
+| pm0.5 | magnet-above | 368 | 0.099 | 0.106 | −0.007 | −0.010 [−0.022, +0.002] | −0.086 | 57 | 79 / 123 | 0.044 | 0.062 | −0.009 [−0.021, +0.003] |
+| pm0.5 | amplification | 166 | 0.081 | 0.088 | −0.007 | −0.009 [−0.022, +0.004] | −0.099 | 53 | 36 / 52 | 0.033 | 0.054 | −0.008 [−0.021, +0.005] |
+| pm0.5 | untethered | 79 | 0.089 | 0.079 | +0.010 | +0.007 [−0.016, +0.030] | +0.053 | 61 | 20 / 15 | 0.047 | 0.032 | +0.009 [−0.015, +0.031] |
+| pm0.5 | bounded (n < 40) | 19 | 0.094 | 0.059 | +0.035 | +0.033 [−0.014, +0.078] | +0.212 | 74 | 1 / 5 | 0.009 | 0.050 | +0.034 [−0.013, +0.079] |
+| pm1 | pooled | 719 | 0.041 | 0.037 | +0.004 | +0.001 [−0.006, +0.008] | −0.001 | 83 | 60 / 66 | 0.016 | 0.021 | +0.002 [−0.004, +0.009] |
+| pm1 | magnetic-pin | 89 | 0.064 | 0.061 | +0.004 | +0.000 [−0.028, +0.026] | −0.015 | 81 | 7 / 10 | 0.027 | 0.033 | +0.002 [−0.027, +0.028] |
+| pm1 | magnet-above | 368 | 0.040 | 0.036 | +0.004 | +0.002 [−0.008, +0.010] | +0.007 | 83 | 30 / 34 | 0.015 | 0.021 | +0.003 [−0.007, +0.012] |
+| pm1 | amplification | 165 | 0.033 | 0.035 | −0.002 | −0.004 [−0.016, +0.007] | −0.031 | 80 | 15 / 17 | 0.014 | 0.021 | −0.003 [−0.015, +0.008] |
+| pm1 | untethered | 79 | 0.036 | 0.023 | +0.013 | +0.011 [−0.004, +0.024] | +0.040 | 87 | 8 / 3 | 0.019 | 0.003 | +0.012 [−0.003, +0.025] |
+| pm1 | bounded (n < 40) | 18 | 0.042 | 0.034 | +0.007 | +0.005 [−0.042, +0.042] | +0.014 | 89 | 0 / 2 | 0.000 | 0.034 | +0.006 [−0.040, +0.044] |
+
+### P-side vs priced on the same dates, ±0.5 IM box, full sample
+
+| regime | n | P-side breach cost beyond ±0.5 IM (uncapped, IM) | beyond ±1.0 IM | wing-capped ±0.5 (IM) | priced realized loss ±0.5 (IM) | priced credit ±0.5 (IM) |
+|---|---|---|---|---|---|---|
+| pooled | 722 | 0.217 | 0.072 | 0.089 | 0.098 | 0.098 |
+| magnetic-pin | 90 | 0.194 | 0.087 | 0.084 | 0.108 | 0.137 |
+| magnet-above | 368 | 0.232 | 0.078 | 0.099 | 0.106 | 0.099 |
+| amplification | 166 | 0.221 | 0.069 | 0.079 | 0.088 | 0.081 |
+| untethered | 79 | 0.200 | 0.049 | 0.082 | 0.079 | 0.089 |
+| bounded | 19 | 0.069 | 0.013 | 0.049 | 0.059 | 0.094 |
+
+### Hypotheses — 650-sample prior (run `b5152407`, $1.30) · full sample at $1.30 · full sample at $0.65
+
+| # | statement | prior: 650 sample @ $1.30 | **full @ $1.30** | full @ $0.65 | read (full @ $1.30) |
+|---|---|---|---|---|---|
+| H1 | ±0.5 pooled mean net P&L > 0 | +0.000 [−0.009, +0.009] (n=650) | **−0.002 [−0.011, +0.006]** (n=722) | −0.001 [−0.009, +0.007] | directional, sign disagrees — break-even; gross +0.000 [−0.008, +0.009] |
+| H2 | pin − magnet-above ≥ 0.03 IM | +0.032 [−0.001, +0.065] (90 / 296) | **+0.036 [+0.003, +0.069]** (90 / 368) | +0.036 [+0.003, +0.069] | directional, sign agrees — CI now excludes 0 but not the 0.03 threshold |
+| H3 | credit / realized breach cost ≥ 1.5 | 1.03 [0.94, 1.13] | **1.00 [0.92, 1.10]** | 1.00 [0.92, 1.10] | sign disagrees — credit equals the wing-capped loss |
+| H4 | magnet-above: put-wing − call-wing loss > 0 | −0.022 [−0.040, −0.004] (296) | **−0.018 [−0.033, −0.003]** (368) | same (fee-free) | reverses, CI excludes 0 — call-wing losses dominate (123 breaches above vs 79 below) |
+| H4 | untethered: same | +0.015 [−0.012, +0.043] (79) | **+0.015 [−0.012, +0.042]** (79) | same | directional, sign agrees |
+| H5 | ±1.0 − ±0.5 net per unit max loss < 0 | +0.032 [−0.019, +0.083] (646 paired) | **+0.042 [−0.005, +0.092]** (718) | +0.040 [−0.008, +0.089] | sign disagrees — the wider box is not worse per unit of risk |
+| H6 | rule (pin + bounded) − all days, per trade > 0 | +0.027 [−0.001, +0.054] (109 / 650) | **+0.029 [+0.001, +0.057]** (109 / 722) | +0.030 [+0.001, +0.057] | **supported** at both fee levels (lower bound +0.001) |
+| H6 | opportunity cost (total net, IM) | rule +2.95 vs all +0.15 | **rule +2.95 over 109 trades vs all-days −1.59 over 722** | rule +3.13 vs all −0.70 | all-days is now net negative; the rule's 15 % of days hold the only positive total. Fee sensitivity: −1.59 → −0.70 all-days, +2.95 → +3.13 rule |
+| H6 sec. | amplification − pooled < 0 | −0.009 [−0.025, +0.007] (166) | **−0.007 [−0.023, +0.009]** (166) | −0.007 [−0.023, +0.009] | directional, sign agrees |
+| H6 sec. | magnet-above − pooled < 0 | −0.007 [−0.023, +0.010] (296) | **−0.008 [−0.023, +0.007]** (368) | −0.008 [−0.022, +0.007] | directional, sign agrees |
+
+Restatement vs the 650-sample prior: every sign and read holds; the only change of category is **H6, which moves from directional to supported** (the CI lower bound crosses from −0.001 to +0.001) — a hair's-breadth change that the fee level does not alter. H1 flips sign in the third decimal (+0.000 → −0.002) and stays a break-even read. The fee sensitivity is +0.001 IM on every net figure at $0.65 vs $1.30; no read changes with the fee.
