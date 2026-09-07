@@ -214,6 +214,7 @@ def main(argv=None) -> None:
             order = [date.fromisoformat(x) for x in ck["order"]]      # deterministic across restarts
     if ck["started_at"] is None:
         ck["started_at"] = datetime.now().isoformat(timespec="seconds")
+    ck["budget_exhausted"] = False        # re-evaluated this invocation (a resumed run may finish inside a raised cap)
     started = datetime.fromisoformat(ck["started_at"])
     deadline = started + timedelta(hours=args.max_hours)
     print(f"budget: started {started}  deadline {deadline}  ({args.max_hours} h)  already done={len(ck['done'])}")

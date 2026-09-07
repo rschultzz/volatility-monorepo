@@ -60,7 +60,7 @@ import numpy as np
 
 from packages.shared.backfill_safety import assert_role_or_die, backfill_run, get_backfill_db_conn, update_run_smoke
 from packages.shared.backtest.condor_0dte import (
-    CONDOR_ROUND_TRIP_FEE_PTS, CONDOR_ROUND_TRIP_FEE_USD, WING_WIDTH, build_boxes, first_valid_entry, settle_condor,
+    CONDOR_LEGS, FEE_PER_CONTRACT_SIDE, WING_WIDTH, build_boxes, first_valid_entry, settle_condor,
 )
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
 from packages.shared.options_cache.opra import format_opra
@@ -153,7 +153,11 @@ def main(argv=None) -> None:
     ap.add_argument("--cr-id", default="CR-AS-analysis")
     ap.add_argument("--out", default=None, help="markdown report path (default scripts/logs/cr_as_analysis_<ts>.md)")
     ap.add_argument("--universe-end", default=UNIVERSE_END.isoformat())
+    ap.add_argument("--fee-per-contract-side", type=float, default=FEE_PER_CONTRACT_SIDE,
+                    help="dollars per contract per side (default %(default)s; 0.65 = commission only)")
     args = ap.parse_args(argv)
+    fee_usd = args.fee_per_contract_side * CONDOR_LEGS * 2
+    fee_pts = fee_usd / 100.0
     universe_end = date.fromisoformat(args.universe_end)
     if universe_end > UNIVERSE_END:
         sys.exit("ERROR: --universe-end past the holdout split (G5)")
@@ -171,7 +175,7 @@ def main(argv=None) -> None:
         (TICKER, CANONICAL_FEATURE_VERSION, universe_end)).fetchall()}
 
     with backfill_run(conn, args.cr_id) as run_id:
-        print(f"CR-AS analysis  run_id={run_id}  universe={len(universe)}  fee={CONDOR_ROUND_TRIP_FEE_PTS:.3f} pts (${CONDOR_ROUND_TRIP_FEE_USD:.2f})")
+        print(f"CR-AS analysis  run_id={run_id}  universe={len(universe)}  fee={fee_pts:.3f} pts (${fee_usd:.2f}, ${args.fee_per_contract_side:.2f}/contract/side)")
         results = []          # dict per date × box with a valid entry
         status = Counter()    # date-level
         box_status = Counter()
@@ -227,7 +231,7 @@ def main(argv=None) -> None:
                 if e is None:
                     box_status[f"{b.label}:no_valid_entry"] += 1
                     continue
-                r = settle_condor(b, e["credit"], spx_close)
+                r = settle_condor(b, e["credit"], spx_close, fee_pts=fee_pts)
                 box_status[f"{b.label}:priced"] += 1
                 results.append({
                     "date": td.isoformat(), "regime": u["regime"], "box": b.label, "im": u["im"],
@@ -246,7 +250,7 @@ def main(argv=None) -> None:
         P = L.append
         P(f"### Analysis run `{run_id}` — {datetime.now():%Y-%m-%d %H:%M} PT\n")
         P(f"Universe {len(universe)} dates ≤ {universe_end}. Date status: {dict(status)}. Box status: {dict(box_status)}.")
-        P(f"Fee: {CONDOR_ROUND_TRIP_FEE_PTS:.3f} pts per condor round trip (${CONDOR_ROUND_TRIP_FEE_USD:.2f}). Bootstrap B={B}, seed {SEED}. "
+        P(f"Fee: {fee_pts:.3f} pts per condor round trip (${fee_usd:.2f} = ${args.fee_per_contract_side:.2f} × 4 legs × 2 sides). Bootstrap B={B}, seed {SEED}. "
           f"Per-regime reads only at n ≥ {MIN_N_REGIME}.\n")
         n_boxes_attempted = sum(v for k, v in box_status.items() if not k.endswith("unlistable"))
         n_nve = sum(v for k, v in box_status.items() if k.endswith("no_valid_entry"))
@@ -369,7 +373,7 @@ def main(argv=None) -> None:
                  "n_results": len(results), "sample_pm05_by_regime": dict(sample),
                  "g3_no_valid_entry_share": round(n_nve / n_boxes_attempted, 4) if n_boxes_attempted else None,
                  "g4_sanity_violations": len(sanity_violations), "g5_max_date": max((r["date"] for r in results), default=None),
-                 "hypotheses": [{"id": h[0], "estimate": h[2], "read": h[3]} for h in H], "report": str(out_path), "fee_pts": CONDOR_ROUND_TRIP_FEE_PTS}
+                 "hypotheses": [{"id": h[0], "estimate": h[2], "read": h[3]} for h in H], "report": str(out_path), "fee_pts": fee_pts, "fee_per_contract_side": args.fee_per_contract_side}
         update_run_smoke(conn, run_id, smoke, f"priced {len(p5)} ±0.5 and {len(p1)} ±1.0 boxes over {status['priced_date']} dates; "
                                               f"G3 {smoke['g3_no_valid_entry_share']}, G4 {len(sanity_violations)} violations; report {out_path.name}")
         print(f"\nreport: {out_path}\nrun_id: {run_id}")
