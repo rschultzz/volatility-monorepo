@@ -8,6 +8,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   plugins: [react()],
   base: '/today-setup/',
+  build: {
+    rollupOptions: {
+      // CR-AW A7: the Setup v2 page is a second entry so its bundle can be
+      // grepped on its own; assets stay under /today-setup/assets/.
+      input: {
+        main:    path.resolve(__dirname, 'index.html'),
+        setupV2: path.resolve(__dirname, 'setup-v2.html'),
+      },
+    },
+  },
   server: {
     proxy: {
       '/api': {

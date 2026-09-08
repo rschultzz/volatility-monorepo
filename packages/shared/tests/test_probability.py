@@ -632,3 +632,72 @@ class TestStructuralProbabilityCutoffContract(unittest.TestCase):
         result = compute_structural_probability(self.anchor, conn)
         self.assertIsInstance(result, dict)
         self.assertIsNotNone(conn.requested_dates)
+
+
+# ─── analogue_fair_value (CR-AW decision 2 / 3, amendment A2) ───────────────
+# d = target − close at T+15 (points below the wall); value = clamp(width − d).
+
+from packages.shared.probability import analogue_fair_value
+
+
+class TestAnalogueFairValue(unittest.TestCase):
+    W = 10.0
+
+    def test_all_at_or_above_short_strike_is_worth_width(self):
+        fv = analogue_fair_value([0.0, -5.0, -40.0, -215.0], self.W, seed=1)
+        self.assertEqual(fv["n"], 4)
+        self.assertAlmostEqual(fv["fair"], self.W)
+        self.assertAlmostEqual(fv["max_price"], self.W)
+        self.assertAlmostEqual(fv["boot_lo"], self.W)
+        self.assertAlmostEqual(fv["full_payout_rate"], 1.0)
+        self.assertAlmostEqual(fv["any_payout_rate"], 1.0)
+
+    def test_all_far_below_long_strike_is_worth_nothing(self):
+        fv = analogue_fair_value([10.0, 25.0, 134.5], self.W, seed=1)
+        self.assertAlmostEqual(fv["fair"], 0.0)
+        self.assertAlmostEqual(fv["max_price"], 0.0)
+        self.assertAlmostEqual(fv["full_payout_rate"], 0.0)
+        self.assertAlmostEqual(fv["any_payout_rate"], 0.0)   # d = 10 is not "< width"
+
+    def test_mixed_set_mean_of_clamped_values(self):
+        # values: clamp(10 − d): −5 → 10, +5 → 5, +20 → 0, 0 → 10, +2 → 8
+        fv = analogue_fair_value([-5.0, 5.0, 20.0, 0.0, 2.0], self.W, seed=20260903)
+        self.assertAlmostEqual(fv["fair"], (10 + 5 + 0 + 10 + 8) / 5)
+        self.assertAlmostEqual(fv["full_payout_rate"], 2 / 5)
+        self.assertAlmostEqual(fv["any_payout_rate"], 4 / 5)
+
+    def test_max_never_above_fair_and_interval_brackets_it(self):
+        d = [-5.0, 5.0, 20.0, 0.0, 2.0, 12.0, -3.0, 7.0, -1.0, 30.0]
+        fv = analogue_fair_value(d, self.W, seed=20260903)
+        self.assertLessEqual(fv["max_price"], fv["fair"])
+        self.assertLessEqual(fv["boot_lo"], fv["fair"])
+        self.assertGreaterEqual(fv["boot_hi"], fv["fair"])
+        self.assertLess(fv["max_price"], fv["fair"])   # strictly below on a dispersed set
+
+    def test_seed_makes_the_number_reproducible(self):
+        d = [-5.0, 5.0, 20.0, 0.0, 2.0, 12.0, -3.0]
+        a = analogue_fair_value(d, self.W, seed=20260903)
+        b = analogue_fair_value(d, self.W, seed=20260903)
+        c = analogue_fair_value(d, self.W, seed=20260904)
+        self.assertEqual(a, b)
+        self.assertEqual(a["fair"], c["fair"])          # the mean does not depend on the seed
+
+    def test_none_entries_are_skipped_and_empty_returns_none(self):
+        fv = analogue_fair_value([None, -5.0, None], self.W, seed=1)
+        self.assertEqual(fv["n"], 1)
+        self.assertAlmostEqual(fv["fair"], self.W)
+        empty = analogue_fair_value([None, None], self.W, seed=1)
+        self.assertEqual(empty["n"], 0)
+        self.assertIsNone(empty["fair"])
+        self.assertIsNone(empty["max_price"])
+        self.assertIsNone(empty["any_payout_rate"])
+
+    def test_t15_derivation_convention(self):
+        # target = close_at_horizon − final_close_distance; d15 = target − close_t15
+        close_h, fcd, close_t15 = 6945.25, -19.4, 6970.0     # wall 6964.65; closed 5.35 above it at T+15
+        target = close_h - fcd
+        d15 = target - close_t15
+        fv = analogue_fair_value([d15], self.W, seed=1)
+        self.assertAlmostEqual(d15, -5.35)
+        self.assertAlmostEqual(fv["fair"], self.W)         # above the short strike → full width
+        self.assertAlmostEqual(fv["full_payout_rate"], 1.0)
