@@ -115,3 +115,58 @@ Run from the git worktree `.claude/worktrees/cr-au` (branch `feat/CR-AU-live-str
 - **A6 — holdout cells are not persisted while the read is locked.** Decision 4 governs the printed read; persisting holdout `mean_pnl` cells would be the same read through the DB. Phase 7 writes holdout cells only when the read is unlocked (`--holdout-read <file>` present **and** n ≥ 60). Holdout **n per band** is still printed.
 - **A7 — where "today's canonical feature row" comes from.** `bt_daily_features` (`regime_at_classification`, `feature_vector.implied_move_1d`) at `CANONICAL_FEATURE_VERSION`, most recent `trade_date ≤ today` (or `--date`). The `bt_daily_outcomes` row for the day does not exist until 13:40 UTC. IM: the feature row's `implied_move_1d`; if NULL (the CR-AB fill missed), the same 06:33 open-straddle computation CR-AB uses, with `im_source` logged.
 - **Tests** live in a new `scripts/tests/` package (the scripts stay scripts; no new shared module), plus `packages/shared/tests/test_config.py` for the fee constant.
+
+## Step 1 — gates (2026-09-07, 19:38 → 19:57 PT)
+
+Logs (untracked): `scripts/logs/cr_au_g1_suites.log`, `cr_au_g2_dryrun.log`, `cr_au_g3_real_20260904.log`, `cr_au_g4_wrapper_stdout.log`, `reference_rerun_REFDRY-2026-08_20260907_193825.log`.
+
+| Gate | Result |
+|---|---|
+| G0 | PASS (Step 0) |
+| G1 | PASS — new tests: leg builder magnet / non-magnet (9), matured capture planner + dedupe + token guard (6), fees + holdout gate (10), reference re-run config (4), shared fee constant (4). Suites: `packages/shared/tests` **439** (+4), `packages/shared/backtest/tests` **142**, `packages/shared/options_cache/tests` **201** (1 skipped, pre-existing), `apps/web/modules` **223**, `scripts/tests` **29**. All pass (Rosetta repo venv). |
+| G2 | PASS — dry runs below; nothing fetched, no run row. |
+| G3 | PASS — run `5bd7b732-7009-4dae-a710-eb65a07c84f1` (`DAILY-CAPTURE`, completed): 6 legs planned, 1 already covered (the short debit leg, captured 06:30–13:00 by CR-AM/AP), **5 fetched, 0 × 404, 0 empty, 0 exceptions**, 160 bars written (15 bars in-window per leg ×, with the counterpart put/call rows the option endpoint returns). `structures = {debit: captured, condor: captured}`. |
+| G4 | PASS — `run_reference_rerun.py --dry-run --today 2026-09-07` → harness `--universe-end 2026-08-31 --split-date 2026-06-05 --structural-prob-mode walk-forward --cr-id REFDRY-2026-08 --selection-only --no-persist`, run `f90713e6-de36-4ca6-bc31-87d006f2ece9`, exit 0, 934 s (Phase 1 only). Universe 394/397 magnet-above dates, 393 entries loaded, 150 selected (`far/holdout 1, far/train 49, mid/holdout 2, mid/train 48, near/holdout 3, near/train 47`), clean credit 57 / debit 57, 11 unlistable, max width 20. **Holdout lines in the log: `holdout: n=15, unread (threshold 60)` and `holdout n per band (selected): {far: 1, mid: 2, near: 3}; dates matured 6/6` — no holdout P&L anywhere (`pnl=` occurs 0 times).** |
+| G5 | PASS — `git diff --stat origin/main...HEAD`: `packages/shared/config.py`, `render.yaml`, `scripts/cr_aa_sweep_pending_outcomes.py`, `scripts/cr_ah_step4_analysis.py`, `scripts/cron_daily_leg_capture.py`, `scripts/run_reference_rerun.py`, `specs/CR-AU-live-stream.md` + tests (`packages/shared/tests/test_config.py`, `scripts/tests/*`) + the `scripts/__init__.py` / `scripts/tests/__init__.py` package markers declared in Step 0. |
+
+### G2 — leg lists (dry runs)
+
+```
+2026-09-04  regime=magnet-above  IM=68.22 (feature_vector.implied_move_1d)  SPX06:33=7742.9@06:33:00  ES_open=7742.25  basis=-0.65  window=06:30–06:45 PT
+  debit: long 7810 / short 7825 C  expiry 2026-09-28  width 15
+  condor ±0.5 IM: 7700P / 7710P / 7775C / 7785C  expiry 2026-09-04 (0DTE)
+    debit  short SPX260928C07825000  [cached]
+    debit  long  SPX260928C07810000
+    condor long  SPX260904P07700000
+    condor short SPX260904P07710000
+    condor short SPX260904C07775000
+    condor long  SPX260904C07785000
+legs planned=6  to_fetch=5  already_covered=1
+dry-run: no fetches, no run row.
+
+2026-09-02  regime=amplification  IM=51.99 (feature_vector.implied_move_1d)  SPX06:33=7635.27@06:33:00  ES_open=7650.5  basis=15.23  window=06:30–06:45 PT
+  debit: none (regime is not magnet-above)
+  condor ±0.5 IM: 7600P / 7610P / 7660C / 7670C  expiry 2026-09-02 (0DTE)
+    condor long  SPX260902P07600000
+    condor short SPX260902P07610000
+    condor short SPX260902C07660000
+    condor long  SPX260902C07670000
+legs planned=4  to_fetch=4  already_covered=0
+dry-run: no fetches, no run row.
+```
+
+The 2026-09-04 debit pair is 7810/7825 (width 15): the prior-close chain for the 2026-09-28 expiry lists 7810 and 7825 but no 7815 / 7820 near the 7825 anchor, so `snap_spread_to_listed` widens within the CR-AR cap. The first G2 attempt failed on `orats_monies_minute.trade_date` being `text` (fixed in a9d1481 before the dry runs above).
+
+### G3 — run row
+
+`bt_backfill_runs` → `run_id 5bd7b732-7009-4dae-a710-eb65a07c84f1 · cr_id DAILY-CAPTURE · status completed · started 2026-09-08 02:40:47 UTC · completed 02:42:11 UTC · self_assessment "2026-09-04 magnet-above: legs planned=6 covered=1 fetched=5 404=0 empty=0 exceptions=0 bars_written=160; debit=captured condor=captured; no P&L computed"`. `orats_options_fetched_windows` now holds 06:30–06:45 rows (row_count 16) for the five new legs next to the pre-existing 06:30–13:00 row (388) for `SPX260928C07825000`.
+
+### Sweep dry run (decision 2, not a gate)
+
+`cr_aa_sweep_pending_outcomes.py --dry-run` (19:20 PT): 0 matured pending rows; matured-trade capture scanned **15** post-split magnet-above computed dates — 34 leg-windows already covered (CR-AM/AP captures), **10 touch-window legs would be fetched** (2026-06-12, 06-18, 07-15, 07-16, 08-10), settlements for 2026-08-26 / 08-28 deferred (expiries 09-17 / 09-21). No run row. The real sweep was not run (not a gate; the next scheduled sweep will fetch them once `ORATS_API_KEY` is on that cron).
+
+### Surfaced
+
+- **The monthly reference re-run will not reproduce CR-AR's sample.** With `--universe-end 2026-08-31` the stratified 50/band selection picks different train dates than the ≤ 2026-06-05 universe did, and most of them were never captured (CR-AH Step 2 captured June's selection): clean credit **57** / debit **57** versus CR-AR's 106 / 108. The first `REF-2026-09` run (2026-10-01) will therefore be a smaller-sample reference unless a capture pass for the newly selected train dates precedes it — either a `cr_ap_capture_snapped_legs.py`-style capture keyed off the `--selection-only` output, or pinning the train selection to CR-AR's dates. Open question for the wrap.
+- Phase 1 alone took 934 s on the 394-date universe (the payload materialisation per date); the monthly run's budget should assume ≥ 30 minutes.
+- `sweep_pending_outcomes` reports `Latest RTH session: 2026-09-07` — ES traded RTH hours on Labor Day (Globex), so the sweep's "latest session" can be a holiday. Pre-existing; irrelevant to the capture windows (all dated by the trade date).
