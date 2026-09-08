@@ -41,6 +41,20 @@ CR-AL flags (2026-09-05):
                           full: allow_lookahead=True (as CR-AH ran in June)
   --seed                  bootstrap seed for the Summary D CI
 
+CR-AU flags (2026-09-07):
+  --holdout-read PATH     decision 4: holdout P&L is printed / persisted only when this
+                          points at the pre-registration document AND the holdout
+                          magnet-above computed count is >= 60. Without it (or below
+                          the threshold) holdout rows show n per band and dates
+                          matured only: "holdout: n=<k>, unread (threshold 60)".
+                          A path that does not exist raises before any DB work.
+  --selection-only        stop after Phase 1 (universe, stratified selection, clean
+                          filter, unlistable list, holdout gate line); no cells.
+                          Used by run_reference_rerun.py --dry-run.
+  Fees (decision 5): compute_pnl also returns close_pnl_net = close_pnl −
+  VERTICAL_FEE_PTS (2 legs × 2 sides × FEE_PER_CONTRACT_PER_LEG / 100);
+  cells persist mean_pnl_net next to the gross mean_pnl.
+
 Decision refs:
   #4  edge = structural_prob - abs(net_credit)/spread_width
   #6  debit: touch_exit + close; credit: close only (touch = breach diagnostic)
@@ -113,6 +127,7 @@ from packages.shared.backtest.plugins.debit_vertical import DebitVerticalPlugin
 from packages.shared.backtest.plugins.vertical import VerticalPlugin
 from packages.shared.backtest.quote_validity import build_quote_map, spread_value_is_valid
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
+from packages.shared.config import FEE_PER_CONTRACT_PER_LEG, round_trip_fee_pts
 from packages.shared.day_features import (
     _LANDSCAPE_ROW_SQL,
     _OPEN_STRADDLE_SQL,
@@ -138,6 +153,59 @@ THRESHOLDS = [0.00, 0.05, 0.10, 0.15, 0.20]
 
 # CR-AL: structural-probability analogue-pool mode, shown in every section header
 _MODE_TAG = "mode=?"
+
+# CR-AU decision 5: commission per two-leg vertical opened and closed (4 contract-sides), in points
+VERTICAL_FEE_PTS = round_trip_fee_pts(2)          # 0.026 at $0.65 / contract / leg
+
+# CR-AU decision 4: holdout read rule
+HOLDOUT_READ_THRESHOLD = 60
+
+
+@dataclass(frozen=True)
+class HoldoutGate:
+    n_holdout_computed: int
+    unlocked: bool
+    threshold: int = HOLDOUT_READ_THRESHOLD
+    preregistration: Optional[str] = None
+
+    @property
+    def line(self) -> str:
+        if self.unlocked:
+            return (f"holdout: n={self.n_holdout_computed}, READ UNLOCKED (threshold {self.threshold}; "
+                    f"pre-registration {self.preregistration})")
+        return f"holdout: n={self.n_holdout_computed}, unread (threshold {self.threshold})"
+
+
+def holdout_read_gate(n_holdout_computed: int, holdout_read_path: Optional[str],
+                      threshold: int = HOLDOUT_READ_THRESHOLD) -> HoldoutGate:
+    """Decision 4. Holdout P&L may be printed only when a pre-registration file is
+    named AND n >= threshold. A named file that does not exist raises — a bare
+    flag is not consent."""
+    if holdout_read_path is not None:
+        path = Path(holdout_read_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"--holdout-read: pre-registration document not found: {holdout_read_path}")
+    unlocked = holdout_read_path is not None and n_holdout_computed >= threshold
+    return HoldoutGate(n_holdout_computed, unlocked, threshold, holdout_read_path)
+
+
+_HOLDOUT_COMPUTED_SQL = """
+    SELECT count(*)
+    FROM bt_daily_outcomes o
+    JOIN bt_daily_features f
+      ON f.ticker = o.ticker AND f.trade_date = o.trade_date
+     AND f.feature_version = o.feature_version AND f.active
+    WHERE o.ticker = %s AND o.feature_version = %s AND o.active
+      AND o.trade_date > %s
+      AND f.regime_at_classification = 'magnet-above'
+      AND o.outcome_status = 'computed'
+"""
+
+
+def count_holdout_computed(conn, split_date: date) -> int:
+    """Holdout magnet-above signal dates whose outcome is computed (the gate's n)."""
+    row = conn.execute(_HOLDOUT_COMPUTED_SQL, (TICKER, VERSION, split_date)).fetchone()
+    return int(row[0]) if row else 0
 
 _UTC = ZoneInfo("UTC")
 _PT  = ZoneInfo("America/Los_Angeles")
@@ -835,14 +903,16 @@ _CREDIT_PLUGIN = VerticalPlugin()
 _DEBIT_PLUGIN  = DebitVerticalPlugin()
 
 
-def compute_pnl(td: TradeData, threshold: float) -> dict:
+def compute_pnl(td: TradeData, threshold: float, fee_pts: float = VERTICAL_FEE_PTS) -> dict:
     """Compute P&L for one trade at a given threshold.
 
     Returns dict with:
       filled, fill_net_credit, fill_edge,
       touch_exit_pnl (debit only), close_pnl,
       baseline_net_credit, baseline_close_pnl, baseline_touch_exit_pnl,
-      close_zone, touch_resolution, settlement_available
+      close_zone, touch_resolution, settlement_available,
+      CR-AU decision 5: close_pnl_net / touch_exit_pnl_net / baseline_close_pnl_net
+      (= gross − fee_pts, the round-trip commission of the vertical), fee_pts
     """
     plugin = _DEBIT_PLUGIN if td.structure == "debit" else _CREDIT_PLUGIN
 
@@ -897,6 +967,11 @@ def compute_pnl(td: TradeData, threshold: float) -> dict:
         "baseline_touch_exit_pnl": baseline_touch_exit_pnl,
         "settlement_available": td.settlement_price is not None,
         "touch_resolution": td.touch_resolution,
+        # CR-AU decision 5: net of commission (gross figures above are unchanged)
+        "close_pnl_net": (close_pnl - fee_pts) if close_pnl is not None else None,
+        "touch_exit_pnl_net": (touch_exit_pnl - fee_pts) if touch_exit_pnl is not None else None,
+        "baseline_close_pnl_net": (baseline_close_pnl - fee_pts) if baseline_close_pnl is not None else None,
+        "fee_pts": fee_pts,
     }
 
 
@@ -916,6 +991,7 @@ class CellStats:
     # CR-AR decision 5: width sums for the width-weighted per-point statistics
     pnl_width_sum: float = 0.0        # Σ width_actual over the settled filled trades
     baseline_width_sum: float = 0.0   # Σ width_actual over the baseline trades
+    pnl_net_sum: float = 0.0          # CR-AU decision 5: Σ close_pnl_net over the settled filled trades
 
 
 def aggregate(trades: list[tuple[TradeData, dict]]) -> CellStats:
@@ -930,6 +1006,7 @@ def aggregate(trades: list[tuple[TradeData, dict]]) -> CellStats:
             s.pnl_sum += r["close_pnl"]
             s.pnl_sq_sum += r["close_pnl"] ** 2
             s.pnl_width_sum += float(td.width_actual)
+            s.pnl_net_sum += r["close_pnl_net"]
             if r["close_pnl"] > 0:
                 s.n_wins += 1
         if r["baseline_close_pnl"] is not None:
@@ -949,7 +1026,7 @@ def fmt_stats(s: CellStats, label: str = "") -> dict:
                 "wilson_lo": None, "wilson_hi": None,
                 "baseline_mean": None, "beat": None,
                 "mean_pnl_per_point": None, "baseline_per_point": None,
-                "beat_per_point": None, "mean_width": None}
+                "beat_per_point": None, "mean_width": None, "mean_pnl_net": None}
 
     mean_pnl = s.pnl_sum / n
     win_rate = s.n_wins / n
@@ -976,6 +1053,7 @@ def fmt_stats(s: CellStats, label: str = "") -> dict:
         "baseline_per_point": baseline_pp,
         "beat_per_point": beat_pp,
         "mean_width": s.pnl_width_sum / n,
+        "mean_pnl_net": s.pnl_net_sum / n,      # CR-AU decision 5
     }
 
 
@@ -1063,11 +1141,13 @@ def print_sweep(sweep_rows: list[dict], chosen: float, structure: str):
 
 
 def print_by_band(all_data: list[TradeData], threshold: float, structure: str, label: str,
-                  train_only: bool = False):
+                  train_only: bool = False, holdout_unlocked: bool = False):
+    """CR-AU decision 4: holdout rows print n per band and dates matured only unless
+    `holdout_unlocked` (the read gate) is True. `net` = mean close P&L − commission."""
     print(f"\n{structure.upper()} — By distance band ({label}, T={threshold:.2f}) [{_MODE_TAG}]:")
-    print(f"  {'band':<6}  {'part':<8}  {'n':>3}  {'pnl':>7}  {'win%':>5}  "
+    print(f"  {'band':<6}  {'part':<8}  {'n':>3}  {'pnl':>7}  {'net':>7}  {'win%':>5}  "
           f"[lo–hi 95%]     {'base':>7}  {'beat':>7}  {'pnl/pt':>7}  {'beat/pt':>7}  {'width':>5}")
-    print(f"  {'─'*96}")
+    print(f"  {'─'*105}")
     for part in (("train",) if train_only else ("train", "holdout")):
         if part == "holdout" and not any(td.partition == "holdout" for td in all_data):
             print(f"  {_NO_HOLDOUT_LINE}")
@@ -1078,6 +1158,10 @@ def print_by_band(all_data: list[TradeData], threshold: float, structure: str, l
             else:
                 subset = [td for td in all_data if td.partition == part and td.band == b]
             if not subset:
+                continue
+            if part == "holdout" and not holdout_unlocked:
+                n_matured = sum(1 for td in subset if td.settlement_price is not None)
+                print(f"  {b:<6}  {part:<8}  {len(subset):>3}  (unread — n only; dates matured={n_matured})")
                 continue
             pairs = [(td, compute_pnl(td, threshold)) for td in subset]
             s = aggregate(pairs)
@@ -1091,7 +1175,7 @@ def print_by_band(all_data: list[TradeData], threshold: float, structure: str, l
 
             print(
                 f"  {b:<6}  {part:<8}  {r['n']:>3}  "
-                f"{pf(r.get('mean_pnl')):>7}  {pf(r.get('win_rate'), '.0%'):>5}  "
+                f"{pf(r.get('mean_pnl')):>7}  {pf(r.get('mean_pnl_net')):>7}  {pf(r.get('win_rate'), '.0%'):>5}  "
                 f"[{pf(r.get('wilson_lo'), '.0%'):>4}–{pf(r.get('wilson_hi'), '.0%'):>4}]  "
                 f"{pf(r.get('baseline_mean')):>7}  {pf(r.get('beat')):>7}  "
                 f"{pf(r.get('mean_pnl_per_point'), '.3f'):>7}  {pf(r.get('beat_per_point'), '.3f'):>7}  "
@@ -1190,14 +1274,18 @@ def build_summary(
     train_only: bool = False,
     seed: int = 20260905,
     summary_d_out: Optional[dict] = None,
+    holdout_gate: Optional[HoldoutGate] = None,
 ) -> str:
     """Build four plain-language summary reads.
 
     train_only (CR-AL): Summary A/B are replaced by a "holdout not read" line.
     summary_d_out: if given, receives per-structure Summary D numbers.
+    holdout_gate (CR-AU decision 4): when given and locked, Summary A/B print
+    the gate line ("holdout: n=<k>, unread (threshold 60)") and no holdout P&L.
     """
     lines = []
     lines.append(f"[{_MODE_TAG}]")
+    holdout_locked = holdout_gate is not None and not holdout_gate.unlocked
 
     def get_cell(data, band, partition, threshold):
         subset = [td for td in data if td.band == band and td.partition == partition]
@@ -1209,11 +1297,13 @@ def build_summary(
 
     # Summary A: Debit near/holdout
     lines.append("\n── Summary A: Debit near-band holdout ──")
-    d_near_ho = None if train_only else get_cell(debit_data, "near", "holdout", debit_thresh)
+    d_near_ho = None if (train_only or holdout_locked) else get_cell(debit_data, "near", "holdout", debit_thresh)
     if train_only:
         lines.append("  holdout not read (--train-only).")
     elif not any(td.partition == "holdout" for td in debit_data):
         lines.append(f"  {_NO_HOLDOUT_LINE}")
+    elif holdout_locked:
+        lines.append(f"  {holdout_gate.line}")
     elif d_near_ho and d_near_ho["n"] >= 3:
         beat = d_near_ho.get("beat") or 0
         sign = "+" if beat > 0 else ""
@@ -1235,11 +1325,13 @@ def build_summary(
 
     # Summary B: Credit near/holdout
     lines.append("\n── Summary B: Credit near-band holdout ──")
-    c_near_ho = None if train_only else get_cell(credit_data, "near", "holdout", credit_thresh)
+    c_near_ho = None if (train_only or holdout_locked) else get_cell(credit_data, "near", "holdout", credit_thresh)
     if train_only:
         lines.append("  holdout not read (--train-only).")
     elif not any(td.partition == "holdout" for td in credit_data):
         lines.append(f"  {_NO_HOLDOUT_LINE}")
+    elif holdout_locked:
+        lines.append(f"  {holdout_gate.line}")
     elif c_near_ho and c_near_ho["n"] >= 3:
         beat = c_near_ho.get("beat") or 0
         sign = "+" if beat > 0 else ""
@@ -1380,7 +1472,9 @@ CREATE TABLE IF NOT EXISTS bt_edge_backtest_results (
     close_pnl_per_point FLOAT,
     baseline_per_point  FLOAT,
     beat_per_point      FLOAT,
-    mean_width_actual   FLOAT
+    mean_width_actual   FLOAT,
+    -- CR-AU decision 5: mean close P&L net of commission (mean_pnl stays gross)
+    mean_pnl_net        FLOAT
 );
 """
 
@@ -1390,7 +1484,8 @@ ALTER TABLE bt_edge_backtest_results
   ADD COLUMN IF NOT EXISTS close_pnl_per_point FLOAT,
   ADD COLUMN IF NOT EXISTS baseline_per_point  FLOAT,
   ADD COLUMN IF NOT EXISTS beat_per_point      FLOAT,
-  ADD COLUMN IF NOT EXISTS mean_width_actual   FLOAT;
+  ADD COLUMN IF NOT EXISTS mean_width_actual   FLOAT,
+  ADD COLUMN IF NOT EXISTS mean_pnl_net        FLOAT;   -- CR-AU decision 5
 """
 
 _GRANT_SQL = "GRANT SELECT, INSERT ON bt_edge_backtest_results TO dash_backfill_writer;"
@@ -1444,8 +1539,9 @@ def persist_cell_stats(
            partition, threshold, n_dates, n_filled, n_settled,
            fill_rate, mean_pnl, win_rate, wilson_lo, wilson_hi,
            baseline_mean, beat_baseline,
-           close_pnl_per_point, baseline_per_point, beat_per_point, mean_width_actual)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+           close_pnl_per_point, baseline_per_point, beat_per_point, mean_width_actual,
+           mean_pnl_net)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """,
         (
             run_id, cr_id, structure, outcome, band, pattern,
@@ -1457,6 +1553,7 @@ def persist_cell_stats(
             # CR-AR decision 5: width-weighted per-point statistics
             r.get("mean_pnl_per_point"), r.get("baseline_per_point"),
             r.get("beat_per_point"), r.get("mean_width"),
+            r.get("mean_pnl_net"),          # CR-AU decision 5
         ),
     )
 
@@ -1477,6 +1574,10 @@ def _parse_args(argv=None):
     p.add_argument("--structural-prob-mode", choices=("full", "walk-forward"), default="walk-forward",
                    help="walk-forward: before_date=trade_date; full: allow_lookahead=True")
     p.add_argument("--seed", type=int, default=20260905, help="bootstrap seed (Summary D)")
+    p.add_argument("--holdout-read", default=None, metavar="PATH",
+                   help="CR-AU decision 4: path to the pre-registration document; holdout P&L prints only with it and n >= 60")
+    p.add_argument("--selection-only", action="store_true",
+                   help="CR-AU: stop after Phase 1 (selection, clean filter, unlistable, holdout gate); no cells")
     return p.parse_args(argv)
 
 
@@ -1485,13 +1586,16 @@ def main(argv=None):
     args = _parse_args(argv)
     mode = args.structural_prob_mode
     _MODE_TAG = f"mode={mode}"
+    if args.holdout_read is not None:
+        holdout_read_gate(0, args.holdout_read)      # raises before any DB work if the file is missing
 
     t0 = _time.perf_counter()
     print(f"\n{SEP}")
     print("CR-AH Step 4 — Two-structure × two-axis analysis")
     print(f"  cr_id={args.cr_id}  structural-prob {_MODE_TAG}  train_only={args.train_only}  "
           f"no_persist={args.no_persist}  universe_end={args.universe_end}  "
-          f"split_date={args.split_date}  seed={args.seed}")
+          f"split_date={args.split_date}  seed={args.seed}  selection_only={args.selection_only}  "
+          f"holdout_read={args.holdout_read}  fee_pts={VERTICAL_FEE_PTS:.3f} (${FEE_PER_CONTRACT_PER_LEG}/contract/leg)")
     print(SEP)
 
     conn = get_backfill_db_conn()
@@ -1550,6 +1654,33 @@ def main(argv=None):
             print(f"  Snapped pairs [{s_}]: {snap_summary[s_]}")
         _w_max = max((v["width_actual_max"] or 0.0 for v in snap_summary.values()), default=0.0)
         print(f"  max(width_actual) across structures (G4, expect ≤ {2 * WIDTH_NOMINAL:g}): {_w_max:g}")
+
+        # ── CR-AU decision 4: holdout read gate (n = holdout magnet-above computed dates) ──
+        gate = holdout_read_gate(count_holdout_computed(conn, args.split_date), args.holdout_read)
+        has_holdout_sel = any(e["partition"] == "holdout" for e in selected)
+        if has_holdout_sel:
+            today_ = date.today()
+            ho_band = Counter(e["band"] for e in selected if e["partition"] == "holdout")
+            ho_matured = sum(1 for e in selected if e["partition"] == "holdout"
+                             and nth_business_day(e["trade_date"], DTE_TARGET) <= today_)
+            print(f"  {gate.line}")
+            print(f"  holdout n per band (selected): {dict(sorted(ho_band.items()))}; "
+                  f"holdout dates matured (expiry ≤ {today_}): {ho_matured}/{sum(ho_band.values())}")
+        else:
+            print(f"  {_NO_HOLDOUT_LINE}")
+
+        if args.selection_only:
+            smoke = {"selection_only": True, "universe_end": args.universe_end.isoformat() if args.universe_end else None,
+                     "split_date": args.split_date.isoformat(), "selection_by_band_partition": sel_counts,
+                     "credit_clean": len(credit_clean), "debit_clean": len(debit_clean),
+                     "snapping": snap_summary, "n_unlistable": len(UNLISTABLE),
+                     "holdout_gate": {"n": gate.n_holdout_computed, "unlocked": gate.unlocked, "threshold": gate.threshold},
+                     "elapsed_s": round(_time.perf_counter() - t0, 1)}
+            update_run_smoke(conn, run_id, smoke,
+                             f"selection-only [{_MODE_TAG}]: selected={len(selected)} credit_clean={len(credit_clean)} "
+                             f"debit_clean={len(debit_clean)}; {gate.line}; no cells, no P&L")
+            print(f"\n  --selection-only: stopping after Phase 1 ({smoke['elapsed_s']}s). No trades collected, no cells, no P&L.")
+            return
 
         # ── Phase 2: Collect per-date data ───────────────────────────────────
         print(f"\n{SEP2}")
@@ -1661,12 +1792,17 @@ def main(argv=None):
             print("Phase 4: Full results (TRAIN only — holdout not read)")
         elif not has_holdout:
             print(f"Phase 4: Full results (all train; {_NO_HOLDOUT_LINE})")
+        elif not gate.unlocked:
+            print(f"Phase 4: Full results (train; {gate.line} — holdout rows show n and dates matured only)")
+            for s_, data_ in (("debit", debit_trades), ("credit", credit_trades)):
+                ho = [td for td in data_ if td.partition == "holdout"]
+                print(f"  {s_}: holdout n={len(ho)}, dates matured={sum(1 for td in ho if td.settlement_price is not None)}")
         else:
-            print("Phase 4: Full results (HOLDOUT READ ONCE at chosen threshold)")
+            print(f"Phase 4: Full results (HOLDOUT READ at chosen threshold — {gate.line})")
 
         band_label = "train only" if args.train_only else "all splits"
-        print_by_band(debit_trades,  debit_thresh,  "debit",  band_label, train_only=args.train_only)
-        print_by_band(credit_trades, credit_thresh, "credit", band_label, train_only=args.train_only)
+        print_by_band(debit_trades,  debit_thresh,  "debit",  band_label, train_only=args.train_only, holdout_unlocked=gate.unlocked)
+        print_by_band(credit_trades, credit_thresh, "credit", band_label, train_only=args.train_only, holdout_unlocked=gate.unlocked)
 
         print_by_pattern(debit_train,  debit_thresh,  "debit")
         print_by_pattern(credit_train, credit_thresh, "credit")
@@ -1687,6 +1823,7 @@ def main(argv=None):
         summary = build_summary(
             debit_trades, credit_trades, debit_thresh, credit_thresh,
             train_only=args.train_only, seed=args.seed, summary_d_out=summary_d,
+            holdout_gate=gate,
         )
         print(summary)
 
@@ -1706,6 +1843,9 @@ def main(argv=None):
                 for part in ("train", "holdout"):
                     if part == "holdout" and not any(td.partition == "holdout" for td in data):
                         print(f"  {structure}: {_NO_HOLDOUT_LINE}")
+                        continue
+                    if part == "holdout" and not gate.unlocked:      # CR-AU A6: no holdout cells while the read is locked
+                        print(f"  {structure}: holdout cells not persisted ({gate.line})")
                         continue
                     for band in ("near", "mid", "far", "all"):
                         if band == "all":
@@ -1738,6 +1878,8 @@ def main(argv=None):
             "universe_end": args.universe_end.isoformat() if args.universe_end else None,
             "split_date": args.split_date.isoformat(),
             "seed": args.seed,
+            "fee_pts": VERTICAL_FEE_PTS,
+            "holdout_gate": {"n": gate.n_holdout_computed, "unlocked": gate.unlocked, "threshold": gate.threshold},
             "selection_by_band_partition": sel_counts,
             "quote_validity": obs_summary,
             "snapping": snap_summary,

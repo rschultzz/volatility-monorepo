@@ -29,3 +29,60 @@ services:
         sync: false
       - key: PYTHONPATH
         value: packages
+
+  # ── CR-AU (2026-09-07): live out-of-sample stream ─────────────────────────
+  # Documentation entries. These crons are created chat-side in the Render
+  # dashboard / MCP after the CR-AU merge, mirroring the existing
+  # `open-implied-move` cron (crn-d8ime5k8aovs738fef60): rootDir "", branch
+  # main, build `pip install -r apps/cron/requirements.txt`, PYTHON_VERSION
+  # 3.13.4, env BACKFILL_DATABASE_URL (role dash_backfill_writer) + ORATS_API_KEY.
+  # NOTE: autoDeploy in this file is dead in practice — the live services were
+  # created in the dashboard and are not reconciled from this blueprint
+  # (see open question orats-eod-cron-not-autodeploying). Values below are
+  # what the dashboard entries should carry.
+  #
+  # Schedule (decision 1, amended 2026-09-07): 13:50 UTC = 06:50 PDT — after the
+  # 13:35 implied-move fill and the 13:40 outcomes insert, and after the
+  # 06:30–06:45 PT capture window has closed (fetching earlier would record
+  # the unfilled minutes as fetched-and-empty). Fixed UTC drifts one hour in
+  # PST (decision 7 DST note); the script polls for the 06:33 PT snapshot up to
+  # 120 min so it is DST-safe on its own; open-implied-move / backfill_outcomes
+  # are not (CR-BD, due before 2026-11-01).
+  #
+  # The existing `sweep_pending_outcomes` cron (crn-d8guhf8jo6nc73e1iou0,
+  # `5 11 * * 1-5`) additionally needs ORATS_API_KEY for the CR-AU decision-2
+  # matured-trade capture; without it the capture is skipped with a warning.
+
+  - type: cron
+    name: daily-leg-capture
+    env: python
+    rootDir: ""
+    buildCommand: pip install -r apps/cron/requirements.txt
+    startCommand: python scripts/cron_daily_leg_capture.py
+    schedule: "50 13 * * 1-5"
+    autoDeploy: false   # dead in practice; see note above
+    envVars:
+      - key: BACKFILL_DATABASE_URL
+        sync: false
+      - key: ORATS_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.13.4
+
+  - type: cron
+    name: reference-rerun
+    env: python
+    rootDir: ""
+    buildCommand: pip install -r apps/cron/requirements.txt
+    startCommand: python scripts/run_reference_rerun.py
+    schedule: "0 14 1 * *"
+    autoDeploy: false   # dead in practice; see note above
+    envVars:
+      - key: BACKFILL_DATABASE_URL
+        sync: false
+      - key: DATABASE_URL       # owner URL: ensure_catalog_table adds mean_pnl_net idempotently; omit to skip the DDL step
+        sync: false
+      - key: ORATS_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.13.4
