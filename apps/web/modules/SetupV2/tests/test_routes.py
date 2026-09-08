@@ -110,14 +110,32 @@ class TestProposalLegs(unittest.TestCase):
         self.assertEqual(legs[1]["side"], "short")
 
 
-class TestFairValueSign(unittest.TestCase):
-    """A1: d = close − wall; positive d pays in full, d ≤ −width pays nothing."""
+class TestT15Derivation(unittest.TestCase):
+    """A2: target = close_at_horizon − final_close_distance; d15 = target − session_close_t15."""
 
-    def test_sign_convention_through_the_helper(self):
+    def _o(self, td, status="computed", end=dt.date(2026, 9, 1), fcd=-165.675, c15=7700.0):
+        return {"trade_date": td, "outcome_status": status, "horizon_end_date": end,
+                "final_close_distance_from_target": fcd, "session_close_t15": c15}
+
+    def test_distances_and_exclusion_counts(self):
+        closes = {dt.date(2026, 9, 1): 7642.25, dt.date(2026, 9, 3): 7751.25}
+        outcomes = [
+            self._o("a"),                                                    # wall 7807.925; close_t15 7700 → d15 +107.925
+            self._o("b", end=dt.date(2026, 9, 3), fcd=-52.825, c15=7810.0),  # wall 7804.075; closed above → d15 −5.925
+            self._o("c", c15=None),                                          # no T+15 close → excluded
+            self._o("d", end=dt.date(2026, 9, 9)),                           # no horizon close → excluded
+            self._o("e", status="pending_history"),                          # not computed → ignored
+        ]
+        d15, counts = r.t15_distances_below_target(outcomes, closes)
+        self.assertEqual(len(d15), 2)
+        self.assertAlmostEqual(d15[0], 107.925, places=3)
+        self.assertAlmostEqual(d15[1], -5.925, places=3)
+        self.assertEqual(counts, {"n_computed": 4, "n_valued": 2, "n_no_t15_close": 1, "n_no_horizon_close": 1})
+
+    def test_values_through_the_helper(self):
         from packages.shared.probability import analogue_fair_value
-        fv = analogue_fair_value([+31.5, -19.4, -134.5, +3.6], 10.0, seed=20260903)
-        # values 10, 0, 0, 10 → fair 5.0; full payout 2/4; any payout 2/4
-        self.assertAlmostEqual(fv["fair"], 5.0)
+        fv = analogue_fair_value([107.925, -5.925], 10.0, seed=20260903)
+        self.assertAlmostEqual(fv["fair"], 5.0)               # 0 and 10
         self.assertAlmostEqual(fv["full_payout_rate"], 0.5)
         self.assertAlmostEqual(fv["any_payout_rate"], 0.5)
 

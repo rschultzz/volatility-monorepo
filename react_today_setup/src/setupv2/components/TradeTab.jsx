@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { gexB, horizonMixText, longDate, pct, pctInterval, pts, shortDate, signedPts, strike } from '../format';
+import { gexB, longDate, pct, pctInterval, pts, shortDate, signedPts, strike } from '../format';
 import DetailPanel from './DetailPanel';
 
 // ── Price gauge ───────────────────────────────────────────────────────────────
@@ -157,8 +157,9 @@ export default function TradeTab({ card, apiBase }) {
               <div className="l">Fair value at close</div>
               <div className="n" data-testid="fair-value">{fv.fair != null ? pts(fv.fair, 1) : '—'}</div>
               <div className="s">
-                mean of this spread's value at the {n} analogue closes — {k} analogues within the similarity ceiling, {n} with a computed outcome
-                {fv.horizon_mix && Object.keys(fv.horizon_mix).length ? `; each at its own outcome horizon (${horizonMixText(fv.horizon_mix)})` : ''}
+                mean of this spread's value at the {n} analogue closes at T+15 sessions — {k} analogues within the similarity ceiling, {fv.n_computed ?? analogues.k_with_outcomes ?? n} with a computed outcome
+                {fv.n_no_t15_close ? `, ${fv.n_no_t15_close} without a T+15 close excluded` : ''}
+                {fv.n_no_horizon_close ? `, ${fv.n_no_horizon_close} without a horizon close excluded` : ''}
               </div>
             </div>
             <div className="box">
@@ -190,13 +191,13 @@ export default function TradeTab({ card, apiBase }) {
             <span className="k">Reached the wall</span>
             <span className="v">{pct(analogues.touch_rate)} <span className="muted">{pctInterval(analogues.touch_ci?.[0], analogues.touch_ci?.[1])}</span>{analogues.mean_days_to_reach != null ? ` · mean ${pts(analogues.mean_days_to_reach, 1)} sessions` : ''}</span>
             <span className="k">Finished above {strike(shortLeg?.strike_spx)}</span>
-            <span className="v">{pct(analogues.full_payout_rate)} <span className="muted">— full payout days (closed at or above the wall)</span></span>
+            <span className="v">{pct(analogues.full_payout_rate)} <span className="muted">— full payout days (at or above the wall at T+15)</span></span>
             <span className="k">Finished above {strike(longLeg?.strike_spx)}</span>
-            <span className="v">{pct(analogues.any_payout_rate)} <span className="muted">— any payout</span></span>
+            <span className="v">{pct(analogues.any_payout_rate)} <span className="muted">— any payout (above the long strike at T+15)</span></span>
             <span className="k">Closed at the wall</span>
             <span className="v">{pct(analogues.close_at_wall_rate)} <span className="muted">— within ±0.25 IM</span></span>
             <span className="k">Spread worth at close</span>
-            <span className="v">{fv.fair != null ? `${pts(fv.fair, 1)} avg` : '—'} <span className="muted">· that's where "fair value" comes from</span></span>
+            <span className="v">{fv.fair != null ? `${pts(fv.fair, 1)} avg` : '—'} <span className="muted">· at T+15 sessions — that's where "fair value" comes from</span></span>
           </div>
         </div>
       </div>

@@ -35,11 +35,11 @@ function card(overrides = {}) {
     },
     quote: { net_debit: 4.1, quote_minute: '06:34', quote_valid: true, stale_quote: false, market_implied: 0.41, entry_minute_pt: '06:34',
              by_minute: [{ minute: '06:34', net_debit: 4.1, valid: true }, { minute: '06:59', net_debit: 4.2, valid: true }], window_pt: ['06:30', '07:00'], warnings: [] },
-    fair_value: { n: 68, width: 10, fair: 5.3542, max_price: 4.8488, boot_lo: 4.159, boot_hi: 6.4688, full_payout_rate: 0.5147, any_payout_rate: 0.5735, horizon_mix: { '5': 34, '20': 28, '60': 6 }, n_boot: 1000, seed: 20260903 },
-    pnl: { expected: 1.2282, lo: 0.033, hi: 2.3428, fee_pts: 0.026, fee_per_contract_per_leg: 0.65 },
+    fair_value: { n: 65, width: 10, fair: 5.206, max_price: 4.72, boot_lo: 4.05, boot_hi: 6.39, full_payout_rate: 0.5077, any_payout_rate: 0.5385, basis: 't15', valuation_horizon_sessions: 15, n_computed: 68, n_valued: 65, n_no_t15_close: 3, n_no_horizon_close: 0, horizon_mix: { '5': 34, '20': 28, '60': 6 }, n_boot: 1000, seed: 20260903 },
+    pnl: { expected: 1.08, lo: -0.076, hi: 2.264, fee_pts: 0.026, fee_per_contract_per_leg: 0.65 },
     verdict: { code: 'enter', text: 'quote is under the max — enter at the open' },
     band: { today: 'far', sigma: 2.5496, im_open_straddle: 53.34, table_spot: 7670.175, cr_id: 'CR-AR', rows: [NEAR, MID, FAR], all: null, today_cell: FAR },
-    analogues: { k: 70, k_with_outcomes: 68, touch_rate: 0.7353, touch_ci: [0.6199, 0.8255], mean_days_to_reach: 4.84, close_at_wall_rate: 0.1029, full_payout_rate: 0.5147, any_payout_rate: 0.5735, similarity_ceiling: 5.0 },
+    analogues: { k: 70, k_with_outcomes: 68, touch_rate: 0.7353, touch_ci: [0.6199, 0.8255], mean_days_to_reach: 4.84, close_at_wall_rate: 0.1029, full_payout_rate: 0.5077, any_payout_rate: 0.5385, similarity_ceiling: 5.0 },
     structural_probability: {
       touch_rate: 0.7353, post_touch: { pattern_label: 'stepping-stone', same_bucket_n: 25, total_touchers: 50, advisory: { n: 25 },
         fractions: { t1: { below: 0.2, at: 0.2, above: 0.6 }, t5: { below: 0.3, at: 0.1, above: 0.6 }, t15: { below: 0.36, at: 0.08, above: 0.56 } } },
@@ -70,10 +70,10 @@ describe('Setup v2 card — verdict (decision 5)', () => {
     const v = screen.getByTestId('verdict')
     expect(v.dataset.code).toBe('enter')
     expect(v.textContent).toContain('enter at the open')
-    expect(screen.getByTestId('max-price').textContent).toContain('4.8')
-    expect(screen.getByTestId('fair-value').textContent).toBe('5.4')
+    expect(screen.getByTestId('max-price').textContent).toContain('4.7')
+    expect(screen.getByTestId('fair-value').textContent).toBe('5.2')
     expect(screen.getByTestId('price-gauge').textContent).toContain('quote now 4.10')
-    expect(screen.getByTestId('expected-pnl').textContent).toContain('+1.2')
+    expect(screen.getByTestId('expected-pnl').textContent).toContain('+1.1')
     expect(screen.getByTestId('market-implied').textContent).toBe('41%')
   })
 
@@ -111,16 +111,19 @@ describe('Setup v2 card — analogue wording and band', () => {
     expect(text).not.toContain('low-confidence')
   })
 
-  it('outlines today\'s band and states the horizon mix and the at-wall rate separately', () => {
+  it('outlines today\'s band and states the T+15 basis, exclusions and the at-wall rate separately', () => {
     render(<TradeTab card={card()} apiBase="" />)
     expect(screen.getByTestId('band-far').className).toContain('today')
     expect(screen.getByTestId('band-near').className).not.toContain('today')
     expect(screen.getByTestId('band-far').textContent).toContain('+1.99')
     expect(screen.getByTestId('band-fact').textContent).toContain('Today is far')
-    expect(screen.getByTestId('fair-value').parentElement.textContent).toContain('34 × 5, 28 × 20, 6 × 60 sessions')
+    const fvBox = screen.getByTestId('fair-value').parentElement.textContent
+    expect(fvBox).toContain('at T+15 sessions')
+    expect(fvBox).toContain('68 with a computed outcome, 3 without a T+15 close excluded')
     const facts = screen.getByTestId('analogue-facts').textContent
     expect(facts).toContain('Finished above 7785')
     expect(facts).toContain('51%')
+    expect(facts).toContain('at or above the wall at T+15')
     expect(facts).toContain('Closed at the wall')
     expect(facts).toContain('10%')
   })

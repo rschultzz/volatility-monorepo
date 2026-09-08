@@ -126,7 +126,8 @@ def _fetch_analogue_outcomes(conn, ticker: str, dates: list[dt.date]) -> list[di
         cur.execute(
             """
             SELECT trade_date, outcome_status, horizon_sessions,
-                   final_close_distance_from_target, reached_touch, reached_close
+                   final_close_distance_from_target, reached_touch, reached_close,
+                   horizon_end_date, session_close_t15
             FROM bt_daily_outcomes_active
             WHERE ticker = %s AND feature_version = %s AND trade_date = ANY(%s)
             """,
@@ -141,9 +142,71 @@ def _fetch_analogue_outcomes(conn, ticker: str, dates: list[dt.date]) -> list[di
             "final_close_distance_from_target": float(r[3]) if r[3] is not None else None,
             "reached_touch":    r[4],
             "reached_close":    r[5],
+            "horizon_end_date": r[6],
+            "session_close_t15": float(r[7]) if r[7] is not None else None,
         }
         for r in rows
     ]
+
+
+_RTH_CLOSE_SQL = """
+    SELECT d, close FROM (
+        SELECT (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date AS d, close,
+               row_number() OVER (
+                   PARTITION BY (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date
+                   ORDER BY datetime DESC) AS rn
+        FROM ironbeam_es_1m_bars
+        WHERE (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date = ANY(%s)
+          AND (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::time
+              BETWEEN '06:30:00' AND '13:00:00'
+    ) x WHERE rn = 1
+"""
+
+
+def _fetch_rth_closes(conn, dates: list[dt.date]) -> dict[dt.date, float]:
+    """ES RTH session close (last 06:30–13:00 PT bar) per date — the same
+    session definition the outcome runner's daily bars use (Bars/service.py)."""
+    dates = sorted({d for d in dates if d is not None})
+    if not dates:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(_RTH_CLOSE_SQL, (dates,))
+        return {r[0]: float(r[1]) for r in cur.fetchall() if r[1] is not None}
+
+
+def t15_distances_below_target(outcomes: list[dict], closes_at_horizon: dict) -> tuple[list[float], dict]:
+    """CR-AW A2: per computed analogue, the wall re-derived from the stored
+    outcome — ``target = close_at_horizon − final_close_distance_from_target``
+    (checked in Step 0b: equals ``pick_drift_target(walls)`` to the point on
+    all 377 magnet-above rows) — and ``d15 = target − session_close_t15``,
+    points below the wall at T+15 sessions. Analogues without a T+15 close or
+    without a horizon close are excluded and counted.
+
+    Returns (d15 list, {"n_computed", "n_valued", "n_no_t15_close",
+    "n_no_horizon_close"}).
+    """
+    d15: list[float] = []
+    n_no_t15 = n_no_close = 0
+    for o in outcomes:
+        if o.get("outcome_status") != "computed":
+            continue
+        ch = closes_at_horizon.get(o.get("horizon_end_date"))
+        fcd = o.get("final_close_distance_from_target")
+        c15 = o.get("session_close_t15")
+        if ch is None or fcd is None:
+            n_no_close += 1
+            continue
+        if c15 is None:
+            n_no_t15 += 1
+            continue
+        target = float(ch) - float(fcd)
+        d15.append(round(target - float(c15), 4))
+    return d15, {
+        "n_computed":         sum(1 for o in outcomes if o.get("outcome_status") == "computed"),
+        "n_valued":           len(d15),
+        "n_no_t15_close":     n_no_t15,
+        "n_no_horizon_close": n_no_close,
+    }
 
 
 def _fetch_reference_rows(conn) -> tuple[Optional[str], list[dict]]:
@@ -372,11 +435,15 @@ def build_card(conn, ticker: str, trade_date: dt.date) -> tuple[dict, int]:
             "window_pt":     [QUOTE_WINDOW_PT[0].strftime("%H:%M"), QUOTE_WINDOW_PT[1].strftime("%H:%M")],
         })
 
-    # ── Fair value (decision 2 / 3) ─────────────────────────────────────────
+    # ── Fair value at T+15 sessions (decision 2 / 3, amendment A2) ──────────
     fv_width = width or 10.0
-    distances = [o["final_close_distance_from_target"] for o in computed]
-    fair = analogue_fair_value(distances, fv_width, n_boot=1000, seed=seed_for_date(trade_date))
-    fair["horizon_mix"] = horizon_mix(computed)
+    closes_at_horizon = _fetch_rth_closes(conn, [o.get("horizon_end_date") for o in computed])
+    d15, counts = t15_distances_below_target(computed, closes_at_horizon)
+    fair = analogue_fair_value(d15, fv_width, n_boot=1000, seed=seed_for_date(trade_date))
+    fair["basis"] = "t15"
+    fair["valuation_horizon_sessions"] = 15
+    fair.update(counts)
+    fair["horizon_mix"] = horizon_mix(computed)   # outcome horizons of the set, for reference only
     fee_pts = fee_points(_STRUCTURE_LEGS)
     pnl = expected_pnl(fair, quote["net_debit"], fee_pts)
     pnl["fee_per_contract_per_leg"] = FEE_PER_CONTRACT_PER_LEG

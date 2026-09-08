@@ -13,7 +13,7 @@ Public entry points:
     compute_structural_probability(today_features, conn, ...) → dict
     classify_post_touch_positions(days_to_reach, horizon_bars, ...) → dict
     aggregate_post_touch_distribution(analogues_with_outcomes, anchor_bucket, ...) → dict
-    analogue_fair_value(close_distances, width, ...) → dict   (CR-AW)
+    analogue_fair_value(distances_below_target, width, ...) → dict   (CR-AW)
 """
 from __future__ import annotations
 
@@ -780,7 +780,7 @@ def _quantile(sorted_vals: list[float], p: float) -> float:
 
 
 def analogue_fair_value(
-    close_distances: list[float],
+    distances_below_target: list[float],
     width: float,
     *,
     n_boot: int = 1000,
@@ -788,13 +788,16 @@ def analogue_fair_value(
     max_pct: float = 0.20,
 ) -> dict:
     """Fair value of a debit vertical with its short strike at the wall, from
-    analogue closes (CR-AW decision 2). Pure math — no DB I/O.
+    analogue closes (CR-AW decision 2, amendment A2). Pure math — no DB I/O.
 
     Args:
-        close_distances: per analogue, ``final_close_distance_from_target`` =
-            close − wall at the end of the analogue's outcome horizon (points;
-            positive = closed above the wall). Only analogues with
-            ``outcome_status == 'computed'`` belong here — the caller filters.
+        distances_below_target: per analogue, ``d = target − close`` at the
+            valuation horizon (points *below* the wall; negative = closed
+            above it). CR-AW A2 values at T+15 sessions:
+            ``target = close_at_horizon − final_close_distance_from_target``,
+            ``d15 = target − session_close_t15``. Only analogues with
+            ``outcome_status == 'computed'`` and a T+15 close belong here —
+            the caller filters and counts the exclusions.
         width:  spread width in points (long strike = wall − width).
         n_boot: bootstrap resamples of the mean (decision 2: 1,000).
         seed:   RNG seed — the trade date as an int (YYYYMMDD) so the number
@@ -802,17 +805,17 @@ def analogue_fair_value(
         max_pct: percentile of the bootstrap distribution of the mean that is
                 the "max price to pay" (decision 2: the 20th).
 
-    Per analogue ``value = clamp(width + d, 0, width)`` — the spread's payout
+    Per analogue ``value = clamp(width − d, 0, width)`` — the spread's payout
     at that close. ``fair`` is the mean; ``max_price`` is the ``max_pct``
     quantile of the bootstrap means, never above ``fair``; ``boot_lo`` /
     ``boot_hi`` are the 2.5 / 97.5 quantiles of the same distribution.
-    Full payout = ``d >= 0`` (closed at or above the short strike); any payout
-    = ``d > -width`` (closed above the long strike) — decision 3.
+    Full payout = ``d <= 0`` (closed at or above the short strike); any payout
+    = ``d < width`` (closed above the long strike) — decision 3.
 
     Returns ``n = 0`` with every number ``None`` when there is nothing to
     average (no silent fallback).
     """
-    d = [float(x) for x in close_distances if x is not None]
+    d = [float(x) for x in distances_below_target if x is not None]
     n = len(d)
     if n == 0 or width <= 0:
         return {
@@ -821,7 +824,7 @@ def analogue_fair_value(
             "full_payout_rate": None, "any_payout_rate": None,
             "n_boot": n_boot, "seed": seed, "max_pct": max_pct,
         }
-    values = [min(max(width + x, 0.0), width) for x in d]
+    values = [min(max(width - x, 0.0), width) for x in d]
     fair = sum(values) / n
 
     import random  # local: keep the module import list unchanged for callers
@@ -844,8 +847,8 @@ def analogue_fair_value(
         "max_price":        round(max_price, 4),
         "boot_lo":          round(boot_lo, 4),
         "boot_hi":          round(boot_hi, 4),
-        "full_payout_rate": round(sum(1 for x in d if x >= 0) / n, 4),
-        "any_payout_rate":  round(sum(1 for x in d if x > -width) / n, 4),
+        "full_payout_rate": round(sum(1 for x in d if x <= 0) / n, 4),
+        "any_payout_rate":  round(sum(1 for x in d if x < width) / n, 4),
         "n_boot":           n_boot,
         "seed":             seed,
         "max_pct":          max_pct,

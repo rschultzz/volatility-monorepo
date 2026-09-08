@@ -188,7 +188,7 @@ class TestPnlAndFees(unittest.TestCase):
         self.assertAlmostEqual(fee_points(2, 0.65), 0.026)
 
     def test_expected_pnl_subtracts_quote_and_fees(self):
-        fv = analogue_fair_value([0.0, 5.0, -5.0, -20.0], 10.0, seed=20260903)   # fair 6.25
+        fv = analogue_fair_value([0.0, -5.0, 5.0, 20.0], 10.0, seed=20260903)   # values 10, 10, 5, 0 → fair 6.25
         p = expected_pnl(fv, 4.10, 0.026)
         self.assertAlmostEqual(p["expected"], 6.25 - 4.10 - 0.026, places=4)
         self.assertLessEqual(p["lo"], p["expected"])
