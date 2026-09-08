@@ -166,3 +166,32 @@ Fair value under the locked definition with the correct sign on the 09-03 set: `
 Browser check (scratch Flask server on 8061 serving the built entry): Trade and KNN tabs render, verdict / gauge / band strip / facts / stamp populated, no console errors.
 
 Surfaced by the KNN tab: today's `implied_move_1d` in the live route is `_resolve_implied_move` (latest `orats_monies_minute` snapshot, nearest dte → 24.3 pt on 09-03) while the stored corpus vectors carry the 06:33 open-straddle move (53.3 pt on 09-03). The KNN therefore matches today's IM against a differently-measured corpus IM; the tab shows it as the one outlier. Pre-existing in v1; recorded under Open questions.
+
+## What changed
+
+- **`packages/shared/probability.py`** — `analogue_fair_value(close_distances, width, *, n_boot, seed, max_pct)`: per analogue `value = clamp(width + d, 0, width)` with `d = final_close_distance_from_target` (close − wall); `fair` = mean; `max_price` = 20th percentile of 1,000 bootstrap means (never above `fair`); `boot_lo / boot_hi` = 2.5 / 97.5; `full_payout_rate` (d ≥ 0), `any_payout_rate` (d > −width). Seed = trade date as YYYYMMDD. Pure; 6 tests.
+- **`apps/web/modules/SetupV2/`** (new) — `service.py`: reference-cell selection (latest `REF-%` else `CR-AR`; debit · close · pooled; train + lowest threshold per band), harness band thresholds, `percentile_rank` (kind = mean) / `quantile`, `knn_factor_rows` (34 keys with label / group / low–high words, today, weight from `get_knn_config()`, percentile vs the magnet-above corpus before the date, analogue 25th–75th band in value and percentile space, `in_band`, `populated`), `match_quality`, `expected_pnl` (fair − quote − fees), `verdict` (enter / skip / no_structure / no_quote — never "wait"), `horizon_mix`, `next_reference_run`, `fee_points`, `net_debit_by_minute`; fee constant imported from `packages.shared.config` with a 0.65 fallback. `routes.py`: `GET /setup-v2` (serves `dist/setup-v2.html`), `GET /api/setup-v2/card?date=&ticker=`; `build_card` reuses the v1 input helpers (landscape, bars-open spot, `_resolve_implied_move`, carry rates, effective regime, `build_proposals_response`) so the analogue set is v1's; prices the debit legs at **06:34 PT** through `price_proposal_legs` (cache write-through, CR-AO stale rule); band σ from the harness measure (wall − `table_spot`) / open-straddle IM; cache-only by-minute quote strip over 06:30–07:00; 37 tests.
+- **`apps/web/app.py`** — mount (`register_setup_v2_routes`), `TAB_SETUP_V2` "Setup v2" tab and its redirect to `/setup-v2`. Nothing else.
+- **`react_today_setup/`** — second Vite entry `setup-v2.html` → `src/setupv2/` (`SetupV2App` with the shared top nav + date picker, `TradeTab` = top / mid / manage / stamp / detail toggle, `DetailPanel` = post-touch bars + quote-by-minute SVG, `KnnFactorsTab`, `format.js`, `setupv2.css` from the mockup). "Setup v2" pill added to the v1 nav. Tests: `SetupV2Card.test.jsx` (10) and `bundleV2Strings.test.js` (greps every chunk `dist/setup-v2.html` references: no `edge ×` / `edge_ratio` / badge phrases / `low-confidence` anywhere; no bare `supported` or string-literal `K=` in the app chunk).
+- **Not embedded:** web-shared's `ProposalEdgeChart` (its legend and tooltip print `edge ×…`, which decision 8 and "no edge ratio anywhere on v2" forbid, and `packages/web-shared/` is outside G2). The detail toggle carries the post-touch bars and the spread's quote by minute against the max line instead (A8).
+
+## Decisions
+
+- **Decision:** proceed past G0's "~10 % close-above" expectation with an amendment rather than halt.
+  **Rationale:** the gate exists to pin the sign; the sign is unambiguous in code (`close − drift_target`) and the 10 % figure in the note is `close_rate`, the at-wall rate, mislabelled. CLAUDE.md's rule for a wrong upstream assumption surfaced in Step 0 is to amend the spec and the note before implementation, which is what A1 does. Recorded here so the reviewer can veto at the PR.
+- **Decision:** fair value on the locked column at each analogue's own outcome horizon, disclosed on the card.
+  **Rationale:** decision 2 is locked; the horizon mix (5 / 20 / 60 sessions by dominant bucket) is stated in the fair-value box so the number is not read as a 15-DTE close. A single-horizon variant needs the analogue wall price (a landscape join) — open question.
+- **Decision:** band from the harness's σ, not the feature vector's.
+  **Rationale:** the reference cells were banded on (wall − `table_spot`) / open-straddle IM; `cluster_1_signed_distance_sigma` is 0 on cluster-less days such as 2026-09-03. Same measure, same band.
+- **Decision:** the v2 page is its own Vite entry and shares nothing with the v1 page beyond React.
+  **Rationale:** decision 8's bundle grep needs a v2 bundle to grep; v1 components carry `K=` and the edge-ratio strings.
+- **Decision:** quote at 06:34 PT with cache write-through, not the stored-only read.
+  **Rationale:** the store had no 06:34 bar for the 09-03 legs; the daily capture (CR-AU) will fill it for live days, and a miss should show a quote with a fetch rather than "no quote" on a day the pipeline hasn't captured.
+
+## Open questions
+
+- **15-session fair value.** `session_close_t15` exists for 458 / 475 computed rows; a per-analogue wall price (from `orats_gex_landscape.walls` via `pick_drift_target`) would give a value at a fixed 15-session horizon for comparison with the mixed-horizon number the card shows.
+- **Implied-move measure mismatch (surfaced by the KNN tab).** The live route's `implied_move_1d` (24.3 pt on 09-03) is measured differently from the corpus's (53.3 pt, 06:33 open straddle); the KNN sees today as the 8th percentile and outside the analogue band on that feature alone. Which measure should the live vector use? (Also affects v1 — not changed here.)
+- **Reference legs vs card legs.** The harness snaps the undiscounted ES-forward target (≈ 7805 SPX at `nth_business_day(15)` = 09-25) while the card prices 7775 / 7785 at date + 15 calendar days (09-18). The band cells the card cites were built on the former.
+- **Mockup's "near · +1.00 IM"** is not reproducible from any stored measure (harness σ 2.55, v1 σ 4.2); the card shows far.
+- **Card latency** ~30 s (v1's queries + two KNN ranks + corpus load + quote fetch). Acceptable for a tab; a shared rank between `compute_structural_probability` and the rows call would halve the KNN part.
