@@ -10,8 +10,8 @@ if _ROOT not in sys.path:
 
 from packages.shared.options_cache.models import FetchedWindow
 from scripts.cron_daily_leg_capture import (
-    MIN_LAG_MIN, Leg, build_plan, capture_window, dedupe_legs, format_plan, legs_for, plan_condor, plan_debit,
-    window_is_closed,
+    MAX_WAIT_MIN, MIN_LAG_MIN, POLL_SECONDS, Leg, build_plan, capture_window, dedupe_legs, format_plan, legs_for,
+    plan_condor, plan_debit, poll_until, window_is_closed,
 )
 
 TD = date(2026, 9, 4)
@@ -103,3 +103,56 @@ def test_window_closed_guard():
     assert not window_is_closed(datetime(2026, 9, 4, 6, 49), TD)
     assert window_is_closed(datetime(2026, 9, 4, 6, 45 + MIN_LAG_MIN), TD)
     assert window_is_closed(datetime(2026, 9, 5, 9, 0), TD)                            # a past date is always closed
+
+
+# ── decision 1 (amended 2026-09-07): poll for the 06:33 PT snapshot, bounded ──
+
+class _Clock:
+    """Fake PT clock: sleep_fn advances it, so the poll's timeout is driven by the test."""
+    def __init__(self, start):
+        self.now = start; self.sleeps = []
+    def now_fn(self):
+        return self.now
+    def sleep_fn(self, s):
+        self.sleeps.append(s); self.now += timedelta(seconds=s)
+
+
+def test_poll_returns_immediately_when_snapshot_present():
+    clk = _Clock(datetime(2026, 9, 4, 6, 50))
+    v, waited, attempts = poll_until(lambda: (7742.9, SNAP), max_wait_min=MAX_WAIT_MIN, now_fn=clk.now_fn, sleep_fn=clk.sleep_fn, log=lambda m: None)
+    assert v == (7742.9, SNAP) and attempts == 1 and waited == 0 and clk.sleeps == []
+
+
+def test_poll_keeps_probing_until_snapshot_appears():
+    clk = _Clock(datetime(2026, 9, 4, 5, 50))          # DST-drift case: cron fired an hour early
+    seen = []
+    def probe():
+        seen.append(clk.now)
+        return (7742.9, SNAP) if clk.now >= datetime(2026, 9, 4, 6, 34) else None
+    v, waited, attempts = poll_until(probe, max_wait_min=MAX_WAIT_MIN, poll_s=POLL_SECONDS, now_fn=clk.now_fn, sleep_fn=clk.sleep_fn, log=lambda m: None)
+    assert v == (7742.9, SNAP)
+    assert attempts == 45 and waited == 44.0                  # 05:50 → 06:34 at 60 s
+    assert all(s == POLL_SECONDS for s in clk.sleeps)
+    assert MAX_WAIT_MIN == 120 and POLL_SECONDS == 60
+
+
+def test_poll_times_out_after_120_minutes_and_returns_none():
+    clk = _Clock(datetime(2026, 9, 7, 6, 50))          # Labor Day: no monies snapshot ever appears
+    logs = []
+    v, waited, attempts = poll_until(lambda: None, max_wait_min=MAX_WAIT_MIN, poll_s=POLL_SECONDS, now_fn=clk.now_fn, sleep_fn=clk.sleep_fn, log=logs.append)
+    assert v is None
+    assert waited == 120.0 and attempts == 121               # probes at t = 0, 1, …, 120 min
+    assert clk.now == datetime(2026, 9, 7, 8, 50)
+    assert sum(clk.sleeps) == 120 * 60 and len(logs) == 120
+
+
+def test_poll_with_zero_budget_probes_once():
+    clk = _Clock(datetime(2026, 9, 5, 9, 0))           # a past --date or --dry-run: check once, never sleep
+    v, waited, attempts = poll_until(lambda: None, max_wait_min=0, now_fn=clk.now_fn, sleep_fn=clk.sleep_fn, log=lambda m: None)
+    assert v is None and attempts == 1 and clk.sleeps == []
+
+
+def test_poll_last_sleep_is_clipped_to_the_budget():
+    clk = _Clock(datetime(2026, 9, 4, 6, 0))
+    v, waited, attempts = poll_until(lambda: None, max_wait_min=2.5, poll_s=60, now_fn=clk.now_fn, sleep_fn=clk.sleep_fn, log=lambda m: None)
+    assert v is None and clk.sleeps == [60, 60, 30] and waited == 2.5 and attempts == 4

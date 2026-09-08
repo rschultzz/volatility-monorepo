@@ -41,11 +41,13 @@ services:
   # (see open question orats-eod-cron-not-autodeploying). Values below are
   # what the dashboard entries should carry.
   #
-  # Schedule note (Step 0 amendment A1): 13:50 UTC = 06:50 PDT — after the
+  # Schedule (decision 1, amended 2026-09-07): 13:50 UTC = 06:50 PDT — after the
   # 13:35 implied-move fill and the 13:40 outcomes insert, and after the
   # 06:30–06:45 PT capture window has closed (fetching earlier would record
   # the unfilled minutes as fetched-and-empty). Fixed UTC drifts one hour in
-  # PST, as for open-implied-move.
+  # PST (decision 7 DST note); the script polls for the 06:33 PT snapshot up to
+  # 120 min so it is DST-safe on its own; open-implied-move / backfill_outcomes
+  # are not (CR-BD, due before 2026-11-01).
   #
   # The existing `sweep_pending_outcomes` cron (crn-d8guhf8jo6nc73e1iou0,
   # `5 11 * * 1-5`) additionally needs ORATS_API_KEY for the CR-AU decision-2

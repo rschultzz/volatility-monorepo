@@ -201,3 +201,15 @@ The 2026-09-04 debit pair is 7810/7825 (width 15): the prior-close chain for the
 - `condor_0dte.FEE_PER_CONTRACT_SIDE = 1.30` still disagrees with the shared constant; a one-line follow-up outside this CR's files.
 - Fixed-UTC cron schedules drift an hour in PST (13:50 UTC = 05:50 PST) — shared with `open-implied-move`; a `--min-lag-min`-style guard covers the capture but not the CR-AB fill.
 - The `bt_daily_features` forward-stamp onto holidays (2026-09-07 row with no monies) makes the daily capture exit 0 with `no_spx_open_snapshot`; harmless, pre-existing (`next-business-day-skips-holidays`).
+
+## Amendment 2 (2026-09-07, after PR #54 opened) — decision 1 re-locked: 13:50 UTC + snapshot poll
+
+The authority note's decision 1 now reads: cron **13:50 UTC Mon–Fri**, and *the script must not assume the clock* — on start it polls `orats_monies_minute` for today's 06:33 PT SPX snapshot up to **120 minutes** and exits with a logged **"no open snapshot"** if none appears (holidays, DST drift, ingest outage). Decision 7 gains the DST note: the 13:35 / 13:40 UTC jobs run at 05:35 / 05:40 PT after 2026-11-01, before the pin exists; retrofitting the poll into them is CR-BD, due before 2026-11-01. Step 0 amendment A1 is therefore superseded by the locked decision (same schedule).
+
+Implemented in `scripts/cron_daily_leg_capture.py` (follow-up commit to Commit 3):
+
+- `poll_until(probe, max_wait_min, poll_s, now_fn, sleep_fn)` — bounded poll with an injectable clock; `max_wait_min = 0` probes once; the last sleep is clipped to the budget.
+- `main`: for **today's** date (PT) in a real run the snapshot probe (`fetch_spx_open`) is polled with `--max-wait-min` (default 120) at `--poll-seconds` (default 60); a past `--date` is probed once; `--dry-run` never waits. No snapshot → log `no open snapshot: … after <k> min / <n> probe(s) — holiday, DST drift or ingest outage. Nothing fetched, no run row.` and **exit 0** (a holiday is a normal day for this cron; the log line is the signal).
+- Once the snapshot exists, the window-closed guard (06:45 PT + 5 min) is also *waited for* inside what remains of the budget instead of exiting 1 immediately; exit 1 only if the budget runs out first.
+- Tests (5 new, `scripts/tests/test_cron_daily_leg_capture.py`): immediate return; keeps probing until the snapshot appears (05:50 → 06:34 DST-drift case, 45 probes); **times out after exactly 120 min / 121 probes and returns None**; zero budget = one probe; last sleep clipped. Suite 34 pass.
+- Smoke: `--date 2026-09-07 --max-wait-min 0.05 --poll-seconds 1` (today, Labor Day, no monies) → 3 probes over 3 s, "no open snapshot", exit 0, no run row (`scripts/logs/cr_au_poll_timeout_smoke.log`). Dry run for 2026-09-04 after G3: 6 legs, all `[cached]`.

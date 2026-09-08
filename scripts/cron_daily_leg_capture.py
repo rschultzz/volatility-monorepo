@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 """CR-AU decision 1 — daily leg capture for the live out-of-sample stream. NO READ.
 
-Render cron `daily-leg-capture`, `50 13 * * 1-5` (06:50 PDT; Step 0 amendment
-A1: after the 13:35 implied-move fill and the 13:40 outcomes insert, and after
-the 06:30–06:45 PT capture window has closed — fetching a window before it
-closes would record the missing minutes as fetched-and-empty).
+Render cron `daily-leg-capture`, `50 13 * * 1-5` (decision 1 as amended
+2026-09-07: 06:50 PT in summer, after the 13:35 implied-move fill and the 13:40
+outcomes insert, and after the 06:30–06:45 PT capture window has closed —
+fetching a window before it closes would record the missing minutes as
+fetched-and-empty).
+
+The script does not assume the clock (decision 1 / DST note in decision 7): on
+start it polls orats_monies_minute for today's 06:33 PT SPX snapshot, up to
+--max-wait-min (120) minutes at --poll-seconds (60) intervals, and exits 0 with
+a logged "no open snapshot" if none appears (holiday, DST drift, ingest outage).
+Once the snapshot exists it waits, inside the same budget, until the capture
+window has closed (+ MIN_LAG_MIN) before fetching. A past --date is checked
+once (no poll); --dry-run never waits.
 
 For the most recent canonical `bt_daily_features` row (trade_date ≤ today, or
 --date):
@@ -31,8 +40,8 @@ Usage:
     python scripts/cron_daily_leg_capture.py --date 2026-09-04
     python scripts/cron_daily_leg_capture.py --date 2026-09-04 --dry-run   # leg list only, no fetch, no run row
 
-Exit: 0 on success or nothing to do (no feature row / no open snapshot);
-      1 on a fetch exception other than a 404, or when the window is not closed yet.
+Exit: 0 on success or nothing to do (no feature row / no open snapshot within the budget);
+      1 on a fetch exception other than a 404, or if the budget runs out before the window closes.
 """
 from __future__ import annotations
 
@@ -43,7 +52,7 @@ import time as _time
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -66,7 +75,9 @@ OPEN_SNAPSHOT_FLOOR = time(6, 33)
 OPEN_SNAPSHOT_CEIL = time(6, 40)
 CONDOR_HALF_WIDTH_IM = 0.5
 DEBIT_WIDTH_NOMINAL = 10.0
-MIN_LAG_MIN = 5                      # A1: the window must have closed this long ago before a fetch
+MIN_LAG_MIN = 5                      # the window must have closed this long ago before a fetch
+MAX_WAIT_MIN = 120                   # decision 1: poll for the 06:33 PT snapshot up to this long
+POLL_SECONDS = 60
 BASIS_MIN, BASIS_MAX = -40.0, 100.0  # ES − SPX at the open (CR-AS Step 0), checked when ES open is known
 _PT = ZoneInfo("America/Los_Angeles")
 
@@ -112,6 +123,27 @@ def window_is_closed(now_pt: datetime, td: date, min_lag_min: int = MIN_LAG_MIN)
     """A1: only fetch once the window end is at least `min_lag_min` in the past."""
     _, w1 = capture_window(td)
     return now_pt >= w1 + timedelta(minutes=min_lag_min)
+
+
+def poll_until(probe: Callable[[], object], *, max_wait_min: float, poll_s: float = POLL_SECONDS,
+               now_fn: Callable[[], datetime] = datetime.now, sleep_fn: Callable[[float], None] = _time.sleep,
+               label: str = "condition", log: Callable[[str], None] = print) -> tuple[object, float, int]:
+    """Decision 1: call `probe` until it returns a truthy value or `max_wait_min`
+    minutes have elapsed (checked against `now_fn`, so tests can drive the clock).
+    Returns (value_or_None, waited_minutes, attempts). max_wait_min = 0 → one probe."""
+    start = now_fn()
+    attempts = 0
+    while True:
+        attempts += 1
+        value = probe()
+        elapsed = (now_fn() - start).total_seconds() / 60.0
+        if value:
+            return value, round(elapsed, 2), attempts
+        remaining_s = max_wait_min * 60.0 - elapsed * 60.0
+        if remaining_s <= 0:
+            return None, round(elapsed, 2), attempts
+        log(f"  waiting for {label}: attempt {attempts}, {elapsed:.1f} min elapsed of {max_wait_min:g}; next probe in {min(poll_s, remaining_s):.0f}s")
+        sleep_fn(min(poll_s, remaining_s))
 
 
 def plan_condor(td: date, spx_open: float, implied_move: float) -> dict:
@@ -253,8 +285,14 @@ WHERE ticker = %s AND feature_version = %s AND active AND trade_date = %s LIMIT 
 _TABLE_SPOT_SQL = "SELECT table_spot FROM orats_gex_landscape WHERE ticker = %s AND trade_date = %s"
 
 
-def load_inputs(conn, td: date) -> dict:
-    """Everything build_plan needs, from the DB (backfill role, read-only here)."""
+def fetch_spx_open(conn, td: date):
+    """The first orats_monies_minute snapshot ≥ 06:33 PT for td: (spot_price, snapshot_pt) or None."""
+    return conn.execute(_SPX_OPEN_SQL, (TICKER, td.isoformat(), datetime.combine(td, OPEN_SNAPSHOT_FLOOR))).fetchone()   # trade_date is text in orats_monies_minute
+
+
+def load_inputs(conn, td: date, spx_open_row=None) -> dict:
+    """Everything build_plan needs, from the DB (backfill role, read-only here).
+    `spx_open_row` is the (spot, snapshot_pt) the caller already polled for."""
     from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
     from packages.shared.day_features import _OPEN_STRADDLE_SQL
     from packages.shared.gex_landscape import compute_implied_move
@@ -266,7 +304,7 @@ def load_inputs(conn, td: date) -> dict:
     regime = row[1] if row else None
     im = float(row[2]) if row and row[2] is not None else None
     im_source = "feature_vector.implied_move_1d" if im else None
-    so = conn.execute(_SPX_OPEN_SQL, (TICKER, td.isoformat(), datetime.combine(td, OPEN_SNAPSHOT_FLOOR))).fetchone()   # trade_date is text in orats_monies_minute
+    so = spx_open_row if spx_open_row is not None else fetch_spx_open(conn, td)
     spx_open = float(so[0]) if so else None
     spx_snap = so[1] if so else None
     spot_row = conn.execute(_TABLE_SPOT_SQL, (TICKER, td)).fetchone()
@@ -302,6 +340,9 @@ def main(argv=None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="print the leg list; no fetch, no run row")
     ap.add_argument("--cr-id", default=CR_ID)
     ap.add_argument("--min-lag-min", type=int, default=MIN_LAG_MIN)
+    ap.add_argument("--max-wait-min", type=float, default=MAX_WAIT_MIN,
+                    help="decision 1: poll for today's 06:33 PT snapshot up to this many minutes (0 = check once)")
+    ap.add_argument("--poll-seconds", type=float, default=POLL_SECONDS)
     args = ap.parse_args(argv)
 
     _bootstrap_env()
@@ -316,7 +357,20 @@ def main(argv=None) -> int:
     if td is None:
         print("no canonical feature row ≤ today — nothing to do")
         return 0
-    inp = load_inputs(conn, td)
+    # decision 1: do not assume the clock — poll for today's 06:33 PT snapshot (a past date is checked once; dry-run never waits)
+    is_today = td == now_pt.date()
+    budget = args.max_wait_min if (is_today and not args.dry_run) else 0.0
+    now_fn = lambda: datetime.now(_PT).replace(tzinfo=None)      # noqa: E731
+    snap, waited, attempts = poll_until(lambda: fetch_spx_open(conn, td), max_wait_min=budget, poll_s=args.poll_seconds,
+                                        now_fn=now_fn, label=f"{td} 06:33 PT SPX snapshot in orats_monies_minute")
+    if snap is None:
+        print(f"no open snapshot: no orats_monies_minute row ≥ 06:33 PT for {td} after {waited:g} min / {attempts} probe(s) "
+              f"(budget {budget:g} min) — holiday, DST drift or ingest outage. Nothing fetched, no run row.")
+        conn.close()
+        return 0
+    if attempts > 1:
+        print(f"open snapshot appeared after {waited:g} min ({attempts} probes)")
+    inp = load_inputs(conn, td, spx_open_row=snap)
     if not inp["feature_row"]:
         print(f"no canonical feature row for {td} — nothing to do")
         return 0
@@ -333,9 +387,13 @@ def main(argv=None) -> int:
     if plan.skip:
         print(f"skip {plan.skip}: nothing to fetch, no run row.")
         return 0
-    if not window_is_closed(now_pt, td, args.min_lag_min):
-        print(f"ERROR: window {plan.window[1]:%H:%M} PT + {args.min_lag_min} min lag has not passed (now {now_pt:%H:%M} PT) — "
-              f"fetching now would record unfilled minutes as fetched. Nothing recorded.")
+    # the window itself must have closed (+ lag) before it is fetched; wait inside what is left of the budget
+    remaining = max(0.0, budget - waited)
+    closed, waited2, _ = poll_until(lambda: window_is_closed(now_fn(), td, args.min_lag_min), max_wait_min=remaining,
+                                    poll_s=args.poll_seconds, now_fn=now_fn, label=f"capture window {plan.window[1]:%H:%M} PT + {args.min_lag_min} min to close")
+    if not closed:
+        print(f"ERROR: window {plan.window[1]:%H:%M} PT + {args.min_lag_min} min lag has not passed (now {now_fn():%H:%M} PT) and the "
+              f"{args.max_wait_min:g}-min budget is spent — fetching now would record unfilled minutes as fetched. Nothing recorded.")
         return 1
 
     from packages.shared.options_cache.fetcher import fetch_option_bars
