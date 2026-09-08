@@ -128,3 +128,20 @@ top-level keys: context, ok, proposals, structural_probability   (unchanged)
 | `filter_mode` | strict | strict (kept, audit only) |
 | post-touch block | label / fractions / Wilson CIs | same fields + `advisory_only: true` + `advisory` (label, n, timeframe, direction, fraction, Wilson bounds) |
 | card text | "Pattern: stepping-stone. Direction signal: debit-to-target supported." | "post-touch pattern: stepping-stone · n=25 · t15 above 56%" |
+
+## What changed
+
+- **Decision 1** — `build_proposals_response` drops `directional_spread_to_target` from the live list (`_LIVE_EXCLUDED_TEMPLATE_IDS`); the template class, `generate_proposals` and its tests are unchanged (the harness and the CR-AH scripts still emit it). No placeholder on the card.
+- **Decisions 2, 4** — `apply_direction_qualification` returns the proposals unchanged (no `confidence_badge`, no drop, no promotion) and annotates `structural_probability.post_touch` in place with `advisory_only: true` and `advisory {pattern_label, n, n_pooled, timeframe, direction, fraction, wilson_lo, wilson_hi}` (timeframe from the magnet proposal's DTE, direction = the regime's continuation side). `filter_mode`, `fractions`, `wilson_cis`, `same_bucket_n`, `total_touchers` kept for audit. The route's call site is unchanged. `post_touch_qualification.py` gains a docstring note; its helpers and pattern sets stay for the harness.
+- **Decision 3** — edge threshold untouched.
+- **Frontend** — `StructuralProbabilityBlock.jsx` renders the advisory line (`post-touch pattern: stepping-stone · n=25 · t15 above 56%`) in place of the "Direction signal: … supported." synthesis line; `.pt-synthesis` → `.pt-advisory`.
+- **Decision 5 tests** — TodaySetup: magnet day → debit only, no credit, no badge; stepping-stone vs mixed → identical proposal sets; advisory block fields; insufficient / 0DTE modes → no badge, `filter_mode` kept; magnet-below direction; legacy `post_touch: None` pass-through (73 pass). Frontend: advisory label + n + fraction; label-only difference; no supported / low-confidence / no-clear-direction / Direction-signal text for any label; raw-field fallback; legacy payload; built-bundle grep (36 pass).
+- **Gates** — G0 ✓ · G1 ✓ (TodaySetup 73, shared 435, backtest 142, options_cache 201, Proposals 60, frontend 36) · G2 ✓ (diff confined) · G3 ✓ (2026-09-03: one structure, `advisory_only: true`, no badge). No halts. **Not merged, not deployed.**
+
+## Decisions
+
+- **Credit removal lives in the live response builder, not in `strategy_templates`.** `packages/shared/` is outside G2's file list and `generate_proposals` has other callers (harness probes) whose tests expect both spreads; the "structure code stays" clause is honoured literally.
+- **The advisory block is computed server-side** (`post_touch.advisory`) so the card text has one source and the backend tests pin it; the component still falls back to the raw fields.
+- **`filter_mode` is still read by the component for the thin-corpus notes** ("Insufficient post-touch sample", "0DTE corpus insufficient", "pooled fallback"). Those describe the sample the bars are drawn from, not a direction call; decision 2's "UI ignores it for display decisions" is read as: nothing about which proposals or badges appear derives from it. Flagged here in case the stricter reading was intended.
+- **No `confidence_badge` at all** rather than a neutral badge: the frontend never read the field, so nothing is lost, and decision 2 says no badge implying support or caution.
+- **Build environment**: the main checkout's `react_today_setup/node_modules` was an x64 install; reinstalled for arm64 (untracked; the old tree moved outside the repo).
