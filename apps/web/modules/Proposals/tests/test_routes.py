@@ -301,7 +301,7 @@ class TestHappyPath(unittest.TestCase):
     def setUp(self):
         self.app = _make_app()
 
-    def _run(self) -> tuple[int, dict]:
+    def _run(self, real_pricing_override: dict | None = None) -> tuple[int, dict]:
         mock_conn = MagicMock()
 
         # Cursor mock for _fetch_anchor_data — two sequential cursor calls
@@ -343,8 +343,11 @@ class TestHappyPath(unittest.TestCase):
                  "bid": 3.00, "ask": 3.20, "mid": 3.10},
             ],
             "net_debit": round(5.20 - 3.10, 4),
+            "width_actual": 25.0, "width_nominal": 25.0, "listed": True, "listed_reason": None,
             "warnings": [],
         }
+        if real_pricing_override is not None:
+            _REAL_PRICING_RESULT = real_pricing_override
         _MOCK_CHAIN = [
             {"strike": k, "call_price": max(0.01, (4210.0 - k) * 0.1)}
             for k in range(4000, 4400, 5)
@@ -439,6 +442,40 @@ class TestHappyPath(unittest.TestCase):
             self.assertIn("strike_spx", leg)
             self.assertIsInstance(leg["strike_spx"], int)
             self.assertEqual(leg["strike_spx"] % 5, 0)
+
+    def test_200_listed_structure_surfaces_width(self):
+        """CR-AR decision 4: listed structure → listed=True, width_actual / width_nominal on the payload."""
+        _, data = self._run()
+        self.assertTrue(data["listed"]); self.assertIsNone(data["listed_reason"])
+        self.assertEqual(data["width_actual"], 25.0); self.assertEqual(data["width_nominal"], 25.0)
+        self.assertEqual(len(data["legs"]), 2)
+
+    def test_200_unlistable_structure_returns_listed_false_and_no_legs(self):
+        """CR-AR G2 / decision 4: no listed pair within the width cap → listed=False,
+        reason='no_listed_structure', legs empty, net_cost None."""
+        unlistable = {
+            "legs": [
+                {"flag": "c", "side": "long", "qty": 1, "strike_es": 4225, "spx_strike_raw": 4225,
+                 "spx_strike": None, "listed": False, "opra": None,
+                 "expiration": __import__("datetime").date(2023, 5, 5), "bid": None, "ask": None, "mid": None},
+                {"flag": "c", "side": "short", "qty": 1, "strike_es": 4250, "spx_strike_raw": 4250,
+                 "spx_strike": None, "listed": False, "opra": None,
+                 "expiration": __import__("datetime").date(2023, 5, 5), "bid": None, "ask": None, "mid": None},
+            ],
+            "net_debit": None, "width_actual": None, "width_nominal": 25.0,
+            "stale_quote": False, "spread_valid": None,
+            "listed": False, "listed_reason": "no_listed_structure",
+            "warnings": ["no listed structure for expiry 2023-05-05 at the prior close before 2023-05-01"],
+        }
+        status, data = self._run(real_pricing_override=unlistable)
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertFalse(data["listed"])
+        self.assertEqual(data["listed_reason"], "no_listed_structure")
+        self.assertEqual(data["legs"], [])
+        self.assertIsNone(data["net_cost"])
+        self.assertIsNone(data["width_actual"])
+        self.assertTrue(any("no listed structure" in w for w in data["warnings"]))
 
     def test_200_trade_thesis_has_required_fields(self):
         _, data = self._run()

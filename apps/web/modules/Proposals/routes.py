@@ -620,8 +620,15 @@ def register_proposals_routes(server) -> None:
             real_legs_by_idx = {
                 i: rleg for i, rleg in enumerate(real_pricing.get("legs", []))
             }
+            # CR-AR decision 4: an unlistable vertical returns listed=False,
+            # reason='no_listed_structure' and no legs — the card shows the
+            # message instead of a widened structure.
+            structure_listed = bool(real_pricing.get("listed", True))
+            listed_reason = real_pricing.get("listed_reason")
             legs_out = []
             for i, (leg, raw) in enumerate(zip(legs_with_iv, raw_legs)):
+                if not structure_listed and listed_reason == "no_listed_structure":
+                    break
                 rleg = real_legs_by_idx.get(i, {})
                 dte_i = (raw["expiration"] - trade_date).days
                 spx_strike_i = rleg.get("spx_strike") or compute_spx_strike(
@@ -667,6 +674,10 @@ def register_proposals_routes(server) -> None:
                 "current_spot":   spot,
                 "implied_move":   implied_move,
                 "legs":           legs_out,
+                "listed":         structure_listed,                       # CR-AR: False → no listed structure at this expiry
+                "listed_reason":  listed_reason if not structure_listed else None,
+                "width_actual":   real_pricing.get("width_actual"),        # CR-AR: listed width (≤ 2 × width_nominal)
+                "width_nominal":  real_pricing.get("width_nominal"),
                 # net_cost uses real mids (None if any leg unavailable, not BSM estimate)
                 "net_cost":       (
                     round(real_pricing["net_debit"], 4)

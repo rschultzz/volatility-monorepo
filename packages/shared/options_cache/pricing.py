@@ -19,7 +19,7 @@ from .fetcher import fetch_option_bars
 from .http_client import OratsError, OratsPermanentError
 from .opra import format_opra
 from . import repository as repo
-from .strikes import StrikeNotListed, snap_to_candidates, listed_strikes
+from .strikes import StrikeNotListed, StructureNotListed, listed_strikes, snap_spread_to_listed, snap_to_candidates
 from packages.shared.backtest.quote_validity import leg_quote_is_valid, spread_value_is_valid
 from packages.shared.forward_math import compute_spx_strike
 from packages.shared.strategy_templates import Leg
@@ -287,14 +287,16 @@ def price_proposal_legs(
     priced_legs: list[dict] = []
 
     if not legs:
-        return {"legs": [], "net_debit": None, "warnings": []}
+        return {"legs": [], "net_debit": None, "warnings": [], "listed": True, "listed_reason": None}
 
     # ── 1. ES→SPX conversion + listed-strike snapping + OPRA construction ──
     # CR-AO decisions 1–3: the 5-point rounding from compute_spx_strike is the
     # *intent*; the tradable strike is the nearest one listed for that expiry
-    # at the prior close (orats_oi_gamma). A two-leg same-flag vertical is
-    # snapped as a pair (anchor = short leg; other leg strictly on its side)
-    # so the width is a real listed width; other structures snap per leg.
+    # at the prior close (orats_oi_gamma). CR-AR decisions 1–2, 4: a two-leg
+    # same-flag vertical is snapped as a pair through snap_spread_to_listed
+    # (width_actual ∈ [nominal, 2 × nominal], never wider); when no listed pair
+    # exists the structure is unlistable (listed=False, 'no_listed_structure')
+    # and nothing is priced. Other structures snap per leg.
     raw_meta: list[dict] = []
     for leg in legs:
         expir_d: date = leg["expiration"]
@@ -307,7 +309,15 @@ def price_proposal_legs(
             "spx_strike_raw": compute_spx_strike(leg["strike"], dte, r, q),
             "expiration": expir_d,
         })
-    snapped, width_actual, width_nominal = _snap_leg_strikes(raw_meta, trade_date, warnings_out)
+    snapped, width_actual, width_nominal, listed_reason = _snap_leg_strikes(raw_meta, trade_date, warnings_out)
+    if listed_reason == "no_listed_structure":
+        # CR-AR decision 4: never a widened spread beyond the cap — no legs, no price.
+        return {
+            "legs": [dict(m, opra=None, bid=None, ask=None, mid=None, delta=None) for m in snapped],
+            "net_debit": None, "width_actual": None, "width_nominal": width_nominal,
+            "stale_quote": False, "spread_valid": None, "listed": False,
+            "listed_reason": "no_listed_structure", "warnings": warnings_out,
+        }
 
     opra_list: list[str] = []
     leg_meta: list[dict] = []
@@ -407,6 +417,7 @@ def price_proposal_legs(
                 )
                 net_debit = None
 
+    all_listed = all(l.get("listed", True) for l in priced_legs)
     return {
         "legs":      priced_legs,
         "net_debit": net_debit,
@@ -414,21 +425,28 @@ def price_proposal_legs(
         "width_nominal": width_nominal,
         "stale_quote": any(l.get("stale_quote") for l in priced_legs),
         "spread_valid": spread_valid,
+        "listed": all_listed,
+        "listed_reason": listed_reason if not all_listed else None,
         "warnings":  warnings_out,
     }
 
 
-def _snap_leg_strikes(raw_meta: list[dict], trade_date: date, warnings_out: list) -> tuple[list[dict], Optional[float], Optional[float]]:
-    """CR-AO: snap each leg's spx_strike_raw to the listed grid at the prior close.
+def _snap_leg_strikes(raw_meta: list[dict], trade_date: date, warnings_out: list) -> tuple[list[dict], Optional[float], Optional[float], Optional[str]]:
+    """Snap each leg's spx_strike_raw to the listed grid at the prior close.
 
-    Returns (legs with spx_strike / listed, width_actual, width_nominal). For a
-    two-leg same-flag vertical the pair is snapped together (anchor = short
-    leg; the long leg on its own side of the anchor). A leg whose expiry is
-    absent from the chain gets spx_strike=None and listed=False plus a warning.
+    Returns (legs with spx_strike / listed, width_actual, width_nominal, reason).
+    A two-leg same-flag vertical is snapped as a pair via snap_spread_to_listed
+    (CR-AR decisions 1–2): anchor = short leg, the long leg on its own side,
+    width_actual ∈ [nominal, 2 × nominal] — never wider; narrower only when
+    nothing at ≥ nominal exists within the cap (recorded in the warnings). When
+    no listed pair exists both legs get spx_strike=None / listed=False and
+    reason='no_listed_structure' (decision 4). Other structures snap per leg
+    (CR-AO); a leg whose expiry is absent from the chain gets spx_strike=None,
+    listed=False and reason='no_listed_strike'.
     """
     out = [dict(m, spx_strike=m["spx_strike_raw"], listed=True) for m in raw_meta]
     if not raw_meta:
-        return out, None, None
+        return out, None, None, None
     try:
         with repo._conn() as conn:
             chains: dict[date, list[float]] = {}
@@ -437,7 +455,7 @@ def _snap_leg_strikes(raw_meta: list[dict], trade_date: date, warnings_out: list
                     _, chains[m["expiration"]] = listed_strikes(conn, m["expiration"], trade_date)
     except Exception as exc:  # chain unavailable → keep the 5-point rounding, say so
         warnings_out.append(f"listed-strike chain unavailable ({exc}); using 5-point rounding")
-        return out, None, None
+        return out, None, None, None
 
     is_vertical = (
         len(raw_meta) == 2
@@ -447,33 +465,48 @@ def _snap_leg_strikes(raw_meta: list[dict], trade_date: date, warnings_out: list
     )
     width_nominal = abs(raw_meta[0]["spx_strike_raw"] - raw_meta[1]["spx_strike_raw"]) if len(raw_meta) == 2 else None
     width_actual: Optional[float] = None
+    reason: Optional[str] = None
 
     if is_vertical:
         cands = chains.get(raw_meta[0]["expiration"], [])
         si = 0 if raw_meta[0]["side"] == "short" else 1
         li = 1 - si
-        if not cands:
+        direction = 1 if raw_meta[li]["spx_strike_raw"] > raw_meta[si]["spx_strike_raw"] else -1
+        is_call = raw_meta[0]["flag"].lower() == "c"
+        # long leg further from the money than the short one → credit; nearer → debit
+        side = "credit" if (direction > 0) == is_call else "debit"
+        try:
+            if not width_nominal or width_nominal <= 0:
+                raise StructureNotListed("vertical with zero nominal width")
+            pair = snap_spread_to_listed(raw_meta[si]["spx_strike_raw"], width_nominal, side, direction, cands)
+        except StructureNotListed as exc:
             for o in out:
                 o["spx_strike"] = None; o["listed"] = False
-            warnings_out.append(f"no listed strikes for expiry {raw_meta[0]['expiration']} at the prior close before {trade_date}")
-            return out, None, width_nominal
-        anchor = snap_to_candidates(raw_meta[si]["spx_strike_raw"], cands)
-        direction = raw_meta[li]["spx_strike_raw"] - raw_meta[si]["spx_strike_raw"]
-        side = [c for c in cands if (c > anchor if direction > 0 else c < anchor)]
-        if not side:
-            out[si]["spx_strike"] = anchor
-            out[li]["spx_strike"] = None; out[li]["listed"] = False
-            warnings_out.append(f"no listed strike on the required side of {anchor:g} for expiry {raw_meta[0]['expiration']}")
-            return out, None, width_nominal
-        other = snap_to_candidates(raw_meta[li]["spx_strike_raw"], side, toward=anchor)
-        out[si]["spx_strike"] = anchor
-        out[li]["spx_strike"] = other
-        width_actual = abs(other - anchor)
+            warnings_out.append(
+                f"no listed structure for expiry {raw_meta[0]['expiration']} at the prior close before "
+                f"{trade_date} (intent {raw_meta[si]['spx_strike_raw']:g}/{raw_meta[li]['spx_strike_raw']:g}, "
+                f"width cap {2 * width_nominal:g}): {exc}"
+            )
+            return out, None, width_nominal, "no_listed_structure"
+        out[si]["spx_strike"] = pair.anchor
+        out[li]["spx_strike"] = pair.other
+        width_actual = pair.width_actual
+        if pair.narrower_than_nominal:
+            warnings_out.append(
+                f"no listed pair at ≥ {width_nominal:g} points within the cap for expiry "
+                f"{raw_meta[0]['expiration']}; narrower structure {pair.anchor:g}/{pair.other:g} (width {width_actual:g})"
+            )
+        elif pair.widened:
+            warnings_out.append(
+                f"width {width_nominal:g} not listed for expiry {raw_meta[0]['expiration']}; "
+                f"structure widened to {width_actual:g} points ({pair.anchor:g}/{pair.other:g})"
+            )
     else:
         for m, o in zip(raw_meta, out):
             cands = chains.get(m["expiration"], [])
             if not cands:
                 o["spx_strike"] = None; o["listed"] = False
+                reason = "no_listed_strike"
                 warnings_out.append(f"no listed strikes for expiry {m['expiration']} at the prior close before {trade_date}")
                 continue
             o["spx_strike"] = snap_to_candidates(m["spx_strike_raw"], cands)
@@ -483,7 +516,7 @@ def _snap_leg_strikes(raw_meta: list[dict], trade_date: date, warnings_out: list
     for m, o in zip(raw_meta, out):
         if o["spx_strike"] is not None and o["spx_strike"] != m["spx_strike_raw"]:
             warnings_out.append(f"strike {m['spx_strike_raw']:g} not listed for {m['expiration']}; snapped to {o['spx_strike']:g}")
-    return out, width_actual, width_nominal
+    return out, width_actual, width_nominal, reason
 
 
 # ── Real implied-distribution strike band (CR-T Step 2) ──────────────────────

@@ -75,7 +75,7 @@ from packages.shared.gex_landscape import compute_implied_move
 from packages.shared.options_cache.fetcher import fetch_option_bars
 from packages.shared.options_cache.http_client import OratsPermanentError
 from packages.shared.options_cache.opra import format_opra
-from packages.shared.options_cache.strikes import StrikeNotListed, snap_vertical_legs
+from packages.shared.options_cache.strikes import StructureNotListed, snap_vertical_pair
 from packages.shared.backtest.quote_validity import leg_quote_is_valid
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
@@ -246,10 +246,10 @@ def load_clean_dates(conn) -> list[dict]:
     for e in selected:
         td = e["trade_date"]
         expiry = nth_business_day(td, DTE_BASE)
-        # CR-AO: snap both legs to the strikes listed at the prior close
+        # CR-AR: snap the debit vertical as a pair from the prior-close chain (width cap 2×)
         try:
-            snapped = snap_vertical_legs(e["drift_target"], -10, expiry, td, conn, toward=e.get("spot"))
-        except StrikeNotListed as exc:
+            snapped = snap_vertical_pair(e["drift_target"], 10.0, "debit", expiry, td, conn, toward=e.get("spot"))
+        except StructureNotListed as exc:
             n_unlistable += 1
             print(f"  unlistable {td}: {exc}", flush=True)
             continue
@@ -271,7 +271,7 @@ def load_clean_dates(conn) -> list[dict]:
                           "width_actual": snapped.width_actual, "width_nominal": snapped.width_nominal})
 
     if n_unlistable:
-        print(f"  unlistable entries (StrikeNotListed): {n_unlistable}", flush=True)
+        print(f"  unlistable entries (StructureNotListed): {n_unlistable}", flush=True)
     return clean
 
 

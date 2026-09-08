@@ -641,8 +641,10 @@ if __name__ == "__main__":
 
 
 class TestPriceProposalLegsSnapping(unittest.TestCase):
-    """CR-AO decisions 1–3 in the live leg builder: strikes snap to the listed
-    grid at the prior close; width_actual is the snapped width."""
+    """CR-AO decisions 1–3 / CR-AR decisions 1–2, 4 in the live leg builder:
+    a vertical snaps as a *pair* to the listed grid at the prior close;
+    width_actual ∈ [nominal, 2 × nominal]; no listed pair → listed=False,
+    reason='no_listed_structure', nothing priced."""
 
     _LEGS = [
         {"flag": "c", "strike": 7655.0, "expiration": date(2026, 8, 3), "qty": 1, "side": "short"},
@@ -662,30 +664,58 @@ class TestPriceProposalLegsSnapping(unittest.TestCase):
             return pricing.price_proposal_legs(self._LEGS, trade_date=date(2026, 7, 13),
                                                entry_pt=datetime(2026, 7, 13, 7, 0), r=r, q=q)
 
-    def test_vertical_snaps_as_a_pair_and_reports_width_actual(self):
-        res = self._run([7600, 7610, 7620, 7650, 7700, 7750])   # coarse 15-DTE grid, no 7655/7665
+    def test_vertical_snaps_as_a_pair_within_the_width_cap(self):
+        # coarse 15-DTE grid, no 7655/7665: 7650 is listed and 7670 is the nearest wing
+        # within the cap → 7650/7670 (20 wide), never 7650/7700 (50)
+        res = self._run([7600, 7610, 7620, 7650, 7670, 7700, 7750])
         short, long_ = res["legs"]
         self.assertEqual(short["spx_strike_raw"], 7655)
-        self.assertEqual(short["spx_strike"], 7650)         # nearest listed to the anchor
-        self.assertEqual(long_["spx_strike"], 7700)         # nearest listed to 7665 strictly above 7650
-        self.assertEqual(res["width_actual"], 50.0)
+        self.assertEqual(short["spx_strike"], 7650)
+        self.assertEqual(long_["spx_strike"], 7670)
+        self.assertEqual(res["width_actual"], 20.0)
         self.assertEqual(res["width_nominal"], 10.0)
+        self.assertTrue(res["listed"]); self.assertIsNone(res["listed_reason"])
         self.assertTrue(short["listed"] and long_["listed"])
         self.assertIn("SPX260803C07650000", short["opra"])
         self.assertTrue(any("snapped to 7650" in w for w in res["warnings"]))
+
+    def test_vertical_far_anchor_is_unlistable_not_relocated(self):
+        # the only pairs within the cap sit 45 points below the intent → unlistable
+        res = self._run([7600, 7610, 7620, 7650, 7700, 7750])
+        self.assertFalse(res["listed"]); self.assertEqual(res["listed_reason"], "no_listed_structure")
+
+    def test_vertical_widens_to_the_cap_when_only_twice_nominal_is_listed(self):
+        res = self._run([7615, 7635, 7655, 7675, 7695])      # 20-point grid around the intent
+        short, long_ = res["legs"]
+        self.assertEqual((short["spx_strike"], long_["spx_strike"]), (7655, 7675))
+        self.assertEqual(res["width_actual"], 20.0)
+        self.assertTrue(res["listed"])
+        self.assertTrue(any("widened to 20" in w for w in res["warnings"]))
+
+    def test_vertical_never_wider_than_the_cap_marks_structure_unlistable(self):
+        res = self._run([7600, 7625, 7650, 7675, 7700])      # 25-point grid only (CR-AP's 25-wides)
+        self.assertFalse(res["listed"])
+        self.assertEqual(res["listed_reason"], "no_listed_structure")
+        self.assertEqual([l["listed"] for l in res["legs"]], [False, False])
+        self.assertEqual([l["spx_strike"] for l in res["legs"]], [None, None])
+        self.assertTrue(all(l["opra"] is None and l["mid"] is None for l in res["legs"]))
+        self.assertIsNone(res["net_debit"]); self.assertIsNone(res["width_actual"])
+        self.assertTrue(any("no listed structure" in w for w in res["warnings"]))
 
     def test_full_grid_leaves_strikes_unchanged(self):
         res = self._run(list(range(7600, 7705, 5)))
         self.assertEqual([l["spx_strike"] for l in res["legs"]], [7655, 7665])
         self.assertEqual(res["width_actual"], 10.0)
+        self.assertTrue(res["listed"])
         self.assertFalse(any("snapped" in w for w in res["warnings"]))
 
-    def test_unlisted_expiry_marks_legs_unlisted(self):
+    def test_unlisted_expiry_marks_structure_unlistable(self):
         res = self._run([])
         self.assertEqual([l["listed"] for l in res["legs"]], [False, False])
         self.assertEqual([l["spx_strike"] for l in res["legs"]], [None, None])
         self.assertIsNone(res["net_debit"])
-        self.assertTrue(any("no listed strikes" in w for w in res["warnings"]))
+        self.assertFalse(res["listed"]); self.assertEqual(res["listed_reason"], "no_listed_structure")
+        self.assertTrue(any("no listed structure" in w for w in res["warnings"]))
 
 
 class TestPriceProposalLegsQuoteSanity(_ChainStub, unittest.TestCase):

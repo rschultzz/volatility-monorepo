@@ -385,3 +385,54 @@ describe('ProposalCard — today\'s edge block (CR-V)', () => {
     expect(tilde.getAttribute('title')).toMatch(/lower.bound/i)
   })
 })
+
+
+describe('ProposalCard — listed structure and width (CR-AR decision 4)', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  function stubResponse(overrides) {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve({ ...MOCK_PL_RESPONSE, ...overrides }) })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('shows "no listed structure at this expiry" instead of legs when listed is false', async () => {
+    const fetchMock = stubResponse({ listed: false, listed_reason: 'no_listed_structure', legs: [], net_cost: null,
+                                     width_actual: null, width_nominal: 10 })
+    renderCard()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByTestId('no-listed-structure')).toBeInTheDocument())
+    expect(screen.getByText(/No listed structure at this expiry/i)).toBeInTheDocument()
+    expect(document.querySelector('.leg-table')).toBeNull()
+    expect(document.querySelector('[data-testid="width-line"]')).toBeNull()
+  })
+
+  it('renders the leg table and no width line when the width matches the intent', async () => {
+    const fetchMock = stubResponse({ listed: true, listed_reason: null, width_actual: 10, width_nominal: 10 })
+    renderCard()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(document.querySelector('.leg-table')).not.toBeNull()
+    await waitFor(() => expect(document.querySelector('[data-testid="no-listed-structure"]')).toBeNull())
+    expect(document.querySelector('[data-testid="width-line"]')).toBeNull()
+    expect(screen.getByText('Debit Spread to Target')).toBeInTheDocument()
+  })
+
+  it('shows a widened structure with width_actual prominently (15 of 10)', async () => {
+    const fetchMock = stubResponse({ listed: true, width_actual: 15, width_nominal: 10 })
+    renderCard()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByTestId('width-line')).toBeInTheDocument())
+    expect(screen.getByTestId('width-line').textContent).toMatch(/Width 15 pts \(intent 10\)/)
+    expect(screen.getByText('Debit Spread to Target')).toBeInTheDocument()   // title unchanged below the cap
+  })
+
+  it('puts the width in the card title at the 2× cap', async () => {
+    const fetchMock = stubResponse({ listed: true, width_actual: 20, width_nominal: 10 })
+    renderCard()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByText(/Debit Spread to Target — 20-wide/)).toBeInTheDocument())
+    expect(screen.getByTestId('width-line').textContent).toMatch(/at the 2× cap/)
+  })
+})
