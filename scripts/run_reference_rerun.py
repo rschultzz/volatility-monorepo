@@ -85,7 +85,7 @@ def main(argv=None) -> int:
                                                        stderr=subprocess.STDOUT, text=True, bufsize=1) as proc:
         for line in proc.stdout:
             sys.stdout.write(line); sys.stdout.flush()
-            fh.write(line)
+            fh.write(line); fh.flush()
         proc.wait()
     print(f"reference re-run finished: exit={proc.returncode}  cr_id={cfg['cr_id']}  log={log_path}")
     return proc.returncode
