@@ -75,11 +75,21 @@ export function BandStrip({ band }) {
   );
 }
 
+/** A4: the harness σ with its inputs — "(7806 − 7670) / 53.3 IM = 2.55 · 136 pt". */
+export function sigmaText(band, wall) {
+  if (band?.sigma == null) return 'σ (harness) not measurable — no open straddle or wall';
+  const w = wall?.price_es != null ? pts(wall.price_es, 0) : '—';
+  const o = band.table_spot != null ? pts(band.table_spot, 0) : '—';
+  const im = band.im_open_straddle != null ? pts(band.im_open_straddle, 1) : '—';
+  const d = band.distance_pts != null ? `${pts(Math.abs(band.distance_pts), 0)} pt ${band.distance_pts >= 0 ? 'above' : 'below'} the open` : '';
+  return `σ (harness) = (${w} − ${o}) / ${im} IM = ${pts(band.sigma, 2)}${d ? ` · ${d}` : ''}`;
+}
+
 function bandFact(band) {
   const today = band?.today_cell;
   if (!band?.today || !today) {
     return band?.sigma != null
-      ? `Today's wall is ${pts(band.sigma, 2)} IM from the open — no reference cell for that band yet.`
+      ? `Today's σ (harness) is ${pts(band.sigma, 2)} — no reference cell for that band yet.`
       : 'No band today — the wall distance could not be measured against the open straddle.';
   }
   const rows = band.rows || [];
@@ -87,7 +97,7 @@ function bandFact(band) {
   const rank = today.win_rate === bestWin ? 'the band with the best win rate' : 'not the band with the best win rate';
   const lb = today.wilson_lo != null ? Math.round(today.wilson_lo * 100) : null;
   const coin = lb == null ? '' : lb > 50 ? ', interval clear of a coin flip' : ', interval includes a coin flip';
-  return `Today is ${band.today} (wall ${pts(band.sigma, 2)} IM above the open): ${rank}${coin}. Mean P&L per trade in points, hold to close, threshold ${pts(today.threshold, 2)}.`;
+  return `Today is ${band.today} at σ (harness) ${pts(band.sigma, 2)}: ${rank}${coin}. Mean P&L per trade in points, hold to close, threshold ${pts(today.threshold, 2)}.`;
 }
 
 // ── Trade tab ─────────────────────────────────────────────────────────────────
@@ -135,7 +145,7 @@ export default function TradeTab({ card, apiBase }) {
           )}
           <div className="kv">
             <span className="k">Wall</span>
-            <span className="v">{pts(wall.price_es, 0)} · {gexB(wall.gex_b)} · {wall.sigma != null ? `${pts(wall.sigma, 2)} implied move ${wall.above_spot === false ? 'below' : 'above'} spot ${pts(card.context?.spot, 0)}` : `spot ${pts(card.context?.spot, 0)}`}</span>
+            <span className="v">{pts(wall.price_es, 0)} · {gexB(wall.gex_b)} · {wall.sigma != null ? `σ (harness) ${pts(wall.sigma, 2)}${band.distance_pts != null ? ` · ${pts(Math.abs(band.distance_pts), 0)} pt ${band.distance_pts >= 0 ? 'above' : 'below'} the open ${pts(band.table_spot, 0)}` : ''}` : `spot ${pts(card.context?.spot, 0)}`}</span>
             {listed && (
               <>
                 <span className="k">Pays in full if</span>
@@ -181,8 +191,9 @@ export default function TradeTab({ card, apiBase }) {
 
       <div className="mid">
         <div>
-          <h3>Distance band — where the evidence is</h3>
+          <h3>Distance band — σ (harness), where the evidence is</h3>
           <BandStrip band={band} />
+          <p className="fact" data-testid="sigma-line"><b>{sigmaText(band, wall)}</b></p>
           <p className="fact" data-testid="band-fact">{bandFact(band)}</p>
         </div>
         <div>

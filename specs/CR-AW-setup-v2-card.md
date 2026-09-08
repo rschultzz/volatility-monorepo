@@ -195,3 +195,22 @@ Surfaced by the KNN tab: today's `implied_move_1d` in the live route is `_resolv
 - **Reference legs vs card legs.** The harness snaps the undiscounted ES-forward target (≈ 7805 SPX at `nth_business_day(15)` = 09-25) while the card prices 7775 / 7785 at date + 15 calendar days (09-18). The band cells the card cites were built on the former.
 - **Mockup's "near · +1.00 IM"** is not reproducible from any stored measure (harness σ 2.55, v1 σ 4.2); the card shows far.
 - **Card latency** ~30 s (v1's queries + two KNN ranks + corpus load + quote fetch). Acceptable for a tab; a shared rank between `compute_structural_probability` and the rows call would halve the KNN part.
+
+## Spec amendments v2 (Ryan, 2026-09-07, before merge) — A2 / A3 / A4 restated
+
+- **A2 — fair value at T+15 sessions.** For each computed analogue: `target = close_at_horizon − final_close_distance_from_target` (the wall re-derived from the stored outcome; `close_at_horizon` = ES RTH close on `horizon_end_date`, last 06:30–13:00 PT bar of `ironbeam_es_1m_bars` — checked against `pick_drift_target(walls)` on all 377 magnet-above rows: equal to the point); `d15 = target − session_close_t15` (points below the wall at T+15); `value = clamp(width − d15, 0, width)`. Analogues with NULL `session_close_t15` (or no horizon close) are excluded and counted (`n_no_t15_close`, `n_no_horizon_close`). Fair, max, expected P&L, full-payout (`d15 ≤ 0`) and any-payout (`d15 < width`) rates all move to this basis; `analogue_fair_value` takes points-below-target. The earlier A1 (sign) and A2 (horizon disclosure) are superseded by this.
+- **A3 — expiry.** `expiry = nth_business_day(trade_date, 15)` (weekdays, NYSE holidays skipped — the harness's `_NYSE_HOLIDAYS`, copied into `SetupV2/service.py`) snapped to the nearest listed expiry in the prior-close chain (`orats_oi_gamma`; ties → later). 2026-09-03 → 2026-09-25 (22 calendar days). Card label "15 sessions (25 Sep)". The earlier fact 5 / date-plus-15-calendar-days convention is superseded.
+- **A4 — the harness distance σ, verbatim from the code.** `scripts/cr_ah_step4_analysis.py::load_signal_entries`:
+  ```
+  spot = float(table_spot)                                       # orats_gex_landscape.table_spot
+  floor_ts = datetime.combine(trade_date, time(6, 33, 0))
+  iv_row = conn.execute(_OPEN_STRADDLE_SQL, (trade_date.isoformat(), TICKER, floor_ts)).fetchone()
+  #   _OPEN_STRADDLE_SQL: first orats_monies_minute row with atmiv IS NOT NULL AND dte > 0
+  #   AND snapshot_pt >= floor_ts, ORDER BY snapshot_pt ASC, dte ASC
+  implied_move = compute_implied_move(spot, float(iv_row[0]), dte=1.0)   # spot × iv × sqrt(1 / 252)
+  payload = _materialize_payload(landscape_rows, spot, implied_move)
+  dt = (payload.get("regime") or {}).get("drift_target")
+  sigma = (float(dt) - spot) / implied_move
+  band = distance_band(sigma)     # near: σ < 1.5 · mid: 1.5 ≤ σ < 2.0 · far: σ ≥ 2.0  (backtest/models.py)
+  ```
+  The card's band strip is headed "σ (harness)" and shows the formula with today's inputs and the point distance beside it: `σ (harness) = (7806 − 7670) / 53.3 IM = 2.55 · 136 pt above the open`. The payload carries `sigma`, `distance_pts`, `table_spot`, `im_open_straddle`, `atmiv_open`, `sigma_formula`.

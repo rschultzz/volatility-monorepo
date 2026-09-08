@@ -472,8 +472,14 @@ def build_card(conn, ticker: str, trade_date: dt.date) -> tuple[dict, int]:
     # ── Band (decision 4, A3) ───────────────────────────────────────────────
     im_open, atmiv_open = _fetch_open_straddle_im(conn, ticker, trade_date, table_spot)
     sigma = None
-    if drift_target is not None and im_open and table_spot is not None:
-        sigma = round((float(drift_target) - float(table_spot)) / im_open, 4)
+    distance_pts = None
+    if drift_target is not None and table_spot is not None:
+        distance_pts = round(float(drift_target) - float(table_spot), 4)
+    if distance_pts is not None and im_open:
+        # A4 — verbatim from the harness (scripts/cr_ah_step4_analysis.py::load_signal_entries):
+        #   implied_move = compute_implied_move(spot, atmiv, dte=1.0)   # spot = table_spot
+        #   sigma = (float(dt) - spot) / implied_move                    # dt = regime drift_target
+        sigma = round(distance_pts / im_open, 4)
     today_band = band_for_sigma(sigma)
     cr_id, ref_rows = _fetch_reference_rows(conn)
     cells = select_reference_rows(ref_rows)
@@ -482,6 +488,9 @@ def build_card(conn, ticker: str, trade_date: dt.date) -> tuple[dict, int]:
     band = {
         "today":            today_band,
         "sigma":            sigma,
+        "sigma_label":      "σ (harness)",
+        "sigma_formula":    "(drift_target − table_spot) / (table_spot × atmiv_0633 × sqrt(1/252))",
+        "distance_pts":     distance_pts,
         "im_open_straddle": round(im_open, 4) if im_open else None,
         "atmiv_open":       round(atmiv_open, 6) if atmiv_open else None,
         "table_spot":       float(table_spot) if table_spot is not None else None,
