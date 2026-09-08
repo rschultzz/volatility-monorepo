@@ -94,3 +94,37 @@ top-level keys: context, ok, proposals, structural_probability
 ```
 
 Before: **two structures** (credit `directional_spread_to_target` + debit `debit_spread_to_target`, 15 DTE), both badged `mixed pattern — no clear direction` (stepping-stone but t15 `above` Wilson lower bound 0.371 < 0.40 floor under today's walk-forward pool — the note's "dropped the credit proposal on 09-03" was the earlier pool), `filter_mode` strict, pattern stepping-stone, n = 25 same-bucket touchers. No `advisory_only` field.
+
+## Commit 4 — frontend
+
+`StructuralProbabilityBlock.jsx`: the `SYNTHESIS_LINES` table ("Direction signal: debit-to-target supported." …) is gone; `PostTouchSection` renders `post-touch pattern: <label> · n=<same_bucket_n> · <tf> <direction> <pct>` from the server-side `post_touch.advisory` block when `advisory_only` is true (falls back to the raw fields; renders nothing on a legacy payload). `filter_mode` is still read only for the thin-corpus data notes ("Insufficient post-touch sample", "0DTE corpus insufficient", "pooled fallback"), which describe the sample, not a direction. `styles.css`: `.pt-synthesis` → `.pt-advisory`. Tests: `StructuralProbabilityBlock.test.jsx` (5: label + n + fraction; stepping-stone vs mixed differ only in the label; no supported / low-confidence / no-clear-direction / Direction-signal text for any label; raw-field fallback; legacy payload renders nothing) and `bundleBadgeStrings.test.js` (greps `dist/assets/*.js` for the five badge phrases; skips with a warning when `dist/` is absent). Build: `npm run build` → `dist/assets/index-DmgJZy5k.js` (382 kB); grep of the bundle for `debit-to-target supported | credit-fade supported | low-confidence | no clear direction | Direction signal` → **none**; `post-touch pattern` present. Note: the main checkout's `react_today_setup/node_modules` was an x64 install (rollup/rolldown arm64 bindings missing); reinstalled with `npm ci` (the x64 tree moved aside outside the repo).
+
+## Step 1 — G3: `GET /api/setup/proposals?date=2026-09-03&ticker=SPX` run locally, after (scratchpad `cr_av_payload.py`, `cr_av_after.json`)
+
+```
+status 200 ok True regime magnet-above
+proposals:
+  debit_spread_to_target           kind=spread     dte=15 badge=None
+structural_probability: regime_kind magnet-above outcome_status ok k 70
+post_touch: {'filter_mode': 'strict', 'pattern_label': 'stepping-stone', 'same_bucket_n': 25, 'total_touchers': 50, 'advisory_only': True}
+post_touch.advisory: {'pattern_label': 'stepping-stone', 'n': 25, 'n_pooled': 50, 'timeframe': 't15', 'direction': 'above', 'fraction': 0.56, 'wilson_lo': 0.371, 'wilson_hi': 0.733}
+fractions: t1 above 0.56 / t5 above 0.72 / t15 above 0.56   (unchanged)
+top-level keys: context, ok, proposals, structural_probability   (unchanged)
+```
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G3 — one structure (debit) | yes | `debit_spread_to_target` only; `directional_spread_to_target` gone, no placeholder | PASS |
+| G3 — post-touch block with `advisory_only` true | yes | `advisory_only: True`, `advisory` = stepping-stone · n=25 · t15 above 56 % (the card text for a 15-DTE trade) | PASS |
+| G3 — no badge | yes | no `confidence_badge` on the proposal; bundle carries no badge strings | PASS |
+| G2 — `git diff --stat` scope | Proposals / qualification module / TodaySetup frontend / tests / spec | `apps/web/modules/TodaySetup/{service,routes}.py`, `packages/shared/post_touch_qualification.py` (docstring), `apps/web/modules/TodaySetup/tests/*`, `react_today_setup/src/**`, `specs/CR-AV-*.md` | PASS |
+
+### Before / after summary (2026-09-03, magnet-above, stepping-stone, n = 25)
+
+| | before | after |
+|---|---|---|
+| structures | 2 — credit `directional_spread_to_target` + debit `debit_spread_to_target` (15 DTE) | 1 — debit `debit_spread_to_target` (15 DTE) |
+| `confidence_badge` | `mixed pattern — no clear direction` on both | none |
+| `filter_mode` | strict | strict (kept, audit only) |
+| post-touch block | label / fractions / Wilson CIs | same fields + `advisory_only: true` + `advisory` (label, n, timeframe, direction, fraction, Wilson bounds) |
+| card text | "Pattern: stepping-stone. Direction signal: debit-to-target supported." | "post-touch pattern: stepping-stone · n=25 · t15 above 56%" |
