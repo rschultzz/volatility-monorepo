@@ -266,7 +266,7 @@ def load_inputs(conn, td: date) -> dict:
     regime = row[1] if row else None
     im = float(row[2]) if row and row[2] is not None else None
     im_source = "feature_vector.implied_move_1d" if im else None
-    so = conn.execute(_SPX_OPEN_SQL, (TICKER, td, datetime.combine(td, OPEN_SNAPSHOT_FLOOR))).fetchone()
+    so = conn.execute(_SPX_OPEN_SQL, (TICKER, td.isoformat(), datetime.combine(td, OPEN_SNAPSHOT_FLOOR))).fetchone()   # trade_date is text in orats_monies_minute
     spx_open = float(so[0]) if so else None
     spx_snap = so[1] if so else None
     spot_row = conn.execute(_TABLE_SPOT_SQL, (TICKER, td)).fetchone()
