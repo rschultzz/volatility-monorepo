@@ -136,3 +136,33 @@ Fair value under the locked definition with the correct sign on the 09-03 set: `
 - **A5 — mount.** `apps/web/app.py` gains the SetupV2 mount (import + `register_setup_v2_routes(server)`), the "Setup v2" tab and its redirect — the only lines touched there.
 - **A6 — fees.** `FEE_PER_CONTRACT_PER_LEG` imported from `packages.shared.config` with a 0.65 fallback; `fee_pts = legs × 2 × fee / 100` subtracted from expected P&L; the stamp says "fees $0.65 / contract / leg included".
 - **A7 — frontend entry.** The v2 page is a second Vite entry (`react_today_setup/setup-v2.html` → `dist/setup-v2.html`) so the v2 bundle can be grepped on its own; assets stay under `/today-setup/assets/` (already served). Both pages' top nav gains the "Setup v2" pill.
+
+## Step 1 — gates and the 2026-09-03 card (2026-09-07)
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G1 — tests per decision 8; suites pass | pass | fair value: all above short → width, all far below → 0, mixed, max ≤ fair, seed reproducible, empty → None (6 tests); verdict above / below / equal / no structure / no quote / never "wait" (6); band selection (REF- over CR-AR, filters, train + lowest threshold, thresholds 1.5 / 2.0) (6); percentile / quantile (2); KNN rows incl. "not populated" and match quality (4); fees / P&L (3); by-minute strip (3); route wiring (9); frontend: verdict enter / skip / no structure, "70 analogues within the similarity ceiling" and no "K=", band outline + horizon mix + at-wall rate, stamp, untested watches, detail toggle, KNN tab rows + tab switch (10), v2 bundle grep (1). Python: **951 passed, 1 skipped** across TodaySetup / Proposals / SetupV2 / packages.shared / options_cache / backtest; vitest **47 passed** (6 files) after `npm run build`. | PASS |
+| G2 — diff confined | yes | `git diff --stat origin/main..HEAD`: `apps/web/app.py` (+8: mount, tab, redirect — A5), `apps/web/modules/SetupV2/**`, `packages/shared/probability.py` (+89: `analogue_fair_value` + `_quantile` + one docstring line), `packages/shared/tests/test_probability.py`, `react_today_setup/**` (v2 entry, components, tests, one nav pill in `App.jsx`, `vite.config.js` input), `specs/CR-AW-setup-v2-card.md`. Nothing in `apps/web/modules/TodaySetup/`, `Proposals/` or `packages/web-shared/`. | PASS |
+| G3 — local `/api/setup-v2/card?date=2026-09-03` populated; verdict against the stored 06:34 quote | yes | 200 in 34 s, 17,094 bytes; every block populated (below). The 06:34 bar for the two legs was not in the store (Step 0 fact 3); `price_proposal_legs` fetched it through the cache (clean, not stale) — it is stored now, and the by-minute strip shows 06:34 and the earlier 07:00 bar. | PASS |
+| G4 — `/api/setup/proposals?date=2026-09-03` byte-identical before / after | yes | 2,211 bytes both; `cmp` equal; md5 `b415e6d5…` both | PASS |
+
+### The 2026-09-03 card (Flask test client on the branch, real DB)
+
+| Field | Value |
+|---|---|
+| Structure | debit call spread, buy **7775** / sell **7785** SPX (ES 7796.175 / 7806.175), expiry **2026-09-18** (15 calendar DTE), width 10, listed, no warnings |
+| Quote at 06:34 PT | **4.10** (7775 mid 42.05, 7785 mid 37.95; both legs valid, not stale); market-implied 41 % |
+| Analogues | 70 within the similarity ceiling (5.0), **68** computed, 2023-05-02 … 2026-08-28; horizon mix 34 × 5, 28 × 20, 6 × 60 sessions |
+| Fair value | **5.35** (mean of clamp(10 + d)); bootstrap of the mean p2.5 **4.16** · p20 **4.85** · p97.5 **6.47** (1,000 resamples, seed 20260903) |
+| Max price | **4.85** |
+| Expected P&L at 4.10 | **+1.23** [+0.03, +2.34] after fees (0.026 pt) |
+| Verdict | **enter** — "quote is under the max — enter at the open" |
+| Payout rates | full (d ≥ 0) **51.5 %**; any (d > −10) **57.4 %**; closed at the wall (± 0.25 IM) 10.3 %; reached the wall 73.5 % [62, 83], mean 4.84 sessions |
+| Band | wall 7806.175, table_spot 7670.175, open-straddle IV 0.1104 → IM 53.34 → σ **2.55 → far** |
+| Reference cells (CR-AR, run b07972a5, debit · close · train · threshold 0.05) | near +1.91 / 68.4 % [52.5, 80.9] n 38 · mid +1.23 / 55.9 % [39.5, 71.1] n 34 · **far +1.99 / 48.4 % [32.0, 65.2] n 31** (baseline +1.96, beat +0.03) |
+| KNN tab | v3 (ceiling 5.0, cap 3.0, half-life 18 m); corpus 394 magnet-above days before 09-03; **match quality 29 of 30** populated factors inside the analogue band; outlier `implied_move_1d` (today 24.3 pt = 7.9th percentile; analogue middle half 33.4–52.9); the five vol-surface factors "not populated" |
+| Stamp | CR-AR · far · debit · hold to close · n 31 · re-run 2026-09-07 · next 2026-10-01 · fees $0.65 / contract / leg included · quote 06:34 PT |
+
+Browser check (scratch Flask server on 8061 serving the built entry): Trade and KNN tabs render, verdict / gauge / band strip / facts / stamp populated, no console errors.
+
+Surfaced by the KNN tab: today's `implied_move_1d` in the live route is `_resolve_implied_move` (latest `orats_monies_minute` snapshot, nearest dte → 24.3 pt on 09-03) while the stored corpus vectors carry the 06:33 open-straddle move (53.3 pt on 09-03). The KNN therefore matches today's IM against a differently-measured corpus IM; the tab shows it as the one outlier. Pre-existing in v1; recorded under Open questions.

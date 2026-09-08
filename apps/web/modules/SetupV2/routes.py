@@ -457,7 +457,7 @@ def build_card(conn, ticker: str, trade_date: dt.date) -> tuple[dict, int]:
              "note": "needs the wall table (CR-AT)"},
             {"key": "vol_state", "label": "Vol state", "status": "untested",
              "value": _vol_state_value(factors),
-             "note": "implied move percentile vs the magnet-above corpus; IV rank / VRP not populated"},
+             "note": "IV rank and VRP are not populated — no action either way until they read"},
         ],
     }
     stamp = {
