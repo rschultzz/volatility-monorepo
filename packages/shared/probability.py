@@ -13,6 +13,7 @@ Public entry points:
     compute_structural_probability(today_features, conn, ...) → dict
     classify_post_touch_positions(days_to_reach, horizon_bars, ...) → dict
     aggregate_post_touch_distribution(analogues_with_outcomes, anchor_bucket, ...) → dict
+    analogue_fair_value(close_distances, width, ...) → dict   (CR-AW)
 """
 from __future__ import annotations
 
@@ -761,6 +762,94 @@ def compute_structural_probability(
         result["post_touch"] = None
 
     return result
+
+
+# ── Analogue fair value (CR-AW decision 2 / 3) ────────────────────────────────
+
+
+def _quantile(sorted_vals: list[float], p: float) -> float:
+    """Linear-interpolated quantile of an ascending list (p in [0, 1])."""
+    n = len(sorted_vals)
+    if n == 1:
+        return sorted_vals[0]
+    pos = p * (n - 1)
+    lo = int(pos)
+    hi = min(lo + 1, n - 1)
+    frac = pos - lo
+    return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * frac
+
+
+def analogue_fair_value(
+    close_distances: list[float],
+    width: float,
+    *,
+    n_boot: int = 1000,
+    seed: int = 0,
+    max_pct: float = 0.20,
+) -> dict:
+    """Fair value of a debit vertical with its short strike at the wall, from
+    analogue closes (CR-AW decision 2). Pure math — no DB I/O.
+
+    Args:
+        close_distances: per analogue, ``final_close_distance_from_target`` =
+            close − wall at the end of the analogue's outcome horizon (points;
+            positive = closed above the wall). Only analogues with
+            ``outcome_status == 'computed'`` belong here — the caller filters.
+        width:  spread width in points (long strike = wall − width).
+        n_boot: bootstrap resamples of the mean (decision 2: 1,000).
+        seed:   RNG seed — the trade date as an int (YYYYMMDD) so the number
+                means the same thing every time the card is opened that day.
+        max_pct: percentile of the bootstrap distribution of the mean that is
+                the "max price to pay" (decision 2: the 20th).
+
+    Per analogue ``value = clamp(width + d, 0, width)`` — the spread's payout
+    at that close. ``fair`` is the mean; ``max_price`` is the ``max_pct``
+    quantile of the bootstrap means, never above ``fair``; ``boot_lo`` /
+    ``boot_hi`` are the 2.5 / 97.5 quantiles of the same distribution.
+    Full payout = ``d >= 0`` (closed at or above the short strike); any payout
+    = ``d > -width`` (closed above the long strike) — decision 3.
+
+    Returns ``n = 0`` with every number ``None`` when there is nothing to
+    average (no silent fallback).
+    """
+    d = [float(x) for x in close_distances if x is not None]
+    n = len(d)
+    if n == 0 or width <= 0:
+        return {
+            "n": 0, "width": width, "fair": None, "max_price": None,
+            "boot_lo": None, "boot_hi": None,
+            "full_payout_rate": None, "any_payout_rate": None,
+            "n_boot": n_boot, "seed": seed, "max_pct": max_pct,
+        }
+    values = [min(max(width + x, 0.0), width) for x in d]
+    fair = sum(values) / n
+
+    import random  # local: keep the module import list unchanged for callers
+    rng = random.Random(seed)
+    means = []
+    for _ in range(n_boot):
+        s = 0.0
+        for _ in range(n):
+            s += values[rng.randrange(n)]
+        means.append(s / n)
+    means.sort()
+    max_price = min(_quantile(means, max_pct), fair)
+    boot_lo = _quantile(means, 0.025)
+    boot_hi = _quantile(means, 0.975)
+
+    return {
+        "n":                n,
+        "width":            width,
+        "fair":             round(fair, 4),
+        "max_price":        round(max_price, 4),
+        "boot_lo":          round(boot_lo, 4),
+        "boot_hi":          round(boot_hi, 4),
+        "full_payout_rate": round(sum(1 for x in d if x >= 0) / n, 4),
+        "any_payout_rate":  round(sum(1 for x in d if x > -width) / n, 4),
+        "n_boot":           n_boot,
+        "seed":             seed,
+        "max_pct":          max_pct,
+    }
 
 
 def _infer_regime_kind(features: dict) -> Optional[str]:
