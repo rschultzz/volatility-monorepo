@@ -311,8 +311,9 @@ def register_today_setup_routes(server) -> None:
             )
             response["structural_probability"] = structural_probability
 
-            # Apply post-touch direction qualification to magnet-regime proposals.
-            # Must run after structural_probability is available (computed above).
+            # CR-AV: post-touch direction data is advisory only — the call
+            # annotates structural_probability["post_touch"] (advisory_only,
+            # advisory) and returns the proposals unchanged.
             if structural_probability:
                 response["proposals"] = apply_direction_qualification(
                     response["proposals"], structural_probability

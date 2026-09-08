@@ -186,6 +186,19 @@ class TestBuildProposalsResponse(unittest.TestCase):
         kinds = [p["template_kind"] for p in resp["proposals"]]
         self.assertIn("spread", kinds)
 
+    def test_magnet_day_yields_debit_only_no_credit(self):
+        """CR-AV decision 1 / 5: the credit-fade template is not a live proposal."""
+        ctx = dict(self.context, regime="magnet-above")
+        resp = build_proposals_response(_magnet_payload(), 7444.0, 50.0, ctx)
+        ids = [p["template_id"] for p in resp["proposals"]]
+        self.assertIn("debit_spread_to_target", ids)
+        self.assertNotIn("directional_spread_to_target", ids)
+        self.assertEqual(ids.count("debit_spread_to_target"), 1)
+        self.assertEqual([p["template_kind"] for p in resp["proposals"]].count("spread"), 1)
+        # no placeholder for the removed structure
+        for p in resp["proposals"]:
+            self.assertNotIn("confidence_badge", p)
+
     def test_all_proposals_have_required_keys(self):
         resp = build_proposals_response(_pin_payload(), 7362.0, 50.0, self.context)
         required = {"template_id", "template_kind", "anchor_strategy",

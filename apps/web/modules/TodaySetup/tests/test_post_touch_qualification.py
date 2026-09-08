@@ -3,7 +3,7 @@
 Tests cover:
   - dte_to_timeframe() mapping
   - credit_direction_qualifies() and debit_direction_qualifies() helpers
-  - apply_direction_qualification() service function — all decision branches
+  - apply_direction_qualification() service function — CR-AV: advisory only, never filters
 
 Run with:
     python -m unittest apps.web.modules.TodaySetup.tests.test_post_touch_qualification
@@ -235,148 +235,112 @@ class TestDebitDirectionQualifies(unittest.TestCase):
         self.assertFalse(debit_direction_qualifies(pt, "magnet-above", None))
 
 
-# ── apply_direction_qualification ─────────────────────────────────────────────
+# ── apply_direction_qualification (CR-AV: advisory only) ──────────────────────
 
 class TestApplyDirectionQualification(unittest.TestCase):
-    """End-to-end tests for the service-layer orchestration function."""
+    """CR-AV decisions 2 and 4: the function never filters or promotes; it
+    annotates post_touch with advisory_only / advisory and returns the
+    proposals unchanged (no confidence_badge)."""
 
     def _two_magnet_proposals(self, dte: int = 15) -> list[dict]:
-        """Standard two-proposal list: one credit + one debit."""
-        return [
-            _make_proposal(CREDIT_ID, dte),
-            _make_proposal(DEBIT_ID, dte),
-        ]
+        return [_make_proposal(CREDIT_ID, dte), _make_proposal(DEBIT_ID, dte)]
 
-    # ── Corpus-insufficient branches ──────────────────────────────────────────
-
-    def test_insufficient_badges_all_passes_through(self):
-        props = self._two_magnet_proposals()
-        sp = _make_sp("stepping-stone", filter_mode="insufficient")
-        result = apply_direction_qualification(props, sp)
-        self.assertEqual(len(result), 2)
+    def _assert_unchanged(self, props, result):
+        self.assertEqual(result, props)
         for p in result:
-            self.assertIn("low-confidence", p["confidence_badge"])
+            self.assertNotIn("confidence_badge", p)
 
-    def test_zero_dte_corpus_badges_all_passes_through(self):
-        props = self._two_magnet_proposals()
-        sp = _make_sp("stepping-stone", filter_mode="zero_dte_corpus_insufficient")
-        result = apply_direction_qualification(props, sp)
-        self.assertEqual(len(result), 2)
-        for p in result:
-            self.assertEqual(p["confidence_badge"], "0DTE corpus insufficient")
-
-    # ── Pin regime (unaffected) ───────────────────────────────────────────────
-
-    def test_magnetic_pin_regime_passes_through_unchanged(self):
-        props = [_make_proposal("pin_butterfly_tight", 15)]
-        sp = {"outcome_status": "ok", "regime_kind": "magnetic-pin", "post_touch": None}
-        result = apply_direction_qualification(props, sp)
-        self.assertEqual(len(result), 1)
-        self.assertNotIn("confidence_badge", result[0])
-
-    # ── Debit-only direction ──────────────────────────────────────────────────
-
-    def test_stepping_stone_high_above_emits_debit_only(self):
-        # stepping-stone + magnet-above + above wilson_lo=0.55 → debit-only
+    def test_stepping_stone_does_not_filter_or_badge(self):
         props = self._two_magnet_proposals()
         sp = _make_sp("stepping-stone", above_t15=0.55, below_t15=0.20)
-        result = apply_direction_qualification(props, sp)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["template_id"], DEBIT_ID)
-        self.assertEqual(result[0]["confidence_badge"], "debit-to-target supported")
+        self._assert_unchanged(props, apply_direction_qualification(props, sp))
 
-    def test_touch_and_pin_high_above_emits_debit_only(self):
-        # touch-and-pin + magnet-above + above wilson_lo=0.50 → debit qualifies
-        props = self._two_magnet_proposals()
-        sp = _make_sp("touch-and-pin", above_t15=0.50, below_t15=0.20)
-        result = apply_direction_qualification(props, sp)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["template_id"], DEBIT_ID)
-        self.assertEqual(result[0]["confidence_badge"], "debit-to-target supported")
-
-    # ── Credit-only direction ─────────────────────────────────────────────────
-
-    def test_touch_and_reject_high_below_emits_credit_only(self):
-        # touch-and-reject + magnet-above + below wilson_lo=0.55 → credit-only
+    def test_touch_and_reject_does_not_filter_or_badge(self):
         props = self._two_magnet_proposals()
         sp = _make_sp("touch-and-reject", below_t15=0.55, above_t15=0.20)
-        result = apply_direction_qualification(props, sp)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["template_id"], CREDIT_ID)
-        self.assertEqual(result[0]["confidence_badge"], "credit-fade supported")
+        self._assert_unchanged(props, apply_direction_qualification(props, sp))
 
-    def test_slow_revert_magnet_below_emits_credit_only(self):
-        # slow-revert + magnet-below + above wilson_lo=0.45 → credit qualifies
-        props = [_make_proposal(CREDIT_ID, 15), _make_proposal(DEBIT_ID, 15)]
-        # For magnet-below, override source regime
-        for p in props:
-            p["source"]["regime"] = "magnet-below"
-        sp = _make_sp("slow-revert", regime_kind="magnet-below", above_t15=0.45, below_t15=0.20)
-        result = apply_direction_qualification(props, sp)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["template_id"], CREDIT_ID)
-        self.assertEqual(result[0]["confidence_badge"], "credit-fade supported")
-
-    # ── Mixed / neither qualifies ─────────────────────────────────────────────
-
-    def test_mixed_pattern_emits_both_with_mixed_badge(self):
-        # mixed pattern → both emitted with mixed badge
+    def test_stepping_stone_and_mixed_yield_identical_proposal_sets(self):
+        # decision 5: label changes the advisory text only
         props = self._two_magnet_proposals()
-        sp = _make_sp("mixed", above_t15=0.30, below_t15=0.30)
-        result = apply_direction_qualification(props, sp)
-        self.assertEqual(len(result), 2)
-        for p in result:
-            self.assertEqual(p["confidence_badge"], "mixed pattern — no clear direction")
+        r1 = apply_direction_qualification([dict(p) for p in props], _make_sp("stepping-stone", above_t15=0.55))
+        r2 = apply_direction_qualification([dict(p) for p in props], _make_sp("mixed", above_t15=0.30, below_t15=0.30))
+        self.assertEqual(r1, r2)
+        self.assertEqual([p["template_id"] for p in r1], [CREDIT_ID, DEBIT_ID])
 
-    def test_stepping_stone_low_wilson_emits_both_with_mixed_badge(self):
-        # stepping-stone but wilson_lo=0.35 < 0.40 floor → neither qualifies → both emitted
+    def test_insufficient_and_zero_dte_do_not_badge(self):
+        for mode in ("insufficient", "zero_dte_corpus_insufficient"):
+            props = self._two_magnet_proposals()
+            sp = _make_sp("stepping-stone", filter_mode=mode)
+            result = apply_direction_qualification(props, sp)
+            self._assert_unchanged(props, result)
+            self.assertTrue(sp["post_touch"]["advisory_only"])
+            self.assertEqual(sp["post_touch"]["filter_mode"], mode)   # kept for audit
+
+    def test_advisory_block_label_n_timeframe_direction_fraction(self):
+        props = self._two_magnet_proposals(dte=5)     # 4–9 → t5
+        sp = _make_sp("stepping-stone", above_t5=0.61, below_t5=0.20)
+        apply_direction_qualification(props, sp)
+        pt = sp["post_touch"]
+        self.assertTrue(pt["advisory_only"])
+        adv = pt["advisory"]
+        self.assertEqual(adv["pattern_label"], "stepping-stone")
+        self.assertEqual(adv["n"], 10)
+        self.assertEqual(adv["n_pooled"], 10)
+        self.assertEqual(adv["timeframe"], "t5")
+        self.assertEqual(adv["direction"], "above")
+        self.assertAlmostEqual(adv["fraction"], 0.61)
+        self.assertAlmostEqual(adv["wilson_lo"], 0.61)
+        self.assertAlmostEqual(adv["wilson_hi"], 0.71)
+
+    def test_advisory_direction_follows_regime(self):
+        props = self._two_magnet_proposals(dte=15)
+        sp = _make_sp("stepping-stone", regime_kind="magnet-below", below_t15=0.58)
+        apply_direction_qualification(props, sp)
+        adv = sp["post_touch"]["advisory"]
+        self.assertEqual((adv["timeframe"], adv["direction"]), ("t15", "below"))
+        self.assertAlmostEqual(adv["fraction"], 0.58)
+
+    def test_existing_post_touch_fields_kept(self):
         props = self._two_magnet_proposals()
-        sp = _make_sp("stepping-stone", above_t15=0.35, below_t15=0.25)
+        sp = _make_sp("mixed")
+        before = dict(sp["post_touch"])
+        apply_direction_qualification(props, sp)
+        for k, v in before.items():
+            self.assertEqual(sp["post_touch"][k], v)
+
+    def test_non_magnet_regime_still_annotates_without_direction(self):
+        props = [_make_proposal("pin_butterfly_tight", 15)]
+        props[0]["source"] = {"type": "cluster"}
+        sp = _make_sp("touch-and-pin", regime_kind="magnetic-pin")
         result = apply_direction_qualification(props, sp)
-        self.assertEqual(len(result), 2)
-        for p in result:
-            self.assertEqual(p["confidence_badge"], "mixed pattern — no clear direction")
-
-    # ── Magnet-below symmetry ─────────────────────────────────────────────────
-
-    def test_magnet_below_debit_uses_below_fraction(self):
-        # magnet-below + stepping-stone + below wilson_lo=0.55 → debit qualifies
-        props = self._two_magnet_proposals()
-        sp = _make_sp("stepping-stone", regime_kind="magnet-below", below_t15=0.55, above_t15=0.20)
-        result = apply_direction_qualification(props, sp)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["template_id"], DEBIT_ID)
-
-    def test_magnet_below_credit_uses_above_fraction(self):
-        # magnet-below + touch-and-reject + above wilson_lo=0.55 → credit qualifies
-        props = self._two_magnet_proposals()
-        sp = _make_sp("touch-and-reject", regime_kind="magnet-below", above_t15=0.55, below_t15=0.20)
-        result = apply_direction_qualification(props, sp)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["template_id"], CREDIT_ID)
-
-    # ── No post_touch data ────────────────────────────────────────────────────
+        self.assertEqual(result, props)
+        adv = sp["post_touch"]["advisory"]
+        self.assertTrue(sp["post_touch"]["advisory_only"])
+        self.assertIsNone(adv["direction"]); self.assertIsNone(adv["fraction"])
+        self.assertEqual(adv["pattern_label"], "touch-and-pin")
 
     def test_no_post_touch_passes_through(self):
         props = self._two_magnet_proposals()
         sp = {"outcome_status": "ok", "regime_kind": "magnet-above", "post_touch": None}
-        result = apply_direction_qualification(props, sp)
-        self.assertEqual(len(result), 2)
+        self.assertEqual(apply_direction_qualification(props, sp), props)
+        self.assertIsNone(sp["post_touch"])
 
-    # ── Non-magnet proposals preserved ───────────────────────────────────────
+    def test_n_falls_back_to_total_touchers(self):
+        props = self._two_magnet_proposals()
+        sp = _make_sp("stepping-stone", filter_mode="pooled-fallback")
+        sp["post_touch"]["same_bucket_n"] = None
+        sp["post_touch"]["total_touchers"] = 23
+        apply_direction_qualification(props, sp)
+        self.assertEqual(sp["post_touch"]["advisory"]["n"], 23)
 
-    def test_pin_proposals_preserved_when_magnet_filtered(self):
+    def test_pin_proposals_preserved_with_magnet(self):
         pin_prop = {"template_id": "pin_butterfly_tight", "template_kind": "butterfly",
                     "expiry_dte_target": 15, "source": {"type": "cluster"},
                     "rationale": "pin", "legs": []}
         props = [pin_prop, _make_proposal(CREDIT_ID), _make_proposal(DEBIT_ID)]
         sp = _make_sp("stepping-stone", above_t15=0.55, below_t15=0.20)
-        result = apply_direction_qualification(props, sp)
-        # pin preserved + 1 debit
-        self.assertEqual(len(result), 2)
-        template_ids = {p["template_id"] for p in result}
-        self.assertIn("pin_butterfly_tight", template_ids)
-        self.assertIn(DEBIT_ID, template_ids)
+        self.assertEqual(apply_direction_qualification(props, sp), props)
 
 
 if __name__ == "__main__":

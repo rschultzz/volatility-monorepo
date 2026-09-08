@@ -15,6 +15,11 @@ Public API:
     dte_to_timeframe(dte)                              → 't1' | 't5' | 't15' | None
     credit_direction_qualifies(post_touch, regime, dte) → bool
     debit_direction_qualifies(post_touch, regime, dte)  → bool
+
+CR-AV (2026-09-07): the live /api/setup/proposals path no longer uses the
+qualifies() helpers to filter or promote proposals — post-touch data is
+advisory only there (apps/web/modules/TodaySetup/service.py). The helpers and
+pattern sets stay for the harness (scripts/cr_ah_step4_analysis.py) and tests.
 """
 from __future__ import annotations
 
