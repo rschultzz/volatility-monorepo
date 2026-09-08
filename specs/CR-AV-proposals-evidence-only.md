@@ -57,3 +57,40 @@ Wrap Commit 6: spec What changed / Decisions. Vault: this note's run log;
   2026-09-07 (CR-AV)"; Sessions MOC one-liner. Push, open PR
   "CR-AV — Proposals: credit-fade removed; direction gate advisory".
   DO NOT MERGE. Print PR URL and before/after payload summary.
+
+## Step 0 findings (2026-09-07)
+
+| Gate | Expected | Actual | Result |
+|---|---|---|---|
+| G0 — `main` contains 331269e | yes | `git branch -r --contains 331269e…` → `origin/main`; branch cut from `origin/main` d8988ad (PR #50, CR-AS merge; 331269e is its first parent's ancestor) | PASS |
+| G0 — every caller of `apply_direction_qualification` listed | yes | one production caller; table below | PASS |
+
+### Callers of `apply_direction_qualification` (and of the qualification module)
+
+| Caller | What it does today | CR-AV action |
+|---|---|---|
+| `apps/web/modules/TodaySetup/routes.py:317` (`GET /api/setup/proposals`) | `response["proposals"] = apply_direction_qualification(response["proposals"], structural_probability)` when SP is available | keep the call; the function no longer filters / promotes and marks `post_touch.advisory_only = true` |
+| `apps/web/modules/TodaySetup/service.py:36` (definition) | filters to credit-only / debit-only by `pattern_label` + Wilson floor, else both; sets `confidence_badge` ("credit-fade supported", "debit-to-target supported", "mixed pattern — no clear direction", "low-confidence — post-touch sample insufficient", "0DTE corpus insufficient") | rewrite per decision 2 |
+| `apps/web/modules/TodaySetup/tests/test_post_touch_qualification.py` | 13 tests pin the filtering / badges | rewrite per decision 5 |
+| `packages/shared/post_touch_qualification.py` (`credit_direction_qualifies`, `debit_direction_qualifies`, `_CREDIT_PATTERNS`, `_DEBIT_PATTERNS`) | pure helpers; imported by the service and by `scripts/cr_ah_step4_analysis.py:1282` (harness pattern sets) | untouched in behaviour (harness keeps its import); docstring notes the live path is advisory |
+| Frontend | **no component reads `confidence_badge`** (grep of `react_today_setup/src`, `packages/web-shared/src`). The only direction-support text the bundle carries is `SYNTHESIS_LINES` in `StructuralProbabilityBlock.jsx` ("Direction signal: debit-to-target supported." etc.), and `PostTouchSection` branches on `filter_mode` for the thin-corpus notes | replace the synthesis line with the advisory block (decision 2); the bundle-grep test targets the badge phrases |
+
+Credit-fade emission: `packages/shared/strategy_templates.py::_DirectionalSpreadTemplate` (`directional_spread_to_target`) is emitted by `generate_proposals` for every magnet-regime payload alongside the debit template. `generate_proposals` is also called by the CR-AH scripts (`cr_ah_step0_power_check.py`, `cr_ah_step01_coverage_probe.py`) and its tests expect both spreads, and `packages/shared/` is outside G2's file list — so decision 1 is applied in `build_proposals_response` (the live `/api/setup/proposals` builder): the credit template is dropped from the live list there; the template class and `generate_proposals` are unchanged ("structure code stays").
+
+G2 reading: "Proposals" = the `/api/setup/proposals` module (`apps/web/modules/TodaySetup/service.py`, `routes.py`) plus `apps/web/modules/Proposals/` if touched; "qualification module" = `packages/shared/post_touch_qualification.py`; "TodaySetup frontend" = `react_today_setup/`.
+
+### "Before" — `GET /api/setup/proposals?date=2026-09-03&ticker=SPX` run locally (Flask test client on the route, real DB, read-only; scratchpad `cr_av_payload.py`, `cr_av_before.json`)
+
+```
+status 200 ok True regime magnet-above
+proposals:
+  directional_spread_to_target     kind=spread     dte=15 badge='mixed pattern — no clear direction'
+  debit_spread_to_target           kind=spread     dte=15 badge='mixed pattern — no clear direction'
+structural_probability: regime_kind magnet-above outcome_status ok k 70
+post_touch: {'filter_mode': 'strict', 'pattern_label': 'stepping-stone', 'same_bucket_n': 25, 'total_touchers': 50, 'advisory_only': None}
+fractions: t1 above 0.56 / t5 above 0.72 / t15 above 0.56
+wilson t15 above [0.371, 0.733]; t5 above [0.524, 0.857]
+top-level keys: context, ok, proposals, structural_probability
+```
+
+Before: **two structures** (credit `directional_spread_to_target` + debit `debit_spread_to_target`, 15 DTE), both badged `mixed pattern — no clear direction` (stepping-stone but t15 `above` Wilson lower bound 0.371 < 0.40 floor under today's walk-forward pool — the note's "dropped the credit proposal on 09-03" was the earlier pool), `filter_mode` strict, pattern stepping-stone, n = 25 same-bucket touchers. No `advisory_only` field.
