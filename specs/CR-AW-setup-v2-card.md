@@ -214,3 +214,23 @@ Surfaced by the KNN tab: today's `implied_move_1d` in the live route is `_resolv
   band = distance_band(sigma)     # near: σ < 1.5 · mid: 1.5 ≤ σ < 2.0 · far: σ ≥ 2.0  (backtest/models.py)
   ```
   The card's band strip is headed "σ (harness)" and shows the formula with today's inputs and the point distance beside it: `σ (harness) = (7806 − 7670) / 53.3 IM = 2.55 · 136 pt above the open`. The payload carries `sigma`, `distance_pts`, `table_spot`, `im_open_straddle`, `atmiv_open`, `sigma_formula`.
+
+## Step 1b — G3 re-run after A2 / A3 / A4 (2026-09-07)
+
+Commits: A2 20fd531 · A3 b222fc0 · A4 cc2dfce. G1: Python 963 passed / 1 skipped; vitest 47 passed after `npm run build`. G4 re-checked: `/api/setup/proposals?date=2026-09-03` still byte-identical to the pre-CR capture.
+
+| Field | Before (calendar expiry, mixed-horizon close) | **After (A2 / A3)** |
+|---|---|---|
+| Structure | buy 7775 / sell 7785 SPX, 18 Sep (15 cal. DTE) | **buy 7770 / sell 7780 SPX, 25 Sep** — `nth_business_day(09-03, 15)` = 09-25 (Labor Day skipped), listed; 22 calendar days; ES 7796.175 / 7806.175 discount to 7770 / 7780 at that expiry |
+| Quote 06:34 PT | 4.10 | **4.80** (7770 mid 62.90, 7780 mid 58.10; clean) · market-implied 48 % |
+| Analogues valued | 68 (each at its bucket horizon) | **65 at T+15** (68 computed; 3 without a T+15 close excluded; 0 without a horizon close) |
+| Fair value | 5.35 | **5.21** |
+| Max price (bootstrap p20) | 4.85 (p2.5 4.16 · p97.5 6.52) | **4.67** (p2.5 4.00 · p97.5 6.36) |
+| Expected P&L at the quote | +1.23 [+0.03, +2.34] | **+0.38 [−0.82, +1.53]** after fees (0.026) |
+| Verdict | enter | **skip — quote above max** (4.80 > 4.67) |
+| Full payout (d15 ≤ 0) | 51.5 % | **50.8 %** |
+| Any payout (d15 < 10) | 57.4 % | **53.8 %** |
+| Band | far, σ 2.55 | **far — σ (harness) = (7806 − 7670) / 53.3 IM = 2.55 · 136 pt above the open**; CR-AR far cell +1.99 / 48 % [32, 65] n 31 |
+| KNN | 29 / 30 | 29 / 30 (unchanged; outlier `implied_move_1d`) |
+
+The verdict flips to skip on this date: the 25-Sep quote carries a week more time value (4.80 vs 4.10) while the T+15 fair value is lower than the mixed-horizon one (5.21 vs 5.35), so the p20 max (4.67) sits under the quote.
