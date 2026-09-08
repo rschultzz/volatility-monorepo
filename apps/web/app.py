@@ -52,6 +52,7 @@ from modules.Bars.routes import register_bars_routes
 from modules.AuditFlags.routes import register_audit_flags_routes
 from modules.DayBrowser.routes import register_day_browser_routes
 from modules.Proposals.routes import register_proposals_routes
+from modules.SetupV2.routes import register_setup_v2_routes
 
 # ===== IDs =====
 CLOCK_ID = "CLOCK"
@@ -73,6 +74,7 @@ TAB_DASHBOARD = "tab-dashboard"
 TAB_PRICE_CHART = "tab-price-chart"
 TAB_BACKTESTS = "tab-backtests"
 TAB_TODAY_SETUP = "tab-today-setup"
+TAB_SETUP_V2 = "tab-setup-v2"
 
 # ---- Tabs styling ----
 TABS_WRAP_STYLE = {
@@ -212,6 +214,9 @@ register_day_browser_routes(server)
 
 # Mount the Proposals P/L data API (CR-G Step 4)
 register_proposals_routes(server)
+
+# Mount the Setup v2 tab: /setup-v2 page + /api/setup-v2/card (CR-AW)
+register_setup_v2_routes(server)
 
 # Mount the React Price Chart preview
 REACT_PREVIEW_DIST_DIR = (REPO_ROOT / "react_price_preview" / "dist").resolve()
@@ -513,6 +518,7 @@ def serve_layout():
                             dcc.Tab(label="Price Chart", value=TAB_PRICE_CHART, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                             dcc.Tab(label="Backtests", value=TAB_BACKTESTS, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                             dcc.Tab(label="Today's Setup", value=TAB_TODAY_SETUP, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
+                            dcc.Tab(label="Setup v2", value=TAB_SETUP_V2, style=TAB_STYLE, selected_style=TAB_SELECTED_STYLE),
                         ],
                     ),
                 ],
@@ -586,6 +592,8 @@ def _switch_main_tab(tab_value):
 def _redirect_to_today_setup(tab_value):
     if tab_value == TAB_TODAY_SETUP:
         return "/today-setup"
+    if tab_value == TAB_SETUP_V2:
+        return "/setup-v2"
     return no_update
 
 
