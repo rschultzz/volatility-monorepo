@@ -27,16 +27,28 @@ function dteToRow(dte) {
   return 't15';
 }
 
-// ── Pattern label → synthesis line ──────────────────────────────────────────
+// ── Post-touch advisory line (CR-AV decision 2) ─────────────────────────────
+//
+// The post-touch pattern is evidence, not a direction gate (CR-AL: the label
+// does not predict P&L; CR-AM: no reversal). The block states the label, the
+// sample size and the continuation fraction at the trade's timeframe — no
+// badge implying support or caution, and nothing here reads filter_mode.
 
-const SYNTHESIS_LINES = {
-  'stepping-stone':      'Pattern: stepping-stone. Direction signal: debit-to-target supported.',
-  'touch-and-pin':       'Pattern: touch-and-pin. Direction signal: pin structure (iron fly / iron condor) supported.',
-  'touch-and-reject':    'Pattern: touch-and-reject. Direction signal: credit-fade supported.',
-  'overshoot-then-revert': 'Pattern: overshoot-then-revert. Direction signal: complex — review timeframes manually.',
-  'slow-revert':         'Pattern: slow-revert. Direction signal: gradual reversion; consider longer-dated structure.',
-  'mixed':               'Pattern: mixed. Direction signal: insufficient consistency across timeframes.',
-};
+/** "post-touch pattern: stepping-stone · n=23 · t5 above 61%" from the
+ *  server-side advisory block; falls back to the raw post_touch fields. */
+function advisoryText(pt, dte) {
+  const adv = pt?.advisory || {};
+  const label = adv.pattern_label ?? pt?.pattern_label ?? null;
+  const n = adv.n ?? pt?.same_bucket_n ?? pt?.total_touchers ?? null;
+  const tf = adv.timeframe ?? dteToRow(dte);
+  const dir = adv.direction ?? null;
+  let fraction = adv.fraction;
+  if (fraction == null && tf && dir) fraction = pt?.fractions?.[tf]?.[dir];
+  const parts = [`post-touch pattern: ${label ?? 'unlabeled'}`];
+  if (n != null) parts.push(`n=${n}`);
+  if (tf && dir && fraction != null) parts.push(`${tf} ${dir} ${Math.round(fraction * 100)}%`);
+  return parts.join(' · ');
+}
 
 // ── Stacked bar row ──────────────────────────────────────────────────────────
 
@@ -95,7 +107,7 @@ function StackedBarRow({ label, fracs, cis, dteMarker }) {
 function PostTouchSection({ pt, dte }) {
   if (!pt) return null;
 
-  const { filter_mode, same_bucket_n, total_touchers, fractions, wilson_cis, pattern_label } = pt;
+  const { filter_mode, same_bucket_n, total_touchers, fractions, wilson_cis } = pt;
   const dteRow = dteToRow(dte);
 
   // ── Graceful fallbacks for thin / 0DTE corpora ──────────────────────────
@@ -131,7 +143,9 @@ function PostTouchSection({ pt, dte }) {
     { key: 't15', label: 'T+15' },
   ];
 
-  const synthesisLine = pattern_label ? SYNTHESIS_LINES[pattern_label] : null;
+  // CR-AV: advisory block (decision 2) — rendered when the payload marks the
+  // post-touch data advisory_only; the label is evidence, never a direction call.
+  const advisory = pt.advisory_only ? advisoryText(pt, dte) : null;
 
   return (
     <div className="pt-section">
@@ -168,8 +182,8 @@ function PostTouchSection({ pt, dte }) {
         </div>
       </div>
 
-      {synthesisLine && (
-        <p className="pt-synthesis">{synthesisLine}</p>
+      {advisory && (
+        <p className="pt-advisory" data-testid="pt-advisory">{advisory}</p>
       )}
     </div>
   );
