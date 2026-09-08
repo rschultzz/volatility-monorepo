@@ -170,3 +170,34 @@ The 2026-09-04 debit pair is 7810/7825 (width 15): the prior-close chain for the
 - **The monthly reference re-run will not reproduce CR-AR's sample.** With `--universe-end 2026-08-31` the stratified 50/band selection picks different train dates than the ≤ 2026-06-05 universe did, and most of them were never captured (CR-AH Step 2 captured June's selection): clean credit **57** / debit **57** versus CR-AR's 106 / 108. The first `REF-2026-09` run (2026-10-01) will therefore be a smaller-sample reference unless a capture pass for the newly selected train dates precedes it — either a `cr_ap_capture_snapped_legs.py`-style capture keyed off the `--selection-only` output, or pinning the train selection to CR-AR's dates. Open question for the wrap.
 - Phase 1 alone took 934 s on the 394-date universe (the payload materialisation per date); the monthly run's budget should assume ≥ 30 minutes.
 - `sweep_pending_outcomes` reports `Latest RTH session: 2026-09-07` — ES traded RTH hours on Labor Day (Globex), so the sweep's "latest session" can be a holiday. Pre-existing; irrelevant to the capture windows (all dated by the trade date).
+
+## What changed
+
+- **`scripts/cron_daily_leg_capture.py`** (new, decision 1 + A1/A7): for the most recent canonical `bt_daily_features` row (or `--date`), builds the ±0.5 IM 0DTE condor box on the SPX 06:33 spot every day and, on magnet-above days, the harness's debit pair (payload drift target, `snap_spread_to_listed` 'debit', 15-business-day expiry); fetches 06:30–06:45 PT per leg, one contract per call, skipping legs whose window `orats_options_fetched_windows` already covers; refuses to fetch before the window has closed + 5 min; `--dry-run` prints the leg list with no run row; `backfill_run` cr_id `DAILY-CAPTURE`; 404 / empty / exception per leg → structure `unlistable` in the run record. Exit 0 on nothing-to-do (no feature row, holiday with no monies snapshot), 1 on a non-404 exception or an unclosed window.
+- **`scripts/cr_aa_sweep_pending_outcomes.py`** (decision 2 + A2): `capture_matured_trades` runs after the promotion pass on every invocation (including dry-run and "nothing to promote"), scanning post-split magnet-above `computed` dates; settlement (expiry 12:50–13:00 PT) and touch (`detect_touch` → +90 min) windows fetched when due and not covered; own run row `DAILY-CAPTURE-MATURE` only when something is fetched; skipped with a warning when `ORATS_API_KEY` is absent; `--split-date` flag. Exit 1 also on a capture fetch exception.
+- **`scripts/cr_ah_step4_analysis.py`** (decisions 4–5 + A4–A6): `compute_pnl` returns `close_pnl_net` / `touch_exit_pnl_net` / `baseline_close_pnl_net` (gross − `VERTICAL_FEE_PTS` = 0.026); cells carry `mean_pnl_net` (printed as `net`, persisted; `mean_pnl` unchanged, gross); `HoldoutGate` / `holdout_read_gate` / `--holdout-read`; holdout rows print n and dates matured only while locked, Summary A/B print the gate line, Phase 7 skips holdout cells while locked; `--selection-only` stops after Phase 1 with a smoke record. `ensure_catalog_table` adds `mean_pnl_net` idempotently under the owner URL.
+- **`scripts/run_reference_rerun.py`** (new, decision 3): last-calendar-month-end universe, split 2026-06-05, walk-forward, `cr_id REF-YYYY-MM` (universe-end month); `--dry-run` → `--selection-only --no-persist` under `REFDRY-YYYY-MM`; tee log per line to `scripts/logs/`.
+- **`packages/shared/config.py`** (new, A3): `FEE_PER_CONTRACT_PER_LEG = 0.65`, `round_trip_fee_pts(n_legs)`.
+- **`render.yaml`**: `daily-leg-capture` (`50 13 * * 1-5`) and `reference-rerun` (`0 14 1 * *`) documentation entries with the env vars each needs; autoDeploy noted as dead in practice.
+- Tests: `scripts/tests/` (29) + `packages/shared/tests/test_config.py` (4). All suites pass (G1).
+- Data: run `5bd7b732` captured the 2026-09-04 legs (G3). The dry runs created no rows except the G4 `REFDRY-2026-08` run row `f90713e6` (selection-only, no cells).
+
+## Decisions
+
+- **Schedule 13:50 UTC, not 13:35 (A1).** The window being fetched ends 06:45 PT; fetching before it closes records the missing minutes as fetched-and-empty (the known cache-poisoning failure). 13:35 also races the implied-move fill it depends on.
+- **Matured capture is an idempotent scan (A2).** The outcome horizon and the 15-day expiry are unrelated, so a one-shot at promotion time misses most settlement windows. Scanning all post-split computed dates and deduping on `orats_options_fetched_windows` is the same cost and self-heals.
+- **Capture failures never abort promotion.** The matured capture runs after the promotion `backfill_run`, under its own run row, and its exceptions only affect the exit code.
+- **Vertical fee = 4 contract-sides × $0.65 = 0.026 pts (A3).** The note's "4 × 2 × fee" is the condor arithmetic; a vertical has two legs. Flagged for review.
+- **No holdout cells while the read is locked (A6).** Persisting holdout `mean_pnl` would be the read by another route.
+- **Dry reference runs use `REFDRY-`** so the card's `REF-%` stamp can never pick one up.
+- **`n` for the gate = holdout magnet-above dates with `outcome_status = 'computed'`** (15 today), not selected or clean trades — it is the size of the stream, which is what the pre-registration will be powered against.
+- **Tests under `scripts/tests/`** (with `scripts/__init__.py`); the scripts stay scripts, no new shared module beyond `config.py`.
+
+## Open questions
+
+- **Reference re-run sample.** `--universe-end 2026-08-31` selects train dates that were never captured (clean 57 / 57 vs 106 / 108). Before the first `REF-2026-09` run on 2026-10-01: either capture the newly selected train dates' legs (a `--selection-only` output → `cr_ap_capture_snapped_legs.py` pass), or pin the train selection to CR-AR's 150 dates and let only the holdout partition grow. Ryan's call; the wrapper is one flag away from either.
+- **`sweep_pending_outcomes` needs `ORATS_API_KEY`** added chat-side with the two cron creations; until then the matured capture logs a warning and skips (10 touch-window legs are waiting).
+- **Fee arithmetic (A3)** — 4 or 8 contract-sides per vertical? 0.026 vs 0.052 pts; nothing else changes.
+- `condor_0dte.FEE_PER_CONTRACT_SIDE = 1.30` still disagrees with the shared constant; a one-line follow-up outside this CR's files.
+- Fixed-UTC cron schedules drift an hour in PST (13:50 UTC = 05:50 PST) — shared with `open-implied-move`; a `--min-lag-min`-style guard covers the capture but not the CR-AB fill.
+- The `bt_daily_features` forward-stamp onto holidays (2026-09-07 row with no monies) makes the daily capture exit 0 with `no_spx_open_snapshot`; harmless, pre-existing (`next-business-day-skips-holidays`).
