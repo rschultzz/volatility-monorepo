@@ -18,6 +18,7 @@ Functions:
     next_reference_run      — 1st of the month after a re-run date
     fee_points              — round-trip fees for a vertical, in SPX points
     net_debit_by_minute     — spread price per minute from per-leg bars (cache only)
+    harness_expiry          — nth_business_day(trade_date, 15) snapped to the nearest listed expiry (A3)
 
 Terminology (CR-AW): analogues are every corpus day inside the KNN similarity
 ceiling (recency-weighted), never a fixed K. Nothing here emits "K=".
@@ -420,3 +421,54 @@ def net_debit_by_minute(bars_by_side: dict[str, list], width: Optional[float]) -
                 net = None
         rows.append({"minute": minute.strftime("%H:%M"), "net_debit": net, "valid": valid})
     return rows
+
+
+# ── Expiry rule (A3) ─────────────────────────────────────────────────────────
+
+# NYSE holiday calendar — the harness's `_NYSE_HOLIDAYS` in
+# scripts/cr_ah_step4_analysis.py, copied so the web app does not import a
+# script. Keep the two in step when a year is added.
+NYSE_HOLIDAYS: frozenset[dt.date] = frozenset({
+    dt.date(2023, 1, 2),  dt.date(2023, 1, 16), dt.date(2023, 2, 20), dt.date(2023, 4, 7),
+    dt.date(2023, 5, 29), dt.date(2023, 6, 19), dt.date(2023, 7, 4),  dt.date(2023, 9, 4),
+    dt.date(2023, 11, 23), dt.date(2023, 12, 25),
+    dt.date(2024, 1, 1),  dt.date(2024, 1, 15), dt.date(2024, 2, 19), dt.date(2024, 3, 29),
+    dt.date(2024, 5, 27), dt.date(2024, 6, 19), dt.date(2024, 7, 4),  dt.date(2024, 9, 2),
+    dt.date(2024, 11, 28), dt.date(2024, 12, 25),
+    dt.date(2025, 1, 1),  dt.date(2025, 1, 9),  dt.date(2025, 1, 20), dt.date(2025, 2, 17),
+    dt.date(2025, 4, 18), dt.date(2025, 5, 26), dt.date(2025, 6, 19), dt.date(2025, 7, 4),
+    dt.date(2025, 9, 1),  dt.date(2025, 11, 27), dt.date(2025, 12, 25),
+    dt.date(2026, 1, 1),  dt.date(2026, 1, 19), dt.date(2026, 2, 16), dt.date(2026, 4, 3),
+    dt.date(2026, 5, 25), dt.date(2026, 6, 19), dt.date(2026, 7, 3),  dt.date(2026, 9, 7),
+    dt.date(2026, 11, 26), dt.date(2026, 12, 25),
+})
+
+SESSIONS_TARGET = 15   # the harness's DTE_TARGET: 15 business days
+
+
+def nth_business_day(d: dt.date, n: int) -> dt.date:
+    """The harness's helper: n weekdays after d, skipping NYSE holidays."""
+    cur, cnt = d, 0
+    while cnt < n:
+        cur += dt.timedelta(days=1)
+        if cur.weekday() < 5 and cur not in NYSE_HOLIDAYS:
+            cnt += 1
+    return cur
+
+
+def harness_expiry(trade_date: dt.date, listed_expiries: list[dt.date], sessions: int = SESSIONS_TARGET) -> dict:
+    """A3: target = nth_business_day(trade_date, sessions) (what the harness
+    prices), snapped to the nearest listed expiry after trade_date — ties go to
+    the later date. With no listed expiries the target itself is returned and
+    `listed` is False.
+
+    Returns {expiry, target, listed, sessions, rule}.
+    """
+    target = nth_business_day(trade_date, sessions)
+    cands = sorted({e for e in listed_expiries if e is not None and e > trade_date})
+    if not cands:
+        return {"expiry": target, "target": target, "listed": False, "sessions": sessions,
+                "rule": f"nth_business_day(trade_date, {sessions}); no listed expiry in the chain"}
+    best = min(cands, key=lambda e: (abs((e - target).days), -e.toordinal()))
+    return {"expiry": best, "target": target, "listed": True, "sessions": sessions,
+            "rule": f"nth_business_day(trade_date, {sessions}) → nearest listed expiry"}

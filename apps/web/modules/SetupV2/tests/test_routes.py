@@ -98,15 +98,15 @@ class TestPageRoute(unittest.TestCase):
 
 
 class TestProposalLegs(unittest.TestCase):
-    def test_pl_data_leg_shape_and_calendar_expiry(self):
+    def test_pl_data_leg_shape_at_the_given_expiry(self):
         proposal = {
             "expiry_dte_target": 15,
             "legs": [{"side": "long", "type": "call", "strike": 7796.175, "quantity": 1},
                      {"side": "short", "type": "call", "strike": 7806.175, "quantity": 1}],
         }
-        legs, exp = r._proposal_legs_for_pricing(proposal, dt.date(2026, 9, 3))
-        self.assertEqual(exp, dt.date(2026, 9, 18))
-        self.assertEqual(legs[0], {"strike": 7796.175, "expiration": dt.date(2026, 9, 18), "flag": "c", "side": "long", "qty": 1})
+        legs, exp = r._proposal_legs_for_pricing(proposal, dt.date(2026, 9, 3), dt.date(2026, 9, 25))
+        self.assertEqual(exp, dt.date(2026, 9, 25))
+        self.assertEqual(legs[0], {"strike": 7796.175, "expiration": dt.date(2026, 9, 25), "flag": "c", "side": "long", "qty": 1})
         self.assertEqual(legs[1]["side"], "short")
 
 

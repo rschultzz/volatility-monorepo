@@ -22,11 +22,13 @@ from apps.web.modules.SetupV2.service import (
     band_for_sigma,
     expected_pnl,
     fee_points,
+    harness_expiry,
     horizon_mix,
     knn_factor_rows,
     match_quality,
     net_debit_by_minute,
     next_reference_run,
+    nth_business_day,
     percentile_rank,
     pick_reference_cr_id,
     quantile,
@@ -230,6 +232,33 @@ class TestNetDebitByMinute(unittest.TestCase):
 
     def test_empty(self):
         self.assertEqual(net_debit_by_minute({}, 10.0), [])
+
+
+class TestHarnessExpiry(unittest.TestCase):
+    D = dt.date(2026, 9, 3)
+
+    def test_nth_business_day_skips_weekends_and_holidays(self):
+        # 2026-09-07 (Labor Day) is skipped: 15 sessions from 09-03 → 09-25
+        self.assertEqual(nth_business_day(self.D, 15), dt.date(2026, 9, 25))
+        self.assertEqual(nth_business_day(dt.date(2026, 9, 4), 1), dt.date(2026, 9, 8))
+
+    def test_snaps_to_the_nearest_listed_expiry(self):
+        listed = [dt.date(2026, 9, 18), dt.date(2026, 9, 24), dt.date(2026, 9, 25), dt.date(2026, 9, 28)]
+        e = harness_expiry(self.D, listed)
+        self.assertEqual(e["expiry"], dt.date(2026, 9, 25))
+        self.assertEqual(e["target"], dt.date(2026, 9, 25))
+        self.assertTrue(e["listed"])
+        self.assertEqual(e["sessions"], 15)
+
+    def test_nearest_when_target_unlisted_and_ties_go_later(self):
+        self.assertEqual(harness_expiry(self.D, [dt.date(2026, 9, 23), dt.date(2026, 9, 28)])["expiry"], dt.date(2026, 9, 23))
+        self.assertEqual(harness_expiry(self.D, [dt.date(2026, 9, 24), dt.date(2026, 9, 26)])["expiry"], dt.date(2026, 9, 26))
+        self.assertEqual(harness_expiry(self.D, [dt.date(2026, 9, 2), dt.date(2026, 9, 3)])["listed"], False)   # nothing after trade_date
+
+    def test_no_chain_returns_the_target_unlisted(self):
+        e = harness_expiry(self.D, [])
+        self.assertEqual(e["expiry"], dt.date(2026, 9, 25))
+        self.assertFalse(e["listed"])
 
 
 class TestMisc(unittest.TestCase):

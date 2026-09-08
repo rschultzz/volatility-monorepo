@@ -127,7 +127,7 @@ export default function TradeTab({ card, apiBase }) {
               </table>
               <span className="tag ok">Listed on today's chain</span>
               <span className="tag">Width {pts(structure.width_actual ?? structure.width_nominal, 0)}{structure.width_actual != null && structure.width_nominal != null && structure.width_actual !== structure.width_nominal ? ` (intent ${pts(structure.width_nominal, 0)})` : ''}</span>
-              <span className="tag">{structure.dte_calendar} DTE</span>
+              <span className="tag" data-testid="expiry-tag">{structure.sessions_target ?? 15} sessions ({shortDate(expiry)})</span>
               <span className={`tag ${quoteTag.cls}`} data-testid="quote-tag">{quoteTag.text}</span>
             </>
           ) : (
@@ -207,7 +207,7 @@ export default function TradeTab({ card, apiBase }) {
         <ul data-testid="manage">
           <li><span className="dot ok" /><b>Enter at the open if the quote is under {fv.max_price != null ? pts(fv.max_price, 1) : '—'}.</b> Don't wait for a better price{holdCell?.beat_baseline != null ? ` — in the reference cell the edge gate changed the mean by ${signedPts(holdCell.beat_baseline)} pt against first-minute entry` : ''}.</li>
           <li><span className="dot ok" /><b>Hold to the close on {expiry ? longDate(expiry) : '—'}.</b>{holdCell?.mean_pnl != null ? ` The ${band.today} cell made ${signedPts(holdCell.mean_pnl)} pt per trade held to close (n ${holdCell.n}).` : ' No reference cell for today\'s band.'}</li>
-          <li><span className="dot ok" /><b>{structure.dte_calendar ?? '—'} DTE.</b> The tested expiry.</li>
+          <li><span className="dot ok" /><b>{structure.sessions_target ?? 15} sessions ({shortDate(expiry)}).</b> The tested expiry: {structure.sessions_target ?? 15} business days out, snapped to the nearest listed expiry{structure.dte_calendar != null ? ` (${structure.dte_calendar} calendar days)` : ''}.</li>
           {(manage.watches || []).map(w => (
             <li key={w.key} className="untested" data-testid={`watch-${w.key}`}>
               <span className="dot none" /><b>{w.label} ({w.status}):</b>{' '}

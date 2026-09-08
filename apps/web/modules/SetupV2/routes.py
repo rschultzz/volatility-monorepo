@@ -40,6 +40,7 @@ from packages.shared.gex_landscape import compute_implied_move
 from packages.shared.knn_config import CANONICAL_KNN_CONFIG_VERSION, get_knn_config
 from packages.shared.options_cache import repository as options_repo
 from packages.shared.options_cache.pricing import price_proposal_legs
+from packages.shared.options_cache.strikes import prior_close
 from packages.shared.probability import (
     _rank_analogues_with_outcomes,
     analogue_fair_value,
@@ -64,6 +65,7 @@ from .service import (
     band_for_sigma,
     expected_pnl,
     fee_points,
+    harness_expiry,
     horizon_mix,
     knn_factor_rows,
     match_quality,
@@ -254,6 +256,19 @@ def _fetch_feature_corpus(conn, ticker: str, before: dt.date) -> list[tuple[str,
     return [(r[0].isoformat(), r[1], r[2] or {}) for r in rows]
 
 
+def _fetch_listed_expiries(conn, ticker: str, trade_date: dt.date) -> list[dt.date]:
+    """Expiries listed in the prior-close chain (orats_oi_gamma) after trade_date — A3."""
+    pc = prior_close(conn, trade_date, ticker)
+    if pc is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT expir_date FROM orats_oi_gamma WHERE ticker = %s AND trade_date = %s AND expir_date > %s",
+            (ticker, pc, trade_date),
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
 def _quote_by_minute(legs_out: list[dict], trade_date: dt.date, width: Optional[float]) -> list[dict]:
     """Cached minute bars for both legs over QUOTE_WINDOW_PT → spread price per
     minute (A8). Cache read only — a miss is an empty strip, never a fetch."""
@@ -277,11 +292,9 @@ def _quote_by_minute(legs_out: list[dict], trade_date: dt.date, width: Optional[
 # ── Card assembly ─────────────────────────────────────────────────────────────
 
 
-def _proposal_legs_for_pricing(proposal: dict, trade_date: dt.date) -> tuple[list[dict], dt.date]:
-    """pl-data leg shape for price_proposal_legs; expiry = trade_date +
-    expiry_dte_target calendar days (the v1 card convention, Step 0 fact 5)."""
-    dte = int(proposal.get("expiry_dte_target") or 0)
-    expiration = trade_date + dt.timedelta(days=dte)
+def _proposal_legs_for_pricing(proposal: dict, trade_date: dt.date, expiration: dt.date) -> tuple[list[dict], dt.date]:
+    """pl-data leg shape for price_proposal_legs at `expiration` — A3: the
+    harness expiry (nth_business_day(trade_date, 15) → nearest listed)."""
     legs = [
         {
             "strike":     float(l["strike"]),
@@ -369,7 +382,10 @@ def build_card(conn, ticker: str, trade_date: dt.date) -> tuple[dict, int]:
         structure["listed_reason"] = "no_magnet_proposal"
         warnings.append(f"no {_DEBIT_TEMPLATE_ID} proposal for regime {regime!r}")
     else:
-        raw_legs, expiration = _proposal_legs_for_pricing(debit, trade_date)
+        exp_rule = harness_expiry(trade_date, _fetch_listed_expiries(conn, ticker, trade_date))
+        if not exp_rule["listed"]:
+            warnings.append(f"no listed expiry in the prior-close chain; using the target {exp_rule['target'].isoformat()}")
+        raw_legs, expiration = _proposal_legs_for_pricing(debit, trade_date, exp_rule["expiry"])
         entry_pt = dt.datetime.combine(trade_date, ENTRY_MINUTE_PT)
         live = trade_date == dt.datetime.now(_PT).date()
         try:
@@ -418,6 +434,10 @@ def build_card(conn, ticker: str, trade_date: dt.date) -> tuple[dict, int]:
             "width_actual":  _fnum(width_actual),
             "expiry":        expiration.isoformat(),
             "dte_calendar":  (expiration - trade_date).days,
+            "sessions_target": exp_rule["sessions"],
+            "expiry_target": exp_rule["target"].isoformat(),
+            "expiry_listed": exp_rule["listed"],
+            "expiry_rule":   exp_rule["rule"],
             "expiry_dte_target": debit.get("expiry_dte_target"),
             "direction":     "call" if raw_legs and raw_legs[0]["flag"] == "c" else "put",
             "rationale":     debit.get("rationale"),
@@ -516,6 +536,7 @@ def build_card(conn, ticker: str, trade_date: dt.date) -> tuple[dict, int]:
         "hold_to_close_mean_pnl": today_cell["mean_pnl"] if today_cell else None,
         "hold_to_close_baseline": today_cell["baseline_mean"] if today_cell else None,
         "dte_calendar": structure.get("dte_calendar"),
+        "sessions_target": structure.get("sessions_target"),
         "expiry": structure.get("expiry"),
         "watches": [
             {"key": "wall_half_life", "label": "Wall watch", "status": "untested", "value": None,

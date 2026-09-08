@@ -31,7 +31,7 @@ function card(overrides = {}) {
         { side: 'short', type: 'call', strike_es: 7806.175, strike_spx: 7785, opra: 'SPX260918C07785000', bid: 37.6, ask: 38.3, mid: 37.95, quote_valid: true, stale_quote: false, quote_minute: '06:34' },
       ],
       short_strike_spx: 7785, long_strike_spx: 7775, width_nominal: 10, width_actual: 10,
-      expiry: '2026-09-18', dte_calendar: 15, expiry_dte_target: 15,
+      expiry: '2026-09-25', dte_calendar: 22, sessions_target: 15, expiry_target: '2026-09-25', expiry_listed: true, expiry_dte_target: 15,
     },
     quote: { net_debit: 4.1, quote_minute: '06:34', quote_valid: true, stale_quote: false, market_implied: 0.41, entry_minute_pt: '06:34',
              by_minute: [{ minute: '06:34', net_debit: 4.1, valid: true }, { minute: '06:59', net_debit: 4.2, valid: true }], window_pt: ['06:30', '07:00'], warnings: [] },
@@ -53,7 +53,7 @@ function card(overrides = {}) {
       ],
       match_quality: { in_band: 1, total: 2, outliers: ['dominance_30plus'] },
     },
-    manage: { enter_under_max: 4.8488, dte_calendar: 15, expiry: '2026-09-18',
+    manage: { enter_under_max: 4.72, dte_calendar: 22, sessions_target: 15, expiry: '2026-09-25',
       watches: [
         { key: 'wall_half_life', label: 'Wall watch', status: 'untested', value: null, note: 'needs the wall table (CR-AT)' },
         { key: 'vol_state', label: 'Vol state', status: 'untested', value: { implied_move: 24.27, implied_move_percentile: 7.87 }, note: 'IV rank / VRP not populated' },
@@ -75,6 +75,8 @@ describe('Setup v2 card — verdict (decision 5)', () => {
     expect(screen.getByTestId('price-gauge').textContent).toContain('quote now 4.10')
     expect(screen.getByTestId('expected-pnl').textContent).toContain('+1.1')
     expect(screen.getByTestId('market-implied').textContent).toBe('41%')
+    expect(screen.getByTestId('expiry-tag').textContent).toBe('15 sessions (25 Sep)')
+    expect(screen.getByTestId('structure-name').textContent).toContain('25 Sep')
   })
 
   it('quote above max → skip, never wait', () => {
