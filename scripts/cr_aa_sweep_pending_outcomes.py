@@ -23,7 +23,19 @@ Usage:
     python scripts/cr_aa_sweep_pending_outcomes.py --limit 5
     python scripts/cr_aa_sweep_pending_outcomes.py --from-date 2026-03-01
 
-Exit: 0 on success; 1 if any row failed.
+CR-AU decision 2 (amendment A2): after the promotion run, a matured-trade
+capture scans every post-split (> --split-date, default 2026-06-05)
+magnet-above date with outcome_status = 'computed', plans the harness's debit
+pair (payload drift target, snap_vertical_pair 'debit', expiry = 15 business
+days), and fetches into orats_options_minute the windows that are due and not
+yet covered in orats_options_fetched_windows:
+  - settlement: expiry day 12:50–13:00 PT, once expiry <= the latest closed RTH session
+  - touch: [touch_pt, touch_pt + 90 min] when detect_touch is rth_touch / gap_touch
+Own run row (cr_id DAILY-CAPTURE-MATURE), created only when something is fetched.
+Needs ORATS_API_KEY; without it the capture is skipped with a warning and the
+sweep behaves exactly as before. --dry-run prints the windows without fetching.
+
+Exit: 0 on success; 1 if any row failed or a capture fetch raised (non-404).
 """
 from __future__ import annotations
 
@@ -49,6 +61,8 @@ from packages.shared.backfill_safety import (
 )
 from packages.shared.buckets import bucket_sessions
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
+from packages.shared.options_cache.models import TimeRange
+from packages.shared.options_cache.windows import find_gaps
 from packages.shared.outcomes_runner import (
     CONTAINMENT_COLUMNS,
     compute_outcome_for_date,
@@ -334,6 +348,169 @@ def _run_smoke(conn, ticker: str, n_promoted: int) -> dict:
     }
 
 
+# ── CR-AU decision 2: matured-trade capture (amendment A2) ───────────────────
+
+MATURE_CR_ID = "DAILY-CAPTURE-MATURE"
+DEFAULT_SPLIT_DATE = dt.date(2026, 6, 5)
+TOUCH_WINDOW_MIN = 90            # get_touch_pos_val: touch_datetime_pt → + 90 minutes
+SETTLE_START = dt.time(12, 50)
+SETTLE_END = dt.time(13, 0)
+OPRA_ROOT = "SPX"
+
+_HOLDOUT_MAGNET_COMPUTED_SQL = """
+    SELECT o.trade_date
+    FROM bt_daily_outcomes o
+    JOIN bt_daily_features f
+      ON f.ticker = o.ticker AND f.trade_date = o.trade_date
+     AND f.feature_version = o.feature_version AND f.active
+    WHERE o.ticker = %s AND o.feature_version = %s AND o.active
+      AND o.trade_date > %s
+      AND f.regime_at_classification = 'magnet-above'
+      AND o.outcome_status = 'computed'
+    ORDER BY o.trade_date
+"""
+
+
+def capture_enabled(env: Optional[dict] = None) -> bool:
+    """The capture needs the ORATS token; the sweep cron may not carry it yet (Step 0)."""
+    env = os.environ if env is None else env
+    return bool((env.get("ORATS_API_KEY") or "").strip())
+
+
+def plan_matured_windows(trade_date: dt.date, expiry: dt.date, touch_resolution: Optional[str],
+                         touch_pt: Optional[dt.datetime], latest_session: dt.date) -> list[dict]:
+    """Pure: the windows the harness reads for a matured debit trade, each tagged
+    due / deferred. Settlement = expiry 12:50–13:00 PT (get_settlement_price's
+    window); touch = [touch_pt, +90 min] for rth_touch / gap_touch (get_touch_pos_val).
+    A window is due when its last day is on/before the latest fully closed RTH session."""
+    out = []
+    s0 = dt.datetime.combine(expiry, SETTLE_START)
+    s1 = dt.datetime.combine(expiry, SETTLE_END)
+    out.append({"label": "settlement", "start": s0, "end": s1, "due": expiry <= latest_session})
+    if touch_pt is not None and touch_resolution in ("rth_touch", "gap_touch"):
+        t1 = touch_pt + dt.timedelta(minutes=TOUCH_WINDOW_MIN)
+        out.append({"label": f"touch ({touch_resolution})", "start": touch_pt, "end": t1,
+                    "due": t1.date() <= latest_session})
+    return out
+
+
+def windows_to_fetch(opras: list[str], windows: list[dict], existing: dict[str, list]) -> tuple[list[tuple[str, dict]], int]:
+    """Pure dedupe: (opra, window) pairs that are due and not fully covered in
+    orats_options_fetched_windows; also returns the count already covered."""
+    todo, covered = [], 0
+    for w in windows:
+        if not w["due"]:
+            continue
+        req = TimeRange(start_pt=w["start"], end_pt=w["end"])
+        for o in opras:
+            if find_gaps(req, existing.get(o, [])):
+                todo.append((o, w))
+            else:
+                covered += 1
+    return todo, covered
+
+
+def capture_matured_trades(conn, ticker: str, latest_session: dt.date, *, split_date: dt.date = DEFAULT_SPLIT_DATE,
+                           dry_run: bool = False, cr_id: str = MATURE_CR_ID) -> dict:
+    """Decision 2 as amended (A2). Returns a stats dict; never raises past a fetch."""
+    stats: dict = {"enabled": capture_enabled(), "dates": 0, "dates_unlistable": 0, "windows_due": 0,
+                   "windows_deferred": 0, "legs_covered": 0, "legs_to_fetch": 0, "legs_fetched": 0,
+                   "legs_404": 0, "legs_exception": 0, "bars_written": 0, "run_id": None,
+                   "orats_404_detail": [], "exception_detail": []}
+    print("\n=== CR-AU matured-trade capture (DAILY-CAPTURE-MATURE) ===")
+    if not stats["enabled"]:
+        log.warning("ORATS_API_KEY not set — matured-trade capture skipped (promotion unaffected). "
+                    "Add ORATS_API_KEY to the sweep cron's env.")
+        stats["skipped"] = "no ORATS_API_KEY"
+        return stats
+    os.environ["DATABASE_URL"] = os.environ["BACKFILL_DATABASE_URL"]     # options_cache reads DATABASE_URL
+    from packages.shared.options_cache import repository as repo
+    from packages.shared.options_cache.opra import format_opra
+    from packages.shared.options_cache.strikes import StructureNotListed, snap_vertical_pair
+    from scripts.cr_ah_step4_analysis import DTE_TARGET, detect_touch, nth_business_day
+    from scripts.cr_am_holdout_leg_capture import _payload_target
+
+    dates = [r[0] for r in conn.execute(_HOLDOUT_MAGNET_COMPUTED_SQL, (ticker, FEATURE_VERSION, split_date)).fetchall()]
+    stats["dates"] = len(dates)
+    print(f"post-split magnet-above computed dates: {len(dates)} (> {split_date}); latest closed session {latest_session}"
+          f"{'  [DRY RUN]' if dry_run else ''}")
+    plans = []
+    for td in dates:
+        target = _payload_target(conn, td)
+        row = conn.execute("SELECT table_spot FROM orats_gex_landscape WHERE ticker=%s AND trade_date=%s", (ticker, td)).fetchone()
+        spot = float(row[0]) if row and row[0] is not None else None
+        expiry = nth_business_day(td, DTE_TARGET)
+        if target is None:
+            stats["dates_unlistable"] += 1
+            print(f"  {td}: no drift_target — skipped")
+            continue
+        try:
+            d_ = snap_vertical_pair(target, 10.0, "debit", expiry, td, conn, toward=spot)
+        except StructureNotListed as exc:
+            stats["dates_unlistable"] += 1
+            print(f"  {td}: UNLISTABLE — {exc}")
+            continue
+        opras = [format_opra(OPRA_ROOT, expiry, "C", k) for k in (d_.other, d_.anchor)]
+        res, touch_pt = detect_touch(conn, td, expiry, target)
+        windows = plan_matured_windows(td, expiry, res, touch_pt, latest_session)
+        existing = {o: repo.get_windows_for_contract(o) for o in opras}
+        todo, covered = windows_to_fetch(opras, windows, existing)
+        stats["windows_due"] += sum(1 for w in windows if w["due"])
+        stats["windows_deferred"] += sum(1 for w in windows if not w["due"])
+        stats["legs_covered"] += covered
+        stats["legs_to_fetch"] += len(todo)
+        plans.append((td, opras, todo))
+        print(f"  {td} target={target:.2f} debit {d_.other:g}/{d_.anchor:g} (w {d_.width_actual:g}) expiry={expiry} touch={res}"
+              f"{f' @ {touch_pt:%m-%d %H:%M} PT' if touch_pt else ''}  windows: "
+              + ", ".join(f"{w['label']} {w['start']:%m-%d %H:%M}–{w['end']:%H:%M} {'due' if w['due'] else 'deferred'}" for w in windows)
+              + f"  → fetch {len(todo)} leg-windows, {covered} covered")
+    if dry_run or not any(todo for _, _, todo in plans):
+        print(f"matured capture: {'dry-run — ' if dry_run else ''}nothing to fetch ({stats['legs_covered']} leg-windows already covered,"
+              f" {stats['windows_deferred']} windows deferred); no run row.")
+        return stats
+
+    from packages.shared.options_cache.fetcher import fetch_option_bars
+    from packages.shared.options_cache.http_client import OratsPermanentError
+    with backfill_run(conn, cr_id) as run_id:
+        stats["run_id"] = run_id
+        print(f"Run ID: {run_id}")
+        for td, opras, todo in plans:
+            for opra, w in todo:
+                try:
+                    r = fetch_option_bars([opra], w["start"], w["end"], source="historical_backfill", record_empty_windows=True)
+                except OratsPermanentError as exc:
+                    stats["legs_404"] += 1
+                    stats["orats_404_detail"].append(f"{td} {w['label']} {opra}: {exc}")
+                    print(f"    {td} {w['label']} {opra}: ORATS 4xx — {exc}")
+                    continue
+                except Exception as exc:                    # noqa: BLE001 — counted, reported, exit 1
+                    stats["legs_exception"] += 1
+                    stats["exception_detail"].append(f"{td} {w['label']} {opra}: {type(exc).__name__}: {exc}")
+                    print(f"    {td} {w['label']} {opra}: EXCEPTION {type(exc).__name__}: {exc}")
+                    continue
+                stats["legs_fetched"] += 1
+                stats["bars_written"] += r.bars_written
+                print(f"    {td} {w['label']} {opra}: bars_written={r.bars_written} cache_hits={r.cache_hits}")
+        summary = (f"{stats['dates']} dates; {stats['legs_fetched']} leg-windows fetched "
+                   f"({stats['legs_covered']} covered, {stats['windows_deferred']} windows deferred, "
+                   f"{stats['dates_unlistable']} unlistable); 404={stats['legs_404']} exceptions={stats['legs_exception']} "
+                   f"bars_written={stats['bars_written']}; no P&L computed")
+        update_run_smoke(conn, run_id, stats, summary)
+        print(f"SUMMARY: {summary}")
+    return stats
+
+
+def _capture_then_exit(conn, ticker: str, latest_session: dt.date, dry_run: bool, code: int, split_date: dt.date) -> None:
+    """Run the matured-trade capture after the promotion pass (whatever it did), then exit."""
+    try:
+        cap = capture_matured_trades(conn, ticker, latest_session, split_date=split_date, dry_run=dry_run)
+    except Exception as exc:          # never let the capture change the promotion's outcome silently
+        log.error("matured-trade capture failed: %s", exc, exc_info=True)
+        cap = {"legs_exception": 1}
+    conn.close()
+    sys.exit(1 if (code or cap.get("legs_exception")) else 0)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -344,7 +521,10 @@ def main() -> None:
                     help="Cap number of matured rows to promote (for testing).")
     ap.add_argument("--dry-run",   action="store_true",
                     help="Print what would be promoted without writing.")
+    ap.add_argument("--split-date", default=DEFAULT_SPLIT_DATE.isoformat(), metavar="YYYY-MM-DD",
+                    help="CR-AU: matured-trade capture scans magnet-above computed dates after this date.")
     args = ap.parse_args()
+    split_date = dt.date.fromisoformat(args.split_date)
 
     ticker    = args.ticker
     from_date = dt.date.fromisoformat(args.from_date) if args.from_date else None
@@ -389,8 +569,7 @@ def main() -> None:
 
     if not matured:
         print("No matured pending rows. Nothing to promote.")
-        conn.close()
-        sys.exit(0)
+        _capture_then_exit(conn, ticker, latest_session, args.dry_run, 0, split_date)
 
     dates = [r[0] for r in matured]
 
@@ -399,8 +578,7 @@ def main() -> None:
             horizon_end = _expected_horizon_end(trade_date, bucket, session_dates)
             print(f"  [dry-run] {trade_date} regime={regime!r} bucket={bucket!r} "
                   f"horizon_end={horizon_end}")
-        conn.close()
-        sys.exit(0)
+        _capture_then_exit(conn, ticker, latest_session, True, 0, split_date)
 
     landscape_by_date = _fetch_landscape(conn, ticker, dates)
 
@@ -512,8 +690,8 @@ def main() -> None:
         print(f"Remaining pending:     {smoke['remaining_pending']}")
         print(f"Null run_id count:     {smoke['null_run_id_count']}")
 
-    conn.close()
-    sys.exit(1 if n_failed > 0 else 0)
+    # CR-AU decision 2: capture the matured trades' windows after the promotion run (own run row)
+    _capture_then_exit(conn, ticker, latest_session, False, 1 if n_failed > 0 else 0, split_date)
 
 
 if __name__ == "__main__":
