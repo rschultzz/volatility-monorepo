@@ -217,7 +217,7 @@ Surfaced by the KNN tab: today's `implied_move_1d` in the live route is `_resolv
 
 ## Step 1b — G3 re-run after A2 / A3 / A4 (2026-09-07)
 
-Commits: A2 20fd531 · A3 b222fc0 · A4 cc2dfce. G1: Python 963 passed / 1 skipped; vitest 47 passed after `npm run build`. G4 re-checked: `/api/setup/proposals?date=2026-09-03` still byte-identical to the pre-CR capture.
+Commits: A2 20fd531 · A3 b222fc0 · A4 cc2dfce. G1: Python 960 passed / 1 skipped; vitest 47 passed after `npm run build`. G4 re-checked: `/api/setup/proposals?date=2026-09-03` still byte-identical to the pre-CR capture.
 
 | Field | Before (calendar expiry, mixed-horizon close) | **After (A2 / A3)** |
 |---|---|---|
