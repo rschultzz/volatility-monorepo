@@ -475,6 +475,7 @@ export default function App() {
         <a href="/?tab=price-chart" className="top-nav-pill">Price Chart</a>
         <a href="/?tab=backtests" className="top-nav-pill">Backtests</a>
         <a href="/today-setup" className="top-nav-pill selected">Today's Setup</a>
+        <a href="/setup-v2" className="top-nav-pill">Setup v2</a>
       </div>
 
       {/* ── Header ── */}
