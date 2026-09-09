@@ -143,3 +143,19 @@ AFTER (21:30:50 PT)
 ```
 
 Each orphan now has exactly one active feature row, a landscape row and an outcome row; the closed days have no active feature or outcome rows. The landscape rows for the three closed days remain (amendment A1: no `active` flag, deletion not authorised). `orats_oi_gamma` now holds the chain under both the holiday date and the true session (same data; harmless to `listed_strikes`, which takes `max(trade_date) < d`).
+
+## Step 2 — G3 daily capture for 2026-09-08 — PASS
+
+`scripts/cron_daily_leg_capture.py --date 2026-09-08 --max-wait-min 0` at 21:31 PT (after the repair, so the day has a canonical magnet-above feature row; the condor-only path was exercised in Commit 6's dry run before the repair: `regime=None IM=62.08 (open_straddle_0633 × spx_open)`, condor 7665P/7675P/7735C/7745C, no debit).
+
+```
+2026-09-08  regime=magnet-above  IM=62.16 (feature_vector.implied_move_1d)  SPX06:33=7705.27@06:33:00  ES_open=7712.25  basis=6.98  window=06:30–06:45 PT
+  debit: long 7810 / short 7825 C  expiry 2026-09-29  width 15
+  condor ±0.5 IM: 7665P / 7675P / 7735C / 7745C  expiry 2026-09-08 (0DTE)
+legs planned=6  to_fetch=6  already_covered=0
+Run ID: 4fd93a8e-6cb0-45a6-b191-509093dccbb1
+  6 legs: bars_in_window=15 each, written=32 each, 0 × 404, 0 empty, 0 exceptions
+SUMMARY: 2026-09-08 magnet-above: legs planned=6 covered=0 fetched=6 404=0 empty=0 exceptions=0 bars_written=192; debit=captured condor=captured; no P&L computed
+```
+
+`bt_backfill_runs` → `run_id 4fd93a8e-6cb0-45a6-b191-509093dccbb1 · cr_id DAILY-CAPTURE · completed · 2026-09-09 04:31:48 → 04:32:09 UTC · smoke: feature_row true, regime magnet-above, im_source feature_vector.implied_move_1d, structures {debit: captured, condor: captured}, debit {long 7810, short 7825, expiry 2026-09-29, width 15}, condor {7665, 7675, 7735, 7745, expiry 2026-09-08}`.
