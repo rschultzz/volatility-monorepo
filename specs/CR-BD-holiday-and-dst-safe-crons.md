@@ -159,3 +159,32 @@ SUMMARY: 2026-09-08 magnet-above: legs planned=6 covered=0 fetched=6 404=0 empty
 ```
 
 `bt_backfill_runs` → `run_id 4fd93a8e-6cb0-45a6-b191-509093dccbb1 · cr_id DAILY-CAPTURE · completed · 2026-09-09 04:31:48 → 04:32:09 UTC · smoke: feature_row true, regime magnet-above, im_source feature_vector.implied_move_1d, structures {debit: captured, condor: captured}, debit {long 7810, short 7825, expiry 2026-09-29, width 15}, condor {7665, 7675, 7735, 7745, expiry 2026-09-08}`.
+
+## G1 — tests and suites — PASS
+
+New: `packages/shared/tests/test_trading_calendar.py` (9: Labor Day 2026, Juneteenth 2026 + orphaned Monday, July 4 observed, Thanksgiving + half-day after, Christmas / New Year 2027, weekends, `nth_trading_day` = harness expiry rule, list sanity, **expiry guard**), `packages/shared/tests/test_snapshot_poll.py` (5: **DST-drift case** 05:35 → 06:34 PT, 120-min timeout with the logged line, past-date single probe, budget selection, clipped last sleep), `scripts/tests/test_job_orats_eod_calendar.py` (3), `scripts/tests/test_cron_snapshot_gates.py` (3), daily capture +2 (condor without a feature row; IM fallback). Suites (Rosetta venv): `packages/shared/tests` **460** (+14), `packages/shared/backtest/tests` **142**, `packages/shared/options_cache/tests` **201** (1 skipped, pre-existing), `apps/web/modules` **265**, `scripts/tests` **44**. All pass.
+
+## What changed
+
+- **`packages/shared/trading_calendar.py`** (new, decision 1): `NYSE_HOLIDAYS` 2023–2027, `is_trading_day`, `next_trading_day`, `prev_trading_day`, `nth_trading_day`, `CALENDAR_VALID_THROUGH = 2027-12-31`; `test_calendar_not_expired` fails once today is past it.
+- **`apps/cron/job_orats_eod.py`**: `store_trade_date = next_trading_day(api_trade_date)`; the weekend-only `next_business_day` is deleted; `previous_business_day_with_data` walks `prev_trading_day` (A2). **`scripts/backfill_orats_oi_gamma.py`**: its `next_business_day` delegates to `next_trading_day` (text-level switch; the script imports `pandas_market_calendars`, present in no venv, so it was compiled but not run).
+- **`packages/shared/snapshot_poll.py`** (new, decision 2): `poll_until` (injectable clock/sleep), `fetch_open_snapshot`, `poll_budget_for` (120 min for today or later on the PT clock, one probe for a past date), `wait_for_open_snapshot`, `no_snapshot_line`. **`scripts/cr_ab_open_implied_move.py`**: polls for the target date's 06:33 PT snapshot before filling, exits 0 logged without it; a non-trading target date is skipped immediately (`skip_reason_for`); `--max-wait-min`, `--poll-seconds`. **`scripts/cr_b_backfill_outcomes.py`**: polls for *today's* snapshot on a trading-day nightly run (`wait_needed`), exits 0 logged without it; `--no-wait`, `--max-wait-min`, `--poll-seconds`; historical `--to-date` and non-trading days skip the poll. **`scripts/cron_daily_leg_capture.py`**: imports the shared poll; condor box captured whenever the snapshot exists — without a feature row the IM is the open straddle × the snapshot's own spot (`implied_move_fallback`, A4); the debit still needs a magnet-above row (decision 3).
+- **`scripts/cr_bd_repair_orphans.py`** (new): decision 4 with logged commands, `--dry-run`, `--only`, G2 verify; connection strings never echoed.
+- **Data**: runs `6d208e3f` / `9af35280` (repair, G2 PASS), `30ecb71c` / `1f94c9aa` / `abc17c7a` (outcome inserts), `4fd93a8e` (G3 capture). Not deployed.
+
+## Decisions
+
+- **Hardcoded calendar, not a package** — no calendar dependency exists in any requirements file; the expiry-guard test is the maintenance contract.
+- **Holiday landscape rows stay (A1)** — no `active` flag; deletion is an owner DELETE the note did not authorise. Ryan's call.
+- **Outcomes cron proceeds without a poll on non-trading days** — nothing to wait for; the backlog should still be inserted.
+- **Implied-move fill refuses a non-trading target immediately** — a mis-stamped row must not hold the cron for 120 minutes.
+- **`apps/cron/db.py` untouched** — the SQLAlchemy URL scheme is a local-`.env` quirk (Render supplies `postgres://`); the repair script passes the plain form.
+- **Repair split across two run rows** — run 1 recorded the failed step (b) honestly rather than being retried in place.
+
+## Open questions
+
+- Delete the three holiday `orats_gex_landscape` rows and the duplicate holiday-dated `orats_oi_gamma` chains (owner DELETE)? Harmless if left; decision 5's query must allow for them.
+- `apps/cron/db.py`: accept `postgresql+psycopg://` (one line) so the EOD job runs locally without the workaround.
+- Outcomes runner counts holiday partial ES sessions as RTH sessions (decision 6 excluded it).
+- Eight private `_NYSE_HOLIDAYS` copies + the harness's holiday-blind `next_weekday` (gap-touch → next RTH open) should import the shared calendar.
+- Redeploy: all five data crons (`orats-eod-gamma`, `sweep_pending_outcomes`, `open-implied-move`, `backfill_outcomes`, `daily-leg-capture`) — chat-side after merge; the fix is inert until then. Next holiday-adjacent check: 2026-11-27 (day after Thanksgiving); the DST shift is 2026-11-01.
