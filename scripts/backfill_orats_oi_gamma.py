@@ -41,6 +41,11 @@ import requests
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from packages.shared.trading_calendar import next_trading_day  # noqa: E402  (CR-BD decision 1)
+
 
 # --- Config ---------------------------------------------------------------
 TICKER              = "SPX"
@@ -183,10 +188,9 @@ def parse_iso_date(s):
 
 
 def next_business_day(d: dt.date) -> dt.date:
-    nd = d + dt.timedelta(days=1)
-    if nd.weekday() == 5: nd += dt.timedelta(days=2)   # Sat -> Mon
-    elif nd.weekday() == 6: nd += dt.timedelta(days=1) # Sun -> Mon
-    return nd
+    """CR-BD decision 1: the store date is the next NYSE trading day (holiday-aware),
+    matching job_orats_eod.py. Name kept for the call sites below."""
+    return next_trading_day(d)
 
 
 # --- Core day-processor ---------------------------------------------------

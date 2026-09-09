@@ -15,12 +15,14 @@ Once the snapshot exists it waits, inside the same budget, until the capture
 window has closed (+ MIN_LAG_MIN) before fetching. A past --date is checked
 once (no poll); --dry-run never waits.
 
-For TODAY's session (today in America/Los_Angeles; --date overrides) and its
-canonical `bt_daily_features` row:
-  * every day, regardless of regime — the symmetric ±0.5 IM 0DTE condor box on
-    the SPX 06:33 PT spot (CR-AS convention: shorts at round5(spot ± 0.5·IM),
-    10-wide wings, same-day expiry), 4 legs;
-  * if the regime is magnet-above — the debit pair the harness would trade:
+For TODAY's session (today in America/Los_Angeles; --date overrides):
+  * every day, regardless of regime — and regardless of whether a canonical
+    `bt_daily_features` row exists (CR-BD decision 3) — the symmetric ±0.5 IM
+    0DTE condor box on the SPX 06:33 PT spot (CR-AS convention: shorts at
+    round5(spot ± 0.5·IM), 10-wide wings, same-day expiry), 4 legs. The implied
+    move is the feature row's; failing that the 06:33 open straddle × the
+    landscape spot; failing that the 06:33 open straddle × the snapshot's own spot;
+  * if the canonical feature row says magnet-above — the debit pair the harness would trade:
     short call at the drift target, long call ~10 below, pair-snapped to the
     strikes listed for the 15-business-day expiry at the prior close
     (`snap_spread_to_listed`, CR-AR), 2 legs;
@@ -65,6 +67,9 @@ from packages.shared.options_cache.models import FetchedWindow, TimeRange
 from packages.shared.options_cache.opra import format_opra
 from packages.shared.options_cache.strikes import StructureNotListed, snap_spread_to_listed
 from packages.shared.options_cache.windows import find_gaps
+from packages.shared.snapshot_poll import (  # CR-BD: one poll implementation for the three crons
+    MAX_WAIT_MIN, POLL_SECONDS, fetch_open_snapshot, no_snapshot_line, poll_until,
+)
 
 TICKER = "SPX"
 OPRA_ROOT = "SPX"
@@ -76,8 +81,7 @@ OPEN_SNAPSHOT_CEIL = time(6, 40)
 CONDOR_HALF_WIDTH_IM = 0.5
 DEBIT_WIDTH_NOMINAL = 10.0
 MIN_LAG_MIN = 5                      # the window must have closed this long ago before a fetch
-MAX_WAIT_MIN = 120                   # decision 1: poll for the 06:33 PT snapshot up to this long
-POLL_SECONDS = 60
+# MAX_WAIT_MIN (120) and POLL_SECONDS (60) come from packages.shared.snapshot_poll (CR-BD)
 BASIS_MIN, BASIS_MAX = -40.0, 100.0  # ES − SPX at the open (CR-AS Step 0), checked when ES open is known
 _PT = ZoneInfo("America/Los_Angeles")
 
@@ -123,27 +127,6 @@ def window_is_closed(now_pt: datetime, td: date, min_lag_min: int = MIN_LAG_MIN)
     """A1: only fetch once the window end is at least `min_lag_min` in the past."""
     _, w1 = capture_window(td)
     return now_pt >= w1 + timedelta(minutes=min_lag_min)
-
-
-def poll_until(probe: Callable[[], object], *, max_wait_min: float, poll_s: float = POLL_SECONDS,
-               now_fn: Callable[[], datetime] = datetime.now, sleep_fn: Callable[[float], None] = _time.sleep,
-               label: str = "condition", log: Callable[[str], None] = print) -> tuple[object, float, int]:
-    """Decision 1: call `probe` until it returns a truthy value or `max_wait_min`
-    minutes have elapsed (checked against `now_fn`, so tests can drive the clock).
-    Returns (value_or_None, waited_minutes, attempts). max_wait_min = 0 → one probe."""
-    start = now_fn()
-    attempts = 0
-    while True:
-        attempts += 1
-        value = probe()
-        elapsed = (now_fn() - start).total_seconds() / 60.0
-        if value:
-            return value, round(elapsed, 2), attempts
-        remaining_s = max_wait_min * 60.0 - elapsed * 60.0
-        if remaining_s <= 0:
-            return None, round(elapsed, 2), attempts
-        log(f"  waiting for {label}: attempt {attempts}, {elapsed:.1f} min elapsed of {max_wait_min:g}; next probe in {min(poll_s, remaining_s):.0f}s")
-        sleep_fn(min(poll_s, remaining_s))
 
 
 def plan_condor(td: date, spx_open: float, implied_move: float) -> dict:
@@ -269,11 +252,6 @@ FROM bt_daily_features
 WHERE ticker = %s AND feature_version = %s AND active AND trade_date = %s
 LIMIT 1
 """
-_SPX_OPEN_SQL = """
-SELECT spot_price, snapshot_pt FROM orats_monies_minute
-WHERE ticker = %s AND trade_date = %s AND snapshot_pt >= %s AND spot_price IS NOT NULL
-ORDER BY snapshot_pt ASC, dte ASC LIMIT 1
-"""
 _ES_OPEN_SQL = """
 SELECT session_open_t0 FROM bt_daily_outcomes
 WHERE ticker = %s AND feature_version = %s AND active AND trade_date = %s LIMIT 1
@@ -281,9 +259,25 @@ WHERE ticker = %s AND feature_version = %s AND active AND trade_date = %s LIMIT 
 _TABLE_SPOT_SQL = "SELECT table_spot FROM orats_gex_landscape WHERE ticker = %s AND trade_date = %s"
 
 
+def implied_move_fallback(atmiv: Optional[float], table_spot: Optional[float], spx_open: Optional[float]) -> tuple[Optional[float], Optional[str]]:
+    """CR-BD decision 3 / A4: the 06:33 open-straddle implied move when the feature row
+    has none (or does not exist). Spot = landscape table_spot if present (the CR-AB
+    pin), else the snapshot's own SPX spot. Returns (im, source) or (None, None)."""
+    from packages.shared.gex_landscape import compute_implied_move
+    if atmiv is None:
+        return None, None
+    if table_spot is not None:
+        im = compute_implied_move(float(table_spot), float(atmiv), dte=1.0)
+        return (float(im), "open_straddle_0633 × table_spot (feature row IM missing)") if im else (None, None)
+    if spx_open is not None:
+        im = compute_implied_move(float(spx_open), float(atmiv), dte=1.0)
+        return (float(im), "open_straddle_0633 × spx_open (no feature row / landscape)") if im else (None, None)
+    return None, None
+
+
 def fetch_spx_open(conn, td: date):
     """The first orats_monies_minute snapshot ≥ 06:33 PT for td: (spot_price, snapshot_pt) or None."""
-    return conn.execute(_SPX_OPEN_SQL, (TICKER, td.isoformat(), datetime.combine(td, OPEN_SNAPSHOT_FLOOR))).fetchone()   # trade_date is text in orats_monies_minute
+    return fetch_open_snapshot(conn, TICKER, td)
 
 
 def load_inputs(conn, td: date, spx_open_row=None) -> dict:
@@ -291,7 +285,6 @@ def load_inputs(conn, td: date, spx_open_row=None) -> dict:
     `spx_open_row` is the (spot, snapshot_pt) the caller already polled for."""
     from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
     from packages.shared.day_features import _OPEN_STRADDLE_SQL
-    from packages.shared.gex_landscape import compute_implied_move
     from packages.shared.options_cache.strikes import listed_strikes
     from scripts.cr_ah_step4_analysis import DTE_TARGET, nth_business_day
     from scripts.cr_am_holdout_leg_capture import _payload_target
@@ -305,13 +298,10 @@ def load_inputs(conn, td: date, spx_open_row=None) -> dict:
     spx_snap = so[1] if so else None
     spot_row = conn.execute(_TABLE_SPOT_SQL, (TICKER, td)).fetchone()
     spot = float(spot_row[0]) if spot_row and spot_row[0] is not None else None
-    if im is None and spot is not None:
-        # A7 fallback: the CR-AB pin (first 06:33+ snapshot, smallest dte > 0)
+    if im is None:
+        # CR-AU A7 / CR-BD A4 fallback: the CR-AB pin (first 06:33+ snapshot, smallest dte > 0)
         iv_row = conn.execute(_OPEN_STRADDLE_SQL, (td.isoformat(), TICKER, datetime.combine(td, OPEN_SNAPSHOT_FLOOR))).fetchone()
-        if iv_row and iv_row[0] is not None:
-            im_calc = compute_implied_move(spot, float(iv_row[0]), dte=1.0)
-            if im_calc:
-                im, im_source = float(im_calc), "open_straddle_0633 (feature row IM was NULL)"
+        im, im_source = implied_move_fallback(iv_row[0] if iv_row else None, spot, spx_open)
     es_row = conn.execute(_ES_OPEN_SQL, (TICKER, CANONICAL_FEATURE_VERSION, td)).fetchone()
     es_open = float(es_row[0]) if es_row and es_row[0] is not None else None
     expiry = nth_business_day(td, DTE_TARGET)
@@ -359,16 +349,15 @@ def main(argv=None) -> int:
     snap, waited, attempts = poll_until(lambda: fetch_spx_open(conn, td), max_wait_min=budget, poll_s=args.poll_seconds,
                                         now_fn=now_fn, label=f"{td} 06:33 PT SPX snapshot in orats_monies_minute")
     if snap is None:
-        print(f"no open snapshot: no orats_monies_minute row ≥ 06:33 PT for {td} after {waited:g} min / {attempts} probe(s) "
-              f"(budget {budget:g} min) — holiday, DST drift or ingest outage. Nothing fetched, no run row.")
+        print(no_snapshot_line(TICKER, td, waited, attempts, budget) + " No run row.")
         conn.close()
         return 0
     if attempts > 1:
         print(f"open snapshot appeared after {waited:g} min ({attempts} probes)")
     inp = load_inputs(conn, td, spx_open_row=snap)
     if not inp["feature_row"]:
-        print(f"no canonical feature row for {td} — nothing to do")
-        return 0
+        # CR-BD decision 3: the snapshot exists, so the condor box is still captured; only the debit needs the row
+        print(f"no canonical feature row for {td} — condor box only (the debit pair needs a magnet-above feature row)")
     plan = build_plan(td, **{k: v for k, v in inp.items() if k != "feature_row"})
 
     existing = {leg.opra: repo.get_windows_for_contract(leg.opra) for leg in plan.legs}
@@ -439,7 +428,7 @@ def main(argv=None) -> int:
 
         states = {"debit": _structure_state("debit", plan.debit), "condor": _structure_state("condor", plan.condor)}
         smoke = dict(counters)
-        smoke.update({"trade_date": td.isoformat(), "regime": plan.regime, "implied_move": plan.implied_move,
+        smoke.update({"trade_date": td.isoformat(), "feature_row": inp["feature_row"], "regime": plan.regime, "implied_move": plan.implied_move,
                       "im_source": plan.im_source, "spx_open": plan.spx_open, "basis_open": plan.basis_open,
                       "window": [w0.isoformat(), w1.isoformat()], "debit": {k: (v.isoformat() if isinstance(v, date) else v) for k, v in (plan.debit or {}).items()},
                       "condor": {"strikes": list(plan.condor["strikes"]), "expiry": td.isoformat()} if plan.condor and "strikes" in plan.condor else plan.condor,

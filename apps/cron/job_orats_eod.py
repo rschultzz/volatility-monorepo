@@ -20,6 +20,7 @@ if str(_REPO_ROOT) not in sys.path:
 from packages.shared.gex_landscape import compute_and_upsert_landscape  # noqa: E402
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION as DAY_FEATURES_VERSION  # noqa: E402
 from packages.shared.day_features import compute_and_upsert_daily_features  # noqa: E402
+from packages.shared.trading_calendar import next_trading_day, prev_trading_day  # noqa: E402  (CR-BD decision 1)
 
 # ------------ Version & logging ------------------------------------------------
 VERSION = "eod-shift-hard-upsert-2025-10-31d"
@@ -91,18 +92,21 @@ def has_data_for_date(session, token, ticker, trade_date):
     return r.status_code == 200 and len(r.json().get("data", [])) > 0
 
 def previous_business_day_with_data(session, token, ticker, max_lookback_days=7):
-    day = dt.datetime.now(TZ_NY).date() - dt.timedelta(days=1)
+    """Most recent NYSE session strictly before today (NY) that ORATS has strike data for.
+
+    CR-BD (A2): walks prev_trading_day so a post-holiday run probes the last real
+    session (Friday), never the closed day; the ORATS data check is unchanged.
+    """
+    day = prev_trading_day(dt.datetime.now(TZ_NY).date())
     for _ in range(max_lookback_days):
         if has_data_for_date(session, token, ticker, day):
             return day
-        day -= dt.timedelta(days=1)
+        day = prev_trading_day(day)
     return None
 
-def next_business_day(d: dt.date) -> dt.date:
-    nd = d + dt.timedelta(days=1)
-    if nd.weekday() == 5: nd += dt.timedelta(days=2)  # Sat->Mon
-    elif nd.weekday() == 6: nd += dt.timedelta(days=1)  # Sun->Mon
-    return nd
+# CR-BD decision 1: the store date is the next NYSE *trading* day, not the next weekday.
+# The old weekend-only next_business_day stamped Friday 2026-09-04's data onto Labor Day
+# and left 2026-09-08 with no row (same on 2026-06-19/22 and 2026-07-03/06).
 
 def fetch_eod_strikes(session, token, ticker, trade_date):
     r = _get(session, STRIKES_URL, token, {"ticker": ticker, "tradeDate": trade_date.isoformat(), "fields": STRIKE_FIELDS})
@@ -145,7 +149,7 @@ def main():
             sys.exit(3)
 
         forced = os.environ.get("FORCE_STORE_DATE")
-        store_trade_date = dt.date.fromisoformat(forced) if forced else next_business_day(api_trade_date)
+        store_trade_date = dt.date.fromisoformat(forced) if forced else next_trading_day(api_trade_date)
 
         log.info("API trade_date=%s  ->  STORED trade_date=%s  (forced=%s)",
                  api_trade_date.isoformat(), store_trade_date.isoformat(), bool(forced))
@@ -185,7 +189,7 @@ def main():
 
             rows.append((
                 d.get("ticker"),
-                store_trade_date,   # <- store as NEXT business day
+                store_trade_date,   # <- store as NEXT NYSE trading day (CR-BD)
                 expd,
                 eff_dte,
                 d.get("strike"),
