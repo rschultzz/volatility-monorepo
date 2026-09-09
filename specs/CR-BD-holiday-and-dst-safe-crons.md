@@ -98,3 +98,48 @@ No holiday package is in `apps/cron/requirements.txt` or `apps/web/requirements.
 - **A3 — the outcomes cron's poll targets today in PT**: `cr_b_backfill_outcomes.py` has no date argument for "today" (it inserts every canonical feature row lacking an outcome), so the poll waits for *today's* 06:33 PT snapshot when today is a trading day and exits 0 logged when it is not (`--no-wait` for backfills, where today's snapshot is irrelevant). `cr_ab_open_implied_move.py` polls for its *target* date's snapshot (auto-detected NULL-IM row or `--date`), single probe when that date is in the past, and exits 0 immediately when the target date is not a trading day (a mis-stamped row can no longer stall it for 120 min).
 - **A4 — daily capture condor without a feature row** (decision 3): with no feature row there is no `table_spot` either, so the implied move for the box is computed from the 06:33 snapshot's own `spot_price` × ATM IV × √(1/252) (`im_source = open_straddle_0633 × spx_open`); the debit pair still requires a magnet-above feature row.
 - Tests live in `packages/shared/tests/test_trading_calendar.py`, `packages/shared/tests/test_snapshot_poll.py`, `scripts/tests/`; the poll moves from `cron_daily_leg_capture.py` into `packages/shared/snapshot_poll.py` so the three crons share one implementation. A small repo script `scripts/cr_bd_repair_orphans.py` performs step (a) so the deactivation is logged in `bt_backfill_runs`.
+
+## Step 1 — repair (decision 4), 2026-09-08 21:28 → 21:31 PT
+
+Executed by `scripts/cr_bd_repair_orphans.py` (new; every command logged, run rows `CR-BD-repair`). Logs: `scripts/logs/cr_bd_repair_*.log` (untracked; connection strings scrubbed).
+
+**Run 1 — `6d208e3f-0ee2-437e-bfc3-9a591339f2d5`: step (a) succeeded, step (b) failed before any write.**
+- (a) owner URL: `UPDATE bt_daily_features SET active=false, deactivated_at=now(), deactivated_reason='holiday-mis-stamp'` for (2026-06-19, v0.5.0-rebuilt) → 1 row, (2026-07-03, v0.5.0-rebuilt) → 1, (2026-09-07, v0.6.0-openiv) → 1. Backfill role: same on `bt_daily_outcomes` → 0, 0, 1 (only 09-07 had an outcome row, `na_data`).
+- (b) `apps/cron/job_orats_eod.py --date …` exited 1 at `db.get_conn`: `apps/cron/db.py` normalises `postgres://` but not the SQLAlchemy scheme `postgresql+psycopg://` that the local `.env` carries (Render supplies `postgres://`, so production never hits this). **Surfaced, not changed**: the repair script hands the subprocess the plain `postgresql://` form instead (`apps/cron/db.py` is outside this CR's files). (c) then failed as expected on "no landscape row" / "Target dates: 0".
+
+**Run 2 — `9af35280-247c-48f6-95ad-9f39c8c073fc`: steps (b), (c), verify — all exit 0.**
+```
+FORCE_STORE_DATE=2026-06-22 python apps/cron/job_orats_eod.py --date 2026-06-18   # landscape 601 pts, 2 walls, table_spot 7504.25; features v0.6.0-openiv IM=NULL; 12 566 oi_gamma rows
+FORCE_STORE_DATE=2026-07-06 python apps/cron/job_orats_eod.py --date 2026-07-02   # 3 walls, table_spot 7460.175; 12 190 rows
+FORCE_STORE_DATE=2026-09-08 python apps/cron/job_orats_eod.py --date 2026-09-04   # 2 walls, table_spot 7715.275; 12 078 rows
+python scripts/cr_ab_open_implied_move.py --date 2026-06-22   # implied_move 37.1088 (single probe, past date)
+python scripts/cr_b_backfill_outcomes.py --from-date 2026-06-22 --to-date 2026-06-22   # run 30ecb71c, 1 inserted (poll skipped: historical)
+python scripts/cr_ab_open_implied_move.py --date 2026-07-06   # implied_move 30.4526
+python scripts/cr_b_backfill_outcomes.py --from-date 2026-07-06 --to-date 2026-07-06   # run 1f94c9aa, 1 inserted
+python scripts/cr_ab_open_implied_move.py --date 2026-09-08   # implied_move 62.1615
+python scripts/cr_b_backfill_outcomes.py --from-date 2026-09-08 --to-date 2026-09-08   # run abc17c7a, 1 inserted (today: polled once, snapshot present)
+```
+
+### G2 — before / after — PASS
+
+```
+BEFORE (21:28:41 PT)
+  date        | act.feat | feature versions                 | landscape | act.outc | outcomes                 | IM
+  2026-06-19  |        1 | v0.5.0-rebuilt                   |         1 |        0 | -                        | 0.0
+  2026-06-22  |        0 | -                                |         0 |        0 | -                        | None
+  2026-07-03  |        1 | v0.5.0-rebuilt                   |         1 |        0 | -                        | 0.0
+  2026-07-06  |        0 | -                                |         0 |        0 | -                        | None
+  2026-09-07  |        1 | v0.6.0-openiv                    |         1 |        1 | na_data                  | None
+  2026-09-08  |        0 | -                                |         0 |        0 | -                        | None
+
+AFTER (21:30:50 PT)
+  date        | act.feat | feature versions                 | landscape | act.outc | outcomes                 | IM
+  2026-06-19  |        0 | v0.5.0-rebuilt(inactive)         |         1 |        0 | -                        | None
+  2026-06-22  |        1 | v0.6.0-openiv                    |         1 |        1 | computed                 | 37.108780313581704
+  2026-07-03  |        0 | v0.5.0-rebuilt(inactive)         |         1 |        0 | -                        | None
+  2026-07-06  |        1 | v0.6.0-openiv                    |         1 |        1 | na_regime                | 30.452556014261408
+  2026-09-07  |        0 | v0.6.0-openiv(inactive)          |         1 |        0 | na_data(inactive)        | None
+  2026-09-08  |        1 | v0.6.0-openiv                    |         1 |        1 | pending_history          | 62.16152845842874
+```
+
+Each orphan now has exactly one active feature row, a landscape row and an outcome row; the closed days have no active feature or outcome rows. The landscape rows for the three closed days remain (amendment A1: no `active` flag, deletion not authorised). `orats_oi_gamma` now holds the chain under both the holiday date and the true session (same data; harmless to `listed_strikes`, which takes `max(trade_date) < d`).
