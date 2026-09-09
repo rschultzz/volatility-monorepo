@@ -11,7 +11,7 @@ if _ROOT not in sys.path:
 from packages.shared.options_cache.models import FetchedWindow
 from scripts.cron_daily_leg_capture import (
     MAX_WAIT_MIN, MIN_LAG_MIN, POLL_SECONDS, Leg, build_plan, capture_window, dedupe_legs, format_plan, legs_for,
-    plan_condor, plan_debit, poll_until, window_is_closed,
+    plan_condor, plan_debit, poll_until, resolve_date, window_is_closed,
 )
 
 TD = date(2026, 9, 4)
@@ -156,3 +156,19 @@ def test_poll_last_sleep_is_clipped_to_the_budget():
     clk = _Clock(datetime(2026, 9, 4, 6, 0))
     v, waited, attempts = poll_until(lambda: None, max_wait_min=2.5, poll_s=60, now_fn=clk.now_fn, sleep_fn=clk.sleep_fn, log=lambda m: None)
     assert v is None and clk.sleeps == [60, 60, 30] and waited == 2.5 and attempts == 4
+
+
+# ── default trade_date is TODAY in America/Los_Angeles (bug 2026-09-08) ───────
+
+def test_default_trade_date_is_today_pt_not_prior_business_day():
+    now_pt = datetime(2026, 9, 8, 6, 50)                 # Tuesday 06:50 PT, the cron's normal firing time
+    assert now_pt.weekday() < 5
+    assert resolve_date(None, now_pt) == date(2026, 9, 8)
+    # the day after a holiday must still be today, never the holiday row the EOD cron forward-stamped
+    assert resolve_date(None, datetime(2026, 9, 8, 6, 50)) != date(2026, 9, 7)
+    # late-evening PT is still that PT date even though it is already the next day in UTC
+    assert resolve_date(None, datetime(2026, 9, 8, 21, 5)) == date(2026, 9, 8)
+
+
+def test_explicit_date_overrides_today():
+    assert resolve_date("2026-09-04", datetime(2026, 9, 8, 6, 50)) == date(2026, 9, 4)

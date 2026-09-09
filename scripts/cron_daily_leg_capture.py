@@ -15,8 +15,8 @@ Once the snapshot exists it waits, inside the same budget, until the capture
 window has closed (+ MIN_LAG_MIN) before fetching. A past --date is checked
 once (no poll); --dry-run never waits.
 
-For the most recent canonical `bt_daily_features` row (trade_date ≤ today, or
---date):
+For TODAY's session (today in America/Los_Angeles; --date overrides) and its
+canonical `bt_daily_features` row:
   * every day, regardless of regime — the symmetric ±0.5 IM 0DTE condor box on
     the SPX 06:33 PT spot (CR-AS convention: shorts at round5(spot ± 0.5·IM),
     10-wide wings, same-day expiry), 4 legs;
@@ -36,7 +36,7 @@ Env: BACKFILL_DATABASE_URL (role dash_backfill_writer) and ORATS_API_KEY.
 DATABASE_URL is overridden in-process to the backfill URL (options_cache reads it).
 
 Usage:
-    python scripts/cron_daily_leg_capture.py                 # today's row
+    python scripts/cron_daily_leg_capture.py                 # today (America/Los_Angeles)
     python scripts/cron_daily_leg_capture.py --date 2026-09-04
     python scripts/cron_daily_leg_capture.py --date 2026-09-04 --dry-run   # leg list only, no fetch, no run row
 
@@ -269,10 +269,6 @@ FROM bt_daily_features
 WHERE ticker = %s AND feature_version = %s AND active AND trade_date = %s
 LIMIT 1
 """
-_LATEST_FEATURE_DATE_SQL = """
-SELECT max(trade_date) FROM bt_daily_features
-WHERE ticker = %s AND feature_version = %s AND active AND trade_date <= %s
-"""
 _SPX_OPEN_SQL = """
 SELECT spot_price, snapshot_pt FROM orats_monies_minute
 WHERE ticker = %s AND trade_date = %s AND snapshot_pt >= %s AND spot_price IS NOT NULL
@@ -326,17 +322,18 @@ def load_inputs(conn, td: date, spx_open_row=None) -> dict:
             "target": target, "spot": spot, "debit_expiry": expiry, "chain": chain}
 
 
-def resolve_date(conn, explicit: Optional[str], today: date) -> Optional[date]:
-    from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
+def resolve_date(explicit: Optional[str], now_pt: datetime) -> date:
+    """--date if given, else TODAY in America/Los_Angeles. This cron captures today's
+    session; it must not fall back to the latest feature row (that resolved to the
+    prior business day on 2026-09-08 and produced "no open snapshot" for a holiday)."""
     if explicit:
         return date.fromisoformat(explicit)
-    row = conn.execute(_LATEST_FEATURE_DATE_SQL, (TICKER, CANONICAL_FEATURE_VERSION, today)).fetchone()
-    return row[0] if row and row[0] else None
+    return now_pt.date()
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="CR-AU daily leg capture (no read)")
-    ap.add_argument("--date", default=None, help="trade_date YYYY-MM-DD (default: most recent canonical feature row ≤ today)")
+    ap.add_argument("--date", default=None, help="trade_date YYYY-MM-DD (default: today in America/Los_Angeles)")
     ap.add_argument("--dry-run", action="store_true", help="print the leg list; no fetch, no run row")
     ap.add_argument("--cr-id", default=CR_ID)
     ap.add_argument("--min-lag-min", type=int, default=MIN_LAG_MIN)
@@ -352,11 +349,9 @@ def main(argv=None) -> int:
     now_pt = datetime.now(_PT).replace(tzinfo=None)
     conn = get_backfill_db_conn()
     assert_role_or_die(conn)
-    td = resolve_date(conn, args.date, now_pt.date())
-    print(f"CR-AU daily leg capture  cr_id={args.cr_id}  dry_run={args.dry_run}  now_pt={now_pt:%Y-%m-%d %H:%M}  trade_date={td}")
-    if td is None:
-        print("no canonical feature row ≤ today — nothing to do")
-        return 0
+    td = resolve_date(args.date, now_pt)
+    print(f"CR-AU daily leg capture  cr_id={args.cr_id}  dry_run={args.dry_run}  now_pt={now_pt:%Y-%m-%d %H:%M}  trade_date={td}"
+          f"{'' if args.date else ' (today, America/Los_Angeles)'}")
     # decision 1: do not assume the clock — poll for today's 06:33 PT snapshot (a past date is checked once; dry-run never waits)
     is_today = td == now_pt.date()
     budget = args.max_wait_min if (is_today and not args.dry_run) else 0.0
