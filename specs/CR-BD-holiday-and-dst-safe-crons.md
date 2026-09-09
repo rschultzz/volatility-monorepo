@@ -50,3 +50,51 @@ Wrap Commit 9: spec What changed; vault run log; update
   loose-ends Q3 → done; Sessions MOC. Push, open PR "CR-BD — Holiday/DST-safe
   crons; orphan repair". DO NOT MERGE. Print PR URL, G2 output, G3 run row.
 ```
+
+## Step 0 — diagnosis findings (2026-09-08, before any implementation code)
+
+Run on the main checkout (branch `feat/CR-BD-holiday-safe-crons` off `origin/main` 69efc0f). Interpreters: `apps/web/.venv/bin/python` (arm64) for runs, `arch -x86_64 .venv/bin/python -m pytest` (Rosetta) for suites.
+
+### G0 — call sites of the old business-day helpers — PASS (complete list)
+
+**Cron path (switched in Commit 4):**
+
+| file:line | symbol | role |
+|---|---|---|
+| `apps/cron/job_orats_eod.py:101` | `def next_business_day` — weekend-only skip | defines the store-date stamp |
+| `apps/cron/job_orats_eod.py:148` | `store_trade_date = … else next_business_day(api_trade_date)` | **the bug**: stamps ORATS date D onto the next weekday, holiday or not; `FORCE_STORE_DATE` env overrides |
+| `apps/cron/job_orats_eod.py:93` | `def previous_business_day_with_data` — walks back calendar days probing ORATS | data-driven, correct by construction; switched to walk `prev_trading_day` so it never probes a closed day |
+| `scripts/backfill_orats_oi_gamma.py:185, 295, 303, 352, 428–429` | own `next_business_day` copy + 5 uses | same stamp for the historical `orats_oi_gamma` backfill; switched |
+
+**Not in the cron path (listed, left alone — follow-up):** `scripts/cr_ah_step4_analysis.py:240 next_weekday` (gap-touch → next RTH open; holiday-blind, harness), the same copies in `cr_ai_stage1_days_to_touch.py:88`, `cr_ah_step2_stratified_backfill.py:272`, `cr_ai_stage2_backfill.py:123`; eight private `_NYSE_HOLIDAYS` copies (harness, CR-AH/AI scripts, `packages/shared/backtest/tests/test_expiry_calc.py`) and `apps/web/modules/SetupV2/service.py:428–449` (web path, its own copy). All should eventually import the shared calendar; outside this CR's files.
+
+### Calendar source
+
+No holiday package is in `apps/cron/requirements.txt` or `apps/web/requirements.txt`, and neither venv has `holidays`, `pandas_market_calendars` or `exchange_calendars`. Decision 1 therefore takes the second branch: **hardcoded NYSE list 2023–2027** in `packages/shared/trading_calendar.py` (2023–2026 verbatim from the harness's `_NYSE_HOLIDAYS`, incl. 2025-01-09 national day of mourning; 2027 added: Jan 1, Jan 18, Feb 15, Mar 26, May 31, Jun 18 (Juneteenth observed), Jul 5 (Independence Day observed), Sep 6, Nov 25, Dec 24 (Christmas observed)), `CALENDAR_VALID_THROUGH = 2027-12-31`, and `test_calendar_not_expired` that fails once today passes it. Adding a dependency to the cron image for ten dates a year was not worth a requirements change on all five crons.
+
+### Data facts (G2 "before")
+
+| date | NYSE | `bt_daily_features` | `orats_gex_landscape` | `bt_daily_outcomes` (canonical) | 06:33 monies |
+|---|---|---|---|---|---|
+| 2026-06-19 Juneteenth | closed | `v0.5.0-rebuilt` active (computed 06-22 03:01 from 06-18 data); no canonical row | row (7504.25) | none | none |
+| 2026-06-22 | open | **none** | **none** | **none** | 7523.28 |
+| 2026-07-03 Independence Day obs. | closed | `v0.5.0-rebuilt` active (computed 07-06 from 07-02 data) | row (7460.175) | none | none |
+| 2026-07-06 | open | **none** | **none** | **none** | 7524.13 |
+| 2026-09-07 Labor Day | closed | `v0.6.0-openiv` active, IM NULL (computed 09-08 03:01 from 09-04 data) | row (7715.275) | `na_data` active | none |
+| 2026-09-08 | open | **none** | **none** | **none** | 7705.27 |
+
+`orats_oi_gamma` also carries the three holiday dates (the same stamp). ES traded shortened RTH sessions on all three holidays (210 / 171 / 210 bars), so the outcomes runner's session list counts them (pre-existing, out of scope per decision 6). Grants: `dash_backfill_writer` has INSERT/SELECT on features and landscape, INSERT/SELECT/UPDATE on outcomes — so feature deactivation needs the owner URL (decision 4 anticipates this); outcome deactivation can use the backfill role. Both tables have `active`, `deactivated_at`, `deactivated_reason`; `orats_gex_landscape` has **no** `active` flag.
+
+### Repair mechanics (decision 4)
+
+- (b) `apps/cron/job_orats_eod.py --date <ORATS date>` with `FORCE_STORE_DATE=<true next trading day>` (existing env override at line 148): 06-18 → 06-22, 07-02 → 07-06, 09-04 → 09-08. The job runs on `DATABASE_URL` (owner, `apps/cron/db.get_conn`) and `ORATS_TOKEN`; it hard-upserts `orats_oi_gamma` for the store date, upserts the landscape and the non-IV canonical feature row.
+- (c) `scripts/cr_ab_open_implied_move.py --date <d>` (backfill role) then `scripts/cr_b_backfill_outcomes.py --from-date <d> --to-date <d>`.
+- (d) `scripts/cron_daily_leg_capture.py --date 2026-09-08 --max-wait-min 0`.
+
+### Amendments
+
+- **A1 — landscape rows for the three holidays stay.** `orats_gex_landscape` has no `active` column; removing them means an owner-role DELETE, which decision 4 does not authorise (it names deactivation only). The rows are harmless to the fixed crons (nothing enumerates landscape dates forward) and are listed here for Ryan to delete or keep. Decision 5's post-redeploy query should therefore check *features* per NYSE trading day and treat the landscape holiday rows as known.
+- **A2 — `previous_business_day_with_data` keeps its data probe** but walks `prev_trading_day`, so a Tuesday run probes Friday, not Monday. Same result on every day it has ever run; fewer ORATS calls after a holiday.
+- **A3 — the outcomes cron's poll targets today in PT**: `cr_b_backfill_outcomes.py` has no date argument for "today" (it inserts every canonical feature row lacking an outcome), so the poll waits for *today's* 06:33 PT snapshot when today is a trading day and exits 0 logged when it is not (`--no-wait` for backfills, where today's snapshot is irrelevant). `cr_ab_open_implied_move.py` polls for its *target* date's snapshot (auto-detected NULL-IM row or `--date`), single probe when that date is in the past, and exits 0 immediately when the target date is not a trading day (a mis-stamped row can no longer stall it for 120 min).
+- **A4 — daily capture condor without a feature row** (decision 3): with no feature row there is no `table_spot` either, so the implied move for the box is computed from the 06:33 snapshot's own `spot_price` × ATM IV × √(1/252) (`im_source = open_straddle_0633 × spx_open`); the debit pair still requires a magnet-above feature row.
+- Tests live in `packages/shared/tests/test_trading_calendar.py`, `packages/shared/tests/test_snapshot_poll.py`, `scripts/tests/`; the poll moves from `cron_daily_leg_capture.py` into `packages/shared/snapshot_poll.py` so the three crons share one implementation. A small repo script `scripts/cr_bd_repair_orphans.py` performs step (a) so the deactivation is logged in `bt_backfill_runs`.
