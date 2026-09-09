@@ -8,10 +8,12 @@ _ROOT = str(Path(__file__).resolve().parents[2])
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+import pytest
+
 from packages.shared.options_cache.models import FetchedWindow
 from scripts.cron_daily_leg_capture import (
     MAX_WAIT_MIN, MIN_LAG_MIN, POLL_SECONDS, Leg, build_plan, capture_window, dedupe_legs, format_plan, legs_for,
-    plan_condor, plan_debit, poll_until, resolve_date, window_is_closed,
+    implied_move_fallback, plan_condor, plan_debit, poll_until, resolve_date, window_is_closed,
 )
 
 TD = date(2026, 9, 4)
@@ -172,3 +174,26 @@ def test_default_trade_date_is_today_pt_not_prior_business_day():
 
 def test_explicit_date_overrides_today():
     assert resolve_date("2026-09-04", datetime(2026, 9, 8, 6, 50)) == date(2026, 9, 4)
+
+
+# ── CR-BD decision 3: condor box without a canonical feature row ─────────────
+
+def test_no_feature_row_still_plans_the_condor_box_and_no_debit():
+    # 2026-09-08 after the holiday mis-stamp: snapshot 7705.27 exists, no feature row, no landscape
+    im, src = implied_move_fallback(atmiv=0.1615, table_spot=None, spx_open=7705.27)
+    assert im == pytest.approx(7705.27 * 0.1615 * (1 / 252) ** 0.5) and "spx_open" in src
+    p = build_plan(date(2026, 9, 8), regime=None, implied_move=im, im_source=src, spx_open=7705.27,
+                   spx_open_snapshot=datetime(2026, 9, 8, 6, 33), es_open=None, target=None, spot=None,
+                   debit_expiry=date(2026, 9, 29), chain=[])
+    assert p.skip is None and p.debit is None
+    assert len(p.legs) == 4 and {l.structure for l in p.legs} == {"condor"}
+    assert p.condor["strikes"][1] < 7705.27 < p.condor["strikes"][2]
+    assert "debit: none" in format_plan(p)
+
+
+def test_implied_move_fallback_prefers_the_landscape_spot_and_handles_missing_iv():
+    im, src = implied_move_fallback(0.16, 7715.275, 7705.27)
+    assert im == pytest.approx(7715.275 * 0.16 * (1 / 252) ** 0.5) and "table_spot" in src
+    assert implied_move_fallback(None, 7715.275, 7705.27) == (None, None)
+    assert implied_move_fallback(0.0, None, 7705.27) == (None, None)
+    assert implied_move_fallback(0.16, None, None) == (None, None)
