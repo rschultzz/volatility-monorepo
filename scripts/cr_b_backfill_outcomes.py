@@ -14,13 +14,22 @@ This keeps values comparable across analogues with similar horizons but means
 the metric is NOT interpretable as "did the structural prediction play out"
 for >1-day buckets. CR-C consumers should weight accordingly.
 
+CR-BD decision 2 (2026-09-08): the nightly run no longer assumes the clock. When
+today (America/Los_Angeles) is an NYSE trading day it first polls
+orats_monies_minute for today's 06:33 PT SPX snapshot, up to --max-wait-min (120)
+minutes, and exits 0 with a logged "no open snapshot" if none appears (DST
+drift, ingest outage) — today's feature row would otherwise be inserted with a
+NULL implied move. On a non-trading day there is nothing to wait for and the
+backlog is processed. --no-wait (or a --to-date before today) skips the poll for
+historical backfills.
+
 Usage:
     python scripts/cr_b_backfill_outcomes.py
     python scripts/cr_b_backfill_outcomes.py --limit 3
     python scripts/cr_b_backfill_outcomes.py --from-date 2023-06-01 --to-date 2023-06-30
     python scripts/cr_b_backfill_outcomes.py --dry-run
 
-Exit: 0 on success; 1 if any date failed.
+Exit: 0 on success (incl. no snapshot within the budget); 1 if any date failed.
 """
 from __future__ import annotations
 
@@ -46,6 +55,8 @@ from packages.shared.backfill_safety import (
 )
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
 from packages.shared.outcomes import pick_drift_target
+from packages.shared.snapshot_poll import no_snapshot_line, now_pt, wait_for_open_snapshot
+from packages.shared.trading_calendar import is_trading_day
 from packages.shared.outcomes_runner import (
     CONTAINMENT_COLUMNS,
     compute_outcome_for_date,
@@ -295,7 +306,21 @@ def _run_smoke(conn, ticker: str) -> dict:
     }
 
 
-def main() -> None:
+def wait_needed(today: dt.date, to_date: Optional[dt.date], no_wait: bool, dry_run: bool) -> Optional[str]:
+    """CR-BD decision 2: why the nightly run does / does not wait for today's snapshot.
+    Returns None when it must poll; otherwise the reason it proceeds without polling."""
+    if no_wait:
+        return "--no-wait"
+    if dry_run:
+        return "--dry-run"
+    if to_date is not None and to_date < today:
+        return f"--to-date {to_date} is before today ({today}); historical backfill"
+    if not is_trading_day(today):
+        return f"today {today} is not an NYSE trading day — no snapshot to wait for; processing the backlog"
+    return None
+
+
+def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ticker",    default="SPX")
@@ -305,7 +330,12 @@ def main() -> None:
     ap.add_argument("--dry-run",   action="store_true")
     ap.add_argument("--batch",     type=int, default=50, metavar="N",
                     help="Update rows_inserted every N dates (default: 50)")
-    args = ap.parse_args()
+    ap.add_argument("--no-wait",   action="store_true",
+                    help="CR-BD: skip the poll for today's 06:33 PT snapshot (historical backfills)")
+    ap.add_argument("--max-wait-min", type=float, default=120.0,
+                    help="CR-BD: poll budget for today's 06:33 PT snapshot (default 120)")
+    ap.add_argument("--poll-seconds", type=float, default=60.0)
+    args = ap.parse_args(argv)
 
     ticker    = args.ticker
     from_date = dt.date.fromisoformat(args.from_date) if args.from_date else None
@@ -314,6 +344,21 @@ def main() -> None:
     _load_env()
     conn = get_backfill_db_conn()
     assert_role_or_die(conn)
+
+    # CR-BD decision 2: wait for today's pin instead of assuming the clock
+    today = now_pt().date()
+    reason = wait_needed(today, to_date, args.no_wait, args.dry_run)
+    if reason:
+        log.info("snapshot poll skipped: %s", reason)
+    else:
+        snap, waited, attempts, budget = wait_for_open_snapshot(
+            conn, ticker, today, max_wait_min=args.max_wait_min, poll_s=args.poll_seconds, log=log.info)
+        if snap is None:
+            log.warning(no_snapshot_line(ticker, today, waited, attempts, budget))
+            conn.close()
+            sys.exit(0)
+        if attempts > 1:
+            log.info("06:33 PT snapshot appeared after %.1f min (%d probes)", waited, attempts)
 
     target_rows = _get_target_rows(conn, ticker, from_date, to_date, args.limit)
 

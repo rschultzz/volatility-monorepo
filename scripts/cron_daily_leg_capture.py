@@ -65,6 +65,9 @@ from packages.shared.options_cache.models import FetchedWindow, TimeRange
 from packages.shared.options_cache.opra import format_opra
 from packages.shared.options_cache.strikes import StructureNotListed, snap_spread_to_listed
 from packages.shared.options_cache.windows import find_gaps
+from packages.shared.snapshot_poll import (  # CR-BD: one poll implementation for the three crons
+    MAX_WAIT_MIN, POLL_SECONDS, fetch_open_snapshot, no_snapshot_line, poll_until,
+)
 
 TICKER = "SPX"
 OPRA_ROOT = "SPX"
@@ -76,8 +79,7 @@ OPEN_SNAPSHOT_CEIL = time(6, 40)
 CONDOR_HALF_WIDTH_IM = 0.5
 DEBIT_WIDTH_NOMINAL = 10.0
 MIN_LAG_MIN = 5                      # the window must have closed this long ago before a fetch
-MAX_WAIT_MIN = 120                   # decision 1: poll for the 06:33 PT snapshot up to this long
-POLL_SECONDS = 60
+# MAX_WAIT_MIN (120) and POLL_SECONDS (60) come from packages.shared.snapshot_poll (CR-BD)
 BASIS_MIN, BASIS_MAX = -40.0, 100.0  # ES − SPX at the open (CR-AS Step 0), checked when ES open is known
 _PT = ZoneInfo("America/Los_Angeles")
 
@@ -123,27 +125,6 @@ def window_is_closed(now_pt: datetime, td: date, min_lag_min: int = MIN_LAG_MIN)
     """A1: only fetch once the window end is at least `min_lag_min` in the past."""
     _, w1 = capture_window(td)
     return now_pt >= w1 + timedelta(minutes=min_lag_min)
-
-
-def poll_until(probe: Callable[[], object], *, max_wait_min: float, poll_s: float = POLL_SECONDS,
-               now_fn: Callable[[], datetime] = datetime.now, sleep_fn: Callable[[float], None] = _time.sleep,
-               label: str = "condition", log: Callable[[str], None] = print) -> tuple[object, float, int]:
-    """Decision 1: call `probe` until it returns a truthy value or `max_wait_min`
-    minutes have elapsed (checked against `now_fn`, so tests can drive the clock).
-    Returns (value_or_None, waited_minutes, attempts). max_wait_min = 0 → one probe."""
-    start = now_fn()
-    attempts = 0
-    while True:
-        attempts += 1
-        value = probe()
-        elapsed = (now_fn() - start).total_seconds() / 60.0
-        if value:
-            return value, round(elapsed, 2), attempts
-        remaining_s = max_wait_min * 60.0 - elapsed * 60.0
-        if remaining_s <= 0:
-            return None, round(elapsed, 2), attempts
-        log(f"  waiting for {label}: attempt {attempts}, {elapsed:.1f} min elapsed of {max_wait_min:g}; next probe in {min(poll_s, remaining_s):.0f}s")
-        sleep_fn(min(poll_s, remaining_s))
 
 
 def plan_condor(td: date, spx_open: float, implied_move: float) -> dict:
@@ -269,11 +250,6 @@ FROM bt_daily_features
 WHERE ticker = %s AND feature_version = %s AND active AND trade_date = %s
 LIMIT 1
 """
-_SPX_OPEN_SQL = """
-SELECT spot_price, snapshot_pt FROM orats_monies_minute
-WHERE ticker = %s AND trade_date = %s AND snapshot_pt >= %s AND spot_price IS NOT NULL
-ORDER BY snapshot_pt ASC, dte ASC LIMIT 1
-"""
 _ES_OPEN_SQL = """
 SELECT session_open_t0 FROM bt_daily_outcomes
 WHERE ticker = %s AND feature_version = %s AND active AND trade_date = %s LIMIT 1
@@ -283,7 +259,7 @@ _TABLE_SPOT_SQL = "SELECT table_spot FROM orats_gex_landscape WHERE ticker = %s 
 
 def fetch_spx_open(conn, td: date):
     """The first orats_monies_minute snapshot ≥ 06:33 PT for td: (spot_price, snapshot_pt) or None."""
-    return conn.execute(_SPX_OPEN_SQL, (TICKER, td.isoformat(), datetime.combine(td, OPEN_SNAPSHOT_FLOOR))).fetchone()   # trade_date is text in orats_monies_minute
+    return fetch_open_snapshot(conn, TICKER, td)
 
 
 def load_inputs(conn, td: date, spx_open_row=None) -> dict:
@@ -359,8 +335,7 @@ def main(argv=None) -> int:
     snap, waited, attempts = poll_until(lambda: fetch_spx_open(conn, td), max_wait_min=budget, poll_s=args.poll_seconds,
                                         now_fn=now_fn, label=f"{td} 06:33 PT SPX snapshot in orats_monies_minute")
     if snap is None:
-        print(f"no open snapshot: no orats_monies_minute row ≥ 06:33 PT for {td} after {waited:g} min / {attempts} probe(s) "
-              f"(budget {budget:g} min) — holiday, DST drift or ingest outage. Nothing fetched, no run row.")
+        print(no_snapshot_line(TICKER, td, waited, attempts, budget) + " No run row.")
         conn.close()
         return 0
     if attempts > 1:
