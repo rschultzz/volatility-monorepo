@@ -115,6 +115,8 @@ from your laptop.
 - Always annotate ES vs SPX — never assume.
 - Times UTC unless explicitly tagged otherwise.
 - Databento → Ironbeam cutover is the 2025-12-31 / 2026-01-01 UTC boundary. The `source` column on `ironbeam_es_1m_bars` distinguishes the two.
+  - **Exception — patched window (CR-BF, 2026-09-20):** 2026-09-13 22:00 → 2026-09-18 20:59 UTC is `source='databento'` (ES Z26 outright, `ESZ6` / `raw_symbol`) in both `ironbeam_es_1m_bars` and `es_minutes`, replacing dying-contract ES U26 bars ingested after the missed 2026-09-14 roll. Do not assume `source='databento'` implies ≤ 2025-12-31.
+  - The 2025 Databento rows were fetched as `ES.c.0` (calendar-roll continuous), so 2025 roll weeks hold dying-contract ES data — see vault open-question `databento-2025-backfill-calendar-roll-dying-contract`.
 - "Walls" = high-|GEX| strikes used as price targets in the backtest strategies.
 - Short vs long strategy parameters differ: `zoneMergeDistancePts` (short=10, long=5); `maxStartPctOfRange` semantics invert; long entries search from the signal bar itself.
 - `target_level_gex_bn` carries signed GEX at target levels; color-coded in the results table.
