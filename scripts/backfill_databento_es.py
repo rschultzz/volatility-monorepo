@@ -8,6 +8,9 @@ Also populates the downstream es_minutes table (which feeds the dashboard
 view es_minutes_with_features) so the dashboard shows the 2025 range.
 
 Data source   : Databento GLBX.MDP3, schema ohlcv-1m, symbol ES.c.0 (continuous front-month)
+                by default; override with --symbol / --stype-in.  ES.c.0 rolls on the
+                calendar, so to repair a missed-roll window pass the outright contract
+                (e.g. --symbol ESZ6 --stype-in raw_symbol).
 Target tables : ironbeam_es_1m_bars  (adds source='databento' column)
                 es_minutes           (adds source='databento' column)
 
@@ -17,14 +20,20 @@ sources can be distinguished.  Existing rows default to 'ironbeam'.
 Workflow:
   1. Preflight: count existing rows in the backfill range
   2. Cost preview from Databento
-  3. Confirm with user
-  4. Add 'source' column to both tables (if missing)
-  5. DELETE existing 2025 rows from both tables
-  6. Disable trigger trg_es_minutes_from_ironbeam
-  7. Fetch + insert from Databento, month-by-month
-  8. Populate es_minutes in one SQL statement using window functions
-  9. Re-enable trigger
- 10. Summary
+  3. Fetch ALL chunks from Databento into memory (month-by-month).  If the fetch
+     raises or comes back empty, abort here -- no DB changes have been made.
+  4. Print the fetched frame (symbol, stype, first/last bar, total volume)
+  5. Confirm with user
+  6. Add 'source' column to both tables (if missing)
+  7. Disable trigger trg_es_minutes_from_ironbeam
+  8. DELETE existing rows in the range from both tables
+  9. Insert the fetched bars
+ 10. Populate es_minutes in one SQL statement using window functions
+ 11. Re-enable trigger
+ 12. Summary
+
+NOTE: --dry-run performs the Databento fetch (step 3-4) so it can show the
+fetched frame; it is billed at the previewed cost.  It makes no DB changes.
 
 Requirements:
     pip install databento python-dotenv sqlalchemy psycopg pandas
@@ -34,6 +43,13 @@ Usage:
     python backfill_databento_es.py --dry-run      # show plan, don't execute
     python backfill_databento_es.py --yes          # skip confirmation (careful!)
     python backfill_databento_es.py --start-date 2024-01-01 --end-date 2025-01-01
+    python backfill_databento_es.py --symbol ESZ6 --stype-in raw_symbol \\
+        --start-date 2026-09-13 --end-date 2026-09-19 --dry-run   # missed-roll repair
+
+Args:
+    --symbol     Databento symbol            (default: ES.c.0)
+    --stype-in   Databento input symbol type (default: continuous; use raw_symbol
+                 for an outright contract such as ESZ6)
 """
 
 import argparse
@@ -174,6 +190,19 @@ def fetch_databento_month(client, start: datetime, end: datetime) -> pd.DataFram
     return df
 
 
+def fetch_all_chunks(client, start: datetime, end: datetime):
+    """Fetch every monthly chunk into memory.  Returns [(label, df), ...].
+    Raises on any fetch error -- the caller must not have touched the DB yet."""
+    chunks = []
+    for chunk_start, chunk_end in month_chunks(start, end):
+        label = chunk_start.strftime("%Y-%m")
+        print(f"  {label}: fetching...", end=" ", flush=True)
+        df = fetch_databento_month(client, chunk_start, chunk_end)
+        print(f"got {len(df):>7,} bars.")
+        chunks.append((label, df))
+    return chunks
+
+
 def insert_bars(engine, df: pd.DataFrame) -> int:
     with engine.begin() as conn:
         df.to_sql(
@@ -232,7 +261,7 @@ def populate_minutes(engine) -> int:
 
 # --- Main -----------------------------------------------------------------
 def main() -> None:
-    global BACKFILL_START, BACKFILL_END
+    global BACKFILL_START, BACKFILL_END, SYMBOL, STYPE_IN
 
     p = argparse.ArgumentParser(description="Backfill ES 1-min OHLCV from Databento.")
     p.add_argument("--env", default=".env", help="Path to .env file")
@@ -244,7 +273,14 @@ def main() -> None:
     p.add_argument("--end-date", default=None,
                    help=f"Override BACKFILL_END (YYYY-MM-DD, exclusive). "
                         f"Default: {BACKFILL_END.date()}")
+    p.add_argument("--symbol", default=SYMBOL,
+                   help=f"Databento symbol. Default: {SYMBOL}")
+    p.add_argument("--stype-in", default=STYPE_IN,
+                   help=f"Databento input symbol type (e.g. continuous, raw_symbol). "
+                        f"Default: {STYPE_IN}")
     args = p.parse_args()
+
+    SYMBOL, STYPE_IN = args.symbol, args.stype_in
 
     # Apply CLI overrides for the backfill range
     if args.start_date:
@@ -274,7 +310,7 @@ def main() -> None:
     print("Databento ES 1-min Backfill")
     print("=" * 92)
     print(f"Range          : {BACKFILL_START.date()}  to  {BACKFILL_END.date()}  (end exclusive)")
-    print(f"Source         : {DATASET} / {SCHEMA} / {SYMBOL}")
+    print(f"Source         : {DATASET} / {SCHEMA} / {SYMBOL}  (stype_in={STYPE_IN})")
     print(f"Target tables  : {BARS_TABLE}, {MINUTES_TABLE}")
 
     # --- Preflight ---
@@ -303,15 +339,34 @@ def main() -> None:
         print(f"  ERROR getting cost: {e}")
         sys.exit(1)
 
+    # --- Fetch (before any DB change) ---
+    print("\n--- Fetch from Databento (into memory; no DB changes yet) ---")
+    try:
+        chunks = fetch_all_chunks(client, BACKFILL_START, BACKFILL_END)
+    except Exception as e:
+        print(f"\n  ERROR fetching from Databento: {e}")
+        sys.exit("ABORTED: fetch failed.  No DB changes made.")
+    fetched = pd.concat([df for _, df in chunks], ignore_index=True)
+    if fetched.empty:
+        sys.exit("ABORTED: Databento returned 0 bars.  No DB changes made.")
+
+    print("\n--- Fetched frame ---")
+    print(f"  Symbol       : {SYMBOL}")
+    print(f"  Stype in     : {STYPE_IN}")
+    print(f"  Bars         : {len(fetched):,}")
+    print(f"  First bar    : {fetched['datetime'].min()} UTC")
+    print(f"  Last bar     : {fetched['datetime'].max()} UTC")
+    print(f"  Total volume : {fetched['volume'].sum():,.0f}")
+
     # --- Plan summary ---
     print("\n--- Plan ---")
     print(f"  1. source column: "
           f"{'add to ' + BARS_TABLE if not bars_has_source else 'ok on ' + BARS_TABLE}, "
           f"{'add to ' + MINUTES_TABLE if not minutes_has_source else 'ok on ' + MINUTES_TABLE}")
-    print(f"  2. DELETE {bars[1]:,} rows from {BARS_TABLE}")
-    print(f"  3. DELETE {minutes[1]:,} rows from {MINUTES_TABLE}")
-    print(f"  4. Disable trigger {TRIGGER_NAME}")
-    print(f"  5. Fetch + insert ~350k rows from Databento (monthly chunks)")
+    print(f"  2. Disable trigger {TRIGGER_NAME}")
+    print(f"  3. DELETE {bars[1]:,} rows from {BARS_TABLE}")
+    print(f"  4. DELETE {minutes[1]:,} rows from {MINUTES_TABLE}")
+    print(f"  5. Insert the {len(fetched):,} fetched {SYMBOL} bars into {BARS_TABLE}")
     print(f"  6. Populate {MINUTES_TABLE} via window-function SQL (source='databento')")
     print(f"  7. Re-enable trigger {TRIGGER_NAME}")
     print(f"  Cost: ${cost:.4f}")
@@ -338,22 +393,21 @@ def main() -> None:
     else:
         print(f"      {MINUTES_TABLE}: already present, skipping.")
 
-    print(f"\n[2-3/7] Deleting existing rows in {BACKFILL_START.date()}..{BACKFILL_END.date()}...")
-    bars_del, minutes_del = drop_in_range(engine)
-    print(f"      {BARS_TABLE}:    -{bars_del:,}")
-    print(f"      {MINUTES_TABLE}: -{minutes_del:,}")
-
-    print(f"\n[4/7] Disabling trigger {TRIGGER_NAME}...")
+    print(f"\n[2/7] Disabling trigger {TRIGGER_NAME}...")
     set_trigger(engine, enabled=False)
 
     total_inserted = 0
     try:
-        print("\n[5/7] Backfilling from Databento (by month)...")
-        for chunk_start, chunk_end in month_chunks(BACKFILL_START, BACKFILL_END):
-            label = chunk_start.strftime("%Y-%m")
-            print(f"      {label}: fetching...", end=" ", flush=True)
-            df = fetch_databento_month(client, chunk_start, chunk_end)
-            print(f"got {len(df):>7,} bars, inserting...", end=" ", flush=True)
+        print(f"\n[3-4/7] Deleting existing rows in {BACKFILL_START.date()}..{BACKFILL_END.date()}...")
+        bars_del, minutes_del = drop_in_range(engine)
+        print(f"      {BARS_TABLE}:    -{bars_del:,}")
+        print(f"      {MINUTES_TABLE}: -{minutes_del:,}")
+
+        print("\n[5/7] Inserting fetched bars (by month)...")
+        for label, df in chunks:
+            if df.empty:
+                continue
+            print(f"      {label}: inserting {len(df):>7,} bars...", end=" ", flush=True)
             n = insert_bars(engine, df)
             total_inserted += n
             print(f"done.  (running total: {total_inserted:,})")
