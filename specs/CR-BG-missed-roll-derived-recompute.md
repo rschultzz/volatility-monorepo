@@ -155,5 +155,5 @@ All-column diff, old → new (columns not listed are unchanged; `backfill_run_id
 - Delta vs frozen spec: Amendment A1 (in-place UPDATE; no deactivation). Kickoff's pending-row list gains 2026-08-18; 2026-09-14 is *not* a seam-crosser after the recompute (Q2).
 - Deferred to vault open-questions: `outcome-target-vs-es-roll-seam-and-basis-bias` (Q2, incl. 09-08's mixed-contract horizon and the four seam-crossing pending rows); `bt-daily-outcomes-pk-excludes-active` (A1 item 6, low / future-project).
 - Known gap, recorded: `ironbeam_es_flow_1s` 09-14..18 rows tagged `XCME:ES.U26` stay; consumers filter on symbol.
-- Not classified in this CR: `es_gamma_smile_minutes` has 6,360 rows for 2026-09-14..18 and no reference anywhere in tracked code (`git grep` empty) — writer unknown; stays on the inventory.
+- `es_gamma_smile_minutes` (6,360 rows for 2026-09-14..18, no reference in tracked code): relkind `v`, a plain view over `es_minutes_with_features` — self-healed (09-15 07:00 UTC open 7667.50 = ES Z26 level). `cron_daily_leg_capture.py` and `cr_ab_open_implied_move.py` read no ES table (SPX/ORATS-only). Inventory fully classified; the vault open-question closes.
 - Side findings left alone (outside the six rows): `wall_*`/containment NULL on 09-09..11 despite closed sessions; `magnet-above` classified with no positive wall on 09-11 / 09-16.
