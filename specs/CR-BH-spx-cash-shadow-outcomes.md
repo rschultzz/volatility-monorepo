@@ -157,3 +157,51 @@ Files: `scripts/cr_bh_spx_cash.py` (A1 series; no ES), `scripts/cr_bh_shadow_spx
 - Status, new = control: computed 479, na_regime 316, na_data 15, pending_history 5 (no status transitions).
 - Pooled computed rows: touch **83.9 % (ES) → 73.3 % (SPX)**; close 8.1 % → 8.1 %.
 - **Control:** recomputing all 815 rows on ES through the same path reproduces the stored canonical rows exactly — 0 mismatches in status, touch, close, `days_to_reach`, `horizon_end_date`; `session_open_t0` / `session_close_t0` / `final_close_distance` max |diff| 0.0. Landscape and features have not drifted; every old → new difference is the price series (incl. its session calendar).
+
+## Step 2 — shadow INSERT (2026-09-21 01:49 UTC)
+
+Run **`ba5d92f4-2e97-4c99-a99b-07877fa71681`** (`bt_backfill_runs`: `completed`, `rows_inserted` 815, self-assessment "OK: one shadow row per active canonical row; canonical untouched"). Interpreter `apps/web/.venv/bin/python`; minutes fetched live (no dev cache). Log: `scripts/logs/cr_bh_run_*.log`.
+
+- Inserted **815** rows under `v0.6.0-openiv-spxcash` (computed 479, na_regime 316, na_data 15, pending_history 5). INSERT only, `ON CONFLICT DO NOTHING`, one transaction.
+- After-state: `v0.5.0-rebuilt` 743 · `v0.6.0-openiv` 815 active + 1 inactive (unchanged; max `computed_at` still 2026-09-21 00:02:04 = CR-BG) · `v0.6.0-openiv-spxcash` 815. No `bt_daily_features` rows written. Canonical constant untouched.
+- The shadow version is a snapshot: the CR-AA sweep filters on the canonical version and will not promote its 5 `pending_history` rows.
+
+## Step 3 — the diff (`scripts/cr_bh_diff.py` → `scripts/logs/cr_bh_diff.md`, per-row CSV `scripts/logs/cr_bh_diff_rows.csv`)
+
+Per-row tags in the CSV: `series_segment`, `lagged_day`, `horizon_crosses_cutover`, `qa_flag_t0`, `bucket`, `basis`. Full tables (confusion by regime × horizon × bucket, all 112 flips, both scopes) are in the md file; headline numbers:
+
+**Control.** 0 of 815 stored canonical rows differ from an ES recompute today → every difference below is the price series (incl. its session calendar: ES counts 26 market-holiday / stray Globex "sessions", so `horizon_end_date` moved on 248 of 479 computed rows — the SPX horizon is the same number of *real* sessions and therefore ends later; that works *against* T→F flips).
+
+**Status transitions.** None (computed 479, na_regime 316, na_data 15, pending 5 in both versions; same in the `stock_price` segment: 403 / 266 / 11 / 5).
+
+**Basis buckets (chosen series, median 06:58–07:02 PT):** < 20: 325 days (mean 10.7) · 20–35: 220 (27.4) · 35+: 249 (47.2) · no basis 21. These supersede both earlier tables. On the `stock_price` segment the *old* 5-session magnet-above touch rates by bucket are 47.4 / 45.8 / 81.6 % — identical to the correction already appended to the open-question.
+
+**Confusion, 479 rows computed in both (old → new):** touch T→T 342 · **T→F 60** · F→T 9 · F→F 68 (83.9 % → 73.3 %); close T→T 10 · T→F 29 · F→T 29 · F→F 411 (8.1 % → 8.1 %). 112 rows flip at least one label (touch 69, close 58). `stock_price` segment (403): touch T→F 52 / F→T 8 (84.6 → 73.7 %), close 26 / 25 (8.7 → 8.4 %); 99 flip rows. Touch T→F by bucket: 35+ 30, 20–35 15, < 20 14, no basis 1. The 9 F→T are 7 magnetic-pin rows (ES sat above the pin band; SPX is inside it) and 2 magnet-above rows (2023-05-26, 2024-08-22: longer real-session horizon).
+
+**Pooled rates old → new (full | `stock_price` segment):**
+
+| regime | horizon | n | touch % | close % | days_to_reach | final dist (pts) |
+| --- | --- | --- | --- | --- | --- | --- |
+| magnet-above | 5 | 99 \| 85 | 61.6 → 43.4 \| 62.4 → 42.4 | 17.2 → 13.1 \| 16.5 → 11.8 | 1.1 → 1.9 \| 1.0 → 1.8 | −20.6 → −48.2 \| −18.9 → −48.8 |
+| magnet-above | 20 | 176 \| 153 | 90.9 → 76.7 \| 91.5 → 77.8 | 8.0 → 8.0 \| 9.2 → 8.5 | 3.0 → 5.0 \| 3.2 → 5.2 | +28.7 → −2.4 \| +33.7 → +2.1 |
+| magnet-above | 60 | 103 \| 83 | 88.3 → 84.5 \| 91.6 → 86.7 | 3.9 → 4.9 \| 4.8 → 6.0 | 13.5 → 15.0 \| 14.4 → 14.4 | +215.0 → +189.0 \| +215.5 → +190.0 |
+| magnetic-pin | 5 | 32 \| 26 | 78.1 → 71.9 \| 76.9 → 76.9 | 12.5 → 18.8 \| 11.5 → 19.2 | 0.4 → 0.5 \| 0.6 → 0.5 | +21.4 → −12.4 \| +24.5 → −10.2 |
+| magnetic-pin | 20 | 59 \| 46 | 96.6 → 94.9 \| 95.7 → 93.5 | 0.0 → 1.7 \| 0.0 → 2.2 | 1.2 → 0.9 \| 1.4 → 0.9 | +55.4 → +33.7 \| +48.5 → +24.2 |
+
+(magnet-above 1-session n = 3, magnetic-pin 1-session n = 2, 60-session n = 5 omitted here.) Mean final distance falls by ≈ 26–34 pts everywhere — the mean basis, as it should.
+
+**Confound test — magnet-above touch by basis bucket (< 20 · 20–35 · 35+; z, p for < 20 vs 35+):**
+
+| horizon | version | full corpus | `stock_price` segment |
+| --- | --- | --- | --- |
+| 5 | old (ES) | 13/27 48.1 % · 14/28 50.0 % · 32/40 80.0 % — z 2.72, p 0.007 | 9/19 47.4 · 11/24 45.8 · 31/38 81.6 — z 2.66, p 0.008 |
+| 5 | **new (SPX)** | 9/27 33.3 % · 12/28 42.9 % · 20/40 50.0 % — **z 1.35, p 0.18** | 6/19 31.6 · 9/24 37.5 · 19/38 50.0 — **z 1.32, p 0.19** |
+| 20 | old (ES) | 78/87 89.7 · 37/41 90.2 · 44/47 93.6 — z 0.77, p 0.44 | 66/73 90.4 · 30/33 90.9 · 43/46 93.5 — p 0.56 |
+| 20 | **new (SPX)** | 73/87 83.9 · 30/41 73.2 · 31/47 66.0 — **z −2.38, p 0.017** | 61/73 83.6 · 27/33 81.8 · 30/46 65.2 — **z −2.30, p 0.022** |
+| 60 | old / new | 92.0 · 77.1 · 100 / 92.0 · 65.7 · 100 | 100 · 74.1 · 100 / 100 · 59.3 · 100 |
+
+Reading: (1) the 5-session gradient drops from +32 pts (p 0.007) to +17 pts (p 0.18) — most of it was the basis; what remains is the same sign, not significant at n = 27 / 40, and excluding ES-QA-flagged t0 days does not change it (8/26 · 10/26 · 20/40, p 0.12). (2) At 20 sessions the ES version showed no gradient because touch was saturated by the bias; on SPX cash a **reverse** gradient appears — high-basis (first month after quarterly OPEX) rows touch *less* (66 % vs 84 %, p ≈ 0.02). Both scopes agree, so the 2023 segment is not driving either result. The basis explains the inflation; it does not explain everything — there is an OPEX-cycle dependence with opposite sign at 5 vs 20 sessions that deserves its own open-question (small n, two tests; treat as a lead, not a finding).
+
+**ES QA flag (flag only): 30 of 850 sessions** — `spot_shifted_2023` 3 (all lagged days: 2023-05-18 high +10, 2023-07-11 high +11, 2023-08-24 low −13), `stock_price` 27: 2023-11-14 (low +53), 2023-11-29 (high +21; 149-minute session), 2023-12-04 (high −36), 2023-12-07, 2023-12-19, 2024-01-03 (high −19), 2024-01-17 (high −31), 2024-02-07, 2024-02-13 (high −40), 2024-03-05 (high −21), 2024-03-07, 2024-03-18, 2024-03-22 (high −13), 2024-05-31, 2024-09-18 (spread 18), 2024-10-31, 2024-12-18 (spread 15; low −22), 2025-04-07 (spread 16), 2025-04-10, 2025-06-23, 2025-11-26 (low −30; session starts 09:27), 2026-02-27 (high −19), 2026-06-29, 2026-07-08 (low +28), 2026-07-10 (low −25), 2026-07-15 (low +28), 2026-08-25. Sign: (ES-implied − SPX); "high −36" = the SPX series high is 36 pts above what ES implies — a residual stale opening print surviving past 06:33. The seven "high −" days could only *add* touches to the new version; checked: they set `days_to_reach` on three rows (2023-11-28 / 29 / 30, touch day 2023-12-04) and change **no** touch label (each also touches on another day). Lagged-day closes (median `stock_price` 12:56–13:00) vs the day's own basis, 101 days: median |err| 3.1, p90 10.7, max 19.0, mean −0.2 pts — unbiased, a few pts of noise against a 0.25 × IM (≈ 10–14 pt) close tolerance.
+
+**Known limitations of the shadow version.** Residual stale opening prints on the 27 flagged `stock_price` days (rows are INSERT-only; not corrected); truncated sessions on outage days (2023-09-21 from 08:09, 2023-10-24 from 09:01, 2023-11-29 from 10:31, 2025-11-26 from 09:27, 2023-05-23, 2026-07-22, 2026-08-19, 2026-08-28 late starts); minute sampling understates highs by ≈ 0.75 pts (biases touch slightly down); SPX close is the 13:00:00 print vs ES 13:00:59.
