@@ -4,6 +4,11 @@
   Q3  ES session window vs SPX-cash window (open/close print comparison)
   Q5  minute-sampling understatement of high/low, ES as proxy, 50 random outcome dates
   Q6  bad-print filter: every dropped minute; partial days classified
+  (Q7 / A1 evidence — lag by month, spot vs stock quality — was produced ad hoc from the same
+   cached minutes; the measured windows are constants in scripts/cr_bh_spx_cash.py.)
+
+Runs on the final A1 series (scripts/cr_bh_spx_cash.build_series). The Step 0 numbers in the
+spec for Q3 / Q6 were taken on the raw `spot_price` series with the rejected draft filter.
 
 Read-only (default_transaction_read_only = on). Usage:
     apps/web/.venv/bin/python scripts/cr_bh_step0_diagnosis.py
@@ -25,12 +30,12 @@ import pandas as pd  # noqa: E402
 
 from packages.shared.backfill_safety import get_backfill_db_conn  # noqa: E402
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION  # noqa: E402
-from scripts.cr_bh_spx_cash import daily_ohlc, fetch_spx_minutes, filter_bad_prints  # noqa: E402
+from scripts.cr_bh_spx_cash import build_series, daily_ohlc, fetch_minutes, normalize_minutes  # noqa: E402
 
 TICKER = "SPX"
 SEED = 20260920
 PARTIAL_MIN_MINUTES = 380
-CACHE = REPO_ROOT / "scripts" / ".cache" / "cr_bh_spx_minutes.pkl"
+CACHE = REPO_ROOT / "scripts" / ".cache" / "cr_bh_spot_stock_minutes.pkl"
 
 # NYSE 13:00 ET (10:00 PT) early closes inside the corpus
 EARLY_CLOSES = {dt.date(*d) for d in [
@@ -60,26 +65,19 @@ def main() -> None:
     print(f"outcome rows {len(rows)} ({sum(1 for r in rows if r[1])} active) {outcome_dates[0]} → {outcome_dates[-1]}")
 
     if CACHE.exists():
-        minutes = pd.read_pickle(CACHE)
+        minutes = normalize_minutes(pd.read_pickle(CACHE))
     else:
-        minutes = fetch_spx_minutes(conn, outcome_dates[0], dt.date.today())
+        minutes = fetch_minutes(conn, outcome_dates[0], dt.date.today())
         CACHE.parent.mkdir(exist_ok=True)
         minutes.to_pickle(CACHE)
-    print(f"SPX minutes: {len(minutes)} rows, {minutes['session_date'].nunique()} days; "
-          f"rows/minute max {minutes['n_rows'].max()}")
+    print(f"SPX minutes: {len(minutes)} rows, {minutes['session_date'].nunique()} days")
 
     # ── Q6 bad prints ────────────────────────────────────────────────────────
-    clean, dropped = filter_bad_prints(minutes)
-    print(f"\n== Q6 bad prints: {len(dropped)} dropped minutes on {dropped['session_date'].nunique()} days")
-    for _, r in dropped.iterrows():
-        print(f"  {r['minute']}  spx={r['spx']}  ref={r['ref']:.2f}  {r['reason']}")
-    # sensitivity
-    import scripts.cr_bh_spx_cash as m
-    for thr in (0.0015, 0.003, 0.005, 0.01):
-        m.NEIGHBOR_MAX_DEV = thr
-        _, d = filter_bad_prints(minutes)
-        print(f"  sensitivity NEIGHBOR_MAX_DEV={thr}: {len(d)} dropped on {d['session_date'].nunique()} days")
-    m.NEIGHBOR_MAX_DEV = 0.005
+    clean, dropped = build_series(minutes)
+    print(f"\n== Q6 bad prints: {len(dropped)} dropped minutes on {dropped['session_date'].nunique()} days "
+          f"{dropped['reason'].value_counts().to_dict()}")
+    for _, r in dropped[~dropped["reason"].isin(["frozen", "frozen_open"])].iterrows():
+        print(f"  {r['minute']}  {r['col']}={r['px']}  {r['reason']}")
 
     # ── Q6 partial days ──────────────────────────────────────────────────────
     daily = daily_ohlc(clean)
@@ -95,7 +93,7 @@ def main() -> None:
     for d, r in part.iterrows():
         if d in EARLY_CLOSES:
             kind = "early close"
-        elif r["first"] > dt.time(6, 35):
+        elif r["first"] > dt.time(6, 40):
             kind = "outage (late start)"
         elif r["last"] < dt.time(12, 55):
             kind = "outage (early end)"
@@ -105,7 +103,7 @@ def main() -> None:
               f"{'outcome-date' if d in set(outcome_dates) else 'not-outcome'}  {kind}")
 
     # ── Q3 open / close print comparison ─────────────────────────────────────
-    cm = clean.set_index("minute")["spx"]
+    cm = minutes.set_index("minute")["spot"].where(lambda x: x > 0).dropna()
     o30, o33, c1259, c1300 = [], [], [], []
     for d in daily.index:
         def at(h, mi):

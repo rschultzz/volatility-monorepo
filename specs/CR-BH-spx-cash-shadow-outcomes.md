@@ -136,3 +136,24 @@ Q7 decision: option (c), amended. Supersedes "Use `spot_price`, not `stock_price
 8. **Window (Q3 proposal adopted):** after any shift, prints 06:33–13:00 PT; open = first print ≥ 06:33.
 9. **Scope:** active canonical rows only (815; the inactive 2026-09-07 holiday mis-stamp is not shadowed). Step 1 also recomputes every row on **ES through the same code path as a control**, so flips caused by anything other than the series (landscape drift since the original compute, the holiday-session calendar) are separated from series flips.
 10. **Out of scope, new low-priority open-question:** the 2026 `spot_price` drift, naming every repo reader of `spot_price`. Not investigated here.
+
+## Step 1 — series builder, shadow script, dry run (2026-09-20)
+
+Files: `scripts/cr_bh_spx_cash.py` (A1 series; no ES), `scripts/cr_bh_shadow_spxcash_outcomes.py` (`--dry-run` writes nothing), `scripts/cr_bh_diff.py`, `scripts/cr_bh_step0_diagnosis.py` (ported to the final series). Full per-minute drop list: `scripts/logs/cr_bh_dropped_minutes.csv`; daily frame: `scripts/logs/cr_bh_spx_daily.csv` (both git-ignored).
+
+**Filter as built (A1.7, one change):** the spike / edge thresholds are `max(0.3 % / 0.5 %, 10 × the session's median |1-min return|)`. With a flat 0.3 % the rule dropped 20 prints on 2025-04-07 / 04-09 / 04-10 that ES confirms were real moves; with the volatility floor it drops 25 spike/edge prints in the whole corpus and **none** is ES-confirmed as real.
+
+**Every dropped minute (2 302 on 159 days):**
+- `gross` 297: 2023-09-21 06:31–08:08 ×97 (prints 3 678–3 873 vs SPX ≈ 4 350; session starts 08:09); 2023-11-29 06:32–10:29 ×198 (3 451–4 057 vs ≈ 4 550; session starts 10:31); 2024-04-26 06:30, 06:34 (22.78 — a VIX-like value).
+- `nonpositive` 1: 2025-11-11 10:48 (NULL).
+- `spike` 10: 2024-02-29 06:40–06:41; 2024-04-02 06:40–06:41; 2024-05-02 06:31; 2024-07-31 06:31; 2024-09-26 06:31; 2024-10-28 06:31; 2024-12-18 12:47; 2026-02-25 06:32 (24–86 pts off ES).
+- `edge_first` 10 (stale first print; all before the 06:33 window except none): 2023-09-26 06:31; 2023-09-29, 2023-10-17, 2024-03-06, 2024-04-04, 2024-07-26, 2025-04-03, 2025-11-28, 2026-08-07 06:30; 2024-05-15 06:32.
+- `edge_last` 5 (bad 13:00 `stock_price` print, 31–60 pts off ES; close falls back to 12:59): 2026-02-18, 2026-03-06, 2026-03-10, 2026-04-27, 2026-05-19.
+- `frozen_open` 1 856 on 113 days: 97 lagged days × 16 prints (06:30–06:45, the 15-min delay — these map to before 06:30 after the shift anyway); 2023-10-24 ×165; 2023-09-15 ×42; 2023-05-15 ×13; 2023-05-24 ×11; 2024-01-19, 2024-02-16 ×10; 2023-11-17, 2023-12-15 ×9; 2023-05-05 ×8; 2023-09-11, 09-18, 10-02, 10-09, 10-16, 10-23 ×4; 2023-09-25 ×3.
+- `frozen` (interior, duplicates of a kept print) 123 on 26 days — mostly the post-10:00 tail on early-close days (2023-11-24 ×13, 2024-07-03 ×12, 2024-12-24 ×12, 2025-07-03 ×14) and 2023-06-26 ×9, 2025-10-30 ×8, 2023-06-27 ×6, 2023-09-15 ×5; the rest ×2–4.
+
+**Dry run** (`--dry-run`, 815 active source rows, 2023-05-01 → 2026-09-18):
+- SPX sessions 850; ES "sessions" 866. **ES has 26 RTH-window "sessions" with no SPX session** — market holidays with Globex trading (Memorial Day, Juneteenth, July 4, Labor Day, Thanksgiving, MLK, Presidents' Day…) plus 2026-02-21 (a Saturday — stray ES bars) and 2026-09-07. The canonical horizons count those as sessions; the shadow version does not.
+- Status, new = control: computed 479, na_regime 316, na_data 15, pending_history 5 (no status transitions).
+- Pooled computed rows: touch **83.9 % (ES) → 73.3 % (SPX)**; close 8.1 % → 8.1 %.
+- **Control:** recomputing all 815 rows on ES through the same path reproduces the stored canonical rows exactly — 0 mismatches in status, touch, close, `days_to_reach`, `horizon_end_date`; `session_open_t0` / `session_close_t0` / `final_close_distance` max |diff| 0.0. Landscape and features have not drifted; every old → new difference is the price series (incl. its session calendar).
