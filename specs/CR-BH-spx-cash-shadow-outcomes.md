@@ -107,3 +107,32 @@ ES 1m closes used only as an independent *witness* (intraday ES−SPX basis shou
 4. 2024 and 2025 are clean in both columns (1–2 days each with spread > 15).
 
 The chat evidence (basis at 07:00 from `spot_price`) is not invalidated — the 2026 drift builds through the session and a 15-min lag is unbiased noise at one sample — but session high/low/close from `spot_price` are not trustworthy in 2023-05→11 and on ~27 % of 2026 days. Options: (a) `spot_price` as specified + frozen-run filter + 15-min timestamp shift in the lagged period — leaves the 2026 drift unfixed; (b) `stock_price` — clean 2024–2026, noisy 2023; (c) per-period hybrid: `stock_price` from 2023-12 on, `spot_price` shifted −15 min before, with an ES-witness QA flag per day (flag only — ES never enters a price); (d) restrict the shadow to 2023-12 → present. No write until one is chosen.
+
+## Amendment A1 (Ryan, 2026-09-20, after Step 0) — per-period hybrid series
+
+Q7 decision: option (c), amended. Supersedes "Use `spot_price`, not `stock_price`" in *Verified from chat*.
+
+1. **Segments.** `series_segment = 'spot_shifted_2023'` for trade_date ≤ 2023-11-08; `'stock_price'` for trade_date ≥ **2023-11-09 (cutover)**. The tag is per outcome row (by its trade_date) and lives in the diff output only, not in the table. A 2023 row's horizon may run into `stock_price` sessions; the diff also carries `horizon_crosses_cutover`.
+2. **`spot_shifted_2023` sessions.** Path / high / low from `spot_price`, timestamps shifted −15 min **on lagged days** (windows below; unlagged days in the segment use `spot_price` unshifted — both columns are clean there). On lagged days the true 12:46–13:00 is absent, so **session close = median `stock_price` over 12:56–13:00 PT** (entered as the 13:00 print, so it also bounds high/low). Same rule for any t1/t5/t15 or horizon close landing on a lagged day — it is one daily frame. Measured quality of that close: `stock_price`'s ES-basis spread is 11–24 pts on lagged days (2–4 on unlagged days), so expect an error of a few pts; every lagged close is checked by the ES QA flag (item 4).
+3. **Lag evidence (measured, not eyeballed).** Per day, lag L ∈ 0..20 min maximising corr(Δ`spot_price`(t), ΔES 1m close(t − L)), 07:15–12:45 PT; `frozen_open` = number of leading session prints identical to the first.
+
+| month | days | L = 15 | L ≤ 1 | other | n/a | median corr at best L | median corr at L = 0 | median `frozen_open` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2023-05 | 22 | 22 | 0 | 0 | 0 | 0.66 | −0.01 | 16 |
+| 2023-06 | 21 | 20 | 0 | 0 | 1 | 0.66 | 0.01 | 16 |
+| 2023-07 | 20 | 20 | 0 | 0 | 0 | 0.62 | −0.02 | 16 |
+| 2023-08 | 23 | 23 | 0 | 0 | 0 | 0.63 | 0.00 | 16 |
+| 2023-09 | 20 | 4 | 15 | 0 | 1 | 0.58 | 0.48 | 2 |
+| 2023-10 | 22 | 6 | 16 | 0 | 0 | 0.54 | 0.45 | 2 |
+| 2023-11 | 21 | 6 | 14 | 1 | 0 | 0.54 | 0.48 | 2 |
+| 2023-12 | 20 | 0 | 20 | 0 | 0 | 0.53 | 0.48 | 2 |
+| 2024-01 → 03 | 61 | 0 | 61 | 0 | 0 | 0.53–0.55 | 0.48–0.53 | 2 |
+
+   The lag is all-or-nothing per day and contiguous: **lagged windows = 2023-05-01 → 2023-09-07 and 2023-10-24 → 2023-11-08** (every day in them has L = 15 and `frozen_open` = 16, except 2023-06-16 — quarterly OPEX, correlation undefined, `frozen_open` = 16 → treated as lagged — and 2023-10-24, frozen 165 min). Unlagged: 2023-09-08 → 2023-10-23 and from 2023-11-09 (first unlagged day after the last lagged day = the cutover). Exceptions inside unlagged time: 2023-09-15 (quarterly OPEX, `frozen_open` 42, corr undefined) and 2023-11-29 (bad-print day, L = 4 at corr 0.14) — left unshifted, caught by the filter / QA flag.
+4. **ES is a per-day QA flag only, never a price.** Flag when, for the chosen series: intraday basis spread (p95 − p5 after 06:45) > 15 pts, or |close basis − day-median basis| > 10, or |ES-implied high/low − series high/low| > 10. Flagged days are listed in the diff; nothing is corrected from ES.
+5. **Basis buckets recomputed with the chosen series:** median over 06:58–07:02 PT of (`es_minutes.close` − series), buckets < 20 / 20–35 / 35+, drop outside −50..120. These supersede both the original `spot_price` table and the `stock_price` 2023-12+ correction in the open-question.
+6. **Every diff table is reported twice:** full corpus, and `stock_price` segment only.
+7. **Filter (final, replaces the Q6 draft), applied to the chosen column per day:** (i) `> 0`; (ii) gross guard — > 10 % from the centered 5-session median of session medians; (iii) frozen runs — ≥ 3 consecutive identical prints: a run that starts at the session's first print is dropped whole (pre-open stale), otherwise all but its first print are dropped; (iv) isolated spike — a run of ≤ 2 prints more than 0.3 % beyond both the preceding and following kept prints (each within 3 min) on the same side. Every dropped minute is written to `scripts/logs/` and summarised in Step 1.
+8. **Window (Q3 proposal adopted):** after any shift, prints 06:33–13:00 PT; open = first print ≥ 06:33.
+9. **Scope:** active canonical rows only (815; the inactive 2026-09-07 holiday mis-stamp is not shadowed). Step 1 also recomputes every row on **ES through the same code path as a control**, so flips caused by anything other than the series (landscape drift since the original compute, the holiday-session calendar) are separated from series flips.
+10. **Out of scope, new low-priority open-question:** the 2026 `spot_price` drift, naming every repo reader of `spot_price`. Not investigated here.
