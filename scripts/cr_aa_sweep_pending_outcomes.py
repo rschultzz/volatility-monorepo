@@ -61,6 +61,8 @@ from packages.shared.backfill_safety import (
 )
 from packages.shared.buckets import bucket_sessions
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
+from packages.shared.sessions import RTH_BARS_SQL, fetch_es_daily_bars
+from packages.shared.trading_calendar import is_trading_day
 from packages.shared.options_cache.models import TimeRange
 from packages.shared.options_cache.windows import find_gaps
 from packages.shared.outcomes_runner import (
@@ -101,38 +103,8 @@ _LANDSCAPE_SQL = """
       AND trade_date = ANY(%s)
 """
 
-_RTH_BARS_SQL = """
-    WITH rth AS (
-        SELECT
-            (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date AS session_date,
-            open, high, low, close,
-            ROW_NUMBER() OVER (
-                PARTITION BY
-                    (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date
-                ORDER BY datetime ASC
-            ) AS rn_asc,
-            ROW_NUMBER() OVER (
-                PARTITION BY
-                    (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date
-                ORDER BY datetime DESC
-            ) AS rn_desc
-        FROM ironbeam_es_1m_bars
-        WHERE
-            (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::time
-                BETWEEN '06:30:00' AND '13:00:00'
-          AND (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date
-                BETWEEN %s AND %s
-    )
-    SELECT
-        session_date,
-        MAX(CASE WHEN rn_asc  = 1 THEN open  END) AS open,
-        MAX(high)                                   AS high,
-        MIN(low)                                    AS low,
-        MAX(CASE WHEN rn_desc = 1 THEN close END)  AS close
-    FROM rth
-    GROUP BY session_date
-    ORDER BY session_date
-"""
+# RTH daily OHLC: one shared definition (CR-BI) — packages/shared/sessions.py.
+_RTH_BARS_SQL = RTH_BARS_SQL
 
 _RTH_SESSION_DATES_SQL = """
     SELECT DISTINCT (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date
@@ -182,7 +154,9 @@ def _load_env() -> None:
 def _fetch_session_dates(conn) -> list[dt.date]:
     """Return sorted list of all distinct RTH session dates in ironbeam_es_1m_bars."""
     rows = conn.execute(_RTH_SESSION_DATES_SQL).fetchall()
-    return sorted(r[0] for r in rows)
+    # CR-BI: a session is an NYSE trading day with RTH bars — ES prints RTH-window bars on market
+    # holidays (Globex) and the table holds stray weekend bars; neither is a horizon session.
+    return sorted(r[0] for r in rows if is_trading_day(r[0]))
 
 
 def _expected_horizon_end(
@@ -268,17 +242,8 @@ def fill_session_containment(conn, ticker: str, feature_version: str,
 
 
 def _fetch_daily_bars(conn, bar_from: dt.date, bar_to: dt.date) -> pd.DataFrame:
-    with conn.cursor() as cur:
-        cur.execute(_RTH_BARS_SQL, (bar_from, bar_to))
-        rows = cur.fetchall()
-    if not rows:
-        return pd.DataFrame(columns=["open", "high", "low", "close"])
-    df = pd.DataFrame(rows, columns=["session_date", "open", "high", "low", "close"])
-    df = df.set_index("session_date")
-    df.index = [d for d in df.index]
-    for col in ["open", "high", "low", "close"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
+    """ES RTH daily OHLC, NYSE trading days only (shared definition)."""
+    return fetch_es_daily_bars(conn, bar_from, bar_to)
 
 
 def _run_smoke(conn, ticker: str, n_promoted: int) -> dict:

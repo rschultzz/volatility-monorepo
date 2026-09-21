@@ -5,4 +5,4 @@ deliberate step: edit this constant, commit, deploy. See
 Data Safety Protocol for the full promotion model.
 """
 
-CANONICAL_FEATURE_VERSION = "v0.6.0-openiv"
+CANONICAL_FEATURE_VERSION = "v0.6.1-nyse-sessions"

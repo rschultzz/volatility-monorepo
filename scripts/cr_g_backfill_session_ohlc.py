@@ -3,9 +3,9 @@
 
 For each row where outcome_status IN ('computed', 'na_regime') and
 session_open_t1 IS NULL:
-  1. Fetch RTH 1-minute bars from ironbeam_es_1m_bars for a 90-day window
-     starting at trade_date
-  2. Build a list of RTH session dates (one row = one trading session)
+  1. Fetch ES RTH daily bars for a 90-day window starting at trade_date through
+     packages/shared/sessions (CR-BI: PT window 06:30–13:00 inclusive, DST-safe)
+  2. Sessions = NYSE trading days (packages/shared/trading_calendar), not bar presence
   3. For N in (1, 5, 15): find the Nth session after trade_date
        - session_open_tN   = FIRST bar open for that session
        - session_high_tN   = MAX bar high for that session
@@ -57,6 +57,7 @@ from packages.shared.backfill_safety import (
     update_run_smoke,
 )
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
+from packages.shared.sessions import fetch_es_daily_bars, session_ohlc_at
 
 log = logging.getLogger(__name__)
 logging.basicConfig(
@@ -67,106 +68,9 @@ logging.basicConfig(
 
 TICKER                  = "SPX"
 BATCH_SIZE              = 50
-RTH_START_UTC           = dt.time(13, 30)   # 06:30 PT = 13:30 UTC
-RTH_END_UTC             = dt.time(20,  0)   # 13:00 PT = 20:00 UTC
 # 90 calendar days covers trade_date + 15 sessions comfortably (~60 calendar days worst case)
 BAR_WINDOW_CALENDAR_DAYS = 90
 TARGET_TIMEFRAMES        = (1, 5, 15)
-
-
-def _fetch_rth_minute_bars(
-    conn, start_date: dt.date, end_date: dt.date
-) -> pd.DataFrame:
-    """Fetch RTH 1-minute bars from ironbeam_es_1m_bars.
-
-    Returns DataFrame with columns: [session_date (str), datetime (UTC),
-    open, high, low, close] filtered to RTH minutes (13:30–20:00 UTC).
-    One row per 1-minute bar.
-    """
-    start_ts = dt.datetime.combine(start_date, RTH_START_UTC, tzinfo=dt.timezone.utc)
-    end_ts   = dt.datetime.combine(end_date,   RTH_END_UTC,   tzinfo=dt.timezone.utc) + dt.timedelta(minutes=1)
-
-    rows = conn.execute(
-        """
-        SELECT datetime, open, high, low, close
-        FROM ironbeam_es_1m_bars
-        WHERE datetime >= %s AND datetime < %s
-        ORDER BY datetime
-        """,
-        (start_ts, end_ts),
-    ).fetchall()
-
-    if not rows:
-        return pd.DataFrame(columns=["session_date", "datetime", "open", "high", "low", "close"])
-
-    df = pd.DataFrame(rows, columns=["datetime", "open", "high", "low", "close"])
-    df["datetime"] = pd.to_datetime(df["datetime"], utc=True)
-
-    # Filter to RTH minutes only (13:30 ≤ t < 20:00 UTC)
-    hm = df["datetime"].dt.hour * 60 + df["datetime"].dt.minute
-    df = df[(hm >= 13 * 60 + 30) & (hm < 20 * 60)].copy()
-    df["session_date"] = df["datetime"].dt.date.astype(str)
-    return df
-
-
-def _compute_session_ohlc(
-    bars: pd.DataFrame,
-    trade_date: dt.date,
-    timeframes: tuple[int, ...] = TARGET_TIMEFRAMES,
-) -> dict[str, Optional[float]]:
-    """Compute session OHLC at each timeframe after trade_date.
-
-    trade_date is session 0. Session T+N is the Nth subsequent RTH session
-    (T+1 = next session, T+5 = 5 sessions later, T+15 = 15 sessions later).
-
-    Returns a flat dict: session_open_tN, session_high_tN, session_low_tN,
-    session_close_tN for each N in timeframes. NULL (None) when the session
-    is beyond available bars.
-    """
-    if bars.empty:
-        result: dict[str, Optional[float]] = {}
-        for tf in timeframes:
-            for col in ("open", "high", "low", "close"):
-                result[f"session_{col}_t{tf}"] = None
-        return result
-
-    # All distinct session dates in the bars, sorted ascending
-    session_dates = sorted(bars["session_date"].unique())
-    # trade_date itself is session 0; T+N is the Nth session after it
-    trade_date_iso = trade_date.isoformat()
-
-    try:
-        origin_idx = session_dates.index(trade_date_iso)
-    except ValueError:
-        # trade_date not in bars — all NULL
-        result = {}
-        for tf in timeframes:
-            for col in ("open", "high", "low", "close"):
-                result[f"session_{col}_t{tf}"] = None
-        return result
-
-    result = {}
-    for tf in timeframes:
-        target_idx = origin_idx + tf
-        if target_idx >= len(session_dates):
-            # Session beyond available bars → NULL
-            for col in ("open", "high", "low", "close"):
-                result[f"session_{col}_t{tf}"] = None
-            continue
-
-        target_date = session_dates[target_idx]
-        session_bars = bars[bars["session_date"] == target_date]
-        if session_bars.empty:
-            for col in ("open", "high", "low", "close"):
-                result[f"session_{col}_t{tf}"] = None
-            continue
-
-        result[f"session_open_t{tf}"]  = float(session_bars["open"].iloc[0])
-        result[f"session_high_t{tf}"]  = float(session_bars["high"].max())
-        result[f"session_low_t{tf}"]   = float(session_bars["low"].min())
-        result[f"session_close_t{tf}"] = float(session_bars["close"].iloc[-1])
-
-    return result
 
 
 def main(feature_version: str) -> None:
@@ -205,7 +109,9 @@ def main(feature_version: str) -> None:
             # ── Fetch RTH bars: trade_date → trade_date + BAR_WINDOW_CALENDAR_DAYS ──
             end_date = trade_date + dt.timedelta(days=BAR_WINDOW_CALENDAR_DAYS)
             try:
-                bars = _fetch_rth_minute_bars(conn, trade_date, end_date)
+                # CR-BI: shared PT session window + NYSE-calendar sessions (was a fixed 13:30–20:00 UTC
+                # window — 05:30–11:59 PT in PST months — counted over bar-present dates)
+                bars = fetch_es_daily_bars(conn, trade_date, end_date)
             except Exception as e:
                 log.error("FAILED bars fetch for %s: %s", trade_date_iso, e)
                 n_failed += 1
@@ -217,7 +123,7 @@ def main(feature_version: str) -> None:
                 continue
 
             # ── Compute session OHLC ──────────────────────────────────────────
-            ohlc = _compute_session_ohlc(bars, trade_date)
+            ohlc = session_ohlc_at(bars, trade_date, TARGET_TIMEFRAMES)
 
             # Track T+15 NULLs (expected near corpus end)
             if ohlc.get("session_open_t15") is None:
