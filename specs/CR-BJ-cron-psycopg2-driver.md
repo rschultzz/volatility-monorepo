@@ -36,3 +36,13 @@ List the post-2026-06-05 magnet-above entry days from 2026-09-09 through 2026-09
 
    `scripts/run_reference_rerun.py` and everything under `apps/cron/*.py` do not import options_cache. The other importers are one-off `scripts/cr_*` backfills (run from the laptop under `apps/web/.venv`, which has psycopg2 2.9.12) and web modules (web build has psycopg2-binary). `packages/shared/utils/data_io.py` also calls `create_engine`, but is not reached from a cron entry point.
 4. **Reason not to add psycopg2-binary?** None found. psycopg2-binary and psycopg 3 coexist already in the web build; psycopg2-binary ships cp313 wheels from 2.9.10 (cron `PYTHON_VERSION` is 3.13.4), so the pin is `>=2.9.10`. Rewriting the scheme to `postgresql+psycopg://` would change the driver under code that has only ever run on psycopg2 (parameter binding, `executemany` behaviour in the upsert paths) — higher risk for a hotfix. **Decision 1 stands: add `psycopg2-binary`.**
+
+## Smoke + wrap (2026-09-21)
+
+- **Change:** `apps/cron/requirements.txt` — `## psycopg2` → `psycopg2-binary>=2.9.10`. No code, env var, URL, or `render.yaml` change.
+- **Test:** `scripts/tests/test_cron_requirements_engine.py`.
+  - Static (always on): 1 passed on the fix; **fails on the pre-fix `origin/main` requirements** (negative control run) with "needs the 'psycopg2' DBAPI".
+  - Clean-venv (`RUN_CRON_VENV_SMOKE=1`): fresh venv, `pip install -r apps/cron/requirements.txt` only, `repository.get_engine()` on a plain `postgresql://` URL → `postgresql psycopg2`. 2 passed in 26.6 s. Run locally on CPython 3.10 / macOS, not 3.13 / Linux; separately confirmed pip resolves `psycopg2_binary-2.9.13-cp313-cp313-manylinux2014_x86_64` for the pin.
+- **Not verified here:** an actual Render build, or a DB connection under the cron build. First real proof is the 2026-09-21 13:50 UTC `daily-leg-capture` run after a manual deploy (both crons are `autoDeploy: false` — merge alone does nothing).
+- **Deploy list:** `daily-leg-capture`, `sweep_pending_outcomes` (crn-d8guhf8jo6nc73e1iou0). `reference-rerun` shares the requirements file but does not import the repository; it picks the change up at its next deploy.
+- **Open:** leg-quote gap 2026-09-09 → 2026-09-18 — recapture via the CR-AO path after the 13:50 UTC run, on explicit go (see Follow-up).
