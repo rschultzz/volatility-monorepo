@@ -200,3 +200,88 @@ Frame: **SPX cash vs carry-corrected levels.** Prices = CR-BH hybrid SPX-cash da
 **P1 — touch.** Signal set S_h, h ∈ {5, 20}: active `v0.6.0-openiv` rows with regime `magnet-above`, `horizon_sessions = h`, a positive-GEX `drift_target`, IM_d > 0, SPX sessions d…d+h−1 available. z_d = (target_A − open_d) / IM_d. Actual_d = 1 if max(high over the h sessions from d) ≥ target_A. Placebo_d = mean over every *other* train date e ≠ d (any regime, IM_e > 0, window available) of 1[max(high over h sessions from e) ≥ open_e + z_d · IM_e]. Report per h: n, mean Actual, mean Placebo, difference, CI. Rows with z_d ≤ 0 are kept (touch at the open counts for both). Single pre-registered secondary: the same with the placebo pool restricted to dates whose regime is not `magnet-above`.
 
 **P2 — containment.** Signal set: every active train row with IM_d > 0, an SPX session on d, and a wall (any sign, from `orats_gex_landscape.walls`) strictly below and strictly above open_d after conversion to cash; nearest each side → offsets a_d = (above_A − open_d) / IM_d, b_d = (open_d − below_A) / IM_d. Actual: close-inside = below_A < close_d < above_A; range-inside = below_A < low_d and high_d < above_A (t0 session only, the CR-AQ definitions). Placebo_d = mean over every other train date e of the same two indicators for the band [open_e − b_d · IM_e, open_e + a_d · IM_e]. Report n, actual, placebo, difference, CI for close-inside and range-inside, pooled and by `regime_at_classification` of d (regimes with n < 20 are reported but flagged).
+
+## Steps 1–2 — shared session definition; fixed-UTC windows retired (`7b1bb05`, `5531453`)
+
+- `packages/shared/sessions.py`: `RTH_BARS_SQL` (bar-open 06:30:00–13:00:00 `America/Los_Angeles`, inclusive — the existing t0 window, DST-safe), `fetch_es_daily_bars` (NYSE trading days only, `trading_calendar.is_trading_day`), `session_ohlc_at`, `post_touch_positions`. Tests: `packages/shared/tests/test_sessions.py`.
+- `packages/shared/spx_cash.py` = the CR-BH builder moved (git mv) + `settlement_prints`; `scripts/cr_bh_spx_cash.py` re-exports. Tests: `test_spx_cash.py`. (No pytest in any local venv; the 9 new tests were run with a function runner — all pass. The existing pytest suites could not be run locally.)
+- `cr_b_backfill_outcomes._fetch_daily_bars` and `cr_aa_sweep_pending_outcomes._fetch_daily_bars` delegate to the shared fetch (their private SQL copies are gone); the sweep's `_fetch_session_dates` drops non-NYSE dates, so `_expected_horizon_end` counts real sessions. `cr_g` / `cr_i`: `RTH_START_UTC` / `RTH_END_UTC`, `_fetch_rth_minute_bars`, `_compute_session_ohlc`, `_fetch_rth_daily_bars` removed → `fetch_es_daily_bars` + `session_ohlc_at` / `post_touch_positions`. They remain manual NULL-fill tools (the crons do not fill tN / post-touch; unchanged).
+- Side finding: `ironbeam_es_1m_bars` has **no RTH-window bars on 2023-12-15 and 2025-12-19** (December quarterly-expiry Fridays) — those trade dates have NULL t0 columns in every version.
+
+## Step 3 — `v0.6.1-nyse-sessions` (run `a44f185c-06b3-4c27-be69-9c74d9eb7e79`, 2026-09-21 UTC)
+
+`scripts/cr_bi_backfill_nyse_sessions.py`, INSERT-only, one transaction: **815 feature rows copied verbatim** (`feature_vector`, regime, config hash identical on 815/815) + **815 outcome rows** (computed 479 · na_regime 316 · na_data 15 · pending 5 — no status transitions). `v0.6.0-openiv` untouched (816 rows, max `computed_at` still CR-BG's). Outcomes are still ES-vs-B.
+
+Smoke gate **PASS**:
+- ES RTH-window dates 866 → NYSE sessions 840; the 26 dropped = the market holidays + Sat 2026-02-21 + 2026-09-07 listed in CR-BH Step 1.
+- t0 / containment columns: **0 rows differ**; 3 rows were NULL in the source and are now filled (2026-09-09 / 10 / 11 — the sweep's null-fill had not landed; CR-BG side finding).
+- Label columns (status, touch, close, `days_to_reach`, `horizon_end_date`, excursion, final distance, realized EM): 240 rows differ, **0 without a non-NYSE "session" inside the old horizon** — every difference is a holiday session removed (the horizon now runs one or more real sessions longer). Full list: `scripts/logs/cr_bi_nyse_sessions_label_diffs.csv`.
+- **12 touch/close flips** (all explained by the longer real horizon): touch F→T 2023-05-26, 2024-08-22, 2024-11-25; close T→F 2024-01-09, 2024-11-12, 2024-11-19, 2024-11-27, 2025-11-06, 2026-06-12, 2026-06-18, 2026-07-01; close F→T 2023-05-26, 2024-01-11, 2024-11-25.
+- T+N closes, old (UTC window, bar-present sessions) → new: non-NULL 767 / 764 / 756 → 785 / 783 / 776 (the script also fills rows `cr_g` had not reached); |Δ| median 2.25 / 2.75 / 5.25, p90 14.3 / 28.0 / 48.9 (PST window error + the 13:00 bar + T+N landing on a different date when a holiday was counted). Post-touch labels: non-NULL 387 → 405; changed where both exist: T+1 30, T+5 34, T+15 40.
+
+## Step 4 — harness settlement (`931f572`)
+
+`cr_ah_step4_analysis.get_settlement_price` = last clean SPX-cash print 12:50–13:00 PT on expiry (`spx_cash.settlement_prints`, series loaded once per process, ≈ 3.5 min). `get_settlement_quote_val` (cross-check only, printed + stored in the run smoke as `settlement_quote_crosscheck`). **AM-settled expiries are excluded, not settled** (`is_am_settled`: entry-day leg quotes with `expiry_tod = 'am'` → `excluded_reason = 'am_settled_expiry'`, reported beside the CR-AN decision-6 exclusions and in the smoke as `am_settled_excluded`). `run_reference_rerun.py` wraps the harness unchanged and inherits all three. `detect_touch` (ES vs `drift_target`) is untouched.
+
+## Step 5 — restated reference, `cr_id = 'CR-BI'` (run `9b292f22-0af8-4865-89a3-416c3eea14d7`)
+
+`--cr-id CR-BI --universe-end 2026-06-05 --split-date 2026-06-05 --structural-prob-mode walk-forward`, canonical still `v0.6.0-openiv` (fills identical to CR-AR). 8 cells persisted under `CR-BI`; the 8 `CR-AR` rows are untouched (`created_at` 2026-09-07). The v2 card reads `REF-%` else `CR-AR`, so `CR-BI` is not shown.
+
+- Excluded as AM-settled: 5 debit + 5 credit trades (entry 2023-05-25, 2024-03-28, 2024-05-30, 2025-07-25, 2026-01-29). Settlement available: debit 102/103, credit 100/101 (expiry 2025-07-03 early close). Cross-check SPX-cash intrinsic vs option quotes: debit n = 101, mean |diff| 0.078, max 1.0, none > 1 pt; credit n = 99, mean 0.081, 2 trades > 1 pt (max 2.0).
+- **The harness picks its threshold on train, and the pick moved: debit T = 0.10 (was 0.05).** Debit sweep: T 0.00 n 101 +1.38 / 55 % beat +0.09 · **T 0.05 n 100 +1.38 / 55 % beat +0.09** (the like-for-like cell; matches Step 0b's ex-third-Friday +1.384 / 55.0 %) · T 0.10 n 99 +1.46 / 56 % beat +0.17 ← chosen · T 0.15 n 98 +1.44 · T 0.20 n 95 +1.30.
+
+| debit, persisted cells | CR-AR (ES settle, T 0.05) | CR-BI (SPX cash, AM-settled excluded, T 0.10) |
+| --- | --- | --- |
+| all | n 103 · +1.713 · 58.3 % [48.6, 67.3] · base +1.616 · beat +0.097 | n 99 · **+1.464 · 55.6 % [45.7, 65.0]** · base +1.290 · beat +0.174 |
+| near | n 38 · +1.912 · 68.4 % · beat −0.034 | n 35 · +2.180 · 71.4 % [54.9, 83.7] · beat −0.003 |
+| mid | n 34 · +1.235 · 55.9 % · beat +0.321 | n 34 · +0.642 · 50.0 % [34.1, 65.9] · beat +0.346 |
+| far | n 31 · +1.994 · 48.4 % · beat +0.034 | n 30 · +1.560 · 43.3 % [27.4, 60.8] · beat +0.245 |
+
+  Credit (T 0.05): n 20 · −1.602 · 60.0 % · beat −0.544 (CR-AR at its own T 0.00: n 27 · −2.045). Caveat, pre-existing: the threshold is selected in-sample by best beat, so "beat" at the chosen T is optimistic; the fixed-T 0.05 row is the comparable number.
+
+## Follow-up CR Step 0 material (read-only; nothing written)
+
+### A. `compute_discounted_level` — formula, inputs, direction
+
+`apps/cron/job_orats_eod.py:121–125`: `discounted_level = strike × exp((short_rate − div_yield) × t)`, `t = (int(dte) + 1) / 252`.
+- **Day count:** `dte` = calendar days (`expir_date − trade_date`, verified equal on every row of four sample dates) **+ 1, divided by 252** — a calendar count over a trading-day year, ≈ 1.45× too long (365/252), plus the +1.
+- **Rate:** ORATS per-expiry `riskFreeRate` (fallback `riskFree30`): 4.5–5.5 % in 2023–24, 3.7–4.4 % in 2025–26.
+- **Dividend:** ORATS per-expiry `yieldRate`; **exactly 0 on 40–55 % of rows** (the nearer expiries), 1.0–1.4 % on average. So for the expiries that build most walls the exponent is the full risk-free rate.
+- **Direction: UP.** Every level is moved *above* its strike (7600 strike, 2026-06-01, r 3.72 %, q 0: +1.1 at 0 DTE, +5.6 at 4, +18.0 at 15, ≈ +48 at 42 DTE). Measured at the `drift_target` wall: median +33.6, p90 +50.2 (Step 0b D); across all walls on train dates: median +38.7, p90 +61.5.
+- **What the physics says:** an option's gamma peaks where the forward to *its* expiry equals the strike, F_T = S·e^{(r−q)T} = K, i.e. at cash **S\* = K·e^{−(r−q)T} — below the strike** (further below by ≈ 1.5σ²T for the lognormal peak; small). The code applies the carry with the opposite sign — it answers "what forward does cash = K imply", not "what cash makes this option at-the-money-forward".
+- **The level under each convention** (K = 7600, 42 DTE, r 3.72 %, true q ≈ 1.2 %): code **≈ 7648 (+48)**; (i) correct carry, act/365, r − q: **≈ 7578 (−22)**; (ii) strike axis, no adjustment: **7600 (0)**. At 15 DTE: +18 / −8 / 0. The gap between the code and (i) is ≈ 70 pts at 42 DTE, ≈ 26 at 15 DTE.
+- In ES terms (what the canonical outcomes compare to): a wall at cash K·e^{−(r−q)T} shows up in the front ES contract at ≈ K·e^{(r−q)(T_ES − T)} — *at or slightly around* K + (small), not K + 34. So ES-vs-B works on average only because two errors (+34 carry on the target, +25 basis on the price) roughly cancel; neither is principled.
+
+### B. Placebo tests (pre-registered above; single run `scripts/cr_bi_followup_placebo.py`, commit `b05954d` precedes the run; output `scripts/logs/cr_bi_followup_placebo.md`)
+
+741 train dates with IM > 0 and an SPX session; SPX frame ends 2026-06-05 (no price after the split read); 1 096 walls converted (carry median +38.7, p90 +61.5).
+
+**P1 — touch, magnet-above vs the same IM-scaled distance on all other days**
+
+| horizon | n | actual | placebo | difference | 95 % CI |
+| --- | --- | --- | --- | --- | --- |
+| 5-session (pool 737) | 91 | 68.1 % | 66.6 % | **+1.5 pts** | [−10.8, +11.9] |
+| 5-session, secondary (non-magnet-above pool 365) | 91 | 68.1 % | 66.0 % | +2.1 | [−10.2, +12.5] |
+| 20-session (pool 723) | 160 | 89.4 % | 87.2 % | **+2.2 pts** | [−6.3, +8.8] |
+| 20-session, secondary (pool 358) | 160 | 89.4 % | 88.0 % | +1.4 | [−7.1, +8.0] |
+
+z = (target − open)/IM: median 0.86 (5-session) / 0.78 (20-session); z ≤ 0 on 17 / 29 rows (target at or below the open after conversion — counted as touched for actual and placebo alike).
+
+**P2 — containment, two-sided wall band vs equal-shape bands on all other days** (256 of 741 rows have a wall on both sides of the open; band half-widths: above median 1.27 IM, below 2.56 IM)
+
+| | regime | n | actual | placebo | difference | 95 % CI |
+| --- | --- | --- | --- | --- | --- | --- |
+| close-inside | pooled | 256 | 84.8 % | 84.7 % | **+0.1 pts** | [−4.6, +4.5] |
+| | magnet-above | 156 | 87.8 % | 87.0 % | +0.8 | [−5.2, +5.8] |
+| | amplification | 66 | 83.3 % | 82.6 % | +0.7 | [−7.3, +8.5] |
+| | untethered | 23 | 78.3 % | 80.8 % | −2.6 | [−15.5, +12.0] |
+| | bounded ⚑ | 7 | 57.1 % | 67.6 % | −10.5 | [−56.1, +8.9] |
+| | magnetic-pin ⚑ | 4 | 75.0 % | 82.3 % | −7.3 | [−64.4, +31.3] |
+| range-inside | pooled | 256 | 75.4 % | 72.8 % | **+2.6 pts** | [−2.0, +6.9] |
+| | magnet-above | 156 | 80.8 % | 76.5 % | +4.2 | [−2.0, +9.6] |
+| | amplification | 66 | 75.8 % | 68.8 % | +6.9 | [−0.2, +13.9] |
+| | untethered | 23 | 56.5 % | 67.1 % | −10.5 | [−25.0, +5.6] |
+| | bounded ⚑ | 7 | 28.6 % | 46.2 % | −17.6 | [−38.5, −0.4] |
+| | magnetic-pin ⚑ | 4 | 50.0 % | 69.9 % | −19.9 | [−67.0, +27.2] |
+
+⚑ n < 20. **Reading (one look, no re-cuts):** in this frame neither test separates the walls from a level at the same IM-scaled distance on any other day. Touch: +1.5 / +2.2 pts, CIs ± 8–11 pts, centred near zero — a high raw touch rate (68 % / 89 %) is what a level ≈ 0.8 IM above the open gets anyway over 5 / 20 sessions in a rising market. Containment: close-inside is exactly at placebo; range-inside is +2.6 pooled with the CI spanning zero (amplification +6.9 is the only cell whose interval nearly excludes zero — one of twelve cells). What this does **not** show: the tests are powered only for effects ≳ 8–10 pts (touch) / 5 pts (containment); the frame is the strike-axis conversion of a landscape whose kernel centres are themselves mis-placed (A), so a wall located correctly might behave differently; and the debit's P&L does not require a touch edge (its restated +1.4 comes mostly from near-band drift, where beat ≈ 0 — i.e. the same as buying the spread at the open without the signal).
