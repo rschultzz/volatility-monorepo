@@ -213,3 +213,21 @@ Reading: (1) the 5-session gradient drops from +32 pts (p 0.007) to +17 pts (p 0
 - Not done / deferred: canonical promotion (ADR, Ryan); residual stale opening prints on 27 ES-flagged `stock_price` days (reported, not fixed — ES may not alter a price and the CR is INSERT-only); the shadow version is a snapshot (5 pending rows will not be swept).
 - Unfiled side findings: ES holiday / stray "sessions" counted in canonical horizons (26 days; `horizon_end_date` differs on 248 computed rows); `cr_g` / `cr_i` fixed-UTC session window (an hour early in PST months); possible post-OPEX dependence of magnet-above touch (reverse 20-session gradient, p ≈ 0.02).
 - Nothing to deploy. No live code path touched: `packages/`, `apps/`, `cr_b_backfill_outcomes.py`, `cr_aa_sweep_pending_outcomes.py` unchanged.
+
+## Addendum — same-calendar cut (2026-09-20, read-only on the two existing versions)
+
+Rows computed in both versions whose `horizon_end_date` is identical: **231 of 479** (ES sessions ⊇ SPX sessions, so these horizons are the same set of sessions — price series isolated from session calendar).
+
+| subset | n | touch old → new (T→F / F→T) | close old → new (T→F / F→T) | flip rows (touch / close) |
+| --- | --- | --- | --- | --- |
+| all | 231 | 74.5 → 62.3 % (35 / 7) | 9.1 → 10.0 % (15 / 17) | 68 (42 / 32) |
+| all, `stock_price` segment | 187 | 74.9 → 63.6 % (28 / 7) | 9.1 → 10.2 % (12 / 14) | 57 (35 / 26) |
+| magnet-above 5-session | 80 | 63.7 → 45.0 % (15 / 0) | 16.2 → 15.0 % (10 / 9) | 30 (15 / 19) |
+| magnet-above 20-session | 60 | 88.3 → 66.7 % (13 / 0) | 6.7 → 8.3 % (3 / 4) | 20 (13 / 7) |
+| magnet-above 60-session | 42 | 71.4 → 71.4 % (0 / 0) | 0.0 → 2.4 % (0 / 1) | 1 (0 / 1) |
+| magnetic-pin, all horizons | 46 | 80.4 → 82.6 % (6 / 7) | 8.7 → 10.9 % (2 / 3) | 16 (13 / 5) |
+| contrast: moved `horizon_end_date` | 248 | 92.7 → 83.5 % (25 / 2) | 7.3 → 6.5 % (14 / 12) | 44 (27 / 26) |
+
+The touch inflation is the price series: with the calendar fixed the drop is larger (pooled −12.2 pts vs −10.6; magnet-above 20-session −21.6 vs −14.2), every magnet-above touch flip is T→F (0 F→T), and all 7 F→T are magnetic-pin rows. The longer real-session SPX horizon in the moved rows hands some touches back. The reverse 20-session basis gradient is not monotonic on this subset (9/13 · 7/14 · 24/33).
+
+Filed from this CR's side findings: `es-holiday-bars-counted-as-horizon-sessions` (high), `cr-g-cr-i-fixed-utc-session-window` (medium), `magnet-above-20-session-reverse-basis-gradient` (low, future-project), `orats-monies-spot-price-drift-2026` (low).
