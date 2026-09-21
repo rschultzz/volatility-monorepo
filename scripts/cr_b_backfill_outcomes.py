@@ -54,6 +54,7 @@ from packages.shared.backfill_safety import (
     update_run_smoke,
 )
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
+from packages.shared.sessions import RTH_BARS_SQL, fetch_es_daily_bars
 from packages.shared.outcomes import pick_drift_target
 from packages.shared.snapshot_poll import no_snapshot_line, now_pt, wait_for_open_snapshot
 from packages.shared.trading_calendar import is_trading_day
@@ -92,41 +93,10 @@ _LANDSCAPE_SQL = """
       AND trade_date = ANY(%s)
 """
 
-# Aggregate 1-minute RTH bars to daily OHLC.
-# open  = first bar's open, high = max(high), low = min(low), close = last bar's close.
-# RTH window: 06:30–13:00 PT = 13:30–20:00 UTC (matches Bars/service.py convention).
-_RTH_BARS_SQL = """
-    WITH rth AS (
-        SELECT
-            (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date AS session_date,
-            open, high, low, close,
-            ROW_NUMBER() OVER (
-                PARTITION BY
-                    (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date
-                ORDER BY datetime ASC
-            ) AS rn_asc,
-            ROW_NUMBER() OVER (
-                PARTITION BY
-                    (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date
-                ORDER BY datetime DESC
-            ) AS rn_desc
-        FROM ironbeam_es_1m_bars
-        WHERE
-            (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::time
-                BETWEEN '06:30:00' AND '13:00:00'
-          AND (datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::date
-                BETWEEN %s AND %s
-    )
-    SELECT
-        session_date,
-        MAX(CASE WHEN rn_asc  = 1 THEN open  END) AS open,
-        MAX(high)                                   AS high,
-        MIN(low)                                    AS low,
-        MAX(CASE WHEN rn_desc = 1 THEN close END)  AS close
-    FROM rth
-    GROUP BY session_date
-    ORDER BY session_date
-"""
+# RTH daily OHLC: one shared definition (CR-BI) — PT window 06:30–13:00 inclusive, NYSE-calendar
+# sessions (packages/shared/sessions.py). ES prints RTH-window bars on market holidays; they are
+# no longer counted as horizon sessions.
+_RTH_BARS_SQL = RTH_BARS_SQL
 
 _INSERT_OUTCOME_SQL = """
     INSERT INTO bt_daily_outcomes (
@@ -219,18 +189,8 @@ def _today_pt() -> dt.date:
 
 
 def _fetch_daily_bars(conn, bar_from: dt.date, bar_to: dt.date) -> pd.DataFrame:
-    """Aggregate RTH 1m bars to daily OHLC over [bar_from, bar_to]."""
-    with conn.cursor() as cur:
-        cur.execute(_RTH_BARS_SQL, (bar_from, bar_to))
-        rows = cur.fetchall()
-    if not rows:
-        return pd.DataFrame(columns=["open", "high", "low", "close"])
-    df = pd.DataFrame(rows, columns=["session_date", "open", "high", "low", "close"])
-    df = df.set_index("session_date")
-    df.index = [d for d in df.index]        # keep as date objects
-    for col in ["open", "high", "low", "close"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
+    """ES RTH daily OHLC over [bar_from, bar_to], NYSE trading days only (shared definition)."""
+    return fetch_es_daily_bars(conn, bar_from, bar_to)
 
 
 def _run_smoke(conn, ticker: str) -> dict:

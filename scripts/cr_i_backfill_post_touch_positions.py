@@ -4,7 +4,8 @@
 For each row where reached_touch=TRUE and position_t1_post_touch IS NULL:
   1. Fetch drift_target from orats_gex_landscape.walls (pick_drift_target)
   2. Fetch implied_move_1d from bt_daily_features_active.feature_vector
-  3. Re-fetch RTH daily bars from ironbeam_es_1m_bars (trade_date + generous window)
+  3. Re-fetch ES RTH daily bars via packages/shared/sessions (CR-BI: PT window, NYSE-calendar
+     sessions; trade_date + generous window)
   4. Call classify_post_touch_positions() to get -1/0/+1 per timeframe
   5. UPDATE bt_daily_outcomes with the three position columns + backfill_run_id
 
@@ -46,7 +47,7 @@ from packages.shared.backfill_safety import (
 )
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
 from packages.shared.outcomes import pick_drift_target
-from packages.shared.probability import classify_post_touch_positions
+from packages.shared.sessions import fetch_es_daily_bars, post_touch_positions
 
 log = logging.getLogger(__name__)
 logging.basicConfig(
@@ -57,8 +58,6 @@ logging.basicConfig(
 
 TICKER          = "SPX"
 BATCH_SIZE      = 50           # rows per explicit conn.commit() heartbeat
-RTH_START_UTC   = dt.time(13, 30)   # 06:30 PT = 13:30 UTC
-RTH_END_UTC     = dt.time(20,  0)   # 13:00 PT = 20:00 UTC
 # Calendar-day buffer past trade_date to cover days_to_reach + T+15:
 # worst case: days_to_reach ≈ 20 sessions ≈ 30 calendar days; T+15 = 15 more sessions ≈ 22 cd
 # 90-day buffer is generous but cheap (bars are per-minute, fetch is date-ranged).
@@ -100,42 +99,6 @@ def _load_implied_moves(conn, feature_version: str) -> dict[str, Optional[float]
     result = {r[0].isoformat(): r[1] for r in rows}
     log.info("Implied moves loaded: %d rows", len(result))
     return result
-
-
-def _fetch_rth_daily_bars(conn, start_date: dt.date, end_date: dt.date) -> pd.DataFrame:
-    """Fetch RTH daily OHLC (close only) from ironbeam_es_1m_bars.
-
-    Returns a DataFrame[trade_date (str), close (float)], one row per trading
-    session between start_date and end_date.
-
-    RTH: 13:30–20:00 UTC (06:30–13:00 Pacific).  'datetime' is the column name.
-    """
-    start_ts = dt.datetime.combine(start_date, RTH_START_UTC, tzinfo=dt.timezone.utc)
-    end_ts   = dt.datetime.combine(end_date,   RTH_END_UTC,   tzinfo=dt.timezone.utc) + dt.timedelta(minutes=1)
-
-    rows = conn.execute(
-        """
-        SELECT datetime, close
-        FROM ironbeam_es_1m_bars
-        WHERE datetime >= %s AND datetime < %s
-        ORDER BY datetime
-        """,
-        (start_ts, end_ts),
-    ).fetchall()
-
-    if not rows:
-        return pd.DataFrame(columns=["trade_date", "close"])
-
-    df = pd.DataFrame(rows, columns=["datetime", "close"])
-    df["datetime"] = pd.to_datetime(df["datetime"], utc=True)
-
-    # Keep RTH minutes only (13:30 ≤ t < 20:00 UTC)
-    hm = df["datetime"].dt.hour * 60 + df["datetime"].dt.minute
-    df = df[(hm >= 13 * 60 + 30) & (hm < 20 * 60)].copy()
-    df["trade_date"] = df["datetime"].dt.date.astype(str)
-
-    # Last minute per session = daily RTH close
-    return df.groupby("trade_date")["close"].last().reset_index()
 
 
 # ── Main backfill ─────────────────────────────────────────────────────────────
@@ -206,7 +169,8 @@ def main(feature_version: str) -> None:
             # sessions (T+15).  90-calendar-day window is generous (covers ≈60 sessions).
             bar_end = trade_date + dt.timedelta(days=BAR_WINDOW_CALENDAR_DAYS)
             try:
-                bars_df = _fetch_rth_daily_bars(conn, trade_date, bar_end)
+                # CR-BI: shared PT session window + NYSE-calendar sessions (was fixed 13:30–20:00 UTC)
+                bars_df = fetch_es_daily_bars(conn, trade_date, bar_end)
             except Exception as e:
                 n_failed += 1
                 log.error("Bar fetch failed for %s: %s", trade_date_iso, e)
@@ -220,13 +184,8 @@ def main(feature_version: str) -> None:
 
             # ── Classify post-touch positions ─────────────────────────────────
             try:
-                positions = classify_post_touch_positions(
-                    days_to_reach=days_to_reach,
-                    horizon_bars=bars_df,
-                    drift_target=drift_target,
-                    tolerance=tolerance,
-                    timeframes_sessions=(1, 5, 15),
-                )
+                positions = post_touch_positions(
+                    bars_df, trade_date, days_to_reach, drift_target, tolerance, (1, 5, 15))
             except Exception as e:
                 n_failed += 1
                 log.error("classify_post_touch_positions failed for %s: %s", trade_date_iso, e)
