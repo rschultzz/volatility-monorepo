@@ -129,3 +129,31 @@ Guard: each UPDATE is keyed on the PK and additionally requires `computed_at` an
 | 2026-09-18 | na_regime (unchanged) | NULL → 7710.00 | NULL → 7719.25 | high/low, walls, containment, IM ratios filled |
 
 No `outcome_status`, `reached_touch` or `reached_close` changes. 09-08's `final_close_distance_from_target` moving +67.75 with an unchanged own session is the Q2 seam artifact in miniature (its final horizon session, 09-14, is now ES Z26).
+
+## Step 2 — repair run + smoke (2026-09-21 00:02 UTC)
+
+`apps/web/.venv/bin/python scripts/cr_bg_recompute_missed_roll.py` → run **`f17b6a70-d807-4512-8a3b-1382d99b825f`** (`cr_id='CR-BG'`, status `completed`, `rows_inserted=0` — UPDATE-only). Role `dash_backfill_writer`; six guarded UPDATEs in one transaction; all six guards hit (rowcount 1 each). `smoke_test_results` holds `archived_old_rows` (6, written before the UPDATE), `diff_all_columns`, `new_rows`, `after_state_problems: []`.
+
+All-column diff, old → new (columns not listed are unchanged; `backfill_run_id` → `f17b6a70…` and `computed_at` → 2026-09-21 00:02:04 on all six):
+
+| trade_date | status | session_open_t0 | session_close_t0 | reached_touch / reached_close | other changed columns |
+| --- | --- | --- | --- | --- | --- |
+| 2026-09-08 | computed → computed | 7712.25 → 7712.25 | 7681.25 → 7681.25 | F/F → F/F | `max_excursion_in_direction` 5.5 → 7.5; `final_close_distance_from_target` −202.025 → −134.275; `actual_realized_em_pct` 2.1275 → 2.1597; `wall_below/above` NULL → 7551.275 / 7826.275; `contained_close`, `contained_range` NULL → true; `close_pos_in_band` NULL → 0.4726 |
+| 2026-09-14 | pending_history → pending_history | 7606.50 → 7673.50 (**+67.00**) | 7624.25 → 7692.00 | NULL → NULL | high 7652.00 → 7719.75; low 7595.25 → 7662.25; walls NULL → 7528.825 / 7800.825; contained_close/range NULL → true; `close_pos_in_band` → 0.5999; `range_over_im` 1.4936 → 1.5134; `close_move_over_im` 0.4672 → 0.4869 |
+| 2026-09-15 | na_regime → na_regime | 7616.75 → 7684.50 (**+67.75**) | NULL → 7659.75 | NULL → NULL | high/low NULL → 7687.00 / 7643.50; walls → 7597.475 / 7798.475; contained true/true; pos 0.3098; `range_over_im` 0.7524; `close_move_over_im` −0.4281 |
+| 2026-09-16 | na_data → na_data | 7609.25 → 7676.50 (**+67.25**) | NULL → 7623.00 | NULL → NULL | high/low → 7699.00 / 7575.00; `wall_below` → 7524.475 (no wall above → containment NULL); `range_over_im` 1.5179; `close_move_over_im` −0.6549 |
+| 2026-09-17 | na_regime → na_regime | 7646.00 → 7713.50 (**+67.50**) | NULL → 7705.25 | NULL → NULL | high/low → 7716.25 / 7680.50; `wall_below` → 7500.45 (no wall above); `range_over_im` 0.3679; `close_move_over_im` −0.0849 |
+| 2026-09-18 | na_regime → na_regime | NULL → 7710.00 | NULL → 7719.25 | NULL → NULL | high/low → 7719.25 / 7675.00; walls → 7495.125 / 7791.125; contained true/true; pos 0.7572; `range_over_im` 0.4245; `close_move_over_im` 0.0887 |
+
+- Expectation met: t0 opens up +67.00 … +67.75 for 09-14..17. No `outcome_status`, `reached_touch`, `reached_close`, `horizon_*`, regime or bucket change on any row.
+- `active`, `deactivated_at`, `deactivated_reason`, PK columns: unchanged on all six (checked in-script and by an independent query). Table totals unchanged: 816 `v0.6.0-openiv` rows, 815 active.
+- CR-G / CR-I columns (`session_*_t{1,5,15}`, `position_t*_post_touch`): NULL → NULL (explicitly written).
+- `ironbeam_es_1m_bars`, `es_minutes`, `_bak_20260920` tables: not touched (SELECT on `ironbeam_es_1m_bars` only).
+
+## Wrap — deltas, deferred
+
+- Delta vs frozen spec: Amendment A1 (in-place UPDATE; no deactivation). Kickoff's pending-row list gains 2026-08-18; 2026-09-14 is *not* a seam-crosser after the recompute (Q2).
+- Deferred to vault open-questions: `outcome-target-vs-es-roll-seam-and-basis-bias` (Q2, incl. 09-08's mixed-contract horizon and the four seam-crossing pending rows); `bt-daily-outcomes-pk-excludes-active` (A1 item 6, low / future-project).
+- Known gap, recorded: `ironbeam_es_flow_1s` 09-14..18 rows tagged `XCME:ES.U26` stay; consumers filter on symbol.
+- Not classified in this CR: `es_gamma_smile_minutes` has 6,360 rows for 2026-09-14..18 and no reference anywhere in tracked code (`git grep` empty) — writer unknown; stays on the inventory.
+- Side findings left alone (outside the six rows): `wall_*`/containment NULL on 09-09..11 despite closed sessions; `magnet-above` classified with no positive wall on 09-11 / 09-16.
