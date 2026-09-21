@@ -137,6 +137,7 @@ from packages.shared.gex_landscape import compute_implied_move
 from packages.shared.options_cache.opra import format_opra
 from packages.shared.options_cache.strikes import StructureNotListed, snap_vertical_pair
 from packages.shared.probability import compute_structural_probability
+from packages.shared.spx_cash import build_series, fetch_minutes, settlement_prints
 from packages.shared.strategy_templates import Leg
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
@@ -328,7 +329,7 @@ class TradeData:
     # = plugin.net_price(legs, quote_at_touch) = positive for debit when target reached
     touch_pos_val: Optional[float]
 
-    # Settlement underlying price (ES close at expiry RTH end)
+    # Settlement underlying price (CR-BI: SPX cash, last print 12:50–13:00 PT on expiry)
     settlement_price: Optional[float]
 
     # CR-AO decision 3: legs snapped to the listed grid at the prior close
@@ -342,6 +343,8 @@ class TradeData:
     baseline_minute_offset: Optional[int] = None
     had_invalid_quote: bool = False
     excluded_reason: Optional[str] = None
+    # CR-BI A1.4: option-quote settlement value (cross-check only; never enters a cell)
+    settlement_quote_val: Optional[float] = None
 
 
 # ── DATA LOADING ──────────────────────────────────────────────────────────────
@@ -700,23 +703,71 @@ def get_touch_pos_val(
 
 # ── SETTLEMENT ────────────────────────────────────────────────────────────────
 
+# CR-BI A1.4: the settlement underlying is SPX cash (packages/shared/spx_cash — the CR-BH hybrid
+# series), not the ES close. The legs are SPX listed strikes; settling them on an ES price valued
+# every call spread ≈ 25 pts (the ES−SPX basis on expiry day) too high. Loaded once per process.
+_SPX_SETTLE: Optional[dict] = None
+_SPX_SERIES_START = date(2023, 5, 1)
+
+
+def _spx_settlement_prints(conn) -> dict:
+    global _SPX_SETTLE
+    if _SPX_SETTLE is None:
+        clean, _dropped = build_series(fetch_minutes(conn, _SPX_SERIES_START, date.today()))
+        _SPX_SETTLE = {d: float(v) for d, v in settlement_prints(clean).items()}
+        print(f"  SPX-cash settlement series loaded: {len(_SPX_SETTLE)} sessions with a 12:50–13:00 PT print", flush=True)
+    return _SPX_SETTLE
+
+
 def get_settlement_price(conn, expiry_date: date) -> Optional[float]:
-    """ES close price at end of expiry RTH (12:50–13:00 PT) as settlement proxy."""
-    settle_start_utc = pt_to_utc(
-        datetime(expiry_date.year, expiry_date.month, expiry_date.day, 12, 50)
-    )
-    settle_end_utc = pt_to_utc(
-        datetime(expiry_date.year, expiry_date.month, expiry_date.day, 13, 0)
-    )
+    """SPX cash at the end of expiry RTH: last clean print 12:50–13:00 PT (None on early closes / outages)."""
+    return _spx_settlement_prints(conn).get(expiry_date)
+
+
+def get_settlement_quote_val(conn, legs: list[Leg], short_opra: str, other_opra: str,
+                             expiry_date: date) -> Optional[float]:
+    """Cross-check only (CR-BI A1.4): position value from the last valid spread-quote minute in
+    12:50–13:00 PT on expiry day. Never enters a cell."""
+    lo = datetime(expiry_date.year, expiry_date.month, expiry_date.day, 12, 50)
+    hi = datetime(expiry_date.year, expiry_date.month, expiry_date.day, 13, 0)
+    rows = conn.execute(
+        """
+        SELECT snapshot_pt, bid_price, ask_price, opra_symbol
+        FROM orats_options_minute
+        WHERE opra_symbol=ANY(%s) AND snapshot_pt>=%s AND snapshot_pt<=%s
+        """,
+        ([short_opra, other_opra], lo, hi),
+    ).fetchall()
+    raw_by_minute: dict[datetime, list[tuple]] = {}
+    for snap_pt, bid, ask, opra in rows:
+        key = _opra_to_quote_key(opra)
+        if key is not None:
+            raw_by_minute.setdefault(snap_pt, []).append((key[0], key[1], bid, ask))
+    width = abs(legs[0].strike - legs[1].strike) if len(legs) == 2 else None
+    for snap_pt in sorted(raw_by_minute.keys(), reverse=True):
+        qmap, _ = build_quote_map(raw_by_minute[snap_pt])
+        pos_val = net_price_from_real_quotes(legs, qmap)
+        if pos_val is not None and (width is None or spread_value_is_valid(pos_val, width, legs)):
+            return pos_val
+    return None
+
+
+def is_am_settled(conn, trade_date: date, short_opra: str, other_opra: str) -> bool:
+    """True when the entry-day leg quotes are the AM-settled contract (third-Friday SPX, not SPXW).
+
+    ORATS files both under root SPX; `expiry_tod` tells them apart. An AM-settled spread settles
+    on the SET (opening prices) — not in the DB — so a 13:00 PT print is the wrong settlement.
+    CR-BI A1.4: such trades are excluded (excluded_reason='am_settled_expiry'), not settled.
+    """
+    lo = datetime(trade_date.year, trade_date.month, trade_date.day)
     row = conn.execute(
         """
-        SELECT close FROM ironbeam_es_1m_bars
-        WHERE datetime>=%s AND datetime<=%s
-        ORDER BY datetime DESC LIMIT 1
+        SELECT count(*) FROM orats_options_minute
+        WHERE opra_symbol=ANY(%s) AND snapshot_pt>=%s AND snapshot_pt<%s AND expiry_tod='am'
         """,
-        (settle_start_utc, settle_end_utc),
+        ([short_opra, other_opra], lo, lo + timedelta(days=1)),
     ).fetchone()
-    return float(row[0]) if row else None
+    return bool(row and row[0])
 
 
 # ── STRUCTURAL PROBABILITY ────────────────────────────────────────────────────
@@ -847,6 +898,9 @@ def collect_trade_data(
     )
     # CR-AN decision 6: exclude only when the entry window has no valid minute
     excluded_reason = "no_valid_entry_minute" if obs["n_minutes_valid"] == 0 else None
+    # CR-BI A1.4: AM-settled expiries are excluded, not settled
+    if excluded_reason is None and is_am_settled(conn, trade_date, short_opra, other_opra):
+        excluded_reason = "am_settled_expiry"
 
     # Touch detection
     touch_resolution, touch_datetime_pt = detect_touch(
@@ -861,8 +915,9 @@ def collect_trade_data(
             touch_resolution, touch_datetime_pt,
         )
 
-    # Settlement price (underlying)
+    # Settlement price (underlying: SPX cash) + the option-quote cross-check
     settlement_price = get_settlement_price(conn, expiry_date)
+    settlement_quote_val = get_settlement_quote_val(conn, legs, short_opra, other_opra, expiry_date)
 
     return TradeData(
         trade_date=trade_date,
@@ -893,6 +948,7 @@ def collect_trade_data(
         baseline_minute_offset=obs["baseline_minute_offset"],
         had_invalid_quote=obs["had_invalid_quote"],
         excluded_reason=excluded_reason,
+        settlement_quote_val=settlement_quote_val,
     )
 
 
@@ -1717,7 +1773,7 @@ def main(argv=None):
                     for td in debit_trades + credit_trades if td.excluded_reason]
         debit_trades  = [td for td in debit_trades  if not td.excluded_reason]
         credit_trades = [td for td in credit_trades if not td.excluded_reason]
-        print(f"\n  Decision-6 exclusions (no valid entry minute): {len(excluded)}")
+        print(f"\n  Exclusions (CR-AN decision 6: no valid entry minute; CR-BI: AM-settled expiry): {len(excluded)}")
         for s_, d_, b_, r_ in excluded:
             print(f"    {s_} {d_} {b_}: {r_}")
 
@@ -1754,6 +1810,20 @@ def main(argv=None):
               f"credit={c_settle}/{len(credit_trades)}")
         print(f"  Actionable touches: debit={d_touch}/{len(debit_trades)}, "
               f"credit={c_touch}/{len(credit_trades)}")
+
+        # ── CR-BI A1.4: SPX-cash intrinsic settlement vs option-quote settlement (cross-check) ──
+        settle_xcheck: dict = {}
+        for s_, data_, plug_ in (("debit", debit_trades, _DEBIT_PLUGIN), ("credit", credit_trades, _CREDIT_PLUGIN)):
+            diffs = [plug_.payoff(td.legs, td.settlement_price) - td.settlement_quote_val for td in data_
+                     if td.settlement_price is not None and td.settlement_quote_val is not None]
+            settle_xcheck[s_] = {
+                "n_both": len(diffs),
+                "n_quote_only": sum(1 for td in data_ if td.settlement_price is None and td.settlement_quote_val is not None),
+                "mean_abs_diff": round(sum(abs(x) for x in diffs) / len(diffs), 4) if diffs else None,
+                "max_abs_diff": round(max((abs(x) for x in diffs), default=0.0), 4) if diffs else None,
+                "n_abs_diff_gt_1pt": sum(1 for x in diffs if abs(x) > 1.0),
+            }
+            print(f"  Settlement cross-check [{s_}] SPX-cash intrinsic vs option quotes: {settle_xcheck[s_]}")
 
         # ── CR-AN G2: post-filter, no accepted spread value may be out of range ──
         oor = 0
@@ -1886,7 +1956,10 @@ def main(argv=None):
             "width_actual_max": _w_max,
             "n_unlistable": len(UNLISTABLE),
             "unlistable": [f"{u['structure']} {u['trade_date']} {u['band']}: {u['reason']}" for u in UNLISTABLE],
-            "decision6_excluded": [f"{s_} {d_} {b_}" for s_, d_, b_, _ in excluded],
+            "decision6_excluded": [f"{s_} {d_} {b_}" for s_, d_, b_, r_ in excluded if r_ == "no_valid_entry_minute"],
+            "am_settled_excluded": [f"{s_} {d_} {b_}" for s_, d_, b_, r_ in excluded if r_ == "am_settled_expiry"],
+            "settlement": "spx_cash (packages/shared/spx_cash, last print 12:50-13:00 PT)",
+            "settlement_quote_crosscheck": settle_xcheck,
             "post_filter_out_of_range": oor,
             "debit_labeled_train": sum(1 for td in debit_trades if td.partition == "train" and td.pattern_label),
             "credit_labeled_train": sum(1 for td in credit_trades if td.partition == "train" and td.pattern_label),
