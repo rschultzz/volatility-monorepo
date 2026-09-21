@@ -48,3 +48,62 @@
 3. Step 2 — run the INSERT under the backfill protocol; smoke appended.
 4. Step 3 — diff script + results.
 5. Smoke + wrap.
+
+## Step 0 — diagnosis findings (2026-09-20, read-only SQL under `dash_backfill_writer` with `default_transaction_read_only=on`)
+
+Scripts: `scripts/cr_bh_step0_diagnosis.py` (Q3/Q5/Q6), `scripts/cr_bh_spx_cash.py` (series builder, draft filter). **Gate result: Q1–Q5 pass; Q6 surfaced Q7, which blocks the write — see Q7.**
+
+### Q1 — version leakage. **None. Every live reader filters on `feature_version`; a new version pollutes nothing.**
+
+- Live readers (all `WHERE … feature_version = %s` with `CANONICAL_FEATURE_VERSION` or a caller-passed version): `apps/web/modules/SetupV2/routes.py:133`, `apps/web/modules/Proposals/routes.py:141`, `packages/shared/probability.py:588`, `scripts/cron_daily_leg_capture.py:256`, `scripts/cr_aa_sweep_pending_outcomes.py` (all 7 statements, incl. both UPDATEs — the first UPDATE's WHERE is 18 lines below the statement head), `scripts/cr_b_backfill_outcomes.py` (NOT EXISTS is correlated on `o.feature_version = f.feature_version`, so shadow rows do not suppress canonical inserts). `packages/shared/edge_today.py` only mentions the view in comments.
+- One-off scripts (`cr_ah_*`, `cr_ai_*`, `cr_am_*`, `cr_aq_backfill_containment`, `cr_as_*`, `cr_bg_*`, `cr_g_*backfill*`, `cr_i_*`): all filter on `feature_version` (several additionally inner-join `bt_daily_features` on it).
+- Unfiltered statements — all in completed one-off migration/diagnostic scripts, none live: `cr_aq_run_migration.py:68`, `cr_g_run_ddl_step0a.py:59/134`, `cr_g_backfill_session_ohlc.py:312` (smoke counts), `cr_bd_repair_orphans.py:61–62` (per-date row counts for six named dates). They already see two versions today.
+- DB side: the only dependent view is `bt_daily_outcomes_active` (`SELECT * … WHERE active`) — no version filter in the view, but every reader of it filters. No `LIKE` / prefix / `max(feature_version)` matching anywhere, so the suffix `-spxcash` cannot be picked up by a `v0.6.0-openiv%` pattern. Two versions (`v0.5.0-rebuilt` 743, `v0.6.0-openiv` 816) already coexist without incident.
+
+### Q2 — `bt_daily_features` join. **Several readers inner-join features on `f.feature_version = o.feature_version`; the shadow version needs no feature rows because nothing reads it through that join.**
+
+The sweep (`_PENDING_ROWS_SQL`, `_CONTAINMENT_TARGETS_SQL`), `cr_as_capture`, `cr_am`, `cr_ah` join on version but also filter `o.feature_version = canonical`, so shadow rows are never candidates. The shadow script reads regime / `feature_vector` from `bt_daily_features` at `v0.6.0-openiv` and writes outcomes under `v0.6.0-openiv-spxcash`; the diff joins old↔new on `(ticker, trade_date)` with each version named explicitly. No `bt_daily_features` rows are written. Consequence: the sweep never promotes shadow `pending_history` rows — the shadow version is a point-in-time snapshot (INSERT-only, `ON CONFLICT DO NOTHING`).
+
+### Q3 — session window. **ES: bars whose bar-open timestamp is 06:30:00–13:00:00 PT inclusive = 391 bars, i.e. 06:30:00 → 13:00:59. The 13:00 bar (the minute *after* the cash close) is included.**
+
+- `cr_b_backfill_outcomes._RTH_BARS_SQL` (shared by the sweep and CR-BG): `(datetime AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')::time BETWEEN '06:30:00' AND '13:00:00'`, DST-safe. open = first bar open, close = **close of the 13:00 bar (≈ 13:01 PT)**, high/low over all 391 bars. Verified 2026-09-18: stored high 7719.25 = high of the 13:00 bar (06:30–12:59 high is 7718.25); stored close 7719.25 = 13:00 bar close (12:59 bar close 7712.25). That is the 0.25–7 pt close difference and the high > RTH high.
+- Side finding (not this CR): `cr_g_backfill_session_ohlc.py` (t1/t5/t15 OHLC) and `cr_i_backfill_post_touch_positions.py` use a **fixed 13:30 ≤ t < 20:00 UTC** window — 06:30–12:59 PT in PDT but **05:30–11:59 PT in PST months**, and they exclude the 13:00 bar. The stored t1/t5/t15 columns are therefore on a different window from t0, and wrong by an hour in winter.
+- Shadow window: snapshots with minute 06:30–13:00 PT inclusive (last print = 13:00:00, the cash close). One window for t0, horizon bars, t1/t5/t15 and post-touch closes. Mismatch vs ES: SPX ends 13:00:00 where ES ends 13:00:59, so the ES series sees one extra minute of post-close futures trading (incl. MOC drift); SPX `|13:00 − 12:59|` is median 1.3, p90 4.1, max 17 pts (closing-auction print). The opening print is a second mismatch: the 06:30 SPX print is largely the prior close (constituents not yet open); `|06:33 − 06:30|` median 3.3, p90 12.6, max 33 pts. Project precedent (CR-AB, memory `project_es_spx_basis`) is 06:33. **Proposed: open = first print ≥ 06:33, high/low/close over 06:33–13:00** (a stale prior-close print on a gap-down day would otherwise become the session high and a spurious magnet-above touch).
+
+### Q4 — every place ES price enters an outcome row
+
+| Column(s) | Code | ES input |
+| --- | --- | --- |
+| `reached_touch`, `days_to_reach` | `outcomes.compute_outcome` §7–8 | horizon daily `high` / `low` vs fixed SPX-space `drift_target` |
+| `reached_close`, `final_close_distance_from_target` | §8 | last horizon `close` |
+| `max_excursion_in_direction` | §7 | horizon `high`/`low` vs first `open` |
+| `actual_realized_em_pct` | §8 | horizon high − low |
+| `outcome_status` (`pending_history` / `na_data`), `horizon_end_date` | §4–6 | bar *availability* (session calendar) |
+| `session_open_t0` | `outcomes_runner.compute_outcome_for_date` | t0 `open` (also the Proposals card spot and `cron_daily_leg_capture` ES open) |
+| `session_high/low/close_t0`, `wall_above/below_price`, `contained_close`, `contained_range`, `close_pos_in_band`, `breach_side`, `range_over_im`, `close_move_over_im` | `compute_session_containment` | t0 OHLC; `nearest_walls(walls, ES open)` |
+| `session_{open,high,low,close}_t{1,5,15}` | `cr_g_backfill_session_ohlc.py` | Nth-session OHLC (fixed-UTC window) |
+| `position_t{1,5,15}_post_touch` | `cr_i_…` → `probability.classify_post_touch_positions` | session close at `days_to_reach + N` vs target ± 0.25×IM |
+
+Not ES: `drift_target` (`pick_drift_target(walls)`), regime, `dominant_bucket`, `implied_move_1d`, `direction_sanity` (`table_spot`). All ES inputs switch to the SPX series; the shadow script computes the CR-G / CR-I columns itself from the same daily frame (they are NULL-filled only to 2026-09-02 / 2026-08-14 in canonical, so old-vs-new on those columns is compared only where canonical is non-NULL).
+
+### Q5 — minute-sampling understatement (ES proxy, 50 random outcome dates, seed 20260920)
+
+1m closes only vs true 1m high/low, 06:30–13:00 PT: high understated **median 0.75** (mean 1.29, p90 1.85, max 11.5); low understated **median 1.38** (mean 1.82, p90 3.85, max 5.0); range **median 2.25** (p90 5.8, max 13.75). Small against a 28-pt basis; it biases touch slightly *down* (the opposite direction to the basis bias).
+
+### Q6 — bad prints and partial days
+
+- One row per minute everywhere (no SPX/SPXW duplicates), so `avg()` is a no-op.
+- Draft rule (`spot_price > 0`; > 12 % from session median; > 0.5 % from a centered 11-print median) drops 327 minutes on 51 days: 231 gross (2023-09-21 06:31–08:08 ×77 prints ≈ 3 680–3 815 vs SPX ≈ 4 350; 2023-11-29 ×150; 2024-04-26 ×4 prints of 22.76–22.78 — a VIX-like value), 1 NULL (2025-11-11 10:48), 95 neighbor. **Rejected as drafted:** 22 of the neighbor drops are real moves confirmed by ES (2025-04-07 07:17–07:35 headline spike, 2025-04-09 10:22–10:45 tariff-pause rally); the session-median guard inverts when most of a day is bad (2023-11-29: it keeps the bad half); and it cannot see frozen runs (Q7). 46 neighbor drops are genuine (mostly stale 06:31–06:33 opening prints 25–87 pts off, plus 2024-08-06 12:04). Threshold sensitivity: 0.15 % → 1 822 drops, 0.3 % → 524, 0.5 % → 327, 1 % → 249.
+- Replacement rule (to be finalised with Q7, full dropped-minute list appended then): (1) `> 0`; (2) gross guard vs the centered 5-session median of session medians (robust to a mostly-bad day); (3) frozen runs — ≥ 3 consecutive identical prints, drop all but the first; (4) isolated spike — a run of ≤ 2 prints > 0.3 % beyond *both* the preceding and following prints (time-adjacent, ≤ 3 min) on the same side; trends and multi-minute moves are kept.
+- Partial days (< 380 clean minutes): **37** (34 before filtering), 31 of them outcome dates. Early closes (8, 10:00 PT): 2023-07-03, 2023-11-24, 2024-07-03, 2024-11-29, 2024-12-24, 2025-07-03, 2025-11-28, 2025-12-24 (only 2023-07-03 and 2024-07-03 are outcome dates). Outages (29) — late start: 2023-05-23 (09:33), 2023-09-21 (07:08 after filter), 2025-11-26 (09:27), 2026-07-22 (07:35), 2026-08-18 (06:51), 2026-08-19 (07:57), 2026-08-28 (07:05); early end: 2023-05-19 (12:50), 2023-11-29 (10:29 after filter), 2025-05-08 (12:30); intraday gaps (max gap 3–29 min): 2023-08-18, 2023-10-25, 2023-11-09, 2024-02-22, 2024-05-09, 2024-08-08, 2024-10-28, 2024-10-31, 2025-04-07, 2025-04-09, 2025-05-20, 2025-07-15, 2025-09-26, 2025-10-22, 2025-10-29, 2025-11-11, 2025-11-24, 2026-02-26, 2026-08-25. 2026-09-07 (the one inactive row, Labor Day) has no SPX minutes. Late-start / early-end days get a truncated session (wrong open or close); proposal: compute them but flag, and report the diff with and without them.
+
+### Q7 (new, surfaced by Q6) — `spot_price` is not a clean SPX cash series. **BLOCKS the write; needs a decision.**
+
+ES 1m closes used only as an independent *witness* (intraday ES−SPX basis should be flat to a few pts):
+
+1. **2023-05 → ~2023-11: `spot_price` is 15 minutes delayed.** Best cross-correlation lag vs ES is exactly 15 min on every sampled day May–Aug 2023, mixed Sep–Nov, ≤ 1 from 2023-12. The first 15 prints of those sessions are frozen at the prior close (e.g. 2023-07-06 06:30–06:45 = 4445.01, then 4409.00). Data ends 13:00, so the true last 15 minutes are absent. 2024-04 → 2025-02 both columns lag 2–3 min (minor). 132 of 169 days in 2023 have ≥ 15 frozen prints; 2023-10-24 is frozen 06:30–09:15 (165 min).
+2. **2026: `spot_price` drifts away from the index on 48 of 179 days** (intraday basis p95−p5 > 15 pts; `stock_price`: 0 days). Example 2026-04-07: ES − `spot_price` goes 47 → 87 → 105 pts through the day while ES − `stock_price` stays ≈ 40; at 13:00 `spot_price` 6551.12 vs `stock_price` 6615.23 (next-day `table_spot` 6599.5). Daily closes built from the two columns differ by > 15 pts on **37 / 179** days in 2026, highs on 36, lows on 29 (2024: 2 / 6 / 8; 2025: 4 / 5 / 6). That is the same size as the basis bias this CR is trying to remove.
+3. **`stock_price` is not a drop-in fix:** in 2023 it is unlagged but jitters ± 15 pts against ES minute to minute (2023-08-10), 56 of 169 days with basis spread > 15; on 2026-09-10 it sits ~8 pts under `spot_price` for the last hour and both converge at 13:00 (7600.82) — consistent with `spot_price` being an option-implied spot and `stock_price` the index feed.
+4. 2024 and 2025 are clean in both columns (1–2 days each with spread > 15).
+
+The chat evidence (basis at 07:00 from `spot_price`) is not invalidated — the 2026 drift builds through the session and a 15-min lag is unbiased noise at one sample — but session high/low/close from `spot_price` are not trustworthy in 2023-05→11 and on ~27 % of 2026 days. Options: (a) `spot_price` as specified + frozen-run filter + 15-min timestamp shift in the lagged period — leaves the 2026 drift unfixed; (b) `stock_price` — clean 2024–2026, noisy 2023; (c) per-period hybrid: `stock_price` from 2023-12 on, `spot_price` shifted −15 min before, with an ES-witness QA flag per day (flag only — ES never enters a price); (d) restrict the shadow to 2023-12 → present. No write until one is chosen.
