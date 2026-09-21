@@ -115,3 +115,63 @@ Mechanism proven: replicating `cr_g`'s pick (bars `13:30 ≤ t < 20:00 UTC`, gro
 3. **Two live readers break or go stale on promotion unless touched in this CR** — a scope addition to approve: (i) `SetupV2/routes._fetch_rth_closes` (ES close used to reconstruct the target from an SPX-space distance) — switch to the shared SPX session frame, or read `drift_target` directly; (ii) `cron_daily_leg_capture` basis guard (`session_open_t0` as ES open).
 4. **Live spot stays ES after promotion** (a3 / c3: TodaySetup + SetupV2 `fetch_rth_open` → regime, KNN query features, call/put choice). The ADR's item 4 says these must move or carry a basis. In or out of this CR? Recommendation: out — separate CR right after, because it changes live regime classification and needs its own before/after; but note the Proposals card spot *does* flip to SPX on promotion, so for a while the two cards will use different spots (they already do on the v2 card: `table_spot` next to ES).
 5. **Auto-deploy:** the four data crons deploy on merge to `main`. The backfill must be complete and the constant commit must be in the same merge (or the merge must happen outside 10:00–13:50 UTC) so no cron runs on half a promotion.
+
+## Step 0b — CR-AR re-settlement on SPX cash, AM-settled flags, quote settlement, frame B − A (2026-09-20, read-only)
+
+Read-only (session `default_transaction_read_only = on`; harness `main()` never called → no `bt_backfill_runs` row, nothing in `bt_edge_backtest_results`; train only, universe ≤ 2026-06-05). Scripts: `scripts/cr_bi_step0b_resettle.py`, `scripts/cr_bi_step0b_frame_test.py`; outputs in `scripts/logs/cr_bi_step0b_*` (git-ignored). The replica reproduces the stored CR-AR debit cells to 4 decimals (all 103 / +1.7129 / 58.25 % / base +1.6157 / beat +0.0972; near, mid, far likewise), so the fills are identical.
+
+**A. CR-AR debit, T = 0.05, re-settled on SPX cash** (CR-BH hybrid series, last print 12:50–13:00 PT on expiry; gross pts; like-for-like = the 103 trades settled under both):
+
+| band | n | ES (old): mean · win [Wilson] · base · beat | SPX cash (new): mean · win [Wilson] · base · beat |
+| --- | --- | --- | --- |
+| all | 103 | +1.713 · 58.3 % [48.6, 67.3] · +1.564 · +0.149 | **+1.315 · 54.4 % [44.8, 63.7] · +1.166 · +0.149** |
+| near | 38 | +1.912 · 68.4 % [52.5, 80.9] · +1.823 · +0.088 | +1.912 · 68.4 % [52.5, 80.9] · +1.823 · +0.088 |
+| mid | 34 | +1.235 · 55.9 % [39.5, 71.1] · +0.914 · +0.321 | **+0.617 · 50.0 % [34.1, 65.9] · +0.296 · +0.321** |
+| far | 31 | +1.994 · 48.4 % [32.0, 65.2] · +1.960 · +0.034 | **+1.349 · 41.9 % [26.4, 59.2] · +1.315 · +0.034** |
+
+(Baseline here is on the same trades, so beat is unchanged by construction — the settlement term cancels per trade; the published +0.097 / +1.616 used a 105-trade baseline denominator.) With each series' own coverage the SPX cell is n = 105, +1.461, 55.2 % [45.7, 64.4], base +1.370 (n = 107), beat +0.091 — but the two extra trades are the AM-settled quarterly-OPEX expiries 2023-06-16 and 2024-06-21 (ES has no 12:50–13:00 bar; both score near max profit on a 13:00 print that is not their settlement), so the like-for-like row is the honest one. One trade (expiry 2025-07-03, early close) has no 12:50–13:00 print in either series.
+
+Basis on expiry day (ES settle − SPX settle), 105 trades: mean +25.5, median +24.6, p10 +2.4, p90 +49.1, min −8.4, max +67.3. **Only 5 trades change** (a 10-wide vertical is binary except inside the strikes): Σ −41.02 pts, 4 wins → losses, 0 the other way.
+
+| trade_date | expiry | band | long/short | fill | ES settle | SPX settle | basis | P&L ES → SPX |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2023-05-01 | 2023-05-22 | far | 4195/4205 | −4.45 | 4206.00 | 4192.77 | +13.2 | +5.55 → −4.45 |
+| 2023-07-17 | 2023-08-07 | mid | 4525/4535 | −4.75 | 4537.00 | 4516.78 | +20.2 | +5.25 → −4.75 |
+| 2024-10-02 | 2024-10-23 | mid | 5810/5820 | −3.40 | 5835.50 | 5796.48 | +39.0 | +6.60 → −3.40 |
+| 2024-10-03 | 2024-10-24 | far | 5840/5850 | −2.60 | 5852.50 | 5811.07 | +41.4 | +7.40 → −2.60 |
+| 2025-12-02 | 2025-12-23 | mid | 6900/6910 | −4.70 | 6958.25 | 6908.98 | +49.3 | +5.30 → +4.28 |
+
+**B. AM-settled expiries: 5 of 108 trades, all filled** (third-Friday expiries; every leg is `OPRA_ROOT = 'SPX'`, and `orats_options_minute.expiry_tod` on the entry day is `am` for all rows — 2023-05-25 → 2023-06-16 is mixed am 600 / pm 179 under one symbol): 2023-05-25 → 06-16 (far), 2024-03-28 → 04-19 (near), 2024-05-30 → 06-21 (far), 2025-07-25 → 08-15 (near), 2026-01-29 → 02-20 (near). A 13:00 PT print is the wrong settlement for these (SET, opening prices). Counted, not fixed. Excluding them: ES n = 100, +1.794, 59.0 %; SPX n = 100, **+1.384, 55.0 % [45.2, 64.4]**.
+
+**C. Quote-based settlement** (last valid spread mid 12:50–13:00 PT on expiry; captured for 104 of 106 filled trades; 102 have all three):
+
+| band | n | ES | SPX cash | option quotes | mean \|SPX − quote\| | mean \|ES − quote\| |
+| --- | --- | --- | --- | --- | --- | --- |
+| all | 102 | +1.776 / 58.8 % | +1.374 / 54.9 % | **+1.305 / 54.9 %** | 0.073 | 0.472 |
+| near | 37 | +2.092 / 70.3 % | +2.092 / 70.3 % | +1.967 / 70.3 % | 0.124 | 0.124 |
+| mid | 34 | +1.235 / 55.9 % | +0.617 / 50.0 % | +0.580 / 50.0 % | 0.043 | 0.654 |
+| far | 31 | +1.994 / 48.4 % | +1.349 / 41.9 % | +1.311 / 41.9 % | 0.046 | 0.686 |
+
+SPX-cash settlement agrees with the option market (identical win/loss on every trade; the ≈ 0.07 gap is residual bid/ask on in-the-money spreads in the last minutes — six trades differ by 0.5–1.0). ES settlement does not. **Restated CR-AR debit reference: ≈ +1.3 pts, ≈ 55 % win (Wilson ≈ 45–64 %), not +1.71 / 58.3 %; the damage is in mid (+1.23 → +0.62) and far (+1.99 → +1.35); near is untouched.**
+
+**D. Frame B − frame A — FAILS the 5-pt test by a wide margin. STOP.** Per date, kernel-weighted mean of (`discounted_level` − `strike`) over the positive-net-GEX rows that build the wall at `drift_target` (same Gaussian kernel as `gex_landscape`, σ = 8·√dte), 655 dates: **median +33.6 pts, mean +34.1, p75 +42.9, p90 +50.2, p99 +65.8, max +70.1**; weighted DTE of the wall median 42 days (p90 62). By year: 2023 +27.7 / 2024 +31.6 / 2025 +34.2 / 2026 +40.0 (median). On the CR-AR trade dates: median +33.0, p90 +46.7.
+
+- Why so large: `job_orats_eod.compute_discounted_level` = `strike × exp((short_rate − div_yield) × (dte + 1) / 252)` with **calendar** `dte` over 252 and **`div_yield` = 0.0** in `orats_oi_gamma` — ≈ +1.1 pt per calendar day at SPX 7600 / r 3.7 % (7600 strike: +5.6 at 4 DTE, +18 at 15 DTE, ≈ +48 at 42 DTE), roughly twice the true carry (ORATS' own per-expiry forward rises ≈ +0.6 pt/day). And the dominant wall is built from ≈ 40-DTE options, not short-dated ones — the ADR's "mostly short-dated and therefore close to cash" is not what the data shows.
+- Consequence: **B ≈ C on average.** Mean carry 31.9 vs mean ES basis 25.5 on the 479 computed rows; (basis − carry) mean −6.7, sd 15.8. The E6 convention was roughly right on level for the wrong reason; its error is the *mismatch* between the ES sawtooth and the wall's carry, not the whole basis. CR-BH's SPX-vs-B shadow removed the +25 basis but left the +32 carry, so it **under**states touch.
+
+Three-frame comparison (read-only; SPX-vs-A = SPX cash vs target − carry(trade_date)):
+
+| subset | n | touch: ES-vs-B (canonical) | SPX-vs-B (CR-BH shadow) | SPX-vs-A | close: ES-vs-B | SPX-vs-B | SPX-vs-A |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| all | 479 | 83.9 % | 73.3 % | **84.6 %** | 8.1 % | 8.1 % | 5.4 % |
+| all, same calendar | 231 | 74.5 % | 62.3 % | **76.6 %** | 9.1 % | 10.0 % | 6.9 % |
+| magnet-above 5 | 99 | 61.6 % | 43.4 % | **66.7 %** | 17.2 % | 13.1 % | 13.1 % |
+| magnet-above 20 | 176 | 90.9 % | 76.7 % | **90.3 %** | 8.0 % | 8.0 % | 5.1 % |
+| magnet-above 60 | 103 | 88.3 % | 84.5 % | 90.3 % | 3.9 % | 4.9 % | 1.0 % |
+| magnetic-pin | 98 | 90.8 % | 87.8 % | 87.8 % | 4.1 % | 7.1 % | 3.1 % |
+
+5-session magnet-above touch by ES-basis bucket (< 20 · 20–35 · 35+): ES-vs-B 48 · 50 · 80 % (p 0.006); SPX-vs-B 33 · 43 · 50 % (p 0.18); **SPX-vs-A 63 · 57 · 78 % (p 0.20)** — the basis gradient is removed in a consistent frame too, but at the *original* level, not 18 pts lower. magnet-above flips ES-vs-B → SPX-vs-A: 5 T→F, 11 F→T.
+
+**What this means.** (1) The CR-BH headline ("touch inflated ≈ 10 pts; honest magnet-above base rates ≈ 43 % / 77 %") and the ADR's evidence table are artifacts of comparing frame-A prices to frame-B targets — the base rates were about right (≈ 62–67 % / 90 %). What ES-vs-B genuinely gets wrong is the *time-varying* part (the basis gradient, roll seams, holiday sessions, the UTC window). (2) Implementing CR-BI as specified would make the artifact canonical. (3) The settlement finding (A–C) stands on its own: it is A-vs-A (SPX cash vs listed strikes) and is confirmed by option quotes. (4) "Where is the wall in cash?" is now the question: the listed strike K (frame A), the landscape's `discounted_level` (B, carry overstated ≈ 2×, q = 0), or the cash level at which those options are at-the-money-forward (≈ K·e^{−(r−q)T}, *below* K). The harness already treats `drift_target` as a cash strike when it snaps legs (Q1 d3) while the live card converts B → A — so the two already disagree by this same ≈ 30 pts on 40-DTE walls (less on the 15-DTE structure's own carry, ≈ 18).
+
+**Options for the canonical switch (decision needed; nothing implemented):** (a) SPX cash vs targets converted to cash per date (SPX-vs-A above) — needs the carry per wall stored or recomputed at outcome time, and a decision on whether to also fix `compute_discounted_level` (calendar/252, q = 0), which would move every landscape, wall and regime label: a much bigger CR; (b) keep B targets and add the wall carry to the SPX series per row (what the frame test does) — smallest change, no landscape rebuild, but bakes a known-overstated carry into outcomes; (c) rebuild the landscape in cash space (strike axis), classify and target in A everywhere — cleanest, largest; (d) pause CR-BI, keep ES-vs-B canonical, ship only the frame-independent fixes (NYSE-calendar sessions, the `cr_g`/`cr_i` PT window, harness settlement on SPX cash).
