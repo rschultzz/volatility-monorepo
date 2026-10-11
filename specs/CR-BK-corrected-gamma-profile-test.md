@@ -83,3 +83,68 @@ Verdicts:
 - Holdout reads.
 - 0DTE intraday flow (OI is prior-day; a known limit, recorded, not fixed here).
 - Testing the dealer-sign assumption.
+
+## Step-0 findings (2026-10-11, read-only, train only)
+
+Session `default_transaction_read_only = on` on every connection; no table written; no date > 2026-06-05 read; no outcome computed. Scripts: `scripts/cr_bk_step0_*.py`.
+
+> [!danger] **STOP — gate 2 fails (median 5.47 % > 5 %).** Gate 1 also contradicts the spec's wording ("stock_price = prior close"). Q6 (shape report) was not run because it would build profiles on a failed IV method. Nothing implemented. Decisions needed: see "For approval" at the end.
+
+**1. `gex_call` / `gex_put` at ingest — identity confirmed; "prior close" is wrong.** `[Certain]` `apps/cron/job_orats_eod.py` and `scripts/backfill_orats_oi_gamma.py` use the same formula: `gex = gamma × stockPrice² × OI × 100` (ORATS `hist/strikes` fields `gamma`, `stockPrice`, `callOpenInterest`, `putOpenInterest`). The row is stored under `trade_date = next_trading_day(API date)`. Check on every train row 2023-05 → 2026-06-05 with gamma > 0 and both OIs > 0 (3,756,473 rows): `gex_call / (gamma·call_oi·100·stock_price²)` ∈ [1 − 2.4e-10, 1 + 2.4e-10]; `gex_put` likewise.
+   - **Contradiction:** ORATS `stockPrice` is **not the prior close.** It is the **12:46 PT (15:46 ET) EOD snapshot** of the API date. The expiring-expiry `stock_price` matches `orats_monies_minute.stock_price` at 12:46 PT exactly on 4 of 6 dates checked and at 12:47–12:50 PT on the other 2. It differs from the 13:00 PT print by 12–60 pts (2025-03-11: 5601.10 vs 5572.24; 2026-05-19: 7356.80 vs 7416.45).
+   - It is also **per expiry**: 53 distinct values on one date, rising with expiry at about the r − q carry (2025-03-12: 5601.10 for the expiring 03-11 expiry → 5606.85 at 12 DTE). It equals monies' per-expiry `stock_price` at 12:46 (03-21: 5606.85 vs 5606.875).
+   - So the stored gamma is evaluated at the per-expiry ORATS price at 15:46 ET of the prior session. L6's substance ("S0 = row `stock_price`") is still implementable; its parenthetical "(prior close)" is wrong, and "the row `stock_price`" needs a rule because it varies by expiry. Proposed amendment A1 below.
+
+**2. IV source — FAILS the gate as written.** Method: for each (store date, expiry), take the `orats_monies_minute` call-delta smile (`vol5`…`vol95`) of the prior session. Map each delta point to a strike with K = F·exp(−N⁻¹(Δ)·σ_Δ·√T + ½σ_Δ²·T), with T in calendar days/365 to 13:00 PT on expiry. Interpolate σ linearly in K, flat beyond Δ5/Δ95. Black gamma φ(d1)/(S·σ·√T). Compare with stored `gamma` on every row with OI > 0, using 20 random train store dates (seed 20261011; 157,041 rows).
+
+   | snapshot | forward | median \|err\| | p90 | GEX-weighted median | GEX-weighted p90 |
+   | --- | --- | --- | --- | --- | --- |
+   | last of session (13:00 PT) — as specified | F = per-expiry S | **5.64 %** | 99.5 % | 2.96 % | 16.1 % |
+   | last of session (13:00 PT) | F = S·e^{(r−q)T} | 5.85 % | 99.4 % | 3.14 % | 16.2 % |
+   | 12:46 PT (= ORATS EOD time) | F = per-expiry S | **5.47 %** | 99.7 % | 2.61 % | 16.0 % |
+   | 12:46 PT | F = S·e^{(r−q)T} | 5.69 % | 99.7 % | 2.79 % | 16.0 % |
+
+   Gate: median ≤ 5 % → **fails on all four variants.** Where the error is (12:46, F = per-expiry S):
+   - **By moneyness z = ln(K/F)/(σ√T):** |z| ≤ 1: median 1.5–2.4 % (73 % of GEX). 1 < |z| ≤ 2: 2.9–8.8 % (23 %). 2 < |z| ≤ 3: 17–55 % (2.9 %). |z| > 3: 65–100 % (0.3 %). Inside the Δ5–Δ95 strike span: median 2.5 % (93 % of GEX); outside: 56 % (7 % of GEX).
+   - **By DTE (row median / GEX-weighted median):** 0 DTE 55 % / 1.4 %; 1–7 DTE 21 % / 2.4 %; 8–30 DTE 4.6 % / 2.4 %; 31–90 DTE 3.9 % / 2.3 %; 91–400 DTE 5.9 % / 3.8 %. Short-dated chains have most of their OI > 0 strikes beyond Δ5/Δ95.
+   - **Time and forward conventions are right.** Near-ATM (|z| ≤ 0.5) ratio of reproduced to stored gamma is 0.97–1.01 at every calendar DTE from 1 to 40, and implied ORATS T matches calendar days. There is no business-day or 252 effect.
+   - **Diagnostic only (same sample, not a gate result):** linear-in-log-K wing extrapolation instead of flat gives median 5.20 %, GEX-weighted 2.59 %. It does not clear the gate.
+   - **Why it matters beyond the gate metric:** under L4 (sticky strike), when the grid moves S by ±300, short-dated wing strikes become at-the-money and carry these extrapolated IVs. For 1 DTE, ±300 pts is about ±4–5σ. The profile near the grid edges for 0–7 DTE is therefore built on the least reliable IVs.
+
+**3. Forward per expiry.** Use the **per-expiry `stock_price` on the `orats_oi_gamma` row itself** as the expiry's forward. It is ORATS' parity-implied price for that expiry: it rises with expiry at about the r − q carry and equals monies' per-expiry `stock_price` at 12:46. Treated as the forward (no extra carry), it reproduces gamma better than S·e^{(r−q)T} with the row's `short_rate` / `div_yield`: 5.47 vs 5.69 % median, 2.61 vs 2.79 % weighted. The row r/q are a poor second choice anyway: `div_yield` = 0 on most rows. Grid mapping: F_e(S) = S_e · S / S0 (each expiry's forward shifts proportionally with cash).
+   - **AM-settled:** monies tags `expiry_tod = 'am'`, about 20 expiries per date (SPX monthlies / quarterlies). `orats_oi_gamma` merges AM and PM chains on third-Friday dates under one `expir_date`, because the PK `(ticker, trade_date, expir_date, strike)` lets one overwrite the other. Example: store 2025-03-12, expiry 03-21: 465 rows at S 5606.85 plus 2 rows with OI 0 at 5605.95. Effect: a 6.5 h T error, material only at ≤ 1 DTE. Proposal: T to 06:30 PT for `am`-tagged expiries; flag merged dates and count them in the results.
+
+**4. Lookahead.** `[Certain]` The profile inputs for store date t are ORATS EOD of the previous session (OI, gamma, per-expiry price at 15:46 ET t−1) and the monies smile from the same session. The cron writes them at 10:00 UTC on t, before the open. The two quantities that are *not* pre-06:30 are part of the test definitions and match the CR-BI harness:
+   - the SPX open (first clean print ≥ 06:33 PT; used for the above/below split and as T3's X evaluation point);
+   - `implied_move_1d` (06:33 PT ATM IV, smallest dte > 0, × prior-session S × √(1/252); used as the placebo distance scale and the Y2 denominator).
+
+   Outcome windows start at that open. The T3 percentile rank uses only prior sessions.
+   - **Calendar artefact:** 32 store dates are NYSE holidays (old next-weekday convention, e.g. 2023-05-29, 2024-07-04, 2024-12-25). Each holds the prior session's EOD, which belongs to the next trading day, and that trading day has no row of its own (745 + 32 = 777 = the NYSE trading days 2023-05-02 → 2026-06-05). Remapping them to `next_trading_day` is lookahead-safe and recovers all 32.
+
+**5. Placebo harness.** `17008e3` is the pre-registration text only. The code that ran it is `scripts/cr_bi_followup_placebo.py` (commit `b05954d`). **It cannot take an alternate level source as is.** Levels are built inline in `main()` from `orats_gex_landscape.walls` plus `wall_carry()`; the P1 signal set is hard-wired to `magnet-above` rows with `horizon_sessions = h`.
+   - **Smallest change:** a new `scripts/cr_bk_placebo.py` that imports `boot_ci` / `line` from the CR-BI script. It re-states the two matching cores verbatim as functions taking `{date: level}` and `{date: (below, above)}`. P1: leave-one-out pool, touch iff max high over h sessions ≥ open + z·IM. P2: band [open − b·IM, open + a·IM], close-inside / range-inside on t0. Same month-cluster bootstrap, 10,000 resamples, seed 20260920.
+   - The CR-BI script stays untouched. **Control before the one run:** fed CR-BI's strike-axis magnet-above walls, the new script must reproduce the published cells exactly (68.1 / 66.6, 89.4 / 87.2, 84.8 / 84.7, 75.4 / 72.8).
+
+**6. Shape report — not run** (stopped at gate 2).
+
+**7. Usable train dates (upper bounds; T2 depends on Q6).**
+   - NYSE trading days 2023-05-02 → 2026-06-05: 777.
+   - With an `orats_oi_gamma` row on the trading day: 745 (777 with the holiday remap).
+   - With the prior-session 12:40–12:50 PT monies snapshot: 741. Missing: 2023-11-27, 2024-12-02, 2025-05-09, 2025-12-01.
+   - With `implied_move_1d` > 0 (`v0.6.1-nyse-sessions`): **736**.
+   - **T1:** ≤ 736 at 5 sessions and ≤ 736 − 19 at 20 sessions, before the above/below split.
+   - **T2:** unknown until Q6.
+   - **T3:** ≤ 736 − 250 ≈ **486** if the trailing-250 percentile requires a full window (first full window ≈ 2024-05). It would be ≈ 736 with an expanding window and a minimum of N sessions.
+
+### For approval (nothing below is implemented)
+
+- **A1 (gate 1 wording):** S0 = per-expiry `stock_price` of the nearest live expiry (= ORATS 15:46 ET snapshot of the prior session), not "prior close". IV smile from the 12:46 PT snapshot (ORATS' own time) instead of the session's last snapshot.
+- **Gate 2, pick one:**
+  - (a) Re-state the gate on the GEX-weighted median, since the profile is a GEX-weighted sum and the row median is dominated by far-wing rows that weigh almost nothing. That passes at 2.6 %. Then re-validate once on a *fresh* 20-date sample before T1–T3.
+  - (b) Keep the row-median gate and get per-strike IV from ORATS directly (`hist/strikes` `smvVol`, the IV ORATS itself used for `gamma`; an API read, no DB write). This means a new fetch path and a re-validation.
+  - (c) Stop the CR here.
+- **Interpretation questions for T1–T3** (the spec is silent on these):
+  - T1's placebo pool on "non-level days": every day has a highest positive peak in a full-repricing profile. Proposal: leave-one-out over all other train days, as in CR-BI P1, run separately for above-open and below-open.
+  - "Block bootstrap" = CR-BI's month-cluster bootstrap.
+  - T3's trailing-250 window: full window (n ≈ 486) or expanding with a minimum?
+  - Holiday-stamped `orats_oi_gamma` rows remapped to the next trading day.
