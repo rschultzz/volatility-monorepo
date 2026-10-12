@@ -222,3 +222,14 @@ At the 12:46 snapshot, 16 489 of 47 127 rows are `expiry_tod = 'am'` (Fridays an
 - **D2 (L4, AM expiries):** exclude (recommended) or keep. 44 / 114 days affected (Q6).
 - **D3 (L4/L8, 35 post-closure sessions without `implied_move_1d`):** leave horizon-1 labels NULL there (recommended; L4 says "as stored") or recompute.
 - **D4 (L7, percentile definition):** confirm `pct_t` = share of the prior ≤ 250 non-NULL values ≤ x_t, min 120, t excluded (as Q8).
+
+## Amendment A1 (Ryan, 2026-10-11, after Step 0)
+
+Supersedes L8's horizon-5 implied-move formula. L1–L14 and the pass criteria are otherwise unchanged.
+
+| # | Decision | Value |
+|---|---|---|
+| A1.1 (D1) | Horizon-5 implied move | SPX open × sqrt(total implied variance from the t−1 12:46 PT snapshot to the date the 5-session window actually ends), interpolated by the L4 method (linear in total variance between bracketing expiries' `atmiv`, calendar days from the snapshot date). Replaces "SPX open × iv_7d × sqrt(5/252)". **Known limit, not fixed:** implied variance starts at the t−1 snapshot while the label measures from the open of t, so post-weekend and post-holiday starts carry gap variance the label does not count. |
+| A1.2 (D2) | AM-settled expiries | Excluded (`expiry_tod = 'am'`) from the 7d and 30d interpolation, and from the A1.1 interpolation. |
+| A1.3 (D3) | Missing `implied_move_1d` | Horizon-1 labels stay NULL on the 35 train sessions with no stored `implied_move_1d`. Not recomputed. |
+| A1.4 (D4) | Percentile rule | Rank against up to 250 prior sessions, excluding the day itself, minimum 120: `pct_t = 100 × share of prior non-NULL values ≤ x_t`. Before T2/T3, check that CR-BK's gamma percentile series uses the same rule; if it differs, stop and report. |
