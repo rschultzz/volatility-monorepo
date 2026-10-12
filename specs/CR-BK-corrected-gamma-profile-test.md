@@ -310,3 +310,20 @@ n 617 (first ranked day 2023-10-30; X missing on 4 base days with the open outsi
 **Verdict (spec rules): only T3 raw passes → gamma matters for volatility, not for levels; redirect toward vol-conditioned structures, no wall targets.**
 - **Levels:** under correct full repricing, the profile has at most one positive peak per day, sitting a median 106 pts above the open. It is *not* touched more often than placebo. Combined with the CR-BI result for the old landscape, wall-as-level has no support in either construction.
 - **Volatility (Y2 qualifier):** the volatility relationship is real in raw terms but mostly priced by the open implied move. Any vol-conditioned structure must earn its edge on the small residual (about −0.1 Spearman on range / IM), not on the raw −0.55.
+
+## Close-out (Ryan, 2026-10-11)
+
+**Interpretation of T3.** T3 raw passes under the pre-registered rule. However, net gamma is mechanically inverse to implied vol: Black gamma ∝ 1/σ, and a higher-IV day spreads every option's gamma wider. So the raw correlation (Spearman −0.554) mostly measures the IV level, and IV already forecasts range. The informative figure is the priced one: Spearman(rank X, range / IM) **−0.115** [−0.200, −0.025], about **−0.10 implied moves** between the top and bottom gamma terciles.
+
+**Verdict as stated for the record: levels — no support in either construction; volatility — small residual beyond the implied move.**
+
+**Old-landscape T3 comparison: not computed, by decision.** The run crashed in this report-only block after every pre-registered statistic had been printed. A2 forbids re-runs, and the block cannot change any pass/fail, so it will not be run.
+
+**Unregistered observation (not a finding):** T1 at 5 sessions was significantly negative: −5.5 pts, CI [−10.0, −1.0]. The corrected peak was reached *less* often than a placebo level at the same implied-move distance. No hypothesis was registered for this direction.
+
+**Consequences (recorded in the vault "State of Knowledge"):**
+- wall-as-level is retired;
+- the corrected profile has no discrete walls (no train day with two positive peaks);
+- wall-based regimes, drift targets and the debit structure's target are unsupported and not to be traded.
+
+No code change to live features in this CR. The holdout remains unread.
