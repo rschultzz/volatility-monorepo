@@ -378,3 +378,50 @@ Script: `scripts/cr_bl_t2t3.py`, read-only. Modes run in this order: `--control`
 - T2 passes → cheap-range days are identifiable.
 - T3 passes → entry filter for the parked 0DTE condor.
 - Neither → nothing passes; record it in State of Knowledge.
+
+## T2 / T3 results (2026-10-11; `scripts/cr_bl_t2t3.py` at `adbc756`; log `scripts/logs/cr_bl_t2t3.md`, not committed)
+
+### Control (A2.4): PASS
+CR-BK's T3 was rebuilt from `profiles.parquet` under CR-BK's own rank rule, and all 9 items match CR-BK's committed results at `df8307c` exactly at printed precision:
+- n 617, first ranked day 2023-10-30, 4 base days missing.
+- Spearman Y1 −0.554 [−0.629, −0.454]; Y2 −0.115 [−0.200, −0.025].
+- Top tercile 257 / 0.683 % / 1.013; bottom tercile 182 / 1.404 % / 1.111.
+- Top − bottom −0.721 pp [−1.119, −0.435] and −0.098 [−0.202, +0.005].
+
+### CR-BL gamma rank (A2.3)
+X is defined on 769 of 778 train sessions. `gamma_pct` exists from 2023-10-24 (649 sessions).
+
+### Cell counts (label presence only, before any outcome)
+
+| h | population | T2 cell (iv_7d_pct ≤ 33 & gamma_pct ≤ 33) | T3 cell (iv_7d_pct ≥ 67 & gamma_pct ≥ 67) |
+|---|---|---|---|
+| 1 | 621 | **13** | **24** |
+| 5 | 645 | **16** | 24 |
+
+**T2: NOT RUN** (n 13 / 16 < 40 at both horizons). **T3: NOT RUN** (n 24 < 40 at h1). Per A2.5, `--run` was not executed, so no T2/T3 outcome was computed.
+
+**Why the cells are empty (descriptive; features only, 649 train days with both ranks):** the two ranks are strongly anti-correlated, Spearman(iv_7d_pct, gamma_pct) = −0.634. The diagonal combinations the tests need are the rare ones:
+
+| iv_7d_pct \ gamma_pct | ≤ 33 | mid | ≥ 67 |
+|---|---|---|---|
+| ≤ 33 | **16** | 61 | 130 |
+| mid | 23 | 76 | 107 |
+| ≥ 67 | 154 | 58 | **24** |
+
+Cheap vol almost always comes with high gamma, and rich vol with low gamma. This is the same relationship CR-BK's raw T3 measured: high gamma means a smaller raw range, which is consistent with lower IV. The "IV at the floor *and* gamma low" combination the CR's "Why" describes occurred on 16 of 649 train days.
+
+## CR verdict: nothing passes
+
+| test | result |
+|---|---|
+| T1 (vol state alone) | **FAIL**: Δ P(close beyond implied), cheap − rich, h1 −1.7 pts [−7.7, +4.9], h5 −5.1 pts [−16.4, +6.0] |
+| T2 (cheap vol & low gamma) | **NOT RUN**: cell n 13 (h1) / 16 (h5) < 40 |
+| T3 (rich vol & high gamma) | **NOT RUN**: cell n 24 (h1) < 40 |
+
+Under the spec's "nothing passes" branch:
+- `bt_vol_state_daily` and `bt_range_labels_daily` stay as data (no cron, no strategy follow-up).
+- **For State of Knowledge:**
+  - At 1 and 5 sessions on SPX cash, a cheap or rich 7-day ATM IV percentile does not separate realized from implied on train.
+  - The vol-with-gamma combinations could not be tested. They are too rare in train (≤ 24 days) because IV rank and gamma rank are strongly anti-correlated (Spearman −0.63).
+  - Not tested is not the same as negative. Any future test of the combination needs a different cell definition or more data, pre-registered fresh.
+- Hypotheses only (A2): the h5 cheap-IV "close inside half" readout and the h5 `vrp_7` lean.
