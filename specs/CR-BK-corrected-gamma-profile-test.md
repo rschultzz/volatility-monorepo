@@ -171,3 +171,56 @@ Supersedes the Step-0 gates and fills the T1–T3 gaps listed under "For approva
 | A1.12 | T3 window | Percentile rank over a trailing 250-session window, starting once 120 prior sessions are available. |
 
 **Sequence:** amendment commit → gate 2 re-validation → gate 6 shape report (+ gate 7 T2 count) → **stop and report**, before T1–T3.
+
+## Post-A1 gates (2026-10-11, read-only, train only; no outcome computed)
+
+Code: `scripts/cr_bk_profile.py` (`validate`, `shape`). Profiles saved locally, not committed: `scripts/logs/cr_bk/profiles.parquet` (date × grid × wing) and `scripts/logs/cr_bk/shape_summary.parquet`. One `validate` invocation crashed before any number was computed (pandas `.T` = transpose, not the `T` column). It was fixed and run once.
+
+### Gate 2 re-validation — **PASS**
+
+Fresh sample, seed 20261012, drawn from the effective train dates. It excludes the 20 Step-0 dates and 2024-07-05 / 2024-12-26, which carry the Step-0 holiday-stamped data. Dates: 2023-05-15, 07-12, 09-01, 10-04; 2024-04-12, 07-09, 07-29, 08-15, 10-09; 2025-03-10, 03-17, 04-28, 05-08, 07-10, 08-28, 11-24; 2026-01-16, 01-30, 05-06, 05-22. Method: A1 (12:46 PT smile, per-expiry forward, linear wings). 161,353 rows with OI > 0.
+
+| | value |
+| --- | --- |
+| **exposure-weighted median \|gamma error\|** | **2.33 %** (gate ≤ 5 %) |
+| exposure-weighted p90 | 15.10 % |
+| row median (info only) | 4.95 % |
+| weighted median by DTE: 0 · 1–7 · 8–30 · 31–90 · 91–400 | 1.39 · 1.61 · 2.22 · 2.34 · 3.56 % (exposure share 9 · 21 · 24 · 14 · 32 %) |
+
+### Gate 6 — shape report (linear wings, `find_walls` prominence 10 %, grid S0 ± 300 step 5)
+
+Effective train dates: 777, including 32 holiday-stamped store dates moved forward. **Usable: 769.** The 8 unusable dates have no prior-session smile at 12:30–12:46 PT:
+- 5 follow NYSE half-days (2023-07-05, 2024-07-05, 2024-12-26, 2025-07-07, 2025-12-26). The session closed at 10:00 PT, so there is no 12:46 snapshot; that is a known limit of A1.2.
+- 3 are monies gaps (2023-11-27, 2024-12-02, 2025-12-01).
+
+Exposure dropped for a missing expiry smile: 0.00 % on every day. AM-flagged rows: median 2,780 per day.
+
+| positive peaks \ troughs | 0 | 1 | all |
+| --- | --- | --- | --- |
+| 0 | 186 | 29 | 215 (28.0 %) |
+| 1 | 540 | 14 | 554 (72.0 %) |
+| ≥ 2 | 0 | 0 | **0** |
+| all | 726 | 43 | 769 |
+
+- **Stop rule (> 80 % with exactly one positive peak and no trough): 70.2 % → does not trigger.**
+- **No day has more than one positive peak.** The corrected net profile is a single smooth hump or a monotone curve. 186 days have no peak or trough at all: monotone over ±300, net gamma negative at S0 on 82 % of them; by year 40 · 48 · 92 · 35 days in 2023 · 2024 · 2025 · 2026.
+- Troughs on 5.6 % of days.
+- **Top positive peak sits above S0 on effectively every day:** peak − S0 median +107.5 pts, p10 +55, p90 +180.
+- **Zero-gamma flip** inside the grid on 97.9 % of days, never more than one. Flip − S0: median −24.6, p10 −100.9, p90 +108.5 pts. Net gamma at S0 < 0 on 36.8 % of days.
+- **Wing robustness (A1.4):** the top positive peak moves > 10 pts between linear and flat wings on **0.9 %** of 552 days (median shift 0.0 pts).
+
+### Gate 7 — usable counts (SPX session + `implied_move_1d` > 0: 737)
+
+| test | n |
+| --- | --- |
+| T1 5-session, peak above open / below open | **523 / 3** (window inside train: 733) |
+| T1 20-session, above / below | **512 / 3** (719) |
+| **T2 (positive peak on both sides of the open)** | **0** |
+| T3 (≥ 120 prior usable sessions) | 617 |
+
+**Reading (no outcome computed):**
+- **T2** is undefined by construction: there are never two positive peaks.
+- **T1** reduces to an above-open test. Below-open n = 3 cannot be estimated.
+- **T3** is unaffected.
+
+The literal stop rule passes, but its stated purpose ("walls are not defined in the corrected profile → T2 dropped") applies in full. Under A1 and L2, T2 is dropped unless Ryan decides otherwise. Stopped here for review, before T1–T3, per A1 "Sequence".
