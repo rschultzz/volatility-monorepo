@@ -224,3 +224,28 @@ Exposure dropped for a missing expiry smile: 0.00 % on every day. AM-flagged row
 - **T3** is unaffected.
 
 The literal stop rule passes, but its stated purpose ("walls are not defined in the corrected profile → T2 dropped") applies in full. Under A1 and L2, T2 is dropped unless Ryan decides otherwise. Stopped here for review, before T1–T3, per A1 "Sequence".
+
+## Amendment A2 (Ryan, 2026-10-11, after gates 2 and 6) — scope of the one run
+
+Recorded before `scripts/cr_bk_placebo.py` exists or anything is run. Pass criteria and L1–L10 are unchanged.
+
+- **Finding in its own right (gate 6):** on the train sample, **no day has two or more positive peaks** in the corrected net gamma profile (769 usable days: 554 with one positive peak, 215 with none). The multi-wall structure of the old landscape does not survive full repricing. That structure came from the 8·√dte kernel.
+- **T2 dropped:** 0 usable days.
+- **T1 runs above-open only.** The 3 below-open days are dropped.
+- **Go:** build `scripts/cr_bk_placebo.py`. Reproduce CR-BI's published placebo output as the control: the full text of `scripts/logs/cr_bi_followup_placebo.md` except its timestamp line; **stop if it does not match**. Then run T1 (above-open, 5 and 20 sessions, with the trend-up / other secondary readout) and T3 **once**.
+- No additional tests, cuts or re-runs. The trough-only days are not tested. Half-day snapshot loss (5 days) accepted as a known limit.
+
+**Operational definitions, fixed before the run** (they fill details the spec leaves open; none is a new test):
+
+1. **Harness base = CR-BI's, unchanged:** `bt_daily_features` `v0.6.0-openiv` (IM = `implied_move_1d`), the CR-BH hybrid SPX-cash daily OHLC (open = first clean print ≥ 06:33 PT), and the leave-one-out pool of all train days whose h-session window ends ≤ 2026-06-05.
+2. **T1 signal:** usable corrected-profile day d in the base, with top positive peak L_d > open_d and the window available. z_d = (L_d − open_d) / IM_d. Actual = max high over sessions d…d+h−1 ≥ L_d. Placebo = mean over the pool minus d of 1[max high over h sessions from e ≥ open_e + z_d·IM_e]. The difference, with the CR-BI month-cluster bootstrap (10 000 resamples, seed 20260920).
+3. **T1 secondary (readout only):** trend-up = SPX-cash close_{d−1} / close_{d−21} − 1 > 3 %, i.e. the trailing 20-session return at the prior close. Days without 21 prior sessions in the series are left out of the split. Same placebo pool for both halves.
+4. **Old landscape alongside T1:** the same harness with L_d = the highest positive wall of `orats_gex_landscape.walls`, put on the strike axis with CR-BI's `wall_carry` (P − carry), above-open days only, all regimes.
+5. **T3:**
+   - X_d = corrected net gamma (linear wings) interpolated on the grid at open_d; missing if open_d is outside S0 ± 300.
+   - Percentile rank = share of the previous ≤ 250 usable X values strictly below X_d, plus half the ties, on (0, 1). Defined once ≥ 120 prior X values exist.
+   - Y1 = (high_d − low_d) / open_d. Y2 = (high_d − low_d) / IM_d.
+   - Spearman(rank, Y) with the month-cluster bootstrap (same seed and resamples; Spearman recomputed on each resample).
+   - Top-tercile (rank > 2/3) minus bottom-tercile (rank < 1/3) mean of Y1 and Y2, with CI.
+   - Flip readout: Y1 and Y2 for days with open_d below vs above the nearest zero-gamma flip (where one exists), with CI on the difference.
+6. **Old landscape alongside T3:** X from `orats_gex_landscape.landscape` `gex_total` interpolated at open_d, as built (frame B, no carry correction); otherwise identical.
