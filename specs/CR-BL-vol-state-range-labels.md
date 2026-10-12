@@ -317,3 +317,15 @@ Cheap-tercile days do not close beyond the implied move more often than rich-ter
 - **Reported per A1.4; T2/T3 wait for Ryan's call:**
   - how to obtain the series (reuse CR-BK's code read-only, or have CR-BK persist it);
   - whether its rule is accepted as is.
+
+## Amendment A2 (Ryan, 2026-10-11, after T1)
+
+T1 result accepted as a fail. The cheap-inside (h5 P(<0.5)) and `vrp_7` readouts stay recorded as hypotheses only; no follow-up test in this CR. L1–L14, A1 and the pass criteria are otherwise unchanged.
+
+| # | Decision | Value |
+|---|---|---|
+| A2.1 | Zero implied move | The two rows with stored `implied_move_1d` = 0 (2023-05-23, 2024-04-26) are treated as missing, same as the 35 A1.3 sessions. |
+| A2.2 | Gamma value for T2/T3 | Exactly CR-BK's X: corrected net gamma evaluated at the SPX open (CR-BK A2 item 5), recomputed read-only from `scripts/logs/cr_bk/profiles.parquet`. Not redefined. No edits to any CR-BK file. |
+| A2.3 | Gamma rank rule | D4 / A1.4: rank against the prior 250 sessions excluding the day itself, among sessions in that window that have a gamma value, minimum 120 values; `pct = 100 × share of those values ≤ X_d` (0–100 scale). |
+| A2.4 | Control (first) | From the same parquet, reproduce CR-BK's rank under CR-BK's own rule and confirm it matches CR-BK's committed T3 inputs/results at `df8307c`. If it does not match, stop and report. |
+| A2.5 | Sequence | T2/T3 pre-registration committed before any join of gamma to labels. Control, then T2/T3 cell counts reported before any outcome is computed; a cell with n < 40 is recorded as not run. T2 and T3 run once, train dates only. |
