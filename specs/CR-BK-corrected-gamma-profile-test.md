@@ -148,3 +148,26 @@ Session `default_transaction_read_only = on` on every connection; no table writt
   - "Block bootstrap" = CR-BI's month-cluster bootstrap.
   - T3's trailing-250 window: full window (n ≈ 486) or expanding with a minimum?
   - Holiday-stamped `orats_oi_gamma` rows remapped to the next trading day.
+
+## Amendment A1 (Ryan, 2026-10-11, after Step 0) — Step-0 decisions
+
+Supersedes the Step-0 gates and fills the T1–T3 gaps listed under "For approval" above. **Pass criteria and L1–L10 are otherwise unchanged.**
+
+**Correction to L6 / gate 1 wording:** `stock_price` in `orats_oi_gamma` is **not the prior close**. It is ORATS' 15:46 ET (12:46 PT) EOD snapshot of the prior session, and it is per expiry.
+
+| # | Item | Decision |
+|---|---|---|
+| A1.1 | S0 | S0 = `stock_price` of the **nearest live expiry** (expir_date ≥ trade_date) — the 15:46 ET snapshot of the prior session. Grid S0 ± 300, step 5 (L6 otherwise unchanged). |
+| A1.2 | IV snapshot | Smile from the `orats_monies_minute` **12:46 PT** snapshot of the prior session (latest snapshot ≤ 12:46), not the session's last snapshot. |
+| A1.3 | Gate 2 restated | Gate = **exposure-weighted median** absolute gamma error ≤ 5 % (weight = gamma × OI × S², the row's contribution to the profile). Re-validate **once** on a fresh random 20-date train sample not used so far (excluding the Step-0 sample and any date carrying the same data through the holiday remap). If it fails, stop and report. No further variants. |
+| A1.4 | Wing method | **Primary:** linear extension in log-strike beyond the smile's Δ5 / Δ95 points (σ floored at 0.03). **Robustness diagnostic only:** flat extension. Report the share of train days on which the top positive peak moves by more than 10 pts between the two methods. Not a second run of T1–T3. |
+| A1.5 | Gate 3 | Forward = the row's own per-expiry `stock_price`. Under a grid move each forward shifts proportionally: F_e(S) = S_e · S / S0. AM-settled expiries (`expiry_tod = 'am'`) are flagged and counted, not re-timed. The third-Friday AM/PM overwrite in `orats_oi_gamma` is a **known limit, not fixed**. |
+| A1.6 | Gate 4 | The 32 holiday-stamped `orats_oi_gamma` store dates are moved to `next_trading_day(store date)` (their content is the prior session's EOD). |
+| A1.7 | Gate 5 | New `scripts/cr_bk_placebo.py`, reusing the matching logic and bootstrap of `scripts/cr_bi_followup_placebo.py`. It must reproduce CR-BI's published cells exactly as a control before the one run; if it does not, stop. |
+| A1.8 | Gate 6 | Run the shape report now, on the amended method, before any outcome is computed. The 80 % single-peak stop rule stands. Report gate 7's T2 count with it. |
+| A1.9 | T1 placebo | Pool = all other train days (leave-one-out), separately for above-open and below-open levels. Distance matched in units of the open implied move (`implied_move_1d`), not points. |
+| A1.10 | T1 secondary readout | Not a pass criterion: T1 reported separately for days with trailing 20-session SPX return > 3 % at the prior close, and for all other days. |
+| A1.11 | Bootstrap | CR-BI month-cluster bootstrap (calendar months of the signal date, 10 000 resamples, seed 20260920, 95 % percentile) for every CI. |
+| A1.12 | T3 window | Percentile rank over a trailing 250-session window, starting once 120 prior sessions are available. |
+
+**Sequence:** amendment commit → gate 2 re-validation → gate 6 shape report (+ gate 7 T2 count) → **stop and report**, before T1–T3.
