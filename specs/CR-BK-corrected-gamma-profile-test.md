@@ -249,3 +249,64 @@ Recorded before `scripts/cr_bk_placebo.py` exists or anything is run. Pass crite
    - Top-tercile (rank > 2/3) minus bottom-tercile (rank < 1/3) mean of Y1 and Y2, with CI.
    - Flip readout: Y1 and Y2 for days with open_d below vs above the nearest zero-gamma flip (where one exists), with CI on the difference.
 6. **Old landscape alongside T3:** X from `orats_gex_landscape.landscape` `gex_total` interpolated at open_d, as built (frame B, no carry correction); otherwise identical.
+
+## Results — the one run (2026-10-11 17:47, read-only, train only)
+
+`scripts/cr_bk_placebo.py` at commit `ca06350`, run once. Raw output: `scripts/logs/cr_bk_placebo_run.txt` (git-ignored).
+- **Control: PASS.** The CR-BI P1/P2 output, regenerated through the new matching functions, is identical to `scripts/logs/cr_bi_followup_placebo.md` on all 41 content lines. A pre-run `--control-only` check first failed on a comparison artefact: the CR-BI timestamp header `"# …\n"` spans two lines and only one was stripped. Every content line already matched. The strip was fixed and the control passed before the script was committed.
+- **Incomplete run:** the run crashed *after* T1 and every corrected-profile T3 statistic had been computed and printed. It failed on the old-landscape T3 comparison (`np.interp` on an object-dtype array built from the `orats_gex_landscape.landscape` JSON). The old-landscape T3 comparison and the script's verdict block were therefore not produced, and `scripts/logs/cr_bk_placebo.md` was not written.
+- **Not re-run, per A2.** The verdict below is derived from the printed numbers under the locked criteria. The old-landscape T3 comparison is a report-only item and cannot change any pass/fail.
+
+### T1 — touch at the corrected peak-gamma level (above-open only)
+
+| horizon · level source · subset | n | actual | placebo | difference | 95 % CI |
+| --- | --- | --- | --- | --- | --- |
+| **5-session · corrected · all above-open** (pool 737) | 523 | 19.1 % | 24.6 % | **−5.5 pts** | [−10.0, −1.0] |
+| 5 · corrected · secondary: trend-up (20-session return > 3 %) | 232 | 24.6 % | 30.4 % | −5.9 | [−13.9, +1.0] |
+| 5 · corrected · secondary: other days | 273 | 15.4 % | 20.4 % | −5.1 | [−11.5, +3.1] |
+| 5 · old landscape (strike-axis walls) · all above-open | 455 | 56.7 % | 56.0 % | +0.7 | [−6.8, +8.0] |
+| **20-session · corrected · all above-open** (pool 723) | 512 | 64.8 % | 61.3 % | **+3.5 pts** | [−8.2, +14.5] |
+| 20 · corrected · secondary: trend-up | 221 | 84.2 % | 66.9 % | +17.3 | [+5.8, +26.4] |
+| 20 · corrected · secondary: other days | 273 | 48.0 % | 57.6 % | −9.6 | [−24.1, +5.3] |
+| 20 · old landscape · all above-open | 447 | 77.2 % | 81.4 % | −4.2 | [−15.2, +5.5] |
+
+- **Level distance:** the corrected level sits a median +105.8 pts above the open (z median 2.62, p10 1.25, p90 4.61). The old wall sits at z median 1.10.
+- **Trend split coverage:** 18 signal days have no 21-session history and are not in the split.
+- **The corrected level is touched *less* often than an arbitrary level at the same IM distance at 5 sessions** (CI excludes 0 on the negative side). At 20 sessions the difference is indistinguishable from 0.
+- **The 20-session trend-up readout (+17.3, CI [+5.8, +26.4]) is a secondary readout, not a pass criterion.** Its placebo pool is all days, not trend-up days. A trend-up day reaching a level above the open is exactly the momentum effect the chat checks found (touch tracks momentum, not the wall). The "other days" half goes the opposite way (−9.6). Treat it as a lead at most.
+
+### T2 — dropped (A2: 0 usable days)
+
+### T3 — volatility vs corrected net gamma at the open
+
+n 617 (first ranked day 2023-10-30; X missing on 4 base days with the open outside S0 ± 300).
+
+| statistic | Y1 = range / open | 95 % CI | Y2 = range / IM | 95 % CI |
+| --- | --- | --- | --- | --- |
+| **Spearman(rank X, Y)** | **−0.554** | [−0.629, −0.454] | −0.115 | [−0.200, −0.025] |
+| top-tercile mean (n 257) | 0.683 % | | 1.013 | |
+| bottom-tercile mean (n 182) | 1.404 % | | 1.111 | |
+| top − bottom | −0.721 pp | [−1.119, −0.435] | −0.098 | [−0.202, +0.005] |
+| open below zero-gamma flip (n 189) | 1.239 % | | 1.104 | |
+| open above zero-gamma flip (n 413) | 0.774 % | | 1.085 | |
+| below − above | +0.466 pp | [+0.324, +0.614] | +0.018 | [−0.099, +0.141] |
+
+- **Old landscape alongside:** not produced (crash, see above).
+- **Range is strongly lower on high-net-gamma days in raw terms.** The bottom tercile has about twice the range of the top tercile, and opens below the zero-gamma flip have about 1.6× the range of opens above it.
+- **Almost all of that is already in the implied move.** On range / IM, Spearman is −0.115 (CI just excludes 0), the tercile gap is −0.10 IM with a CI touching 0, and the flip gap is +0.02 IM with a CI around 0.
+- **The priced effect is small.** It amounts to about 10 % of an implied move between terciles.
+
+### Pass / fail (locked criteria)
+
+| test | result | criterion | verdict |
+| --- | --- | --- | --- |
+| T1 5-session | −5.5 pts, CI lower −10.0 | ≥ +8, lower > 0 | fail |
+| T1 20-session | +3.5 pts, CI lower −8.2 | ≥ +8, lower > 0 | fail |
+| **T1** | | either horizon | **FAIL** |
+| T2 | — | — | dropped (A2) |
+| **T3 raw (Y1)** | Spearman −0.554, CI [−0.629, −0.454] | ≤ −0.10, CI excludes 0 | **PASS** |
+| T3 priced (Y2) | Spearman −0.115, CI [−0.200, −0.025] | reported only | — |
+
+**Verdict (spec rules): only T3 raw passes → gamma matters for volatility, not for levels; redirect toward vol-conditioned structures, no wall targets.**
+- **Levels:** under correct full repricing, the profile has at most one positive peak per day, sitting a median 106 pts above the open. It is *not* touched more often than placebo. Combined with the CR-BI result for the old landscape, wall-as-level has no support in either construction.
+- **Volatility (Y2 qualifier):** the volatility relationship is real in raw terms but mostly priced by the open implied move. Any vol-conditioned structure must earn its edge on the small residual (about −0.1 Spearman on range / IM), not on the raw −0.55.
