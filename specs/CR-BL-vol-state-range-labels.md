@@ -329,3 +329,52 @@ T1 result accepted as a fail. The cheap-inside (h5 P(<0.5)) and `vrp_7` readouts
 | A2.3 | Gamma rank rule | D4 / A1.4: rank against the prior 250 sessions excluding the day itself, among sessions in that window that have a gamma value, minimum 120 values; `pct = 100 × share of those values ≤ X_d` (0–100 scale). |
 | A2.4 | Control (first) | From the same parquet, reproduce CR-BK's rank under CR-BK's own rule and confirm it matches CR-BK's committed T3 inputs/results at `df8307c`. If it does not match, stop and report. |
 | A2.5 | Sequence | T2/T3 pre-registration committed before any join of gamma to labels. Control, then T2/T3 cell counts reported before any outcome is computed; a cell with n < 40 is recorded as not run. T2 and T3 run once, train dates only. |
+
+## T2 / T3 pre-registration (committed before any join of gamma to labels, A2.5)
+
+Script: `scripts/cr_bl_t2t3.py`, read-only. Modes run in this order: `--control`, then `--counts`, then `--run` (once). Log: `scripts/logs/cr_bl_t2t3.md`.
+
+**Gamma input (A2.2).** `profiles.parquet` is CR-BK's git-ignored local output: `/Users/ryan/code/volatility-monorepo/scripts/logs/cr_bk/profiles.parquet`. It covers 769 dates, 2023-05-02 → 2026-06-05, with the linear and flat wings at 121 grid points each. It is read in place and not copied or modified.
+- The gamma value is X_d = `np.interp(open_d, price, gex_total)` on the `wing == 'linear'` profile of date d. It is NaN if d has no profile or open_d is outside the grid.
+- open_d is the CR-BH hybrid SPX-cash open (`spx_cash.build_series` / `daily_ohlc`, first clean print ≥ 06:33 PT). The fetch window is 2023-05-01 → 2026-06-05, so nothing after the split is fetched.
+- This is verbatim CR-BK `cr_bk_placebo.py` T3 (`x_at`, at `df8307c`).
+
+**Control (A2.4), run first.** Rebuild CR-BK's T3 frame exactly as CR-BK built it:
+- **Base:** `bt_daily_features` `v0.6.0-openiv` active SPX rows with trade_date ≤ 2026-06-05, `implied_move_1d` > 0, and an SPX session.
+- **Ranking:** X as above, NaN days dropped, sorted by date. CR-BK's rank is applied: share of the previous ≤ 250 usable X values `<` X_d plus ½ ties, on (0, 1), with ≥ 120 prior values.
+- **Outcomes:** Y1 = (high − low) / open, Y2 = (high − low) / IM.
+- **Bootstrap:** CR-BK's `boot_stat` (month-cluster, seed 20260920, 10 000 resamples, months in order of first appearance).
+- **Must reproduce, at the printed precision**, CR-BK's committed T3 results at `df8307c`:
+  - n 617, first ranked day 2023-10-30, X missing on 4 base days.
+  - Spearman Y1 −0.554 [−0.629, −0.454]; Y2 −0.115 [−0.200, −0.025].
+  - Top tercile n 257, 0.683 %, 1.013. Bottom tercile n 182, 1.404 %, 1.111.
+  - Top − bottom −0.721 pp [−1.119, −0.435] and −0.098 [−0.202, +0.005].
+- **Any mismatch:** stop and report. No CR-BL gamma rank is computed.
+
+**CR-BL gamma rank (A2.3).** Computed over the NYSE sessions 2023-05-01 → 2026-06-05 (`trading_calendar`).
+- X_d is defined for every session d with a profile and an in-grid open. It is not restricted to CR-BK's IM > 0 base.
+- `gamma_pct_d = 100 × share of {X_e : e among the 250 sessions before d, X_e defined} ≤ X_d`, with ≥ 120 such values. d itself is excluded.
+
+**Cells, using A1.4 `iv_7d_pct` from `bt_vol_state_daily` `cr-bl-v1`.**
+- Population per horizon: train label rows (trade_date and horizon end ≤ 2026-06-05, SQL WHERE) with non-NULL `abs_close_over_implied`, non-NULL `iv_7d_pct` and non-NULL `gamma_pct`.
+- **T2 cell:** `iv_7d_pct` ≤ 33 AND `gamma_pct` ≤ 33.
+- **T3 cell:** `iv_7d_pct` ≥ 67 AND `gamma_pct` ≥ 67.
+- **Comparison:** all other days in the same population (cell complement).
+
+**Counts before outcomes.** `--counts` reports the population and cell n per horizon. It reads only whether the label is non-NULL, never its value. A test whose cell n < 40 (T2: at both horizons; T3: at h1) is recorded as **not run**. For T2, a horizon with n < 40 is not evaluated, and the other horizon still can be.
+
+**Statistics.**
+- **T2:** Δ = P(`abs_close_over_implied` > 1 | cell) − P(… | other), at h1 and h5.
+- **T3:** Δ = P(`abs_close_over_implied` < 0.5 | cell) − P(… | other), at h1. h5 is reported, not a criterion.
+- **CI:** month-cluster bootstrap identical to CR-BL T1 (`cr_bl_t1.group_diff`: calendar months of trade_date resampled jointly, 10 000 resamples, seed 20260920, 2.5 / 97.5 percentiles).
+
+**Pass (as locked).**
+- **T2:** Δ ≥ 8 pts, CI lower > 0, cell n ≥ 40, at either horizon.
+- **T3:** Δ ≥ 8 pts at h1, CI lower > 0, cell n ≥ 40.
+
+**Reported, not criteria:** for each cell and horizon, mean `range_over_implied` (cell vs other, Δ with CI) and the other P() threshold.
+
+**CR verdict mapping (spec "Verdicts")**, with T1 already FAIL:
+- T2 passes → cheap-range days are identifiable.
+- T3 passes → entry filter for the parked 0DTE condor.
+- Neither → nothing passes; record it in State of Knowledge.
