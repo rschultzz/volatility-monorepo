@@ -254,3 +254,66 @@ How T1 is carried out. These rules fill in detail L13 and the T1 text leave open
   - Secondary readout: the identical split on `vrp_7_pct`.
   - Descriptive only: the share of holiday-window days (`sessions_in_7d` = 4) in each tercile.
 - **One run:** `scripts/cr_bl_t1.py`, output `scripts/logs/cr_bl_t1.md`. No re-run with changed choices.
+
+## Build (2026-10-11)
+
+- **Migration:** `infra/sql/cr_bl_vol_state_range_labels.sql`, applied with the owner role. Both tables were created and granted SELECT/INSERT to `dash_backfill_writer`.
+- **Backfill:** `scripts/cr_bl_backfill.py`, version `cr-bl-v1`, under `dash_backfill_writer`.
+  - `bt_backfill_runs` run `7123c32c-2c26-4833-b8e1-c9f0c7911c84`: status `completed`, 2 590 rows.
+  - Started after CR-BK's `cr_bk_placebo.py` had exited and `pg_stat_activity` showed no other active query. A dry run preceded it.
+- **What was written:**
+  - `bt_vol_state_daily`: **864 rows**, trade dates 2023-05-02 → 2026-10-09 (777 train).
+  - `bt_range_labels_daily`: **1 726 rows**, horizons 1 and 5 (train: h1 778, h5 774). Holdout rows were written and not read.
+- **Smoke checks (train only):**
+  - The 5 Step-0 hand checks match to 0.01 vol pt.
+  - No IV or RV lookahead (asserted).
+  - Train read-back counts match the built frames.
+  - `iv_7d_pct` starts 2023-10-23 (657 train dates).
+- **Implied move:**
+  - h1 has an implied move on **741 / 778** train sessions: the 35 A1.3 sessions, plus 2 where the stored `implied_move_1d` is **0** (2023-05-23, 2024-04-26, the known zero-IV rows). Both are treated as missing (ratios NULL).
+  - h5 has one on 773 / 774 (2023-05-01 has no prior snapshot).
+  - On normal weeks (`sessions_in_7d` = 5, n 616), the A1.1 h5 implied move is 0.983× the original L8 formula (median ratio), as expected from 7/365 vs 5/252.
+
+## T1 results (one run, 2026-10-11; `scripts/cr_bl_t1.py`, log `scripts/logs/cr_bl_t1.md`, not committed)
+
+1 550 train label rows fetched (trade_date and horizon end ≤ 2026-06-05). Cheap: `iv_7d_pct` ≤ 33; rich: ≥ 67. CI: month-cluster bootstrap, 10 000 resamples, seed 20260920.
+
+**Primary, X = `iv_7d_pct`**
+
+| h | n cheap / mid / rich | P(>1) cheap | P(>1) rich | **Δ P(>1) [95 % CI]** | mean R/I cheap / rich, Δ [CI] | P(<0.5) cheap / rich, Δ [CI] | Spearman X vs R/I [CI] |
+|---|---|---|---|---|---|---|---|
+| 1 | 195 / 200 / 230 | 11.8 % | 13.5 % | **−1.7 pts [−7.7, +4.9]** | 1.105 / 1.052, +0.053 [−0.073, +0.195] | 53.8 / 51.3 %, +2.5 pts [−6.6, +11.0] | −0.021 [−0.112, +0.063] |
+| 5 | 211 / 205 / 237 | 22.7 % | 27.8 % | **−5.1 pts [−16.4, +6.0]** | 1.358 / 1.411, −0.053 [−0.214, +0.104] | 47.4 / 35.9 %, +11.5 pts [+0.8, +22.1] | +0.028 [−0.086, +0.131] |
+
+**Secondary readout (not a criterion), X = `vrp_7_pct`**
+
+| h | n cheap / mid / rich | P(>1) cheap / rich, Δ [CI] | mean R/I cheap / rich, Δ [CI] | P(<0.5) cheap / rich, Δ [CI] | Spearman [CI] |
+|---|---|---|---|---|---|
+| 1 | 195 / 206 / 219 | 11.8 / 15.5 %, −3.7 pts [−8.8, +1.1] | 1.071 / 1.067, +0.004 [−0.089, +0.092] | 52.8 / 51.6 %, +1.2 pts [−8.7, +11.7] | +0.001 [−0.072, +0.076] |
+| 5 | 208 / 218 / 222 | 30.8 / 21.2 %, +9.6 pts [−1.4, +20.7] | 1.455 / 1.283, +0.172 [+0.006, +0.329] | 34.1 / 42.3 %, −8.2 pts [−19.4, +3.5] | −0.150 [−0.254, −0.043] |
+
+**Descriptive.** Holiday-window days (`sessions_in_7d` = 4) per tercile:
+
+| h | cheap | mid | rich |
+|---|---|---|---|
+| 1 | 55 / 195 | 28 / 200 | 23 / 230 |
+| 5 | 74 / 211 | 34 / 205 | 29 / 237 |
+
+### T1 verdict: **FAIL**
+
+Cheap-tercile days do not close beyond the implied move more often than rich-tercile days at either horizon. The point estimates go the wrong way: −1.7 pts at h1, −5.1 pts at h5, and neither CI excludes 0. A cheap 7-day ATM IV on its own does not identify a mispriced range.
+
+**Readouts outside the pre-registration (hypotheses only, not findings):**
+- At h5, cheap-IV days close *inside* half the implied move more often (+11.5 pts, CI just above 0). That is the opposite of "cheap vol = underpriced range".
+- The vrp_7 split leans the hypothesised way at h5: low premium → more closes beyond, +9.6 pts with a CI that crosses 0; range +0.17 with a CI above 0; Spearman −0.15.
+- Each of these is one cell among about 16 examined, so any follow-up must pre-register it and confirm it on fresh data.
+
+### T2 / T3: not run (stopped per kickoff)
+
+- **CR-BK status:** CR-BK has since committed results (`df8307c`, branch `feat/CR-BK-corrected-gamma-profile-test`). It has **not saved a gamma percentile series**: its T3 rank is computed inside its script. The saved files are `scripts/logs/cr_bk/profiles.parquet` and `shape_summary.parquet`.
+- **A1.4 rule check:** CR-BK's rule is "share of the previous ≤ 250 usable X values strictly below X_d, plus half the ties, on (0, 1)", with ≥ 120 prior values. It differs from A1.4 in two ways:
+  - Ties: < plus ½ ties, against ≤. For continuous X this only matters on ties, and the scale is 0–1 against 0–100.
+  - The window counts the previous 250 **usable X values**, not sessions. Days without X (open outside S0 ± 300, missing profiles) widen it.
+- **Reported per A1.4; T2/T3 wait for Ryan's call:**
+  - how to obtain the series (reuse CR-BK's code read-only, or have CR-BK persist it);
+  - whether its rule is accepted as is.
