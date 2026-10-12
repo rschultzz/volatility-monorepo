@@ -233,3 +233,24 @@ Supersedes L8's horizon-5 implied-move formula. L1–L14 and the pass criteria a
 | A1.2 (D2) | AM-settled expiries | Excluded (`expiry_tod = 'am'`) from the 7d and 30d interpolation, and from the A1.1 interpolation. |
 | A1.3 (D3) | Missing `implied_move_1d` | Horizon-1 labels stay NULL on the 35 train sessions with no stored `implied_move_1d`. Not recomputed. |
 | A1.4 (D4) | Percentile rule | Rank against up to 250 prior sessions, excluding the day itself, minimum 120: `pct_t = 100 × share of prior non-NULL values ≤ x_t`. Before T2/T3, check that CR-BK's gamma percentile series uses the same rule; if it differs, stop and report. |
+
+## T1 pre-registration (committed before any label is joined to any feature, L13)
+
+How T1 is carried out. These rules fill in detail L13 and the T1 text leave open; they change no threshold.
+
+- **Inputs:** `bt_vol_state_daily` ⋈ `bt_range_labels_daily`, both `version = 'cr-bl-v1'`, on (ticker, trade_date).
+  - The train filter goes in the SQL `WHERE`: `trade_date <= 2026-06-05 AND horizon_end_date <= 2026-06-05`. No holdout label row leaves the database.
+  - Rows with NULL `iv_7d_pct` or NULL `abs_close_over_implied` are dropped. At horizon 1 these include the 35 A1.3 sessions.
+- **X:** `iv_7d_pct`.
+  - **Cheap tercile = X ≤ 33; rich tercile = X ≥ 67.** These are the same cut points as the T2/T3 cells. X is already a trailing percentile rank, so the cuts are fixed, not sample terciles.
+- **Primary statistic, per horizon:** Δ = P(`abs_close_over_implied` > 1 | cheap) − P(… | rich).
+- **CI:** CR-BI month-cluster bootstrap.
+  - Clusters are the calendar months of trade_date. Months are resampled with replacement, jointly for both groups. Δ is recomputed from the pooled rates in the resample.
+  - 10 000 resamples, seed 20260920, 2.5 / 97.5 percentiles.
+- **Pass (as locked):** Δ ≥ 0.08 and CI lower bound > 0 at horizon 1 **or** horizon 5.
+- **Reported, not criteria:**
+  - Per tercile: n, mean `range_over_implied`, and P(`abs_close_over_implied` < 0.5), each with the cheap − rich difference and the same CI.
+  - Spearman(X, `range_over_implied`) per horizon, with a month-cluster bootstrap CI.
+  - Secondary readout: the identical split on `vrp_7_pct`.
+  - Descriptive only: the share of holiday-window days (`sessions_in_7d` = 4) in each tercile.
+- **One run:** `scripts/cr_bl_t1.py`, output `scripts/logs/cr_bl_t1.md`. No re-run with changed choices.
