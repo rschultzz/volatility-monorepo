@@ -63,7 +63,7 @@ L2 (settle on the harness's SPX-cash function) and G1 (condor_pnl reproduces the
 
 **Proposed amendment A1 (not adopted; for Ryan):**
 - A1.1 Primary read (L4, L5, L7) uses the harness settlement, as L2 says.
-- A1.2 G1 is a code check, run on the CR-AS rows under CR-AS's own settlement: per-row call_pnl + put_pnl = CR-AS `net_pts` to the cent, and the pooled ±0.5 / ±1.0 mean net IM reproduces CR-AS's printed −0.002 / +0.001 (at $0.65: run 85b690ec). The harness-settled condor totals are then printed next to CR-AS's as a restatement, not a gate.
+- A1.2 G1 is a code check, run on the CR-AS rows under CR-AS's own settlement: per-row call_pnl + put_pnl = CR-AS `net_pts` to the cent, and the pooled ±0.5 / ±1.0 mean net IM reproduces CR-AS's printed −0.001 / +0.002 (run 85b690ec, $0.65). The harness-settled condor totals are then printed next to CR-AS's as a restatement, not a gate.
 - A1.3 Primary universe excludes the 8 AM-contaminated third Fridays and the 3 dates with no harness settlement (2023-05-19 is in both) → 713 dates.
 - A1.4 Fee: `packages/shared/config.FEE_PER_CONTRACT_PER_LEG` = $0.65; per wing 2 legs × 2 sides = 0.026 pts; condor 0.052.
 - A1.5 Splits: IV tercile = `iv_7d_pct` ≤ 33 / 33–67 / ≥ 67 (CR-BL cuts; 609 dates, the rest reported as "no IV rank"); gamma sign = sign of CR-BK `x_at` on the linear profile at the SPX-cash open (CR-BL's verbatim CR-BK convention; 719 dates); regime = CR-AS row label, magnet-above vs other.
