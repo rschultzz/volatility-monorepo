@@ -39,3 +39,32 @@ Authority: vault `Dash/research/Test plan — lean sequence and reconciliation p
 2. Step 0 diagnosis: coverage (how many of the 732 dates have both wings on both structures); dates where the CR-AS fill rule and the harness settlement disagree; roll-week and holiday dates in the universe; CR-BK parquet join count. Stop if a spec amendment is needed.
 3. Single run (script + parquet + report), one commit.
 4. Reconciliation (session note) and wrap.
+
+## Step 0 — diagnosis findings (2026-10-17)
+
+Script `scripts/cr_bm_step0.py` (SELECTs only, no run row); full output `scripts/output/cr_bm/step0.md`. Universe source: the CR-AS full-sample read as run, `scripts/logs/cr_as_analysis_full_fee0.65.json` (run `85b690ec`, $0.65), whose rows carry strikes, IM, regime and the CR-AS settlement.
+
+**Q1 Coverage.** 732 CR-AS universe dates → 728 priced dates (3 `bad_spx_open`, 1 `no_spx_open_snapshot`) → 723 with ≥ 1 priced box. ±0.5 boxes 722, ±1.0 boxes 719; **both structures on the same date: 718**. One structure only: 2023-05-25, 2023-06-16, 2024-08-06, 2025-05-09, 2025-05-13. Every priced box has all four legs (both wings) in the 06:30–06:45 window. DAILY-CAPTURE (CR-AU) runs are all 2026-09-08 → 2026-10-16, i.e. holdout; they add no train dates. 5 train dates have some 0DTE bar in the window outside the priced set (the skipped CR-AS dates).
+
+**Q2 CR-AS fill / settlement vs the harness settlement — they disagree.**
+- CR-AS settled on `orats_monies_minute.spot_price` at the last snapshot ≤ 13:00 PT. The harness settles on `spx_cash.settlement_prints` (CR-BI: last clean print 12:50–13:00 PT of the CR-BH hybrid series — `spot_price` shifted −15 min on the lagged 2023 windows, `stock_price` from 2023-11-09).
+- 720 / 723 dates have a harness settlement; absent: 2023-05-19, 2023-07-03, 2024-07-03 (the last two are early closes, no 12:50–13:00 print).
+- harness − CR-AS close: exact on 124 dates; |Δ| ≥ 0.01 on 594; ≥ 1 pt on 343; ≥ 5 pts on 97; median |Δ| 0.89, p95 10.41, max 68.29 (2026-03-02). The large ones are the 2026 `spot_price` drift and the 2023 lagged windows (94 dates).
+- The wing intrinsic changes on **90 ±0.5 call wings, 57 ±0.5 put wings, 32 ±1.0 call, 22 ±1.0 put**.
+- **AM/PM contamination on 8 third Fridays** (2023-05-19, 06-16, 07-21, 08-18, 10-20, 11-17, 2024-01-19, 02-16): the captured bars under the same OPRA symbols include `expiry_tod = 'am'` rows (AM-settled SPX monthly) alongside the PM rows, roughly half each. The CR-AS fill builds a per-minute `(strike, type)` dict, so the entry mid on those dates may be an AM-contract quote. The harness excludes AM-settled expiries (CR-BI A1.4).
+
+**Q3 Calendar.** No NYSE holiday or non-trading day in the universe. Early closes: 2023-07-03, 2024-07-03 (CR-AS took the ~10:00 PT last print; the harness has no settlement). ES roll-week dates (week before the quarterly third Friday through expiry): 105 — SPX legs and SPX-cash settlement do not use ES; ES entered CR-AS only through the open-basis filter and the regime label. Third Fridays: 26.
+
+**Q4 Joins.** CR-BK `scripts/logs/cr_bk/profiles.parquet` (the CR-BK output lives under `scripts/logs/cr_bk/`, not `scripts/output/`; wing = linear): 769 dates; **719 / 723** universe dates join (missing 2023-05-01, 2023-11-27, 2024-12-02, 2025-12-01). `bt_vol_state_daily` `cr-bl-v1`: 722 / 723 have a row; non-NULL `iv_7d_pct` on **609 / 723** (starts 2023-10-23). Regime labels as CR-AS used them: magnet-above 369, amplification 166, magnetic-pin 90, untethered 79, bounded 19.
+
+### Gate: spec amendment required — STOP
+
+L2 (settle on the harness's SPX-cash function) and G1 (condor_pnl reproduces the CR-AS pooled figures to the cent) cannot both hold: CR-AS settled on a different price on 594 of 720 dates and its wing intrinsic changes on 201 boxes. Separately, 8 dates carry AM-settled quotes the CR-AS fill cannot tell apart from PM, and 3 dates have no harness settlement. The spec does not say which wins, so no run is made until it is amended.
+
+**Proposed amendment A1 (not adopted; for Ryan):**
+- A1.1 Primary read (L4, L5, L7) uses the harness settlement, as L2 says.
+- A1.2 G1 is a code check, run on the CR-AS rows under CR-AS's own settlement: per-row call_pnl + put_pnl = CR-AS `net_pts` to the cent, and the pooled ±0.5 / ±1.0 mean net IM reproduces CR-AS's printed −0.002 / +0.001 (at $0.65: run 85b690ec). The harness-settled condor totals are then printed next to CR-AS's as a restatement, not a gate.
+- A1.3 Primary universe excludes the 8 AM-contaminated third Fridays and the 3 dates with no harness settlement (2023-05-19 is in both) → 713 dates.
+- A1.4 Fee: `packages/shared/config.FEE_PER_CONTRACT_PER_LEG` = $0.65; per wing 2 legs × 2 sides = 0.026 pts; condor 0.052.
+- A1.5 Splits: IV tercile = `iv_7d_pct` ≤ 33 / 33–67 / ≥ 67 (CR-BL cuts; 609 dates, the rest reported as "no IV rank"); gamma sign = sign of CR-BK `x_at` on the linear profile at the SPX-cash open (CR-BL's verbatim CR-BK convention; 719 dates); regime = CR-AS row label, magnet-above vs other.
+- A1.6 No roll-week exclusion (the test uses no ES price).
