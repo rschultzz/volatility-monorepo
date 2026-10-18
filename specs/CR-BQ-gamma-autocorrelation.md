@@ -111,3 +111,37 @@ Script `scripts/cr_bq_step0.py` (read-only; no outcome statistic computed); full
 - **Bootstrap:** `default_rng(17)` per statistic, 10,000 resamples.
 
 **For approval (Ryan):** choose G under L2: A (stored `net_at_s0_linear`), B (ES-implied open), or C (CR-BK's exact X, which waives the no-monies-at-open rule for `stock_price` only). Also: keep raw-G deciles (L2 as written) or normalise. The run does not start until this is amended.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-18) — gamma state and windows
+
+Adopted verbatim:
+
+| # | Amendment |
+|---|---|
+| A1.1 | L2 gamma state = candidate A: net_at_s0_linear from the CR-BK parquet (net dealer gamma at the prior session's 15:46 ET price). Record its sign convention and units as a row in components/field-conventions.md. Candidate B (ES-implied open) is computed and reported beside every primary statistic as a diagnostic; it is not used for L6. |
+| A1.2 | Decile construction: primary = trailing-250-session percentile rank of G (CR-BK's rule), minimum 120 sessions of history, so the first ~120 train days carry no decile and are excluded from decile statistics (report the count). Secondary, reported only: raw-dollar deciles on the full train sample, and G / ES ADV (20-session trailing mean RTH volume) deciles per Barbon–Buraschi. The sign split (G < 0 vs ≥ 0) uses raw G and all 641 days. |
+| A1.3 | L4(d) Baltussen regression, primary: last-30-min return (12:30–13:00 PT) on the return from the prior session's ES RTH close (12:59 PT bar close) to 12:30 PT — Baltussen's window. Secondary, reported: (i) the frozen first-30-min-only regressor (06:30–07:00 PT); (ii) the Gao window, prior RTH close to 07:00 PT, as the unconditional market-intraday-momentum baseline. L6's clause (d) is judged on the primary. |
+| A1.4 | L6 pass/kill otherwise unchanged. L7 placebo shuffles the trailing-rank decile labels. Priors unchanged. |
+| A1.5 | Report every primary statistic by year as well (2023, 2024, 2025, 2026 H1) so any residual era effect is visible; this is a diagnostic, not a selection. |
+| A1.6 | Nothing else in the frozen spec changes. Proceed: extraction → single run → reconciliation (all nine steps; the CR-BK session note and State of Knowledge CR-BK section as Dash priors) → write-backs → verification agent → wrap → PR unmerged. STOP before any modification. |
+
+**Operational definitions** under A1. These fill gaps A1 leaves open; they add no threshold. The Step 0 definitions above stand.
+
+- **Trailing rank history (A1.2).**
+  - The history is G on every CR-BK-usable session (769 days). G does not depend on ES, so roll-week and early-close days count as history even though they are not in the universe.
+  - rank_d = (#{prior < G_d} + ½ #{prior = G_d}) / n_prior over the up-to-250 usable sessions before d. Defined when n_prior ≥ 120 (CR-BK `pct_rank`).
+  - Decile = min(⌊10·rank⌋ + 1, 10), so D1 = rank < 0.1.
+  - B uses the same rule on its own history: days where B is computable.
+- **ES ADV (A1.2, secondary).**
+  - The mean daily RTH contract volume (`es_minutes.volume`, summed over is_rth bars) over the 20 prior NYSE sessions that pass the L1 ES rules: not a roll week, not an early close, ≥ 370 bars. Roll weeks are excluded because the calendar-roll series carries the dying contract's collapsing volume.
+  - Deciles of G / ADV are cut on the full universe.
+  - 2026 volume is Ironbeam and earlier volume is Databento; whether the two volume definitions match is unmeasured.
+- **Prior-session returns (A1.3).**
+  - Prior close = the close of the 12:59 PT bar on the previous NYSE session.
+  - rROD = ln(P_360 / prior close).
+  - Gao = ln(P_30 / prior close).
+  - These are missing when the previous session has no 12:59 bar: 2023–25 expiry Fridays print no RTH bars, and early closes have no 12:59 bar. Those days drop from the regressions that use them.
+- **L7.** One permutation of days (`default_rng(17)`) moves the trailing-rank decile label and the sign label together. Every gated statistic is recomputed on the permuted labels.
+- **A1.5 years.** 2023, 2024 and 2025 are calendar years; 2026 H1 is 2026-01-01 → 2026-06-05. The deciles are those of the full run; they are not re-cut within a year.
