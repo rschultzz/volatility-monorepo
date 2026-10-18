@@ -27,6 +27,7 @@ Vault subfolders:
 Before doing any work, every session:
 
 1. Skim `/Users/ryan/My Drive/Obsidian Vault/Anonymous/Dash/_Dash MOC.md` for project state — strategies in flight, key data tables, current focus.
+1a. Read /Users/ryan/My Drive/Obsidian Vault/Anonymous/Dash/components/field-conventions.md before writing any query, feature, outcome, settlement or test. A field name is never evidence of its contents; a field not listed there is unmeasured — measure it against a traded price or known print before relying on it, and add the row.
 2. List the 3 most recent files in `/Users/ryan/My Drive/Obsidian Vault/Anonymous/Dash/sessions/` (sorted by filename — they're `YYYY-MM-DD-<slug>` prefixed).
 3. Read at least the most recent in full. Pay particular attention to `## Open questions` and `## Next session`.
 4. If today's task overlaps with anything in `/Users/ryan/My Drive/Obsidian Vault/Anonymous/Dash/open-questions/`, read those notes too.
@@ -120,6 +121,7 @@ from your laptop.
 - "Walls" = high-|GEX| strikes used as price targets in the backtest strategies.
 - Short vs long strategy parameters differ: `zoneMergeDistancePts` (short=10, long=5); `maxStartPctOfRange` semantics invert; long entries search from the signal bar itself.
 - `target_level_gex_bn` carries signed GEX at target levels; color-coded in the results table.
+- When two fields disagree, that is a measurement to run against an observed price, never a verdict on either field. Prefer price-space primitives (settlement prints, straddle mids, realized variance from bars) over derived ones (IV, implied move) at ≤ 1 DTE.
 
 ## Frontmatter conventions
 
