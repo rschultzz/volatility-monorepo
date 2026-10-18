@@ -61,10 +61,22 @@ Script `scripts/cr_bm_step0.py` (SELECTs only, no run row); full output `scripts
 
 L2 (settle on the harness's SPX-cash function) and G1 (condor_pnl reproduces the CR-AS pooled figures to the cent) cannot both hold: CR-AS settled on a different price on 594 of 720 dates and its wing intrinsic changes on 201 boxes. Separately, 8 dates carry AM-settled quotes the CR-AS fill cannot tell apart from PM, and 3 dates have no harness settlement. The spec does not say which wins, so no run is made until it is amended.
 
-**Proposed amendment A1 (not adopted; for Ryan):**
+**Proposed amendment A1 (superseded by the adopted A1 below):**
 - A1.1 Primary read (L4, L5, L7) uses the harness settlement, as L2 says.
 - A1.2 G1 is a code check, run on the CR-AS rows under CR-AS's own settlement: per-row call_pnl + put_pnl = CR-AS `net_pts` to the cent, and the pooled ±0.5 / ±1.0 mean net IM reproduces CR-AS's printed −0.001 / +0.002 (run 85b690ec, $0.65). The harness-settled condor totals are then printed next to CR-AS's as a restatement, not a gate.
 - A1.3 Primary universe excludes the 8 AM-contaminated third Fridays and the 3 dates with no harness settlement (2023-05-19 is in both) → 713 dates.
 - A1.4 Fee: `packages/shared/config.FEE_PER_CONTRACT_PER_LEG` = $0.65; per wing 2 legs × 2 sides = 0.026 pts; condor 0.052.
 - A1.5 Splits: IV tercile = `iv_7d_pct` ≤ 33 / 33–67 / ≥ 67 (CR-BL cuts; 609 dates, the rest reported as "no IV rank"); gamma sign = sign of CR-BK `x_at` on the linear profile at the SPX-cash open (CR-BL's verbatim CR-BK convention; 719 dates); regime = CR-AS row label, magnet-above vs other.
 - A1.6 No roll-week exclusion (the test uses no ES price).
+
+## Amendment A1 — adopted (Ryan, 2026-10-17), before any wing P&L was computed
+
+- **A1.1** Main read settles on the harness function (`spx_cash.settlement_prints`). L5 pass/kill applies to this read only.
+- **A1.2** G1 is split in two. **G1a:** under CR-AS's own settlement (`spot_price` ≤ 13:00 PT), call_pnl + put_pnl must equal the CR-AS net per row to the cent, and the pooled means must reproduce −0.001 (±0.5) and +0.002 (±1.0) IM from the $0.65 run — this proves the decomposition. **G1b:** report the pooled condor P&L under both settlements side by side, with the 201 changed boxes broken out (count, direction, mean change in IM). G1b is diagnostic, not a gate; its result is a finding about CR-AS, not about S3.
+- **A1.3** Universe: drop the 8 mixed-quote third Fridays (AM/PM under the same OPRA symbol) and the 3 dates with no harness settlement (2023-05-19, 2023-07-03, 2024-07-03). 713 dates. Apply the same universe to both settlements so G1b is like-for-like. List the 11 dates in the report.
+- **A1.4** Fees $0.65/contract/leg = 0.026 pts per wing.
+- **A1.5** Gamma from the `scripts/logs/cr_bk/` parquet; report the 4 unjoined dates by name. IV tercile on the 609 dates with an IV rank; the gamma and IV splits report their own n.
+- **A1.6** No roll-week exclusion — the test uses no ES price (SPX legs, SPX-cash settlement); ES entered CR-AS only through its open-basis filter and the regime label, which are taken as CR-AS recorded them.
+- **A1.7** Reconciliation gets a row for the CR-AS session note stating that its break-even and its "magnet-above days lose on the call wing" reading were computed on `spot_price` settlement, with G1b's numbers as the re-settled version. A line goes into State of Knowledge — 2026-09-20 under a new "## Updates — 2026-10-17 (CR-BM)" heading only if G1b moves the CR-AS pooled condor P&L by more than its CI half-width; otherwise the session note records "re-settlement did not change the read."
+
+Nothing else in the spec changes.
