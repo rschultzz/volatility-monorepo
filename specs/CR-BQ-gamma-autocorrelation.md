@@ -34,3 +34,80 @@
 3. One commit for extraction (per-day statistics).
 4. One commit for statistics + report.
 5. Wrap. Single run. Report pass/kill against L6 exactly as written, L7, and (e) as secondary. Then the Reconciliation protocol, all nine steps.
+
+---
+
+## Step 0 — diagnosis findings (2026-10-18) — **STOP: L2 needs an amendment**
+
+Script `scripts/cr_bq_step0.py` (read-only; no outcome statistic computed); full output `scripts/output/cr_bq/step0.md`. Shared definitions `scripts/cr_bq_common.py`.
+
+**Q1 — parquet schema and sign convention.**
+- `scripts/logs/cr_bk/shape_summary.parquet`: 777 rows (2023-05-02 → 2026-06-05). Profiles in `profiles.parquet`: 769 dates, linear wings, S0 ± 300 in steps of 5.
+- **Value:** `gex_total(price)` = Σ unit_gamma(F, K, σ, T) · F² · 100 · (call_oi − put_oi). Here F is the per-expiry forward, shifted in proportion to price. σ is sticky-strike, from the 12:46 PT prior-session smile.
+- **Sign:** call OI +, put OI −, so dealers are assumed long calls and short puts (the SqueezeMetrics / Barbon–Buraschi eq. 4 convention). G > 0 means dealers are net long gamma.
+- **Units:** $ of delta per unit (100 %) relative move. Divide by 100 for $ per 1 % move, so value / 1e11 = $bn per 1 % move.
+- **`net_at_s0_linear`** is the only stored scalar. It is the profile at **S0 = the prior session's 15:46 ET** `orats_oi_gamma.stock_price`.
+- **No stored column is gamma at the open.** CR-BK's T3 X was computed in the run and not saved: the profile interpolated at the SPX open from `packages/shared/spx_cash`. That open is the first `orats_monies_minute.stock_price` print ≥ 06:33 PT; on 2023 days before 2023-11-09 it is the 15-min-shifted `spot_price`.
+- **Worked day 2025-02-11.** Recomputed from `orats_oi_gamma` and the 2025-02-10 12:46 PT smile:
+  - calls +65.92e11, puts −61.42e11, net +4.50e11 (+$4.50bn per 1 %);
+  - matches the parquet exactly (max grid difference 0);
+  - flip −11.0 pts below S0. G(S0 − 25) = −5.57e11 and G(S0 + 25) = +14.90e11, so an ordinary overnight move changes the sign.
+
+**Q2 — the conflict.** L2 asks for "CR-BK's net dealer gamma at the open". The kickoff says "no ORATS monies fields at the open are used anywhere in this test". CR-BK's value at the open needs exactly such a field, so the spec cannot be met as written. Two candidates use no monies field:
+- **A:** `net_at_s0_linear`, G at the prior session's 15:46 ET price. Stored column.
+- **B:** the profile at S0 · ES_open(d) / ES(prev session, 12:46 PT close). This is an ES-implied SPX open, uses ES only and is frame-neutral (a ratio). It cannot be computed on 12 universe days because the prior session has no 12:45 PT bar.
+- **A vs B (n 629):** Spearman 0.932. Sign differs on 72 days (11.4 %). Same decile on only 46.3 %; decile differs by ≥ 2 on 13.5 %. D1 agrees on 53/63, D10 on 47/63. The S0 → open move has median |15.4| pts, p90 53.3. **Which G is used changes which days are in each decile, so it is a decision, not a detail.**
+
+**Q3 — L1 counts.**
+- 777 parquet rows. Every NYSE session in range is present, none missing.
+- → 777 after dropping non-sessions.
+- → **769** after the CR-BK exclusions (8 days with no 12:46 smile: 2023-07-05, 2023-11-27, 2024-07-05, 2024-12-02, 2024-12-26, 2025-07-07, 2025-12-01, 2025-12-26).
+- → **761** after early closes.
+- → **644** after roll weeks (all years).
+- → **641** after requiring ≥ 370 bars (dropped 2026-02-13 with 361, 2026-02-17 with 282, 2026-02-18 with 307).
+
+**Q4 — distribution of G (A; B is similar).**
+- G < 0 on **243 of 641** days (37.9 %); B: 235 of 629. That is ≥ 60, so the decile test and the sign split are both powered as the spec intends.
+- Decile cut points ($bn per 1 %): −29.05, −18.91, −6.67, +1.51, +8.72, +14.90, +21.82, +28.09, +37.05.
+- **G is not stationary:**
+  - median by year: 2023 +1.89, 2024 +9.22, 2025 +9.12, 2026 +25.48;
+  - sd by year: 23.0 / 21.7 / 25.2 / 35.7;
+  - **D10 = 1 day from 2023, 11 from 2024, 19 from 2025, 33 from 2026.** D1 is spread across years (21 / 13 / 22 / 9).
+- So D1 − D10 on raw G is partly 2023–25 vs 2026. This is not an amendment under L2 as written, which says deciles on the train sample. It is flagged because Barbon–Buraschi normalise by ADV (Γ^IB) and CR-BK ranked over a trailing 250-session window; neither is in L2.
+
+**Q5 — ES coverage by year.**
+- **Non-early sessions with exactly 390 bars:** 2023 163/166, 2024 245/249, 2025 243/247. 2026 has 92 with 390 bars and 11 with 370–389.
+- **0-bar sessions:** 10, all quarterly expiry Fridays (the dying contract stops at the SOQ; CR-BO Q2).
+- **Other short sessions:** 2023-06-16 has 1 bar (expiry Friday); 2026-03-17 has 340 (roll week); 2026-02-13/17/18 are dropped above.
+- Sources: databento 679 dates, ironbeam 111.
+
+**Q6 — first and last 30 minutes.**
+- All 641 included days have a 06:30 and a 12:59 PT bar, and all have the boundary bars 06:59 and 12:29.
+- 12:30–12:59 is complete (30 bars) on every day. 06:30–06:59 has fewer than 30 bars on 5 days (minimum 24).
+- No included day is an early close, so **12:30–13:00 PT is the last 30 minutes on every included day.**
+
+**Comparability note (no amendment needed; recorded for the reconciliation).**
+- Baltussen's 6.63 / 0.82 is the slope of the last half-hour on **rROD = prior close → 15:30 ET**.
+- Gao et al.'s first half-hour runs **from the prior close to 10:00 ET**.
+- L4(d)'s first-30 is 06:30–07:00 PT, RTH only, with no overnight leg. That matches neither paper's regressor exactly, so the L8 prior comparison is "direction only" by construction.
+
+**Operational definitions to be fixed with the amendment (no new thresholds).**
+- **Prices:** P0 = open of the 06:30 bar, P_k = close of bar k−1 (k = 1…390). Missing bars carry the last close forward.
+- **Returns:**
+  - 5-min r = ln(P_{5j}/P_{5(j−1)}), 78 per day;
+  - 30-min returns: 13 per day;
+  - 60-min returns: k = 60…360, 6 per day; the 12:30–13:00 half is dropped;
+  - first-30 = ln(P30/P0), last-30 = ln(P390/P360).
+- **ρ5:** sample lag-1 acf per day, mean across days.
+- **ρ60:** pooled within-day pairs around the group mean.
+- **VR:** per day Σr30² / Σr5², mean across days.
+- **Skew:** √N Σr³ / (Σr²)^{3/2} on 1-min returns.
+- **"Gradient":** D1 − D10, bootstrap over days, each group resampled separately, CI clear of zero in either sign.
+- **Baltussen (L6):**
+  - "t ≥ 2" means OLS with HC1 standard errors;
+  - "flat across gamma sign" means the interaction (G < 0) × first-30 in the pooled regression has |t| < 2.
+- **L5 previous-session statistic:** used only when the previous NYSE session itself passes L1; otherwise that day drops from the conditional regression.
+- **RV tercile:** same-day Σ 1-min r², terciles on the universe.
+- **Bootstrap:** `default_rng(17)` per statistic, 10,000 resamples.
+
+**For approval (Ryan):** choose G under L2: A (stored `net_at_s0_linear`), B (ES-implied open), or C (CR-BK's exact X, which waives the no-monies-at-open rule for `stock_price` only). Also: keep raw-G deciles (L2 as written) or normalise. The run does not start until this is amended.
