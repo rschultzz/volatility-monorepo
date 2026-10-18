@@ -144,3 +144,56 @@ Adopted verbatim:
 - **Second half (A1.3).** The OOS set is split by date order at ⌊n/2⌋. The second-half OOS R² keeps the expanding-mean benchmark of each day, i.e. the same per-day terms restricted to the later half.
 - **E0 descriptive tables (A1.2).** For each era: the in-sample OLS R² and the in-sample Q5 − Q1. The in-sample Q5 − Q1 uses fitted values from the full-sample OLS, cut into quintiles within the era. Every such cell is labelled "in-sample (no OOS predictions by construction)". The E1 OOS figures are the pooled OOS figures.
 - **A1.4 measurement.** The extraction reports the share of universe days on which the 0DTE `atmiv` is identical at 07:30 and 07:31 PT, and at 07:30 → 07:33. 07:29 is outside the loaded window. Its one observed instance (2025-03-04, 0.448685 at 07:29, 07:30 and 07:31) comes from the Step 0 probe.
+
+---
+
+## Result (single run, 2026-10-18 11:02 PT) — L6 as amended by A1.1: **KILL S3's gate (and, with CR-BM, S3 as designed)**
+
+Full output: `scripts/output/cr_bs/report.md`, plus `days.parquet`, `days_scored.parquet`, `summary.json` and `extract_meta.json`.
+
+**Primary (walk-forward).** OOS n 375, all E1 (E0 n 0 by construction, A1.2).
+
+| statistic | value | gate |
+|---|---|---|
+| OOS R² (vs expanding mean) | **−0.0098** | pass ≥ 0.05; kill < 0.02 → kill side |
+| pooled Q5 − Q1 of realized Y (Q5 = richest predicted) | **−0.087 [−0.259, +0.086]** (n 56 / 63) | spans zero → kill side |
+| A1.3 OOS R², first / second half of the OOS set | +0.0053 / −0.0183 | descriptive |
+
+Pass not met; kill met.
+
+**In-sample (never gated).**
+
+| model | R² |
+|---|---|
+| raw | 0.029 |
+| MA22 (a) | 0.093 |
+| MA22 (b) | 0.225 |
+| noise benchmark (Y permuted), MA22 (a) / (b) | 0.101 / 0.173 |
+| E0 own-era | 0.112 |
+| E1 own-era | 0.018 |
+
+- In-sample Q5 − Q1 is −0.237 [−0.416, −0.064] (E0) and −0.235 [−0.358, −0.107] (E1), labelled "in-sample (no OOS predictions by construction)".
+- BFR's 21.2 % / 34.8 % (a different statistic) are not approached once the MA's mechanical inflation is benchmarked.
+
+**L7 placebos.**
+- (i) Shuffled state: OOS R² −0.016, Q5 − Q1 −0.052 [−0.226, +0.119]. Null.
+- (ii) Y_(t−1) on state_t: **OOS R² +0.058, Q5 − Q1 −0.345 [−0.507, −0.179]**.
+  - The 10:30 state "predicts" the *previous* session's outcome better than the next one.
+  - Spearman of L with Y_(t−1) is +0.235.
+  - The surface records the past premium; it does not forecast the remaining day.
+
+**Secondaries (not gated).**
+- (i) Y_up − Y_dn +0.317 [+0.291, +0.343] (E0 +0.165, E1 +0.373). The **downside** is the richer side; implied up-share is 0.416 vs realized 0.487. Almeida's VRP⁺ > VRP⁻ sign is reversed here.
+- (ii) rskew Q5 − Q1 −0.223 [−0.520, +0.072]. Spearman(rskew, Y) −0.253 (contemporaneous).
+- (iii) Dealer-loss proxy: Spearman +0.033 [−0.052, +0.112]; loss − no-loss +0.025 [−0.052, +0.103]. Null.
+
+**Clock (level shift only).**
+- RV/implied: exp(mean Y) 0.169 on the session clock vs 0.902 on 1/365.
+- The constant log offset is 1.677.
+
+**Post-run cosmetic fix.**
+- One print string lacked its f-prefix.
+- The regenerated report differs only on that line: "n {len(Fj)}" became "n 590".
+- `summary.json` is byte-identical.
+
+Reconciliation, decision line and write-backs: vault session note. STOP before any modification.
