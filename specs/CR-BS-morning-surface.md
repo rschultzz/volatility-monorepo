@@ -173,7 +173,7 @@ Pass not met; kill met.
 | E1 own-era | 0.018 |
 
 - In-sample Q5 − Q1 is −0.237 [−0.416, −0.064] (E0) and −0.235 [−0.358, −0.107] (E1), labelled "in-sample (no OOS predictions by construction)".
-- BFR's 21.2 % / 34.8 % (a different statistic) are not approached once the MA's mechanical inflation is benchmarked.
+- BFR's 21.2 % / 34.8 % (a different statistic): raw 0.029. MA22 (a) is below a permuted-Y noise benchmark. MA22 (b) is 0.05 above its benchmark. Overlapping MAs make in-sample R² non-evidence.
 
 **L7 placebos.**
 - (i) Shuffled state: OOS R² −0.016, Q5 − Q1 −0.052 [−0.226, +0.119]. Null.
