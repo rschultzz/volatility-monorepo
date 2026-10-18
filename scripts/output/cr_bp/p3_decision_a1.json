@@ -1,0 +1,89 @@
+{
+  "cut": "2024-03-01",
+  "deciding": {
+    "E0": "secondary",
+    "E1": "secondary"
+  },
+  "cells": {
+    "E0_S1": {
+      "r_atm": 0.3211986253051604,
+      "r_v50": 0.22407734831688966,
+      "atm": false,
+      "v50": false,
+      "extension": null
+    },
+    "E0_S2": {
+      "r_atm": null,
+      "r_v50": null,
+      "atm": false,
+      "v50": false,
+      "extension": null
+    },
+    "E0_S7": {
+      "r_atm": null,
+      "r_v50": null,
+      "atm": false,
+      "v50": false,
+      "extension": null
+    },
+    "E1_S1": {
+      "r_atm": 0.3678194131650113,
+      "r_v50": 0.9301691597023929,
+      "atm": false,
+      "v50": true,
+      "extension": "vol50"
+    },
+    "E1_S2": {
+      "r_atm": null,
+      "r_v50": null,
+      "atm": false,
+      "v50": false,
+      "extension": null
+    },
+    "E1_S7": {
+      "r_atm": null,
+      "r_v50": null,
+      "atm": false,
+      "v50": false,
+      "extension": null
+    }
+  },
+  "coverage": {
+    "E0_S1": {
+      "universe": 155,
+      "vpx": 14,
+      "extended": 0,
+      "dropped": 141
+    },
+    "E0_S2": {
+      "universe": 154,
+      "vpx": 0,
+      "extended": 0,
+      "dropped": 154
+    },
+    "E0_S7": {
+      "universe": 161,
+      "vpx": 0,
+      "extended": 0,
+      "dropped": 161
+    },
+    "E1_S1": {
+      "universe": 345,
+      "vpx": 6,
+      "extended": 339,
+      "dropped": 0
+    },
+    "E1_S2": {
+      "universe": 344,
+      "vpx": 0,
+      "extended": 0,
+      "dropped": 344
+    },
+    "E1_S7": {
+      "universe": 356,
+      "vpx": 0,
+      "extended": 0,
+      "dropped": 356
+    }
+  }
+}
