@@ -288,3 +288,51 @@ These follow mechanically from A1 and the frozen spec; they are stated here so t
   - otherwise the field that passed in that era's S1 cell;
   - otherwise the night drops.
 - **(r3) P2** (`atmiv` at 09:50, C6(i) windows) is computed on every CR-BO-universe night per bucket. It is reported both on its full sample and on the P1 nights.
+
+---
+
+## Run summary and reconciliation (2026-10-18)
+
+Single run 08:21 PT. Outputs are `scripts/output/cr_bp/report.md` and `summary.json`; the session note is `2026-10-18 - CR-BP — Session Premium Live Open`.
+
+**P1 coverage.** v_b = V_px (primary, K-aware) on 20 S1 nights (E0 14, E1 6); v_b = vol50²τ on 339 E1 S1 nights; 141 E0 S1 nights have no P1 row. S2 and S7 have no P1 rows (A1 reading r1).
+
+**L8 — KILL S1 as written** (kill (b)). On the pooled P1 read, S1 non-event weeknights (n 225):
+- P_on −0.818 [−2.288, −0.006], P_rth +0.748 [−0.056, +2.193].
+- The mean is driven by one `vol50` print: on 2024-10-15, v_b = 144.8 var pts vs atmiv 0.077, contributing −0.643 of the mean.
+- Without the worst 5 nights the mean is +0.012; the medians are P_on +0.012 and P_rth +0.035.
+
+**A1.4.** E0 +0.002 (n 1) vs E1 −0.821. The signs disagree, so the decision line must be "modify".
+
+**Convention-free S1 nights** (n 20): P_on +0.006 [−0.044, +0.055], P_rth +0.042 [+0.000, +0.085].
+
+**P2** (atmiv at 09:50, RV split at 09:50): P_on ≈ 0 in every bucket, every CI spanning 0.
+
+**Shares.** Variance share 38.7 % (E0 34.9, E1 40.4); volatility share 44.0 %.
+
+**A1.8 — live card.** atmiv²τ / V_px at 09:33 is E1 0.133 (√ 0.365, n 18) and E0 0.129 (√ 0.359, n 25). On `implied_move_1d`'s √(1/252) clock it is E1 0.717 (√ 0.847) and E0 0.696 (√ 0.834).
+
+**Reconciliation.**
+
+| Source | Classification |
+|---|---|
+| Muravyev–Ni | does not replicate |
+| Terstegge | not comparable |
+| Jones–Shemesh | direction only (secondary) |
+| OptionMetrics | does not replicate |
+| Gatheral | replicates |
+| Bennett | does not replicate |
+| Augen | direction only |
+| Chong | not comparable |
+| Lou–Polk–Skouras | not comparable |
+| CR-BO | does not replicate |
+| CR-037 | does not replicate (its "not a snapshot artifact" reading) |
+
+**Decision: modify** (A1.4). L8 as written returns KILL; the conflict is left to Ryan. STOP before any modification.
+
+**Verification (step 9).** A separate agent re-checked about 110 numbers and 13 quotes. It fixed 7 wording and number discrepancies in the vault notes; none changes a verdict or classification.
+
+**Follow-ups:**
+- the `atmiv`-at-open exposure (new open question, high priority);
+- `vol50` single-day extremes;
+- Gate A's 09:31 ATM 0DTE straddle and 15:59 1-DTE capture, needed for a price-only re-test.
