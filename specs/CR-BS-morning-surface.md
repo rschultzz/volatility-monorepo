@@ -126,3 +126,21 @@ The freeze reading said the kill is "evaluated literally on whatever n each era 
 Also recorded for the amendment and the reconciliation (from the source texts):
 - Todorov–Zhang's estimator is QV⁽⁰⁾ / (QV⁽¹⁾ − QV⁽⁰⁾) in total variance (odp.pdf p. 7 eq. 8), not IV₀²/IV₁². L2(d)'s T is the cruder IV² ratio.
 - Bandi2026 (p. 29) cites BFR as "Journal of Finance. Forthcoming" (2025). Our Sec. 10 numbers are from the 2024-03-15 draft.
+
+---
+
+## Amendment A1 — era clauses (Ryan, 2026-10-18; adopted after the Step 0 STOP, before any implementation run)
+
+Adopted verbatim:
+
+- **A1.1** The 10:30 era gate passed (atmiv/vol50 1.027 E0, 1.051 E1), so the era split is descriptive, not a gate. L6 kill clause becomes: "OOS R² < 0.02 AND Q5 − Q1 CI spans zero on the pooled walk-forward OOS set." Pass clause unchanged (pooled).
+- **A1.2** Walk-forward first-fit window stays at 250 days as frozen (no tuning). The OOS set is therefore E1-only; state its n. E0 appears in the in-sample R² and the by-era descriptive tables only, labelled "in-sample (no OOS predictions by construction)".
+- **A1.3** Add one descriptive column: the walk-forward OOS R² recomputed on the second half of the OOS set alone, so a drift in predictability across E1 is visible. Not gated.
+- **A1.4** Record in field-conventions.md: ORATS dte = 1 denotes the same-day (0DTE) expiry in orats_monies_minute (confirmed CR-BS Step 0, consistent with CR-BP's note), and atmiv repeats across adjacent minutes 07:29–07:31 PT (update cadence coarser than one minute at that hour — measured, cause unknown).
+- **A1.5** Nothing else changes. Proceed: commit the drafted extraction and stats scripts → single run → reconciliation (all nine steps; in the Bandi row note that his "volatility premium" is the Q-minus-P drift at next-day 10:30 with the 22-day MA on both the dependent variable and β̃, and that his 21.2 % / 34.8 % are single- vs joint-equation GMM — so our OOS R² and his in-sample are "same question, not the same statistic") → write-backs → verification agent → wrap → PR unmerged. STOP before any modification.
+
+### A1 reading, recorded at adoption (Code)
+
+- **Second half (A1.3).** The OOS set is split by date order at ⌊n/2⌋. The second-half OOS R² keeps the expanding-mean benchmark of each day, i.e. the same per-day terms restricted to the later half.
+- **E0 descriptive tables (A1.2).** For each era: the in-sample OLS R² and the in-sample Q5 − Q1. The in-sample Q5 − Q1 uses fitted values from the full-sample OLS, cut into quintiles within the era. Every such cell is labelled "in-sample (no OOS predictions by construction)". The E1 OOS figures are the pooled OOS figures.
+- **A1.4 measurement.** The extraction reports the share of universe days on which the 0DTE `atmiv` is identical at 07:30 and 07:31 PT, and at 07:30 → 07:33. 07:29 is outside the loaded window. Its one observed instance (2025-03-04, 0.448685 at 07:29, 07:30 and 07:31) comes from the Step 0 probe.
