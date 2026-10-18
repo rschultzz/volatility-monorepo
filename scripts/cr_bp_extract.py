@@ -2,14 +2,16 @@
 """CR-BP extraction — CR-BO's night × bucket × side rows with the open-side variance v_b per P1, plus the P2 read.
 READ-ONLY: SELECTs only, no run row, no API calls. Holdout never read (t+1 ≤ 2026-06-05).
 
-Spec: specs/CR-BP-session-premium-live-open.md (P1, P2, P3 decision via scripts/output/cr_bp/p3_decision.json, L1–L10).
+Spec: specs/CR-BP-session-premium-live-open.md (P1, P2, L1–L10) as amended by A1 (era-aware P3; decision via
+scripts/output/cr_bp/p3_decision_a1.json). Era of a night: E0 t < 2024-03-01, E1 t ≥ 2024-03-01.
 
 Per night (t, t+1) in the CR-BO universe (ES side identical — gate) and bucket S1 / S2 / S7:
   atm side (gated):
     v_a = atmiv²τ at 15:59 ET on t            (C3, unchanged from CR-BO)
     v_b = P1 open-side variance at 09:31 ET on t+1:
-          V_px (09:31) of t+1's 0DTE contract on decision-subset days (S1 only — the only captured contract);
-          else extension_field²τ (atmiv or vol50, per P3's rule); else the night is dropped (reported)
+          V_px (09:31, primary subset, K-aware solve — A1.2) of t+1's 0DTE contract (S1 only — the only captured contract);
+          else the extension field²τ of the night's era × bucket cell (A1.3); else P1 is NaN for that row (p1 = False).
+          P2 columns are filled on every CR-BO-universe night (A1 reading r3).
     v_c = atmiv²τ at 15:59 ET on t+1          (unchanged)
   put / call sides: exactly CR-BO's (vol75 / vol25 at all three snapshots; not gated).
   P2 (atm rows): v_b2 = atmiv²τ at 09:50 ET; RV_on2 = Σ r² 16:00 t → 09:50 t+1, RV_rth2 = Σ r² 09:50 → 16:00 t+1 (C6(i)).
@@ -71,11 +73,11 @@ def rv(es: pd.DataFrame, lo: datetime, hi: datetime) -> float:
 
 
 def main() -> None:
-    dec = json.loads((OUT_DIR / "p3_decision.json").read_text())
-    ext = dec["extension_field"]
-    vp = pd.read_parquet(OUT_DIR / ("vpx_primary.parquet" if dec["subset"] == "primary" else "vpx_secondary.parquet"))
+    dec = json.loads((OUT_DIR / "p3_decision_a1.json").read_text())
+    cut = date.fromisoformat(dec["cut"])
+    vp = pd.read_parquet(OUT_DIR / "vpx_primary.parquet")   # A1.2: V_px from the primary subset in both eras
     vpx = {d: v for d, v in zip(pd.to_datetime(vp.d).dt.date, vp["vpx_06:31"]) if v > 0}
-    print(f"P3: subset {dec['subset']}, extension {ext}, V_px days {len(vpx)}", flush=True)
+    print(f"A1: cut {cut}, cells {{k: v['extension'] for k, v in dec['cells'].items()}}, V_px days {len(vpx)}", flush=True)
 
     conn = get_backfill_db_conn(); assert_role_or_die(conn); conn.autocommit = True
     m = load_monies(conn); es = load_es(conn)
@@ -111,22 +113,25 @@ def main() -> None:
             if not all(pd.notna(r.atmiv) and r.atmiv > 0 for r in (ra, rb, rc)):
                 continue   # CR-BO bucket rule (L1/L3 rows present) — identical universe per bucket
             ta = C.tau_years(ra.et.to_pydatetime(), e); tb = C.tau_years(rb.et.to_pydatetime(), e); tc = C.tau_years(rc.et.to_pydatetime(), e)
-            # P1 open-side variance
+            # P1 open-side variance (A1.2 / A1.3)
+            era = "E0" if t < cut else "E1"
+            ext = dec["cells"][f"{era}_{bk}"]["extension"]
             if bk == "S1" and t1 in vpx:
                 vb_atm, src = float(vpx[t1]), "vpx"
             elif ext and pd.notna(getattr(rb, ext)) and getattr(rb, ext) > 0:
                 vb_atm, src = getattr(rb, ext) ** 2 * tb, ext
             else:
+                vb_atm, src = np.nan, "none"
                 drops[bk] += 1
-                continue
+            p1 = src != "none"
             rb2 = rows.get(kb2)
             for side, col in SIDES.items():
                 ia, ic = getattr(ra, col), getattr(rc, col)
                 va, vc = ia * ia * ta, ic * ic * tc
-                vb = vb_atm if side == "atm" else getattr(rb, col) ** 2 * tb
+                vb = (vb_atm if side == "atm" else getattr(rb, col) ** 2 * tb) if p1 else np.nan
                 rec = dict(
                     t=t, t1=t1, weekday=t.strftime("%a"), cal_gap=(t1 - t).days, holiday_span=bool(C.holiday_dates_between(t, t1)),
-                    bucket=bk, expir_date=e, cal_dte=(e - t).days, side=side, vb_source=src if side == "atm" else col,
+                    bucket=bk, expir_date=e, cal_dte=(e - t).days, side=side, era=era, p1=p1, vb_source=src if side == "atm" else col,
                     v_a=va, v_b=vb, v_c=vc, v_b_atmiv=rb.atmiv ** 2 * tb, v_b_vol50=(rb.vol50 ** 2 * tb) if rb.vol50 else np.nan,
                     D_on=va - vb, D_rth=vb - vc, RV_on=x["RV_on"], RV_rth=x["RV_rth"],
                     P_on=(va - vb) - x["RV_on"], P_rth=(vb - vc) - x["RV_rth"], RV_on_next=rv_next,
@@ -147,14 +152,14 @@ def main() -> None:
     if set(s0[s0.keep].t.dt.date) != keep_nights:
         raise SystemExit("ES universe mismatch vs Step 0")
     cov = dec["coverage"]
-    for bk in BUCKETS:
-        got = df[(df.side == "atm") & (df.bucket == bk)]
-        want = cov[bk]["vpx"] + cov[bk]["extended"]
-        if len(got) != want:
-            raise SystemExit(f"bucket {bk}: extract {len(got)} vs Step 0 coverage {want} (drops here {drops[bk]})")
+    for key, c_ in cov.items():
+        e_, bk = key.split("_")
+        got = df[(df.side == "atm") & (df.bucket == bk) & (df.era == e_)]
+        if len(got) != c_["universe"] or int(got.p1.sum()) != c_["vpx"] + c_["extended"] or int((got.vb_source == "vpx").sum()) != c_["vpx"]:
+            raise SystemExit(f"{key}: extract n {len(got)} / p1 {int(got.p1.sum())} / vpx {int((got.vb_source == 'vpx').sum())} vs Step 0 A1 {c_}")
     df.to_parquet(OUT_DIR / "nights.parquet", index=False)
     a = df[df.side == "atm"]
-    print(f"gates PASS; rows {len(df)}; atm per bucket {a.groupby('bucket').size().to_dict()}; v_b source {a.groupby(['bucket','vb_source']).size().to_dict()}; drops {drops}")
+    print(f"gates PASS; rows {len(df)}; atm per bucket {a.groupby('bucket').size().to_dict()}; v_b source {a.groupby(['era','bucket','vb_source']).size().to_dict()}; P1-NaN rows {drops}")
     print(f"wrote {OUT_DIR / 'nights.parquet'}")
 
 
