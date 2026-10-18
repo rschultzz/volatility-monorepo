@@ -92,3 +92,18 @@ Script `scripts/cr_bm_condor_legs_by_wing.py`, one run; outputs `scripts/output/
 - **L7.** Same-day call/put P&L correlation −0.262 (±0.5) / −0.077 (±1.0) vs ≈ 0 shuffled; call − put CI essentially unchanged under shuffling; the wing means are identical by construction.
 
 Full tables: `scripts/output/cr_bm/report.md`.
+
+## Wrap (2026-10-17)
+
+- Reconciliation protocol run, all nine steps, in the vault session note `Dash/sessions/2026-10-17 - CR-BM — Condor Legs by Wing.md`:
+  - AlmeidaHizmeri2025 — Does not replicate
+  - BandiFusariReno2023 — Not comparable
+  - Vilkov2023 — Replicates direction only `[secondary only]`
+  - Sinclair2020 — Replicates (±0.5)
+  - CR-AS — Replicates (re-settled)
+- **Decision: continue.** No modification drafted.
+- Write-backs: `## Dash result (2026-10-17)` on the four source notes; `## Status` on S3. State of Knowledge unchanged under A1.7.
+- Step 9 verification (separate agent): about 160 numbers and 22 quotes checked; 1 discrepancy fixed (entry-minute counts are over all 1,441 CR-AS rows, 22 / 25 in the universe). The S3 table's Sinclair locator was corrected to p. 120.
+- Follow-ups, not done here:
+  - AM/PM contract mixing under one OPRA symbol on third Fridays (`expiry_tod` filter for 0DTE callers);
+  - `condor_0dte.FEE_PER_CONTRACT_SIDE` still 1.30.
