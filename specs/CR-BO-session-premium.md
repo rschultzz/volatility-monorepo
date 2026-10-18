@@ -55,3 +55,34 @@ Amendments adopted before this freeze (Ryan, 2026-10-18): L2 and L4 replaced; L1
 3. Extraction script (monies snapshots + ES overnight / RTH sums), one commit.
 4. Statistics + report (the single run), one commit.
 5. Wrap commit (reconciliation summary, deltas, follow-ups).
+
+## Step 0 — diagnosis findings (2026-10-17)
+
+Script `scripts/cr_bo_step0.py` (SELECTs only, no run row; shared definitions in `scripts/cr_bo_common.py`). Full output `scripts/output/cr_bo/step0.md`; per-night flags `scripts/output/cr_bo/step0_pairs.csv`.
+
+**Q1 — L1 coverage.** 777 session pairs → 761 after early closes (16 pairs touch the 8 early closes) → 632 after roll weeks (129 nights) → 632 after contract switches (all 12 switch nights already lie in roll weeks) → 631 with an ES anchor bar 15:55–15:59 on t → 623 with ≤ 5 % overnight minutes missing → **621 ES-clean nights** after also requiring ≤ 5 % of RTH t+1 minutes (needed to compute RV_rth at all; this applies L1's 5 % rule to the RTH leg — an interpretation, recorded here, not a new threshold). With the monies rows of L1/L3: **S1 500, S2 498, S7 517 nights.**
+- Monies losses on ES-clean nights: the 09:31 ET snapshot is absent from `orats_monies_minute` on 92 t+1 days (an ingest gap concentrated in 2024-04/05 and 2025-01/02, 16 + 16 + 9 + 12 days). This takes ~15 % of every bucket. It is clustered in time, so it can bias the sample toward the remaining months; recorded, not repaired (read-only CR).
+- On Thursday nights before a monthly third Friday the PM S1 row does not exist: the table is keyed (ticker, expir_date, quote_date), so the AM monthly and the PM weekly on the same date cannot both be stored, and the AM row is the one held (S1 21, S2 20 nights). L2's PM-only rule removes them as written.
+- Weekdays of t in the ES-clean set: Mon 121, Tue 132, Wed 128, Thu 126, Fri 114; calendar gap t→t+1: 1 day 505, 3 days 103, 2 / 4 days 13 (holiday-spanning nights, kept per L2).
+
+**Q2 — contract switches and roll weeks.** Detected from the ES − SPX basis at 15:59 (jump > 30 pts; non-switch |Δ| ≤ 27.4, sd 9.1): 12 switches, one per quarterly expiry, +35.6 to +64.3 pts. The 2023–2025 Databento `ES.c.0` data switch at the **Sunday 18:00 reopen after expiry Friday**, and print **no RTH bars on expiry Friday** (the dying contract stops at the 09:30 SOQ). This applies to 2023 and 2024 as well as 2025: the same `ES.c.0` backfill default produced all three years. The 2026-03 Ironbeam switch is at 09:30 on expiry Friday 2026-03-20. Roll weeks, under the CR-BM definition (Monday of the week before the third Friday → expiry Friday), remove 129 nights. That covers the 2025 `ES.c.0` dying-contract weeks and the same weeks in 2023, 2024 and 2026.
+
+**Q3 — τ convention.** `orats_monies_minute` has no fractional time column: `dte` is calendar days + 1, and `dte_pct` = (dte − 1)/365.25 is constant through the day. τ was implied from cached `orats_options_minute` ATM call/put pairs (parity forward, Black, r = 0). For 4–30 calendar-DTE contracts, ORATS IV matches τ = calendar time to 16:00 ET on expiry / 365, with median ratio 1.000–1.020 at both 09:31 and 15:59. Worked example: 2025-10-24 09:31 ET, expiry 2025-11-13 PM, K 6800, F 6793.15, call mid 75.45, mid_iv 0.12338. Calendar time to expiry is 20.2701 days; the implied τ is 20.2682 days (ratio 0.9999). No 1–3 DTE pairs are cached, so for S1 / S2 the L3 fallback (calendar/365) applies and is stated as such. 0DTE IV departs from calendar time in the last ~90 minutes, because ORATS uses a longer clock near expiry. That affects only v_c of S1 (15:59 on its expiry day, τ = 1 min), which is ≈ 0 under either clock. **τ used: (16:00 ET on expir_date − snapshot label time) / 365 days.**
+- **atmiv refresh cadence (finding).** `atmiv` refreshes every few minutes, unlike `vol50`, which changes every minute. At the 09:31 row it equals the 09:30 row's value on 85.9 % of rows. The 09:30 row is built from pre-open quotes (`quote_date` 09:15 / 09:25 ET), so v_b is in practice the IV as of ~09:15–09:30. The 15:59 row's quotes are from 15:56–15:59 (mostly 15:58). The implied side's clock therefore ends up to ~15 min before RV_on's 09:30 boundary. L3 is unchanged (atmiv at the 09:31 row). Median atmiv / vol50 at 09:31 is 0.989.
+
+**Q4 — vol25 / vol75.** The ORATS smile is indexed by call delta. At 15:59, `vol75` > `vol25` on 96.5 % of PM rows ≤ 15 DTE, and `vol75` > `vol50` on 97.1 %. **Put side = `vol75` (75-delta call = 25-delta put); call side = `vol25`.** This agrees with `packages/shared/vol_features.py:20-21`.
+
+**Q5 — ES overnight minutes missing.** On roll-, switch- and early-close-clean nights, the median missing share is 0.00 % in every year; p95 is 0.40 % (2023), 0.30 % (2024), 0.10 % (2025) and 0.66 % (2026). The nights that fail are holiday-schedule nights (Christmas, New Year, Good Friday: 27–38 % missing even with the holiday date dropped from the grid) and 2026-02-12 → 02-19 (Ironbeam gaps, including the RTH legs).
+
+**Q6 — weekday coverage.** Every weekday of t has a next-session PM expiry from the first train session (Mon 2023-05-01, Tue 05-02, Wed 05-03, Thu 05-04, Fri 05-05). Thursday's lower S1 count (104 / 154 of all pairs) is the third-Friday AM collision (Q1).
+
+**Q7 — events.** The dates are hand-coded in `scripts/cr_bo_common.py`, with the source URL for each schedule:
+- 08:30 ET releases: CPI 36, PPI 36, NFP 37, PCE 32, giving 141 distinct dates.
+- PCE released at 10:00 ET is not an event night: 2024-11-27, 2025-04-30, 2025-12-05, 2026-01-22.
+- FOMC statement days: 25. The 2025-08-22 notation vote is not flagged.
+- October 2025 CPI / NFP / PPI were never published (the appropriations lapse).
+- ES-clean universe: 107 event nights and 15 FOMC-on-t+1 nights. The full date list is in `step0.md` Q7.
+
+### Gate: no spec amendment required — continue
+
+Every Step 0 finding is covered by L1–L10 as written. The exclusions above follow mechanically from L1/L2. τ follows L3: confirmed for 4–30 DTE, calendar/365 fallback for 1–3 DTE. The RTH-coverage requirement applies L1's 5 % rule to the leg L4 needs. Recorded for the reconciliation, not amended: the ~15 % monies loss from the missing 09:31 snapshot (time-clustered), and the atmiv cadence at the open (v_b ≈ pre-open IV).
