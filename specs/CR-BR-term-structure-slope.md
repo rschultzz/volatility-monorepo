@@ -151,3 +151,35 @@ Adopted verbatim:
 - (ii) at h = 5 uses nights (t−5 … t−1, t).
 
 **By year.** Calendar years 2023, 2024, 2025 and 2026 H1, using the full-sample quintiles.
+
+---
+
+## A1 gate result (2026-10-18) — **STOP: the A1.1 sign-check gate FAILS**
+
+`scripts/cr_br_extract.py` asserts the A1.1 gate before it loads any ES data or computes any outcome. It aborted:
+
+| day | curve (IV 7 / 14 / 30 / 60 / 90 d) | PC2 of log IV² (centred) | required | percentile rank |
+|---|---|---|---|---|
+| 2024-05-17 | 8.86 / 8.48 / 9.87 / 10.45 / 10.94 (upward) | **−0.0324** | > 0 | 0.474 |
+| 2025-04-08 | 61.18 / 51.01 / 42.37 / 35.45 / 32.25 (inverted by 28.9 pts, 90 d below 7 d) | −0.0492 | < 0 | 0.434 |
+
+**Why it fails** (diagnostic; no outcome used).
+- **The centring curve.** PCA scores are centred on the mean train curve. In vol points that curve is 12.84 / 13.02 / 13.29 / 13.60 / 13.81, already upward-sloping. A mildly upward day such as 2024-05-17 therefore scores below zero.
+- **The level leak.** The PC2 loadings, −0.645 / −0.156 / +0.266 / +0.453 / +0.534, sum to **+0.452**, not 0. PC2 is orthogonal to PC1, and PC1 is front-heavy (+0.67 at 7 d), but PC2 is not orthogonal to a parallel shift. A high-vol day therefore gets a level push upward. That is why the sample's most inverted day, 2025-04-08, ranks mid-sample (0.43) rather than in Q1.
+- **No sign meaning.** PC2 > 0 on 46.0 % of days, while 66.2 % of days slope upward (IV90 > IV7). The sign agrees with the slope direction on 66.5 % of days.
+- **Not fixable within PCA.** The same mechanism made the frozen PC2 of IV² levels fail. On 2023–26, inversion is itself a vol-level event (s_t vs log IV7² −0.76), so a level-free *and* sign-correct centred PCA score does not exist on this sample.
+
+**Monies-only alternatives, measured.**
+
+| candidate | sign agrees with IV90 > IV7 | 2024-05-17 / 2025-04-08 | inverted share Q1 … Q5 | Spearman with log IV7² |
+|---|---|---|---|---|
+| (iii) s_t = IV30 − IV7 (pre-registered secondary) | sign-correct by construction | +1.01 / −18.81 | 97 / 60 / 10 / 2 / 0 % | −0.757 |
+| (ii) row-demeaned log IV² curve projected on the PC2_log loadings (a loading-weighted slope; level removed per day) | 97.7 % | +0.367 / −1.003 | 100 / 69 / 0 / 0 / 0 % | −0.84 |
+| (iv) PC2_log centred, gate dropped (sign = "relative to the mean curve") | 66.5 % | −0.032 / −0.049 | 67 / 45 / 33 / 16 / 8 % | −0.206 |
+
+**For approval (Ryan): pick the primary slope.**
+- (iii) Promote s_t to primary. It needs no new construction, but L6's kill clause then needs a second "definition".
+- (ii) Use the weighted slope.
+- (iv) Keep PC2_log with the gate replaced by a rank statement.
+
+Every sign-correct option is strongly level-correlated, so L4's level-neutral outcome carries the Bekaert–Hoerova control under any choice. The run does not start until A1.1 is amended. The extraction script is committed with its gate unchanged.
