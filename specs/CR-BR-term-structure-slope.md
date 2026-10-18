@@ -206,3 +206,28 @@ Adopted verbatim. No further stop on the slope definition is permitted; if A2 fa
 **Gate operational definition (A2.4).** The inversion indicator is 1[IV90 < IV7], as in the A1 operational definitions. Monotone means strictly decreasing shares over r_t quintiles Q1 > Q2 > Q3 > Q4 > Q5, on the 778 x-complete train days.
 
 **Correlations (A2.3).** All are Spearman, computed on the 778 days. "Quintile-ranking agreement" is the share of days whose PC2 quintile equals their r_t quintile, plus the Spearman between the two quintile labels.
+
+---
+
+## Result (single run `8c0ed26`, 2026-10-18) — L6 as written: **KILL S4's slope signal (not S4)**
+
+Full output: `scripts/output/cr_br/report.md` (`days.parquet`, `summary.json`, `extract_meta.json`). A2.4 gate PASS (inverted share by r_t quintile 95.5 / 61.9 / 10.3 / 1.3 / 0.0 %).
+
+**Primary statistics (level-neutral outcome, Q1 − Q5):**
+
+| slope | h = 1 | h = 5 |
+|---|---|---|
+| r_t | +0.015 [−0.119, +0.150] | +0.044 [−0.260, +0.398] |
+| s_t | +0.010 [−0.125, +0.146] | +0.049 [−0.247, +0.383] |
+
+- **Pass:** not met.
+- **Kill:** met (all four CIs span zero).
+- **Placebo (i), shuffled labels:** null.
+- **Placebo (ii), outcome shifted one day earlier:** null at h = 1. At h = 5 the Spearman is clear of zero (r_t +0.204 level-neutral, +0.279 raw): the slope tracks the past week's realized/implied.
+- **By year:** the sign is unstable (2025 positive at h = 1; 2023 and 2026 H1 negative at h = 5).
+
+**Reported only:**
+- PC2 log IV² Spearman −0.080 [−0.161, −0.001] (h = 1, level-neutral). Bridge corr(PC2_log, r_t) +0.675.
+- Unconditional RV/implied 1.247 at h = 1. That is L4's calendar 1/365 clock; on a session clock it is ≈ 0.89.
+
+**Reconciliation, decision line and write-backs:** vault `sessions/2026-10-18 - CR-BR — Term Structure Slope.md`. Decision line: kill S4's slope signal by the written rule. A past-week-conditioned pre-registration is the only modify candidate and is left to Ryan. Stopped before any modification.
