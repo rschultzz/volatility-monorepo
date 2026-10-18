@@ -178,3 +178,79 @@ CR-BO's Q1–Q7 are re-run with the same script logic and must reproduce CR-BO's
     - (ii) **Small-n note.** If any L8 cell (non-event weeknights, by bucket) has n < 40, the L8 verdict is printed with a "cell n < 40" note naming the cell. The verdict itself is still computed exactly as L8 says.
 
 **Known prior relevant to P3** (from CR-BO Step 0 Q3, `scripts/output/cr_bo/step0.md`). On cached 0DTE ATM pairs (|K − `stock_price`| ≤ 10, n 196) at 09:31 ET, the τ that reproduces each pair's mid at its own `mid_iv` was a median 3.889× calendar time (IQR 1.008–8.261). At 09:45 it was ≈ 1.02×. `mid_iv` at 09:31 is therefore not tightly tied to the 09:31 mid on 0DTE, which is why C4 makes P3 price-based and keeps `mid_iv` diagnostic only.
+
+---
+
+## Step 0 — diagnosis findings (2026-10-18)
+
+Scripts `scripts/cr_bp_step0.py` (items 1–11) and `scripts/cr_bp_step0_era.py` (era split of P3). Both are SELECTs only, with no run row and no API calls. Outputs in `scripts/output/cr_bp/`:
+- `step0.md`, `step0_era.md`, `step0_crbo_rerun.md`
+- `step0_pairs.csv`, `vpx_primary.parquet`, `vpx_secondary.parquet`, `p3_decision.json`
+
+**Item 1 — gate PASS.** The CR-BO Q1–Q7 re-run reproduces `step0_pairs.csv` exactly: 621 ES-clean nights; S1 500 / S2 498 / S7 517.
+
+**Items 2–3 — P3(a)(b)(c)(g).**
+- **S and the rates.** S = `spot_price` at the first monies row ≥ 06:33 PT (≤ 06:40), per CR-AS `SPX_OPEN_SQL`; found on 723 of 723 CR-AS train dates. r = q = 0, because the harness prices from quote mids and settles on intrinsic.
+- **Primary subset: n = 44** (2023: 20, 2024: 20, 2025: 3, 2026: 1).
+  - Median |K − S| = **9.09 pts** (IQR 8.28–9.42).
+  - IM median 19.5 vs 44.8 on all CR-AS days: the subset is low-IM days only.
+  - 13 days fall in 2023 `spot_price`-lagged windows. V_px with S = `stock_price` changes V_px by a median ×1.00.
+- **Secondary set: n = 648** (445 in the CR-BO universe as t+1 with S1 ok). K_p − S median −22.5, K_c − S median +22.4 pts.
+
+**Item 4 — P3(d), pooled.** At 09:33 ET:
+
+| set | atmiv²τ / V_px | vol50²τ / V_px |
+|---|---|---|
+| primary | 0.132 | 0.104 |
+| secondary | 0.358 | 0.908 |
+
+The secondary IQRs are bimodal (vol50: 0.263–0.966).
+
+**Era split (`step0_era.md`).** The bimodality is a regime break at **2024-03-01**:
+
+| set | era | atmiv²τ / V_px @09:33 | vol50²τ / V_px @09:33 | low-mode days |
+|---|---|---|---|---|
+| secondary | 2023-05 → 2024-02 | 0.321 | **0.224** | 91 % |
+| secondary | 2024-03 → 2026-06 | 0.368 | **0.931** | 2 % |
+| primary | 2023-05 → 2024-02 | 0.129 | 0.083 | 96 % |
+| primary | 2024-03 → 2026-06 | 0.133 | 1.158 | 5 % |
+
+The primary rows are n 25 and 18. Low mode means vol50²τ / V_px < 0.5 at 09:33.
+
+- **The quotes are steady across the break.** The strangle-implied vol is 0.224 vs 0.216, and leg-pair bid–ask is 0.30 vs 0.30 pts.
+- **The monies fields move.** `vol50` at 09:33 is 0.102 before the break vs 0.213 after.
+- **Over all train days** (all PM ≤ 15 DTE), median field(09:33) / field(09:50) by calendar DTE at the open:
+
+  | field / era | 0 | 1 | 2–3 | 4–7 | 8–15 |
+  |---|---|---|---|---|---|
+  | `vol50`, 2023-05 → 2024-02 | 0.523 | 0.790 | 0.864 | 0.944 | 0.966 |
+  | `vol50`, 2024-03 → 2026-06 | 1.035 | 1.014 | 1.012 | 1.004 | 1.000 |
+  | `atmiv`, 2023-05 → 2024-02 | 0.622 | 0.834 | 0.890 | 0.969 | 0.976 |
+  | `atmiv`, 2024-03 → 2026-06 | 0.625 | 0.841 | 0.900 | 0.977 | 0.982 |
+
+  Same pattern at 09:31 and 09:35.
+
+**Item 5 — P3(e), close side.** atmiv / vol50 at 15:59 on t: S1 1.017, S2 1.012, S7 1.007. All three are inside 0.95–1.05, so no "unadjudicated" flag.
+
+**Item 6 — P3(f).** The 0DTE / S1 / S2 open-side `atmiv` first changes at a median 09:37 ET (IQR 09:34–09:39). 417 of 436 days change by 09:40.
+
+**Item 8 — P3 decision line, applied mechanically.** The secondary set decides (primary n 44 < 100). The 09:33 medians are atmiv 0.358 (outside 10 %) and vol50 0.908 (inside), so the **extension field is `vol50`**. P1 coverage:
+
+| bucket | v_b from V_px | v_b from vol50²τ |
+|---|---|---|
+| S1 | 445 | 55 |
+| S2 | 0 | 498 |
+| S7 | 0 | 517 |
+
+**Item 9 — P4 proxy.** CR-AS 0DTE per-leg bid–ask at 09:31–09:33 ET: median 0.30 pts (IQR 0.10–0.70). Two-leg straddle 0.40; strangle 0.30. This is a lower-bound proxy; the real cost test is Gate B. No 1-DTE train quotes exist.
+
+**Items 10–11.** CR-BO P_on vs the P6 priors: S1 +0.260 vs +0.05, S2 +0.255 vs 0, S7 +0.170 vs +0.14. C6(i) and (ii) are as drafted.
+
+### Gate: spec amendment required — STOP
+
+The P3 rule pools both eras into one median. That median (0.908) qualifies `vol50`, but `vol50` is itself depressed at the open on every day before 2024-03-01 (0DTE 0.52, 1 DTE 0.79, 2–3 DTE 0.86 of its 09:50 value). Mechanical application would put that field into v_b for S2 and S7 on all ~10 pre-break months, and for S1 on its 55 non-V_px nights. That is the bias this CR exists to remove. The spec did not anticipate an era break, so it needs an amendment before implementation.
+
+Also recorded for the amendment:
+- (i) `atmiv` is below the price-implied variance at the open in **both** eras: 0.13 against ATM straddles, 0.32–0.37 against the strangle. That is the P8 measurement.
+- (ii) On S1's 445 V_px nights, v_b would be the ±0.5 IM strangle variance, a wing quantity. v_a stays ATM `atmiv`. In the clean era vol50²τ / V_px is 0.93 on the strangle, so the wing–ATM gap biases D_on down by about that much.
+- (iii) The primary subset is n 44, on low-IM days only.
