@@ -82,11 +82,11 @@ Script `scripts/cr_bn_step0.py` (read-only transaction, counts only); full outpu
 ## Decisions
 
 - `= 'pm'` rather than `IS DISTINCT FROM 'am'` (Step 0 Q2: no NULLs; an unlabelled future row surfaces as a missing leg).
-- Fee (Q-fee) not changed — awaiting Ryan.
+- Fee (Q-fee) **answered by Ryan 2026-10-17: not changed in this CR** — out of scope under visible-change discipline.
 - No DB writes, no re-run of CR-AS / CR-BM, archived results untouched.
 
 ## Follow-ups (not done here)
 
 1. **PM minutes lost on the 8 mixed dates** (Step 0 Q4): PK `(opra_symbol, snapshot_pt)` + `ON CONFLICT DO NOTHING` kept one of AM/PM per minute. Recovering the PM quotes needs a writer/schema change (`expiry_tod` in the key, or a delete-and-refetch under a role with DELETE) — and the fetch path (`fetch_option_bars`) should drop or separately key AM rows before insert so a future third-Friday capture can't repeat it. Step 0 shows ORATS stopped returning AM rows for 0DTE after 2024-02-16, so this is historical repair.
-2. **Q-fee:** point `condor_0dte.FEE_PER_CONTRACT_SIDE` (1.30) at `packages/shared/config.FEE_PER_CONTRACT_PER_LEG` (0.65) — Ryan's call.
+2. **Q-fee:** point `condor_0dte.FEE_PER_CONTRACT_SIDE` (1.30) at `packages/shared/config.FEE_PER_CONTRACT_PER_LEG` (0.65) — Ryan: not in CR-BN; separate CR if wanted.
 3. `packages/shared/options_cache/repository.get_bars_for_contract` / `count_bars_for_contract` have no `expiry_tod` filter; no callers today.
