@@ -336,3 +336,13 @@ Single run 08:21 PT. Outputs are `scripts/output/cr_bp/report.md` and `summary.j
 - the `atmiv`-at-open exposure (new open question, high priority);
 - `vol50` single-day extremes;
 - Gate A's 09:31 ATM 0DTE straddle and 15:59 1-DTE capture, needed for a price-only re-test.
+
+## Decision (Ryan, 2026-10-18) — supersedes the "Decision: modify" line above
+
+**Not supported, not killed — S1 parked.**
+
+- **(a) Governing number.** The convention-free P1 read: S1 P_on +0.006 [−0.044, +0.055], n = 20.
+- **(b) L8's mechanical KILL is not adopted.** It is driven by the 2024-10-15 `vol50` print. No outlier rule was pre-registered, so neither the KILL nor the trimmed +0.012 is a result.
+- **(c) CR-BO's PASS is withdrawn as a field artifact.**
+- **(d) Augen is reclassified as Does not replicate** on the P2 S7 read: 5.8 % vs 19 %.
+- **(e) What would unpark S1:** about 600 train nights of 1-DTE ATM straddle quotes at 15:55 and 09:35 ET via the ORATS one-minute history. This is a bounded backfill, deferred until a Gate A pass elsewhere.
