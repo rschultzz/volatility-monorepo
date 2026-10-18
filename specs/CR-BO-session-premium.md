@@ -86,3 +86,56 @@ Script `scripts/cr_bo_step0.py` (SELECTs only, no run row; shared definitions in
 ### Gate: no spec amendment required — continue
 
 Every Step 0 finding is covered by L1–L10 as written. The exclusions above follow mechanically from L1/L2. τ follows L3: confirmed for 4–30 DTE, calendar/365 fallback for 1–3 DTE. The RTH-coverage requirement applies L1's 5 % rule to the leg L4 needs. Recorded for the reconciliation, not amended: the ~15 % monies loss from the missing 09:31 snapshot (time-clustered), and the atmiv cadence at the open (v_b ≈ pre-open IV).
+
+## Run summary (single run, 2026-10-17 21:14 PT)
+
+Outputs: `scripts/output/cr_bo/report.md`, `summary.json`, `nights.parquet`. Readings left open by L7/L8 were fixed in the `scripts/cr_bo_stats.py` header before the run:
+- the mean is the gated statistic;
+- "non-event weeknight" = Mon–Thu t, next-calendar-day t+1, no 08:30 release; FOMC kept;
+- kill (b) = S1 mean P_rth ≥ mean P_on.
+
+**L8 — PASS.** Atm, non-event weeknights, variance points (total variance × 10⁴):
+
+| bucket | n | P_on mean | P_rth mean | P_on − P_rth |
+|---|---|---|---|---|
+| S1 | 321 | +0.260 [+0.188, +0.355] | −0.311 [−0.453, −0.226] | +0.571 [+0.433, +0.761] |
+| S2 | 318 | +0.255 [+0.167, +0.368] | −0.270 [−0.401, −0.162] | +0.525 [+0.356, +0.748] |
+| S7 | 336 | +0.170 [+0.062, +0.290] | −0.194 [−0.447, +0.026] | +0.364 [+0.098, +0.707] |
+
+**L9.** The placebo keeps most of the premium: S1 0.262 → 0.203, against an unconditional +0.164. The premium is largely calendar-time pricing.
+
+**Shares.** Realized overnight variance share is 38.7 % [37.5, 39.9] (Gatheral 40 %). The volatility share is 44.0 % [43.3, 44.7] (Bennett 1/6).
+
+**Post-run validity diagnostic (unregistered).** `atmiv` at the 09:31 row is biased low against the live `vol50` for short expiries; by 09:50 the ratio is ≈ 1.0. S1's v_b is a 0DTE row at the open, and S2's is mostly 1 DTE, so their D_on is inflated. Crude correction:
+
+| bucket | DTE at the open | atmiv / vol50 at 09:31 | P_on → |
+|---|---|---|---|
+| S1 | 0 | 0.706 | ≈ +0.05 |
+| S2 | 1 | 0.904 | ≈ 0 |
+| S7 | ≥ 4 | ≈ 1.0 | +0.14 |
+
+S7 is the clean pass.
+
+**Reconciliation** (session note `2026-10-18 - CR-BO — Session Premium`):
+
+| Source | Classification |
+|---|---|
+| Muravyev–Ni | replicates direction only |
+| Terstegge | not comparable |
+| Jones–Shemesh | replicates direction only (secondary) |
+| OptionMetrics | does not replicate |
+| Gatheral | replicates |
+| Bennett | does not replicate |
+| Augen | replicates (S7 weekend straddle loss 21.1 % vs 19 %) |
+| Chong | not comparable |
+| Lou–Polk–Skouras | not comparable |
+| CR-BM | replicates direction only |
+
+**Decision: modify.** T-S1a′ is a new pre-registration using a post-open implied snapshot for v_b, with RV_on's boundary moved to match. STOP before any modification.
+
+**Verification (step 9).** A separate agent checked about 190 numbers and 24 quotes. It fixed 9 wording and number discrepancies in the vault notes, none of which changes the verdict or a classification. The Bennett direction cell was set to n/a, because the source makes a level claim.
+
+Deferred follow-ups (session note, Open questions):
+- ORATS `atmiv` cadence and bias at the open;
+- the 09:31 monies snapshot missing on 92 train days;
+- `orats_monies_minute` holds only the AM row on third-Friday expir_dates.
