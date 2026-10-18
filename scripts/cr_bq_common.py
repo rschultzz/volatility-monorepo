@@ -50,11 +50,11 @@ def load_bk() -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def load_es(conn, date_from: dt.date = ES_FROM, date_to: dt.date = SPLIT) -> pd.DataFrame:
-    """ES RTH 1-min bars (es_minutes, is_rth: bar-start 06:30–12:59 PT). Columns trade_date, minute (0…389), open, close."""
+    """ES RTH 1-min bars (es_minutes, is_rth: bar-start 06:30–12:59 PT). Columns trade_date, minute (0…389), open, close, volume."""
     rows = conn.execute(
-        "SELECT trade_date, ts_pt, open, close FROM es_minutes WHERE is_rth AND trade_date BETWEEN %s AND %s "
+        "SELECT trade_date, ts_pt, open, close, volume FROM es_minutes WHERE is_rth AND trade_date BETWEEN %s AND %s "
         "ORDER BY trade_date, ts_pt", (date_from, date_to)).fetchall()
-    df = pd.DataFrame(rows, columns=["trade_date", "ts_pt", "open", "close"])
+    df = pd.DataFrame(rows, columns=["trade_date", "ts_pt", "open", "close", "volume"])
     t = df.ts_pt.dt.hour * 60 + df.ts_pt.dt.minute
     df["minute"] = (t - (6 * 60 + 30)).astype(int)
     assert df.minute.between(0, N_MIN - 1).all()
@@ -91,6 +91,13 @@ def universe(summ: pd.DataFrame, counts: pd.Series) -> tuple[pd.DataFrame, list[
     u = u[[counts.get(d, 0) >= MIN_BARS for d in u.d]]
     steps.append((f"− ES RTH bars < {MIN_BARS} of {N_MIN}", len(u)))
     return u.sort_values("d").reset_index(drop=True), steps
+
+
+def es_day_ok(d: dt.date, counts: pd.Series) -> bool:
+    """L1's ES rules alone (NYSE session, not an early close, not a roll week, >= 370 bars): the rule for the
+    previous-session statistic (L5) and the ADV history (A1.2). The CR-BK rule concerns G, not ES."""
+    return (is_trading_day(d) and d not in BO.EARLY_CLOSES and not BO.roll_week(d)
+            and counts.get(d, 0) >= MIN_BARS)
 
 
 def prev_session(d: dt.date) -> dt.date:
