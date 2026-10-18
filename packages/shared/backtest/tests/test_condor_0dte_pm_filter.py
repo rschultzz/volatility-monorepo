@@ -57,3 +57,33 @@ def test_am_minute_cannot_set_the_entry():
 
     assert first_valid_entry(box, minutes("")) is not None            # unfiltered: AM minute prices the box
     assert first_valid_entry(box, minutes(f"WHERE {PM_SETTLED_SQL}")) is None
+
+
+# ── every 0DTE reader carries the predicate (Step 0 Q4b inventory) ───────────
+
+def _import_script(monkeypatch, name):
+    import importlib
+    # the CR-AS scripts need BACKFILL_DATABASE_URL at import and copy it into DATABASE_URL;
+    # setenv first so both are restored after the test. Nothing connects.
+    monkeypatch.setenv("BACKFILL_DATABASE_URL", "postgresql://cr-bn-test/none")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://cr-bn-test/none")
+    return importlib.import_module(name)
+
+
+def test_cr_as_analysis_bars_sql_is_pm_only(monkeypatch):
+    m = _import_script(monkeypatch, "scripts.cr_as_condor_analysis")
+    assert PM_SETTLED_SQL in m.BARS_SQL
+    # CR-BM unpacks (snapshot_pt, strike, option_type, bid, ask) — column list unchanged
+    assert "SELECT snapshot_pt, strike, option_type, bid_price, ask_price\n" in m.BARS_SQL
+
+
+def test_cr_as_capture_count_is_pm_only(monkeypatch):
+    m = _import_script(monkeypatch, "scripts.cr_as_capture_0dte_condor_legs")
+    assert PM_SETTLED_SQL in m.BARS_IN_WINDOW_SQL
+
+
+def test_daily_capture_count_is_pm_only(monkeypatch):
+    m = _import_script(monkeypatch, "scripts.cron_daily_leg_capture")
+    assert PM_SETTLED_SQL in m.BARS_IN_WINDOW_SQL
+    src = open(m.__file__).read()
+    assert "FROM orats_options_minute WHERE" not in src   # no inline unfiltered count left

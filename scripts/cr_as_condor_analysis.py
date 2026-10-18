@@ -60,7 +60,7 @@ import numpy as np
 
 from packages.shared.backfill_safety import assert_role_or_die, backfill_run, get_backfill_db_conn, update_run_smoke
 from packages.shared.backtest.condor_0dte import (
-    CONDOR_LEGS, FEE_PER_CONTRACT_SIDE, WING_WIDTH, build_boxes, first_valid_entry, settle_condor,
+    CONDOR_LEGS, FEE_PER_CONTRACT_SIDE, PM_SETTLED_SQL, WING_WIDTH, build_boxes, first_valid_entry, settle_condor,
 )
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
 from packages.shared.options_cache.opra import format_opra
@@ -84,10 +84,12 @@ SELECT spot_price, snapshot_pt FROM orats_monies_minute
 WHERE ticker = %s AND trade_date = %s AND snapshot_pt <= %s AND spot_price IS NOT NULL
 ORDER BY snapshot_pt DESC, dte ASC LIMIT 1
 """
-BARS_SQL = """
+# CR-BN: PM rows only — third-Friday AM-settled SPX bars share the OPRA symbol.
+# Column list unchanged (CR-BM imports this and unpacks 5-tuples).
+BARS_SQL = f"""
 SELECT snapshot_pt, strike, option_type, bid_price, ask_price
 FROM orats_options_minute
-WHERE opra_symbol = ANY(%s) AND snapshot_pt BETWEEN %s AND %s
+WHERE opra_symbol = ANY(%s) AND snapshot_pt BETWEEN %s AND %s AND {PM_SETTLED_SQL}
 ORDER BY snapshot_pt
 """
 
