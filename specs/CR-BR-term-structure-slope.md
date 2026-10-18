@@ -183,3 +183,26 @@ Adopted verbatim:
 - (iv) Keep PC2_log with the gate replaced by a rank statement.
 
 Every sign-correct option is strongly level-correlated, so L4's level-neutral outcome carries the Bekaert–Hoerova control under any choice. The run does not start until A1.1 is amended. The extraction script is committed with its gate unchanged.
+
+---
+
+## Amendment A2 (Ryan, 2026-10-18) — ratio slope primary; PCA relative sign only
+
+Adopted verbatim. No further stop on the slope definition is permitted; if A2 fails its own gate, the CR reports it and runs on s_t.
+
+| # | Amendment |
+|---|---|
+| A2.1 | L3(a) primary slope = r_t = log(IV30 / IV7), scale-free, absolute sign meaningful (r_t < 0 = inverted). Quintiles on train, Q1 = most negative. This is the Cheng / Beckmeyer front-to-next ratio object; state that in the spec. |
+| A2.2 | L3(b) secondary = s_t = IV30 − IV7 in vol points (unchanged). |
+| A2.3 | L3(c) Johnson-object column = PC2 of log IV² from the train PCA, orientation fixed only by the relative rule sign(corr(PC2, r_t)) > 0 — the absolute-sign gate of A1.1 is withdrawn as mis-specified (centred scores cannot carry an absolute sign; Johnson's SLOPE is also a centred score). Report corr(PC2, r_t), corr(PC2, log IV7²), and the quintile-ranking agreement between PC2 and r_t. The frozen IV² PC2 stays as the "failed sign check" column. |
+| A2.4 | Gate for A2.1 (Step 0 addendum, one line): r_t quintiles must rank the inversion indicator monotonically (Q1 share inverted > Q2 > … > Q5). If this fails, run on s_t and say so. |
+| A2.5 | L6 pass/kill: judged on r_t quintiles on the level-neutral outcome, as frozen. Kill clause now names its two definitions explicitly: "Q1 − Q5 CI spans zero at both horizons on both r_t and s_t." PC2 is reported, never gated. |
+| A2.6 | Everything else unchanged. Proceed: extraction → single run → reconciliation (in the Johnson row, state that his SLOPE is a centred PC score and ours is a ratio, and give corr(PC2, r_t) as the bridge) → write-backs → verification agent → wrap → PR unmerged. STOP before any modification. |
+
+**Statement required by A2.1.**
+- r_t = log(IV30 / IV7) is the front-to-next ratio object of Cheng's futures/spot term-structure ratio and of Beckmeyer's front-to-next comparison, expressed in logs. It is scale-free, and its sign is absolute: r_t < 0 means inverted.
+- Sign convention (L8, unchanged): positive = upward-sloping, Q1 = most negative.
+
+**Gate operational definition (A2.4).** The inversion indicator is 1[IV90 < IV7], as in the A1 operational definitions. Monotone means strictly decreasing shares over r_t quintiles Q1 > Q2 > Q3 > Q4 > Q5, on the 778 x-complete train days.
+
+**Correlations (A2.3).** All are Spearman, computed on the 778 days. "Quintile-ranking agreement" is the share of days whose PC2 quintile equals their r_t quintile, plus the Spearman between the two quintile labels.
