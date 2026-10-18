@@ -254,3 +254,37 @@ Also recorded for the amendment:
 - (i) `atmiv` is below the price-implied variance at the open in **both** eras: 0.13 against ATM straddles, 0.32–0.37 against the strangle. That is the P8 measurement.
 - (ii) On S1's 445 V_px nights, v_b would be the ±0.5 IM strangle variance, a wing quantity. v_a stays ATM `atmiv`. In the clean era vol50²τ / V_px is 0.93 on the strangle, so the wing–ATM gap biases D_on down by about that much.
 - (iii) The primary subset is n 44, on low-IM days only.
+
+---
+
+## Amendment A1 — era-aware P3 (Ryan, 2026-10-18; adopted after the Step 0 STOP, before any implementation run)
+
+- **A1.1** Era split fixed at **2024-03-01**. It is data-determined from the Step 0 era table and recorded as an **in-sample choice**. Sensitivity at 2024-02-01 and 2024-04-01 is reported as a diagnostic column, not as a selection. Era E0 = nights with t < 2024-03-01; E1 = t ≥ 2024-03-01.
+- **A1.2** P1 open-side variance = V_px (K-aware solve, P3(g)) on every primary-subset night, in both eras. It is the only convention-free measurement, and the quote-based vol shows no era break.
+- **A1.3** The P3 decision rule (field within 10 % of the V_px median at 09:33) is applied separately per era and per bucket (S1/S2/S7).
+  - A field qualifies for extension only in the era-bucket cells where it passes.
+  - Where no field passes, that era-bucket runs on the primary subset only; n is reported per cell.
+  - No field is extended across the break.
+- **A1.4** Mandatory splits added to L6: era (E0/E1) for every statistic, including L8.
+  - L8 is judged on the pooled P1 read, as frozen, and the report shows E0 and E1 beside it.
+  - If the two eras disagree in sign, that is recorded as a finding, and the decision line must say "modify", not "pass".
+- **A1.5** New diagnostic table (Step 0 addendum, committed): by era and bucket, the median and IQR of atmiv²τ / V_px and vol50²τ / V_px at 09:31, 09:33, 09:35 and 09:45, and at 15:59 where captures exist, plus the implied-vol-ratio form √(·).
+  - This table is the measurement for `open-questions/implied-move-1d-is-atm-iv-not-open-straddle.md` (P8).
+  - It is also the measurement for a new open question, "atmiv at the open understates traded straddle IV — implied_move_1d exposure by era" (status: created, priority: high). That note lists the downstream fields: `bt_daily_features.implied_move_1d` and the σ-normalised features, `bt_range_labels_daily` h=1, CR-AS/CR-BM condor strike placement, `bt_daily_outcomes.range_over_im`.
+  - Exposure is stated as measured ratios per era; no cause.
+- **A1.6** Two rows are appended to `components/field-conventions.md` (monies section): `atmiv` and `vol50` at the open, giving the per-era ratio to straddle-implied variance from A1.5 and the note "ORATS-side change at ~2024-03-01, cause unknown", established in CR-BP Step 0.
+- **A1.7** Nothing else in the frozen spec changes. L8, L9, P5, the P6 priors, the seed, the universe and the event list are unchanged. Proceed to the extraction and the single run, then the reconciliation protocol with the CR-BO and CR-037 session notes as priors. STOP before any modification.
+- **A1.8** The report states in one line the E1-era (t ≥ 2024-03-01) median of atmiv²τ / V_px and its square root at 09:33 for bucket S1, with n. This is the live-card `implied_move_1d` accuracy today. The E0 equivalent is stated beside it.
+
+### A1 reading, recorded at adoption (Code)
+
+These follow mechanically from A1 and the frozen spec; they are stated here so the run is reviewable.
+
+- **(r1) Only 0DTE contracts are captured** (Step 0 item 4). So for S2 and S7 the A1.3 test has no V_px for the bucket's own contract and cannot pass in either era. The primary-subset V_px is the 0DTE contract's, not theirs. **So S2 and S7 have no P1 rows (n = 0) in both eras.**
+  - L8's kill (a), "P_on CI spans zero … in every bucket", is evaluated over the buckets with n > 0, and the report says so.
+  - S2 and S7 stay reported through the P2 read (`atmiv` at 09:50), which A1 does not restrict.
+- **(r2) S1.** The A1.3 test uses the deciding set of C1. That is the secondary strangle, because the primary n is 44 < 100, and per era 25 / 18 < 100. P1 v_b is:
+  - V_px (primary, A1.2) on primary-subset nights;
+  - otherwise the field that passed in that era's S1 cell;
+  - otherwise the night drops.
+- **(r3) P2** (`atmiv` at 09:50, C6(i) windows) is computed on every CR-BO-universe night per bucket. It is reported both on its full sample and on the P1 nights.
