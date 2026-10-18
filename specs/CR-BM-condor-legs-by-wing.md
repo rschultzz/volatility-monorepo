@@ -80,3 +80,15 @@ L2 (settle on the harness's SPX-cash function) and G1 (condor_pnl reproduces the
 - **A1.7** Reconciliation gets a row for the CR-AS session note stating that its break-even and its "magnet-above days lose on the call wing" reading were computed on `spot_price` settlement, with G1b's numbers as the re-settled version. A line goes into State of Knowledge — 2026-09-20 under a new "## Updates — 2026-10-17 (CR-BM)" heading only if G1b moves the CR-AS pooled condor P&L by more than its CI half-width; otherwise the session note records "re-settlement did not change the read."
 
 Nothing else in the spec changes.
+
+## Single run (2026-10-17 17:09 PT)
+
+Script `scripts/cr_bm_condor_legs_by_wing.py`, one run; outputs `scripts/output/cr_bm/{legs_by_wing.parquet, report.md, summary.json}`. Operational definitions (bootstrap re-seeded per statistic, L5 read per structure in points with IM alongside, L7 statistics) are in the script header, written before the run.
+
+- **G1a PASS.** Max per-row |call + put − CR-AS net| 1.8e-15 pts over 1,441 rows; pooled ±0.5 −0.00096 → −0.001, ±1.0 +0.00246 → +0.002; entry minute and credit re-derived for every row.
+- **Universe** 713 dates (712 ±0.5, 710 ±1.0 boxes). Gamma unjoined: 2023-05-01, 2023-11-27, 2024-12-02, 2025-12-01. IV rank on 605 universe dates.
+- **L5 (harness settlement, points): not supported, not killed.** ±0.5 call −0.218 [−0.515, +0.061], put −0.027 [−0.294, +0.241]; ±1.0 call −0.053 [−0.225, +0.107], put +0.077 [−0.102, +0.250]. Same read in IM on both structures.
+- **G1b (diagnostic).** Pooled condor, CR-AS vs harness settlement: ±0.5 −0.001 → −0.002 IM (Δ −0.0005, CI half-width 0.0083); ±1.0 +0.002 → +0.003 (Δ +0.0009, half-width 0.0066). 147 + 54 boxes changed. Re-settlement did not change the read. CR-AS H4 magnet-above −0.018 [−0.035, −0.001] → −0.018 [−0.034, −0.001].
+- **L7.** Same-day call/put P&L correlation −0.262 (±0.5) / −0.077 (±1.0) vs ≈ 0 shuffled; call − put CI essentially unchanged under shuffling; the wing means are identical by construction.
+
+Full tables: `scripts/output/cr_bm/report.md`.
