@@ -145,3 +145,35 @@ Adopted verbatim:
   - These are missing when the previous session has no 12:59 bar: 2023–25 expiry Fridays print no RTH bars, and early closes have no 12:59 bar. Those days drop from the regressions that use them.
 - **L7.** One permutation of days (`default_rng(17)`) moves the trailing-rank decile label and the sign label together. Every gated statistic is recomputed on the permuted labels.
 - **A1.5 years.** 2023, 2024 and 2025 are calendar years; 2026 H1 is 2026-01-01 → 2026-06-05. The deciles are those of the full run; they are not re-cut within a year.
+
+---
+
+## Result (single run `a3264cd`, 2026-10-18) — L6 as written: **KILL S2**
+
+Full output: `scripts/output/cr_bq/report.md` (per-day data `days.parquet`, `summary.json`).
+
+**Sample.** Universe 641 days; trailing-250 rank decile on 541 (first ranked day 2023-10-24; 100 carry no decile).
+
+**Primary statistics:**
+
+| Statistic | Result |
+|---|---|
+| (a) ρ5 D1 − D10 | +0.0102 [−0.0354, +0.0560] |
+| (b) ρ60 pooled D1 − D10 | +0.1222 [−0.1193, +0.2957] |
+| (c) VR D1 − D10 | +0.0341 [−0.1062, +0.1785] |
+| (d) rROD slope, G < 0 | −0.0008 (t −0.04, n 237) |
+| (d) rROD slope, G ≥ 0 | −0.0308 (t −1.68, n 392) |
+| (d) interaction | t +1.01 |
+| (e) skew D1 − D10 | +0.160 [−0.139, +0.453] |
+
+- **L6 pass:** neither clause is met.
+- **L6 kill:** no gradient in (a), (b) or (c), and the Baltussen slope is flat across sign → **KILL S2**.
+- **L7 placebo:** all gradients span zero.
+
+**Reported, not gated:**
+- sign-split VR (G < 0) − (G ≥ 0) +0.093 [+0.028, +0.161];
+- skew +0.183 [+0.072, +0.303];
+- ρ5 +0.021 [−0.0003, +0.043];
+- ρ5 per +1 sd of raw G −0.0095 (t −1.81).
+
+Reconciliation, decision line and write-backs: vault session note `sessions/2026-10-18 - CR-BQ — Gamma Autocorrelation.md`. The decision line is kill by the written rule; a sign-split pre-registration is the only modify candidate, left to Ryan. Stopped before any modification.
