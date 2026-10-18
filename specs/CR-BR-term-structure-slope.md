@@ -108,3 +108,46 @@ Script `scripts/cr_br_step0.py` (read-only; no outcome used anywhere); full outp
 - (iii) Make s_t primary.
 
 L6 and everything else are unchanged under any choice. The run does not start until L3(a) is amended.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-18) — slope definition
+
+Adopted verbatim:
+
+| # | Amendment |
+|---|---|
+| A1.1 | L3(a) primary slope = PC2 of log IV² (x_t = log IV7², …, log IV90²), PCA fitted on train, sign fixed so positive = upward-sloping (back above front). Record the loadings and variance explained; the 2024-05-17 worked day must now pass the sign check — it is a gate, not a report line. |
+| A1.2 | L3(b) s_t = IV30 − IV7 stays as secondary. The original PC2 of IV² levels is retained as a third, reported-only column labelled "frozen definition — failed sign check (Step 0)", with its +0.39 correlation to level and +0.19 to s_t stated. |
+| A1.3 | Report Spearman of each slope definition against log IV7² and against the inversion indicator, so the reconciliation can say which object Johnson's SLOPE corresponds to here. |
+| A1.4 | L6 pass/kill unchanged, applied to A1.1's quintiles on the level-neutral outcome. Everything else in the frozen spec unchanged: universe 621 / 515, L4 outcomes, L5 statistics, L7 placebos, priors. |
+| A1.5 | Proceed: extraction → single run → reconciliation (all nine steps; note in the Johnson row that his PCA was on VIX-level curves and ours on log IV², and state whether that is "same object up to a monotone transform") → write-backs → verification agent → wrap → PR unmerged. STOP before any modification. |
+
+**Operational definitions under A1.** These fill gaps A1 leaves open; they add no thresholds.
+
+**Samples.**
+- PCA and quintile cut points for every slope definition use all **778 x-complete train days**, as in Step 0: the slope state does not depend on ES.
+- The h = 1 statistics use the 621-day universe; the h = 5 statistics use the 515-day universe.
+- The "inversion indicator" is 1[IV90 < IV7].
+
+**Sign-check gate (A1.1).** The extraction aborts unless both of these hold:
+- PC2_log(2024-05-17) > 0;
+- PC2_log(2025-04-08) < 0.
+
+**Outcomes (L4).**
+- **Level-neutral residual:** OLS of the outcome on [1, log IV7²], fitted separately per horizon on that horizon's universe.
+- **h = 5 sum:** RV_{t+1..t+5} = Σ over the nights (t, t+1) … (t+4, t+5) of CR-BO's 13:00 → 13:00 PT RV. All five nights must pass `es_ok`.
+
+**Bootstrap (L5).**
+- **h = 1:** i.i.d. over days, 10,000 resamples, `default_rng(17)` per statistic.
+- **h = 5:** moving-block bootstrap, 5-day blocks over the date-ordered universe, resampled within each quintile.
+- **Q1 − Q5:** the two groups are resampled independently.
+
+**Spearman CI.** The same bootstrap, applied to the (slope, outcome) pairs.
+
+**Placebos (L7).**
+- (i) One permutation (`default_rng(17)`) of the quintile labels across the universe days of each horizon.
+- (ii) The outcome shifted one day earlier. The h = 1 outcome uses night (t−1, t), i.e. 13:00 PT t−1 → 13:00 PT t, normalised by IV7(t)²/365. That night must pass `es_ok`, and the day keeps its slope from t. This is contemporaneous, not predictive.
+- (ii) at h = 5 uses nights (t−5 … t−1, t).
+
+**By year.** Calendar years 2023, 2024, 2025 and 2026 H1, using the full-sample quintiles.
