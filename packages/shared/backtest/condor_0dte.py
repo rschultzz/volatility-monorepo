@@ -33,6 +33,11 @@ CONDOR_LEGS = 4
 CONDOR_ROUND_TRIP_FEE_USD = FEE_PER_CONTRACT_SIDE * CONDOR_LEGS * 2   # 10.40
 CONDOR_ROUND_TRIP_FEE_PTS = CONDOR_ROUND_TRIP_FEE_USD / 100.0         # 0.104 SPX points
 
+# CR-BN: on third Fridays ORATS files the AM-settled SPX monthly under the same
+# OPRA symbol as the PM SPXW (8 train dates, 2023-05 → 2024-02); only
+# orats_options_minute.expiry_tod tells them apart. Every 0DTE bar read ANDs this in.
+PM_SETTLED_SQL = "expiry_tod = 'pm'"
+
 
 def round5(p: float) -> float:
     """Nearest multiple of 5 (same rule as cr_ah_step4_analysis.round5)."""
