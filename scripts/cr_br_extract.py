@@ -3,9 +3,11 @@
 
 Spec: specs/CR-BR-term-structure-slope.md (L1–L4, Step 0, amendment A1). No statistic across quintiles here.
 Output: scripts/output/cr_br/days.parquet — one row per x-complete train day (778): IV at 7/14/30/60/90 d,
-  pc2_log (A1.1 primary), s_t (secondary), pc2_lvl (frozen, failed sign check), quintiles of each, inversion
-  indicator, log IV7², universe flags, h = 1 / h = 5 outcomes (raw + level-neutral), the shifted-outcome placebo.
-Gate (A1.1): PC2_log(2024-05-17) > 0 and PC2_log(2025-04-08) < 0, else abort.
+  r_t = log(IV30/IV7) (A2.1 primary), s_t (secondary), pc2_log (A2.3 Johnson-object column, relative sign),
+  pc2_lvl (frozen, failed sign check), quintiles of each, inversion indicator, log IV7², universe flags,
+  h = 1 / h = 5 outcomes (raw + level-neutral), the shifted-outcome placebo.
+Gate (A2.4): r_t quintiles must rank 1[IV90 < IV7] strictly decreasing Q1 > … > Q5; if not, the primary
+  ("gated") slope becomes s_t and that is recorded (no stop — A2). The A1.1 absolute-sign gate is withdrawn (A2.3).
 
 Usage: apps/web/.venv/bin/python scripts/cr_br_extract.py
 """
@@ -62,12 +64,19 @@ def main() -> None:
     D["pc2_log"], w_log, sh_log = pca2(np.log(IV ** 2))
     D["pc2_lvl"], w_lvl, sh_lvl = pca2(IV ** 2)
     D["s"] = 100 * (D.iv30 - D.iv7)
-    up = float(D.loc[D.t == GATE_UP, "pc2_log"].iloc[0]); inv = float(D.loc[D.t == GATE_INV, "pc2_log"].iloc[0])
-    print(f"sign gate: PC2_log {GATE_UP} = {up:+.5f} (must be > 0); {GATE_INV} = {inv:+.5f} (must be < 0)")
-    assert up > 0 and inv < 0, "A1.1 sign-check gate FAILED — stop"
-    for c in ("pc2_log", "s", "pc2_lvl"):
+    D["r"] = np.log(D.iv30 / D.iv7)
+    from scipy.stats import spearmanr
+    if spearmanr(D.pc2_log, D.r).statistic < 0:          # A2.3 relative orientation rule
+        D["pc2_log"] *= -1; w_log = -w_log
+    for c in ("r", "s", "pc2_log", "pc2_lvl"):
         D[f"q_{c}"] = pd.qcut(D[c], 5, labels=False) + 1
     D["inv"] = (D.iv90 < D.iv7).astype(int)
+    inv_share = [float(D.loc[D.q_r == k, "inv"].mean()) for k in range(1, 6)]
+    gate_ok = all(a > b for a, b in zip(inv_share, inv_share[1:]))
+    gated = "r" if gate_ok else "s"
+    print(f"A2.4 gate: inverted share by r_t quintile {[round(x, 4) for x in inv_share]} → "
+          f"{'PASS — r_t is the gated primary' if gate_ok else 'FAIL — run on s_t (A2)'}")
+    up = float(D.loc[D.t == GATE_UP, "pc2_log"].iloc[0]); inv = float(D.loc[D.t == GATE_INV, "pc2_log"].iloc[0])
     D["log_iv7sq"] = np.log(D.iv7 ** 2)
     D["year"] = [t.year for t in D.t]
 
@@ -118,7 +127,8 @@ def main() -> None:
     D.to_parquet(R.OUT_DIR / "days.parquet")
     meta = {"loadings_log": dict(zip(map(str, R.TENORS), map(float, w_log))), "var_share_log": [float(x) for x in sh_log[:3]],
             "loadings_lvl": dict(zip(map(str, R.TENORS), map(float, w_lvl))), "var_share_lvl": [float(x) for x in sh_lvl[:3]],
-            "gate": {str(GATE_UP): up, str(GATE_INV): inv}, "level_neutral_coefs": coefs,
+            "gate_A2_4": {"inv_share_by_r_quintile": inv_share, "pass": gate_ok, "gated_slope": gated},
+            "pc2_log_worked_days_info_only": {str(GATE_UP): up, str(GATE_INV): inv}, "level_neutral_coefs": coefs,
             "n": {"x_complete": len(D), "h1": int(D.in_h1.sum()), "h5": int(D.in_h5.sum()),
                   "h1_prev": int(D.y1_prev.notna().sum()), "h5_prev": int(D.y5_prev.notna().sum())}}
     (R.OUT_DIR / "extract_meta.json").write_text(json.dumps(meta, indent=1, default=str))
