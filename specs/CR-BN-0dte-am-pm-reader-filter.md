@@ -35,7 +35,7 @@ CR-BM Step 0 (`scripts/output/cr_bm/step0.md` on the CR-BM branch) found that on
 
 1. Spec freeze (this file).
 2. Step 0 findings appended here.
-3. Shared predicate + pure row filter in `condor_0dte`, unit tests.
+3. Shared predicate `PM_SETTLED_SQL` in `condor_0dte`, unit tests (amended at Step 0: a SQL predicate, not a Python row filter, so `BARS_SQL`'s column list — imported by CR-BM — stays unchanged).
 4. Apply to the 0DTE readers.
 5. Wrap: deltas, decisions, follow-ups.
 
@@ -70,3 +70,23 @@ Script `scripts/cr_bn_step0.py` (read-only transaction, counts only); full outpu
 **Archive (L3).** CR-AS's archived logs and session note are untouched and nothing is re-run. A future re-run of `cr_as_condor_analysis.py` would now price the 8 dates on PM bars only (fewer minutes) and so would not reproduce run 85b690ec on those dates — intended. CR-BM's G1a re-derivation runs on its 713-date universe, which excludes the 8, so it is unaffected.
 
 **Gate:** no contradiction with the spec. One amendment, recorded here before code: the fix is reader-side only and leaves PM gaps on the 8 dates (Q4); the writer-side recovery is a follow-up. Q-fee unanswered → fee not changed.
+
+## What changed (wrap, 2026-10-17)
+
+- `packages/shared/backtest/condor_0dte.PM_SETTLED_SQL = "expiry_tod = 'pm'"` — one predicate for every 0DTE bar read.
+- `scripts/cr_as_condor_analysis.BARS_SQL` ANDs it in; column list unchanged (CR-BM's import keeps working).
+- `scripts/cr_as_capture_0dte_condor_legs.BARS_IN_WINDOW_SQL` and a new `scripts/cron_daily_leg_capture.BARS_IN_WINDOW_SQL` (replaces the inline count) count PM bars only. The DAILY-CAPTURE count covers condor and debit legs; it only sets the logged leg status (`ok` / `empty`) and never prices. A debit leg whose window holds only AM rows would now log `empty` — accurate, since the harness excludes AM-settled trades (CR-BI A1.4). Zero holdout dates are affected today (Step 0 Q1).
+- Tests: `packages/shared/backtest/tests/test_condor_0dte_pm_filter.py` — predicate semantics on an in-memory table (keeps `pm`, drops `am` and NULL); an AM-only valid minute cannot set the condor entry once filtered; each of the three readers carries the predicate. Backtest + cron suites: 165 passed.
+- Smoke (read-only): 2023-07-21 window 256 rows → `BARS_SQL` 128 (PM only); 2026-10-16 (holdout, DAILY-CAPTURE) 128 → 128 (unchanged). Counts only, no prices read.
+
+## Decisions
+
+- `= 'pm'` rather than `IS DISTINCT FROM 'am'` (Step 0 Q2: no NULLs; an unlabelled future row surfaces as a missing leg).
+- Fee (Q-fee) not changed — awaiting Ryan.
+- No DB writes, no re-run of CR-AS / CR-BM, archived results untouched.
+
+## Follow-ups (not done here)
+
+1. **PM minutes lost on the 8 mixed dates** (Step 0 Q4): PK `(opra_symbol, snapshot_pt)` + `ON CONFLICT DO NOTHING` kept one of AM/PM per minute. Recovering the PM quotes needs a writer/schema change (`expiry_tod` in the key, or a delete-and-refetch under a role with DELETE) — and the fetch path (`fetch_option_bars`) should drop or separately key AM rows before insert so a future third-Friday capture can't repeat it. Step 0 shows ORATS stopped returning AM rows for 0DTE after 2024-02-16, so this is historical repair.
+2. **Q-fee:** point `condor_0dte.FEE_PER_CONTRACT_SIDE` (1.30) at `packages/shared/config.FEE_PER_CONTRACT_PER_LEG` (0.65) — Ryan's call.
+3. `packages/shared/options_cache/repository.get_bars_for_contract` / `count_bars_for_contract` have no `expiry_tod` filter; no callers today.
