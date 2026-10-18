@@ -1,0 +1,32 @@
+{
+  "subset": "secondary",
+  "n_primary": 44,
+  "n_secondary": 648,
+  "r_atm_0933": 0.35834804802328557,
+  "r_v50_0933": 0.9079022784542047,
+  "atm_qualifies": false,
+  "v50_qualifies": true,
+  "extension_field": "vol50",
+  "close_flags": {
+    "S1": "ok",
+    "S2": "ok",
+    "S7": "ok"
+  },
+  "coverage": {
+    "S1": {
+      "vpx": 445,
+      "extended": 55,
+      "dropped": 0
+    },
+    "S2": {
+      "vpx": 0,
+      "extended": 498,
+      "dropped": 0
+    },
+    "S7": {
+      "vpx": 0,
+      "extended": 517,
+      "dropped": 0
+    }
+  }
+}
