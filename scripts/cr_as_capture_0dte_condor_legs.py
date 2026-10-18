@@ -73,7 +73,7 @@ from packages.shared.backfill_safety import (
     assert_role_or_die, backfill_run, get_backfill_db_conn, update_run_progress, update_run_smoke,
 )
 from packages.shared.backtest.condor_0dte import (
-    FIRST_REGIME, REGIME_ORDER, TARGET_PER_REGIME, build_boxes, dedupe_contracts,
+    FIRST_REGIME, PM_SETTLED_SQL, REGIME_ORDER, TARGET_PER_REGIME, build_boxes, dedupe_contracts,
     is_third_friday, sample_order, unlisted_legs,
 )
 from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
@@ -105,9 +105,10 @@ WHERE o.ticker = %s AND o.feature_version = %s AND o.active
   AND (f.feature_vector->>'implied_move_1d')::float > 0
 ORDER BY o.trade_date
 """
-BARS_IN_WINDOW_SQL = """
+# CR-BN: count PM bars only — third-Friday AM-settled SPX bars share the OPRA symbol.
+BARS_IN_WINDOW_SQL = f"""
 SELECT count(*) FROM orats_options_minute
-WHERE opra_symbol = %s AND snapshot_pt BETWEEN %s AND %s
+WHERE opra_symbol = %s AND snapshot_pt BETWEEN %s AND %s AND {PM_SETTLED_SQL}
 """
 SPX_OPEN_SQL = """
 SELECT spot_price, snapshot_pt FROM orats_monies_minute

@@ -62,7 +62,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 # Pure helpers only at import time (tests import this module without any env).
-from packages.shared.backtest.condor_0dte import CondorBox, build_box
+from packages.shared.backtest.condor_0dte import PM_SETTLED_SQL, CondorBox, build_box
 from packages.shared.options_cache.models import FetchedWindow, TimeRange
 from packages.shared.options_cache.opra import format_opra
 from packages.shared.options_cache.strikes import StructureNotListed, snap_spread_to_listed
@@ -76,6 +76,12 @@ OPRA_ROOT = "SPX"
 CR_ID = "DAILY-CAPTURE"
 WINDOW_START = time(6, 30)
 WINDOW_END = time(6, 45)
+# CR-BN: a leg's "bars" count is PM rows only — third-Friday AM-settled SPX bars
+# share the OPRA symbol and are never priced.
+BARS_IN_WINDOW_SQL = f"""
+SELECT count(*) FROM orats_options_minute
+WHERE opra_symbol = %s AND snapshot_pt BETWEEN %s AND %s AND {PM_SETTLED_SQL}
+"""
 OPEN_SNAPSHOT_FLOOR = time(6, 33)
 OPEN_SNAPSHOT_CEIL = time(6, 40)
 CONDOR_HALF_WIDTH_IM = 0.5
@@ -411,8 +417,7 @@ def main(argv=None) -> int:
             counters["bars_written"] += r.bars_written
             counters["cache_hits"] += r.cache_hits
             counters["gaps_filled"] += r.gaps_filled
-            n = conn.execute("SELECT count(*) FROM orats_options_minute WHERE opra_symbol = %s AND snapshot_pt BETWEEN %s AND %s",
-                             (leg.opra, w0, w1)).fetchone()[0]
+            n = conn.execute(BARS_IN_WINDOW_SQL, (leg.opra, w0, w1)).fetchone()[0]
             if n == 0:
                 counters["legs_empty"] += 1
             leg_status[leg.opra] = {"status": "ok" if n else "empty", "structure": leg.structure, "bars": int(n), "written": r.bars_written}
