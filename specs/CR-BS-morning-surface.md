@@ -63,3 +63,66 @@ If Step 0 requires a spec amendment, STOP and report. Otherwise continue without
 (1) spec freeze; (2) Step 0; (3) one commit for extraction; (4) one commit for statistics + report; (5) wrap.
 
 Single run. Report pass/kill against L6 exactly as written, both placebos, the by-era tables, and the three secondaries. Then the Reconciliation protocol, all nine steps; STOP before any modification.
+
+---
+
+## Step 0 — diagnosis findings (2026-10-18)
+
+Script `scripts/cr_bs_step0.py` (with `scripts/cr_bs_common.py`), SELECTs only, no run row, no API calls. Outputs in `scripts/output/cr_bs/`: `step0.md`, `step0_universe.csv`, `step0_gate.json`.
+
+**Item 3 — dte convention.**
+- ORATS stores the same-day expiry with **dte = 1**. There are 0 rows with dte = 0 in the window, and all 3,091 same-day PM rows carry dte = 1.
+- `dte_pct` is 0.000 on same-day rows at 07:30 PT, so it is not a usable clock.
+- Worked day 2025-03-04, 07:30 PT (quote 15:29:07Z): expir 2025-03-04 pm, dte 1, atmiv 0.4487, vol50 0.4303; next session 2025-03-05 pm, dte 2, atmiv 0.3306.
+- L1(i)'s "dte = 0 (ORATS dte convention)" is implemented as `expir_date = trade_date`, PM. This is CR-BP's "smallest dte > 0" contract, so it confirms the convention and is not an amendment.
+
+**Item 1 — L1 counts (E0 / E1 / total).**
+
+| step | E0 | E1 | total |
+|---|---|---|---|
+| train sessions | 210 | 568 | 778 |
+| after early closes | 208 | 562 | 770 |
+| after roll weeks | 179 | 474 | 653 |
+| snapshot present 07:30–07:33 PT | 177 | 473 | 650 |
+| 0DTE PM smile | 176 | 473 | 649 |
+| next-session PM atmiv | 169 | 459 | 628 |
+| RTH ≥ 370 bars | 169 | 456 | **625** |
+
+- Snapshot minute: 07:30 on 621 days.
+- Third Fridays lost to the AM-only row: 0 (all fall in roll weeks or are otherwise excluded).
+- Flags: FOMC 15 (E0 5, E1 10); 08:30 release days 108 (E0 33, E1 75).
+
+**Item 2 — 10:30 ET era gate: PASS.** No captured quotes exist at 10:30 ET in train, so this is field vs field only.
+
+| median | E0 | E1 |
+|---|---|---|
+| atmiv/vol50, 0DTE | 1.027 (IQR 1.004–1.050) | 1.051 (IQR 1.022–1.087) |
+| atmiv/vol50, next session | 1.011 | 1.022 |
+| vol50 10:30/10:50, 0DTE | 1.026 | 1.036 |
+| atmiv 10:30/10:50, 0DTE | 1.014 | 1.034 |
+
+- Monthly medians 2023-11 → 2024-06 run 1.021–1.055.
+- The open-time E0 depression (CR-BP: vol50 09:33/09:50 E0 0.523) is absent at 10:30.
+
+**Item 4 — sides.** `vol75` = 25Δ put, `vol25` = 25Δ call (`vol_features.py:21-22`, CR-BO/CR-BP). vol75 > vol25 on 97.8 % of days. K median: E0 0.085, E1 0.164.
+
+**Item 5 — morning RV.** 60/60 morning bars on the median day; E1 minimum 46. 4 E1 days have < 57 morning bars, all kept.
+
+**Item 6 — walk-forward sizes.**
+- n 625.
+- First fit window: days 1–250, **2023-05-01 → 2024-07-30**. First prediction 2024-07-31.
+- **OOS n 375: E0 0, E1 375.**
+- Expanding-rank quintiles: 356 ranked days.
+
+### Gate: spec amendment required — STOP
+
+The 250-day initial window covers all 169 E0 days. Three locked clauses are therefore not evaluable as written:
+- L5's "Q5 − Q1 … by era";
+- L6's kill clause, "Q5 − Q1 CI spans zero in both eras";
+- L1's "E0/E1 mandatory in every table", for the walk-forward tables.
+
+The freeze reading said the kill is "evaluated literally on whatever n each era has", but it assumed some E0 n. With E0 n = 0 there is no CI, so a literal reading can never meet the kill. That would turn the pre-registered test into pass-or-"not supported" by a window artifact, so it is not a mechanical reading.
+
+Also recorded for the amendment and the reconciliation (from the source texts):
+- Todorov–Zhang's estimator is QV⁽⁰⁾ / (QV⁽¹⁾ − QV⁽⁰⁾) in total variance (odp.pdf p. 7 eq. 8), not IV₀²/IV₁². L2(d)'s T is the cruder IV² ratio.
+- Bandi2026 (p. 29) cites BFR as "Journal of Finance. Forthcoming" (2025). Our Sec. 10 numbers are from the 2024-03-15 draft.
