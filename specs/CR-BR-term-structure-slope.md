@@ -43,3 +43,68 @@
 3. One commit for extraction.
 4. One commit for statistics + report.
 5. Wrap. Single run. Report pass/kill against L6 exactly as written, both placebos, and the by-year table. Then the Reconciliation protocol, all nine steps.
+
+---
+
+## Step 0 — diagnosis findings (2026-10-18) — **STOP: L3(a) needs an amendment**
+
+Script `scripts/cr_br_step0.py` (read-only; no outcome used anywhere); full output `scripts/output/cr_br/step0.md`. Shared definitions `scripts/cr_br_common.py`, which reuses CR-BL's `total_variance_at` and CR-BO's `es_side` / `es_ok` / `detect_switches` unchanged.
+
+**Q3 — bracketing.** All five tenors are bracketed by PM expiries on **778 of 778** train sessions (100 %).
+- 7 d, 14 d and 30 d mostly sit on an exact node (718 / 714 / 415 days).
+- The 60 d and 90 d brackets have median widths of 21 and 31 days.
+- The longest PM node is ≥ 283 d on every day.
+- Snapshot: 12:46 PT on 765 days. The others are early-close days (10:06–10:15 PT), all removed by L1.
+
+**Q2 — era gate (close-time atmiv vs vol50, constant maturity).** **PASS**: there is no close-time era break.
+
+| tenor | E0 (< 2024-03-01, n 210) | E1 (≥ 2024-03-01, n 568) | E1 − E0 |
+|---|---|---|---|
+| 7 d | 1.0011 (IQR 0.996–1.008) | 1.0110 (IQR 1.000–1.025) | +0.0098 |
+| 30 d | 0.9967 (IQR 0.993–1.001) | 1.0074 (IQR 0.999–1.017) | +0.0106 |
+
+- Every value is inside CR-BP's 0.95–1.05 band. Monthly medians around 2024-03 are 0.997–1.024. Compare CR-BP's open-time ratios of 0.08 → 1.16.
+- This is a new field-conventions row (to be added at wrap).
+
+**Q1 — L1 counts.**
+- 778 train sessions.
+- → 778 with a ≤ 12:46 PT snapshot, and 778 with all tenors bracketed.
+- → 777 with t+1 ≤ 2026-06-05 (holdout never read).
+- → 761 after early closes.
+- → **632** after roll weeks (all years).
+- → 632 after contract switches (all 12 detected switches fall in roll weeks).
+- → 631 after the ES anchor bar.
+- → 623 after the overnight-minutes rule (≤ 5 % missing).
+- → **621** after the RTH-minutes rule (≤ 5 % missing on t+1, so ≥ 371 of 390, which implies ≥ 370; minimum seen 376).
+- **h = 5** (all five nights t … t+4 pass and t+5 ≤ split): **515**.
+- By year (h = 1 / h = 5): 2023 131 / 104; 2024 201 / 170; 2025 199 / 167; 2026 90 / 74.
+- The PCA and quintile sample is every x-complete train day (778), since the slope state does not depend on ES.
+
+**Q4 — PCA of x_t = IV² levels (L3(a) as written).**
+- Variance explained: PC1 96.94 %, PC2 **2.75 %**, PC3 0.22 %.
+- PC2 loadings (7 / 14 / 30 / 60 / 90 d): −0.589 / −0.005 / +0.343 / +0.490 / +0.544. The sign is fixed so the 90 d loading exceeds the 7 d loading. The shape is close to Johnson's (≈ +0.60 at 1 m to −0.54 at 12 m, about 4 %; opposite sign convention).
+- **Worked days:**
+  - 2025-04-08 (IV 61.2 / 51.0 / 42.4 / 35.5 / 32.3) has PC2 −0.0574: inverted and negative, correct.
+  - **2024-05-17 (IV 8.86 / 8.48 / 9.87 / 10.45 / 10.94, upward-sloping) has PC2 −0.0049: negative.**
+  - The score measures slope *relative to the mean curve*, and in IV² levels it is mixed with the vol level.
+
+**Q5 — what each definition sorts on. This is why Step 0 stops.**
+
+| definition | share of days with IV90 < IV7, Q1 … Q5 | Spearman with log IV7² | Spearman with IV90 − IV7 |
+|---|---|---|---|
+| (a) PC2 of IV², L3 as written | 40 / 26 / 33 / 34 / 35 % | **+0.391** | +0.155 |
+| (b) s_t = IV30 − IV7 | 97 / 60 / 10 / 2 / 0 % | **−0.757** | +0.934 |
+| (c) candidate: PC2 of log IV² | **67 / 45 / 33 / 16 / 8 %** | −0.206 | +0.688 |
+| (d) candidate: PC2 of IV² / row mean (shape only) | 35 / 32 / 35 / 34 / 33 % | +0.012 | +0.054 |
+
+- **(a) is not a slope on this sample.** Its quintiles do not separate inverted from upward curves, and Q5 holds the *higher*-vol days (median IV7 14.3 vs 11.0 in Q1). L3's "positive PC2 = back-end above front" and "Q1 = most inverted" are false for (a)'s scores, so Johnson's sign cannot be read off it, and L6's pass clause loses its meaning.
+- **(b)** sorts on inversion cleanly but is mostly a vol-level variable, which is why L4's level-neutral outcome matters.
+- **(c)** sorts monotonically on inversion with a weak level link. Its PC2 explains 3.56 %, with loadings −0.645 / −0.156 / +0.266 / +0.453 / +0.534.
+- **(d)** is a curvature factor, not slope.
+
+**For approval (Ryan): choose L3(a).**
+- (i) Keep PC2 of IV² as written, knowing Q1 ≠ inverted.
+- (ii) Replace it with PC2 of log IV² (c). This is the recommended option: it is Johnson's object on a log scale, the only PCA variant that ranks inversion, and its sign convention holds.
+- (iii) Make s_t primary.
+
+L6 and everything else are unchanged under any choice. The run does not start until L3(a) is amended.
