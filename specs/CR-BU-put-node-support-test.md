@@ -223,3 +223,15 @@ The train universe cannot produce 150 touched events under L3 + L7 + L8. Before 
 2. **Re-register with a lower n floor.** n ≈ 99 at most, and fewer once unresolved races drop out. Q5 suggests a CI half-width of about ±8 pts at that n, the size of the pass bar.
 3. **Re-register the node or entry definition** (window, bin width, DTE range). Any change must be fixed now, before any outcome is computed. Touch counts reveal nothing about bounces, but choosing a definition by its touch count is still a specification change and needs a new freeze.
 4. **Extend the date range backward** after resolving the pre-2024-04-03 `stock_price` open question. That is a separate CR.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-24, after Step 0; no actual-node outcome has been computed)
+
+A1 replaces L7/L8/L10's single-node rule; all else (L1–L6, L9 race with R = 0.20·IM, L11–L14, pass criterion incl. n ≥ 150, S1–S7) is unchanged. S1–S6 refer to the touched node.
+
+| # | Clause |
+|---|---|
+| A1.1 | **Candidates:** up to 3 per day — the most negative-net 5-pt bins of corrected L (0–7 DTE rows, P_target = S0) with L in [open − 1.5·IM, open − 0.25·IM], greedy by most negative net, each ≥ 10 pts from any already chosen. Only bins with net < 0. |
+| A1.2 | **Event:** scan RTH minutes from the open; the event is the first candidate whose entry E = N + 0.05·IM satisfies low ≤ E. One event per day. Race (L9) runs from that minute and that E. |
+| A1.3 | **Placebo:** for event day d with candidate z-set {z_1..z_k} (z_i = (open_d − N_i)/IM_d), on each other usable day e place pseudo-levels P_i = open_e − z_i·IM_e, apply the same first-touch rule and race. Placebo rate for d = win share over touched, resolved e. Statistic = mean(actual − placebo) over event days. |
