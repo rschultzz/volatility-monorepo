@@ -668,6 +668,8 @@ export default function PriceChart({
   gexMinAbsB = 50,
   expectedMoveLevels,
   onApplyGexMinAbsB,
+  gexLevelsMode = 'current',
+  onApplyGexLevelsMode,
   onApplyIntervalChange,
   onVisibleLogicalRangeChange,
   onLinkedCrosshairChange,
@@ -956,6 +958,8 @@ export default function PriceChart({
     }
   })
   const [draftAtmIvLineEnabled, setDraftAtmIvLineEnabled] = useState(atmIvLineEnabled)
+  // CR-BT: Levels: Current | Corrected — owned by App (URL param + localStorage).
+  const [draftGexLevelsMode, setDraftGexLevelsMode] = useState(gexLevelsMode)
 
   const [floatingPos, setFloatingPos] = useState(() => {
     try {
@@ -1068,9 +1072,10 @@ export default function PriceChart({
       setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
       setDraftInterval(normalizeIntervalValue(interval, '1min'))
       setDraftAtmIvLineEnabled(atmIvLineEnabled)
+      setDraftGexLevelsMode(gexLevelsMode)
       setSettingsError('')
     }
-  }, [gexMinAbsB, interval, atmIvLineEnabled, settingsOpen])
+  }, [gexMinAbsB, interval, atmIvLineEnabled, gexLevelsMode, settingsOpen])
 
   useEffect(() => {
     hideParentTopControls()
@@ -2181,6 +2186,7 @@ export default function PriceChart({
     setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
     setDraftInterval(normalizeIntervalValue(interval, '1min'))
     setDraftAtmIvLineEnabled(atmIvLineEnabled)
+    setDraftGexLevelsMode(gexLevelsMode)
     setSettingsError('')
     setSettingsOpen(true)
   }
@@ -2191,6 +2197,7 @@ export default function PriceChart({
     setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
     setDraftInterval(normalizeIntervalValue(interval, '1min'))
     setDraftAtmIvLineEnabled(atmIvLineEnabled)
+    setDraftGexLevelsMode(gexLevelsMode)
   }
 
   function applySettings(event) {
@@ -2205,6 +2212,9 @@ export default function PriceChart({
 
     if (typeof onApplyGexMinAbsB === 'function') {
       onApplyGexMinAbsB(next)
+    }
+    if (typeof onApplyGexLevelsMode === 'function') {
+      onApplyGexLevelsMode(draftGexLevelsMode)
     }
     if (typeof onApplyIntervalChange === 'function') {
       onApplyIntervalChange(nextInterval)
@@ -3258,6 +3268,32 @@ export default function PriceChart({
 
                 <div style={{ fontSize: '11px', color: '#94a3b8', lineHeight: 1.45 }}>
                   Only plot GEX levels whose absolute net gamma is at or above this threshold, in billions.
+                </div>
+
+                <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e1', marginTop: '14px', marginBottom: '8px' }}>
+                  Levels
+                </label>
+
+                <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: '#cbd5e1', marginBottom: '8px' }}>
+                  {[
+                    ['current', 'Current'],
+                    ['corrected', 'Corrected'],
+                  ].map(([value, label]) => (
+                    <label key={value} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        name="gex-levels-mode"
+                        value={value}
+                        checked={draftGexLevelsMode === value}
+                        onChange={() => setDraftGexLevelsMode(value)}
+                      />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+
+                <div style={{ fontSize: '11px', color: '#94a3b8', lineHeight: 1.45 }}>
+                  Corrected places each expiry at strike × ES ÷ its forward (prior 15:46 ET). No corrected lines before 2024-04-03 or when that ES bar is missing.
                 </div>
 
                 {settingsError && (
