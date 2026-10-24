@@ -230,3 +230,18 @@ The two dominant lines move +21 pts (7660 → 7681, 7760 → 7781). The 2027-06-
 2. **No ES 15:45 ET bar on A** (28 sessions; early closes, Databento expiry Fridays, 2026 feed gaps). Recommendation: same as 1 — no corrected lines + note, rather than a substitute bar (the ORATS snapshot time on early-close days is unmeasured).
 3. **Snapshot/display contract mismatch** (2026-03-20, 06-15, 09-14; one session per quarter in 2023–2025). Recommendation: accept as a display caveat and record the list; no code rule.
 4. "Why" problem 3 correction (multiplicity remains under Corrected) — wording only, no change to L1–L10.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-24, after Step 0)
+
+Approved as recommended in Step 0 "Decisions needed". L1–L10 stand; these clauses add rules L2/L4 did not cover.
+
+| # | Clause |
+|---|---|
+| A1.1 | **Forward-era floor.** Corrected placement is defined only for session dates D ≥ **2024-04-03** (first session from which `orats_oi_gamma.stock_price` is forward-like on every session, Step 0 Q1). For D < 2024-04-03, Corrected mode draws **no** GEX lines for that session (no segment, no `gex_levels` row). No rate/dividend substitute. |
+| A1.2 | **Missing ES snapshot.** If the `ironbeam_es_1m_bars` bar starting 15:45 America/New_York on A = `prev_trading_day(D)` is absent (or its close is not a positive finite number), Corrected mode draws no lines for that session. No substitute bar. |
+| A1.3 | **Payload note.** Corrected responses (only) carry `"levels": "corrected"` and `"levels_notes"`: a list of `{"session_date", "reason"}` for every loaded session without corrected lines, reason ∈ `pre_forward_era` / `no_es_snapshot` / `no_rows`. Current-mode responses gain no key (L7). |
+| A1.4 | **Roll-mismatch sessions** (contract switch between the A 15:45 ET snapshot and the end of session D — 2026-03-20, 2026-06-15, 2026-09-14; the quarterly expiry Friday in 2023–2025) are accepted as a display caveat: no code rule; listed here and in the session note for CR-BU. |
+| A1.5 | **"Why" problem 3, corrected wording.** The correction fixes the amount and direction of each expiry's shift, not the multiplicity: one strike's expiries legitimately land at different ES prices (706/887 strikes in > 1 bucket on 2026-10-23 under both modes). |
+| A1.6 | **Bucketing.** The corrected path buckets in Python with half-away-from-zero rounding, matching Postgres `ROUND(double)` used by the existing queries, on the same row universe (same WHERE clause). |
