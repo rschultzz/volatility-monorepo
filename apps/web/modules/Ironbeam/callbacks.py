@@ -30,6 +30,13 @@ from packages.shared.surface_compare import k_for_abs_delta
 from packages.shared.options_orats import pt_minute_to_et
 from packages.shared.options_cache.pricing import build_condor_pricing_payload
 from packages.shared.gex_landscape_api import build_gex_landscape_response
+from packages.shared.level_placement import (
+    bucket_levels,
+    corrected_levels_defined,
+    es_snapshot_bar_start_utc,
+    place_levels,
+)
+from packages.shared.trading_calendar import prev_trading_day
 from modules.Ironbeam.routes import register_gex_landscape_route
 
 # Import skew helpers for the React API
@@ -883,14 +890,20 @@ def _build_gex_segments_for_session(
         pt_tz: ZoneInfo,
         *,
         gex_min_abs_b: float | None = None,
+        gex_tables: tuple[pd.DataFrame | None, pd.DataFrame | None] | None = None,
 ) -> list[dict]:
+    # gex_tables: precomputed (by-level, by-level-and-expir) frames — the CR-BT
+    # corrected placement. None = the current discounted_level queries.
     if df_bars is None or df_bars.empty:
         return []
 
-    try:
-        df_gex = _fetch_gex_grouped_by_level(session_date)
-    except Exception:
-        return []
+    if gex_tables is not None:
+        df_gex = gex_tables[0]
+    else:
+        try:
+            df_gex = _fetch_gex_grouped_by_level(session_date)
+        except Exception:
+            return []
 
     if df_gex is None or df_gex.empty:
         return []
@@ -914,10 +927,13 @@ def _build_gex_segments_for_session(
     # Per-expiration breakdown — attached to each segment for the React chart's
     # popup/legend. Falls back to empty lists on any error so the levels still
     # render exactly as before.
-    try:
-        df_by_expir = _fetch_gex_grouped_by_level_and_expir(session_date)
-    except Exception:
-        df_by_expir = None
+    if gex_tables is not None:
+        df_by_expir = gex_tables[1]
+    else:
+        try:
+            df_by_expir = _fetch_gex_grouped_by_level_and_expir(session_date)
+        except Exception:
+            df_by_expir = None
 
     expirs_by_level: dict[float, list[dict]] = {}
     if df_by_expir is not None and not df_by_expir.empty:
@@ -987,8 +1003,10 @@ def _build_react_preview_bars_payload(
         gex_min_abs_b: float | None = None,
         phase: str = "center",
         days_either_side: int | None = None,
+        levels_mode: str = "current",
 ) -> tuple[dict, int]:
     interval = str(interval or "1min").strip()
+    corrected = levels_mode == "corrected"
     if interval not in ("1min", "5min"):
         interval = "1min"
 
@@ -1062,10 +1080,34 @@ def _build_react_preview_bars_payload(
         )
     bars.sort(key=lambda x: x["time"])
 
+    # CR-BT: corrected tables per loaded session (Levels: Corrected only).
+    corrected_tables: dict[dt.date, tuple[pd.DataFrame | None, pd.DataFrame | None]] = {}
+    levels_notes: list[dict] = []
+    if corrected and gex_enabled:
+        for load_date, _ in loaded_frames:
+            try:
+                df_c, df_ce, reason = _corrected_gex_tables(load_date)
+            except Exception as e:
+                df_c, df_ce, reason = None, None, f"error: {e}"
+            corrected_tables[load_date] = (df_c, df_ce)
+            if reason is not None:
+                levels_notes.append({"session_date": load_date.isoformat(), "reason": reason})
+
     gex_segments: list[dict] = []
     if gex_enabled:
         for load_date, df_day in loaded_frames:
             try:
+                if corrected:
+                    gex_segments.extend(
+                        _build_gex_segments_for_session(
+                            load_date,
+                            df_day,
+                            pt_tz,
+                            gex_min_abs_b=gex_min_abs_b,
+                            gex_tables=corrected_tables.get(load_date, (None, None)),
+                        )
+                    )
+                    continue
                 gex_segments.extend(
                     _build_gex_segments_for_session(
                         load_date,
@@ -1115,7 +1157,10 @@ def _build_react_preview_bars_payload(
     if phase == "center" and gex_enabled and loaded_frames:
         df_bars = loaded_frames[0][1]
         try:
-            df_gex = _fetch_gex_grouped_by_level(session_date)
+            if corrected:
+                df_gex = corrected_tables.get(session_date, (None, None))[0]
+            else:
+                df_gex = _fetch_gex_grouped_by_level(session_date)
             if df_gex is not None and not df_gex.empty:
                 band_min = float(df_bars["low"].min()) - float(GEX_LEVEL_PADDING)
                 band_max = float(df_bars["high"].max()) + float(GEX_LEVEL_PADDING)
@@ -1155,7 +1200,7 @@ def _build_react_preview_bars_payload(
         except Exception:
             gex_levels = []
 
-    return {
+    payload = {
         "bars": bars,
         "gex_levels": gex_levels,
         "gex_segments": gex_segments,
@@ -1171,7 +1216,12 @@ def _build_react_preview_bars_payload(
         "days_either_side": n_each_side,
         "requested_dates": [d.isoformat() for d in target_dates],
         "loaded_dates": [d.isoformat() for d, _ in loaded_frames],
-    }, 200
+    }
+    # CR-BT A1.3: only Corrected responses carry these keys (Current stays byte-identical, L7).
+    if corrected:
+        payload["levels"] = "corrected"
+        payload["levels_notes"] = levels_notes
+    return payload, 200
 
 
 def _build_react_live_trades_overlay_payload(
@@ -2041,6 +2091,87 @@ def _fetch_gex_grouped_by_level_and_expir(trade_date: dt.date) -> pd.DataFrame:
     return df[["level", "expir_date", "dte", "call_gamma", "put_gamma", "net_gamma"]]
 
 
+# ---------- CR-BT: corrected level placement (Levels: Corrected) ----------
+# Same row universe and aggregation as the two queries above; only the level key
+# changes: L = strike × ES(15:45 ET bar close on the API date) / stock_price,
+# per packages/shared/level_placement.py. The queries above are untouched.
+
+def _fetch_gex_rows_for_placement(trade_date: dt.date) -> pd.DataFrame:
+    """Per-strike rows for one session, same WHERE clause as _fetch_gex_grouped_by_level."""
+    where = ["trade_date = :d", "discounted_level IS NOT NULL", "expir_date >= :d"]
+    params: dict[str, object] = {"d": trade_date.isoformat()}
+    if TICKER:
+        where.append("ticker = :tkr")
+        params["tkr"] = TICKER
+
+    sql = f"""
+        SELECT expir_date, dte, strike, stock_price, gex_call, gex_put
+        FROM orats_oi_gamma
+        WHERE {" AND ".join(where)}
+    """
+    with engine.connect() as con:
+        return pd.read_sql(text(sql), con, params=params)
+
+
+def _fetch_es_snapshot_close(api_trade_date: dt.date) -> float | None:
+    """Close of the ES bar starting 15:45 ET on the API trade date, or None if absent."""
+    sql = text(f"SELECT close FROM {DB_TABLE_NAME} WHERE datetime = :t")
+    with engine.connect() as con:
+        row = con.execute(sql, {"t": es_snapshot_bar_start_utc(api_trade_date)}).fetchone()
+    if row is None or row[0] is None:
+        return None
+    val = float(row[0])
+    return val if np.isfinite(val) and val > 0 else None
+
+
+def _corrected_gex_tables(session_date: dt.date) -> tuple[pd.DataFrame | None, pd.DataFrame | None, str | None]:
+    """
+    Corrected equivalents of (_fetch_gex_grouped_by_level, _fetch_gex_grouped_by_level_and_expir)
+    for one session, plus a reason when no corrected lines can be drawn (CR-BT A1.1–A1.3):
+    'pre_forward_era', 'no_es_snapshot' or 'no_rows'.
+    """
+    if not corrected_levels_defined(session_date):
+        return None, None, "pre_forward_era"
+
+    p_es = _fetch_es_snapshot_close(prev_trading_day(session_date))
+    if p_es is None:
+        return None, None, "no_es_snapshot"
+
+    rows = _fetch_gex_rows_for_placement(session_date)
+    if rows is None or rows.empty:
+        return None, None, "no_rows"
+
+    rows = place_levels(rows, p_es)
+    rows = rows[rows["level_corrected"].notna()].copy()
+    if rows.empty:
+        return None, None, "no_rows"
+
+    rows["level"] = bucket_levels(rows["level_corrected"], GEX_LEVEL_BUCKET)
+    rows["gex_call"] = pd.to_numeric(rows["gex_call"], errors="coerce").fillna(0.0)
+    rows["gex_put"] = pd.to_numeric(rows["gex_put"], errors="coerce").fillna(0.0)
+
+    def _finish(df: pd.DataFrame) -> pd.DataFrame:
+        df["call_gamma"] = df["call_gamma_raw"].astype(float)
+        df["put_gamma"] = -df["put_gamma_raw"].abs().astype(float)
+        df["net_gamma"] = df["call_gamma"] + df["put_gamma"]
+        df["level"] = df["level"].astype(float)
+        return df
+
+    df_gex = _finish(
+        rows.groupby("level", sort=True)
+        .agg(call_gamma_raw=("gex_call", "sum"), put_gamma_raw=("gex_put", "sum"))
+        .reset_index()
+    )[["level", "call_gamma", "put_gamma", "net_gamma"]]
+
+    df_by_expir = _finish(
+        rows.groupby(["level", "expir_date"], sort=True)
+        .agg(dte=("dte", "max"), call_gamma_raw=("gex_call", "sum"), put_gamma_raw=("gex_put", "sum"))
+        .reset_index()
+    )[["level", "expir_date", "dte", "call_gamma", "put_gamma", "net_gamma"]]
+
+    return df_gex, df_by_expir, None
+
+
 def _color_for_net_gex(net_val: float, cmin: float, cmax: float) -> str:
     if not np.isfinite(net_val):
         return pc.sample_colorscale(GEX_HEATMAP_COLORSCALE, 0.5)[0]
@@ -2703,6 +2834,10 @@ def register_ironbeam_callbacks(app):
             except Exception:
                 days_either_side = None
 
+            # CR-BT L8: levels=corrected selects the corrected placement; anything else = current.
+            levels_raw = (request.args.get("levels") or "").strip().lower()
+            levels_mode = "corrected" if levels_raw == "corrected" else "current"
+
             payload, status = _build_react_preview_bars_payload(
                 trade_date,
                 interval,
@@ -2710,6 +2845,7 @@ def register_ironbeam_callbacks(app):
                 gex_min_abs_b=gex_min_abs_b,
                 phase=phase,
                 days_either_side=days_either_side,
+                levels_mode=levels_mode,
             )
             resp = jsonify(payload)
 
