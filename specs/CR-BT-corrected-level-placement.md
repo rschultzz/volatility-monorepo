@@ -245,3 +245,35 @@ Approved as recommended in Step 0 "Decisions needed". L1–L10 stand; these clau
 | A1.4 | **Roll-mismatch sessions** (contract switch between the A 15:45 ET snapshot and the end of session D — 2026-03-20, 2026-06-15, 2026-09-14; the quarterly expiry Friday in 2023–2025) are accepted as a display caveat: no code rule; listed here and in the session note for CR-BU. |
 | A1.5 | **"Why" problem 3, corrected wording.** The correction fixes the amount and direction of each expiry's shift, not the multiplicity: one strike's expiries legitimately land at different ES prices (706/887 strikes in > 1 bucket on 2026-10-23 under both modes). |
 | A1.6 | **Bucketing.** The corrected path buckets in Python with half-away-from-zero rounding, matching Postgres `ROUND(double)` used by the existing queries, on the same row universe (same WHERE clause). |
+
+---
+
+## Implementation (2026-10-24)
+
+| step | commit | what |
+|---|---|---|
+| amend | `9db3acd` | Amendment A1 |
+| 1 | `0fc88d3` | `packages/shared/level_placement.py`: `place_levels`, `bucket_levels` (half away from zero = Postgres `ROUND`), `es_snapshot_bar_start_utc` (zoneinfo), `CORRECTED_LEVELS_FIRST_SESSION` 2024-04-03; 13 unit tests |
+| 2 | `dfdadc8` | `callbacks.py`: `_fetch_gex_rows_for_placement`, `_fetch_es_snapshot_close`, `_corrected_gex_tables` (new); `levels` route parameter → `levels_mode`; `_build_gex_segments_for_session(gex_tables=…)`; Corrected-only `levels` / `levels_notes` keys. `_fetch_gex_grouped_by_level*` and `_select_levels` unchanged (diffed against `e78774f`). Tests: `tests/test_bars_levels_toggle.py` (9), record/replay harness `tests/bars_fixture.py`, `tests/record_bars_fixture.py`, fixtures |
+| 3 | `e57d8fa` | `App.jsx` state + localStorage `ib-react-gex-levels-mode` (try/catch) + `levels=corrected` on the three bars fetches; `PriceChart.jsx` "Levels: Current / Corrected" radio in the settings modal under Min \|GEX\| |
+
+**L7 golden.** `fixtures/cr_bt_bars_golden_center.json` (sha256 `86b5cb49…`, 245,329 B) and `…_multi.json` (`8645e12a…`, 240,164 B) were written by `record_bars_fixture.py --golden` while `callbacks.py` was byte-equal to `e78774f` (checked with `git diff --quiet e78774f`); live and replay bodies matched at capture.
+
+## Step 4 — smoke (2026-10-24)
+
+**Byte identity, live DB.** `origin/main` (`e78774f`, a detached worktree) vs the branch, Flask test client, 2026-10-23 / 2026-09-21 / 2026-10-16 / 2024-04-02 × center/multi(±1) × 1min/5min = 16 requests: **all 16 sha256-identical** with no `levels` parameter, and all 16 identical again with `levels=current`. Unit test: absent / `current` / `CURRENT` / `foo` / empty all equal the golden in both phases.
+
+**Corrected mode, live DB** (gex_min_abs_b 10, 1min):
+
+| D | center lines Current → Corrected | top-3 Current | top-3 Corrected | per-expiry sum mismatches (both modes) | notes |
+|---|---|---|---|---|---|
+| 2026-10-23 | 60 → 60 | 7660, 7760, 7651 | 7681, 7781, 7687 | 0 | [] |
+| 2026-09-21 (first session after the Sept roll; A 09-18 is the Z26 patch) | 63 → 72 | 7612, 7701, 7712 | 7918, 7660, 7762 | 0 | [] |
+| 2026-10-16 (third Friday) | 69 → 70 | 7751, 7801, 7809 | 7794, 7844, 7839 | 0 | [] |
+| 2026-06-15 (roll-mismatch caveat A1.4) | 53 → 52 | 7494, 7401, 7501 | 7494, 7500, 7400 | 0 | [] — lines in the M26 frame over U26 bars, as accepted |
+| 2024-04-02 | 52 → 0 | | | 0 | `pre_forward_era` |
+| 2024-04-03 | 49 → 57 | 5200, 5139, 5207 | 5248, 5299, 5273 | 0 | [] |
+
+**UI** (local Vite dev server + an auth-free smoke backend registering only the Ironbeam routes; screenshots 800 px, `specs/assets/cr-bt/`): the settings control (`settings-levels-control.jpg`); Current vs Corrected for 2026-10-23, 2026-09-21, 2026-10-16 (`<date>-current.jpg`, `<date>-corrected.jpg`); the Corrected popup for line 7687 on 2026-10-23 (`2026-10-23-corrected-popup-7687.jpg`): rows −272.16 + 0.00 − 0.58 − 0.02 + 1.10 = −271.66 B vs headline −271.67 B (display rounding). Applying Corrected stored `corrected` in localStorage and added `levels=corrected` to the center and multi requests. No console errors on the bars route. (The smoke backend did not allow origin `:5174` on the flow/skew/smile/ATM-IV routes, so those panels errored in this harness only.)
+
+**Not verified here:** the deployed web service (no deploy done); the Dash-embedded copy of the React build (`/react-preview/`) — only the Vite dev build was exercised.
