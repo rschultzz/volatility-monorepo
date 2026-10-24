@@ -109,3 +109,117 @@ Commit 2: Step 0 findings appended to the spec. Answer all six gate questions; c
 Read-only against the database. Train dates only (session date 2024-04-03 .. 2026-06-05, L3/L14 exclusions); do not read the holdout. Import place_levels from CR-BT unchanged.
 After I approve Step 0: commit scripts/cr_bu_support.py before running it, run T1 and S1-S6 once, append results and the verdict to the spec, write the session note.
 ```
+
+---
+
+## Step 0 findings (2026-10-24)
+
+Script `scripts/cr_bu_step0.py` (committed with this section). Connection `get_backfill_db_conn()` (role `dash_backfill_writer` asserted) with `SET default_transaction_read_only = on`; SELECTs only. Log `scripts/logs/cr_bu/step0.log` (git-ignored). Definitions fixed in the script docstring before the run. Session D = NYSE trading day in [2024-04-03, 2026-06-05]. Holiday-stamped `orats_oi_gamma.trade_date` was remapped to `next_trading_day`: 23 store dates in range, 0 collisions with a properly stamped row. Levels come from `place_levels` (imported unchanged) with P_target = S0 = MIN(`stock_price`) of the nearest expiry ≥ D. Bins use `bucket_levels(L, 5)`. Price series: the `spx_cash` hybrid series, open = first clean print ≥ 06:33 PT. No race was run at any actual node. The race harness ran only for the Q5 A/A pseudo-nodes and their placebo levels, and only actual − placebo is reported.
+
+**Verdict: STOP. Gate 2 fails: 99 touched node days, against a minimum of 150.** Gates 1, 5 and 6 pass. Q3 and Q4 are answered below. L12 rules out re-tuning, so this needs Ryan's decision (see "Decisions needed").
+
+### Q1 — dependency: PASS
+
+- `packages/shared/level_placement.py` on this branch is byte-identical to `origin/main`, checked with `git diff --quiet origin/main`.
+- Its introducing commit `0fc88d3` is an ancestor of `origin/main` `0e943d8` (PR #71).
+- The script imports `place_levels` and `bucket_levels` unchanged.
+- CR-BT Step 0 gate 2 (F_matched vs ES) passed: median 0.70 pts on the gate sample. In the ≥ 2024-04-03 era without roll weeks it was 0.23 pts (p90 0.85, n 536). Source: `specs/CR-BT-corrected-level-placement.md` Q2.
+
+### Q2 — counts (no outcomes): **FAIL (touched 99 < 150)**
+
+**L3 floor.** It removes 232 sessions: the trading days 2023-05-01 → 2024-04-02, all of which have `orats_oi_gamma` rows. That leaves 546 trading sessions in [2024-04-03, 2026-06-05].
+
+**L14, each clause on its own** (on the 546 sessions):
+
+| clause | sessions |
+|---|---|
+| (a) roll week | 78 |
+| (b) no ES 15:45 ET bar on A | 15. All 15 fall outside (a): 2024-06-24, 07-05, 09-23, 12-02, 12-23, 12-26; 2025-03-24, 06-23, 07-07, 09-22, 12-01, 12-22, 12-26; 2026-02-18, 02-19 |
+| (c) roll mismatch (CR-BT A1.4) | 8: the quarterly expiry Fridays 2024-06-21 … 2026-03-20. 2026-06-15 is in a roll week. All 8 are inside (a), so (c) removes 0 sessions beyond (a)∪(b) |
+
+**Sequential exclusions:**
+
+| step | removed | remaining |
+|---|---|---|
+| start (2024-04-03 → 2026-06-05) | | 546 |
+| L14a roll week | 78 | 468 |
+| L14b no ES 15:45 ET bar on A | 15 | 453 |
+| L14c roll mismatch | 0 | 453 |
+| no canonical `bt_daily_features` row | 19 | 434 |
+| IM null or ≤ 0 | 1 (2024-04-26, IM = 0.0) | 433 |
+| no SPX-cash open | 0 | 433 |
+| no node rows | 0 | 433 |
+| **usable** | | **433** |
+
+**Missing canonical rows.** 25 of the 546 sessions have no canonical row (546 − 521). Almost all are the first session after a market closure: 2024-05-28, 06-20, 07-05, 09-03, 11-29, 12-24, 12-26; 2025-01-02, 01-10, 01-21, 02-18, 04-21, 05-27, 06-20, 07-03, 07-07, 09-02, 11-28, 12-24, 12-26; 2026-01-02, 01-20, 02-17, 04-06, 05-26. Six of them were already removed by L14a or L14b, so 19 are removed at this step. The rows are absent, not null.
+
+**Nodes** (L7): 365 of the 433 usable days have one. The other 68 have no negative 5-pt bin inside [open − 1.5·IM, open − 0.25·IM].
+
+**z_d distribution** (n 365): mean 0.952, median 1.006, p5 0.316, p25 0.624, p75 1.303, p95 1.461. The distribution is skewed toward the far edge of the window: 114 days have z in (1.25, 1.5], against 30 in the first bin, [0.25, 0.375].
+
+| z band | 0.25–0.375 | –0.5 | –0.625 | –0.75 | –0.875 | –1.0 | –1.125 | –1.25 | –1.375 | –1.5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| days | 30 | 26 | 36 | 28 | 30 | 32 | 34 | 35 | 63 | 51 |
+
+**Touched** (L8, low path only):
+- **99 of 365 node days (27.1 %). Gate requires ≥ 150: FAIL.**
+- Median z: 0.609 on touched days, 1.114 on untouched days.
+- By year: 2024 35 of 120, 2025 49 of 168, 2026 15 of 77.
+- S1 split (count only): 72 first touches before 10:00 PT, 27 after.
+- Minute prints understate the session low by a median 1.38 pts (field-conventions, CR-BH Q5). That biases touches slightly downward, by an amount far too small to close a 51-event gap.
+
+### Q3 — node anatomy (365 node bins)
+
+- **Share of node net:** 0DTE 38.2 %, 1–7 DTE 61.8 % (aggregate of signed sums).
+  - Per-day 0DTE share: median 26.7 %, IQR 5.7–63.0 %.
+  - 0DTE carries the majority on 121 of 365 days.
+- **Median node |net|:** 60.3 $bn, IQR 27.3–105.5. Units: stored gex ÷ 1e9, the chart's "B".
+- **Median node distance (open − N):** 51.1 pts, IQR 35.5–69.0. Median IM is 52.9 pts.
+- **Typical node bin:** 6 rows, 6 expiries, 2 strikes. A node is one or two strikes stacked across the week's expiries.
+- **Touched subset:** 0DTE share 43.4 %, median |net| 82.5 $bn, median distance 36.6 pts.
+- **By year**, median |net| / distance / 0DTE share: 2024 69.4 / 46.2 / 30 %, 2025 48.9 / 54.3 / 25 %, 2026 70.2 / 51.1 / 25 %.
+- `gex_put` is stored positive (500,831 of 746,995 node-universe rows are > 0, the rest 0). net = `gex_call` − |`gex_put`| as L6 specifies.
+
+### Q4 — worked day 2026-01-12 (random node day, `default_rng(20261024)`)
+
+- A = 2026-01-09. S0 = 6973.40, open = 6944.10, IM = 24.12.
+- Window: [6907.93, 6938.07].
+- Node: N = 6920, net −9.70 $bn, z = 0.999, E = 6921.21.
+- **Not touched:** no print after the open reached ≤ E. No race exists to hide.
+
+| strike | expiry | dte | `stock_price` | `discounted_level` | corrected L | L − `discounted_level` | net $bn |
+|---|---|---|---|---|---|---|---|
+| 6925 | 2026-01-16 | 4 | 6977.55 | 6930.09 | 6920.88 | −9.20 | −6.58 |
+| 6920 | 2026-01-13 | 1 | 6973.92 | 6922.03 | 6919.48 | −2.55 | −2.00 |
+| 6920 | 2026-01-12 | 0 | 6973.40 | 6921.02 | 6920.00 | −1.02 | −1.22 |
+| 6920 | 2026-01-14 | 2 | 6974.55 | 6923.05 | 6918.86 | −4.19 | −0.69 |
+| 6920 | 2026-01-15 | 3 | 6975.08 | 6924.07 | 6918.34 | −5.73 | +0.79 |
+
+- **Other window bins:** 6915 +2.11, 6910 +3.56, 6935 +8.36, 6925 +8.63 $bn. 6920 is the only negative bin in the window.
+- **Under `discounted_level` binning** the same OI splits differently. The most negative bins are 6915 (−6.71) and 6910 (−3.72), while 6920 is +9.80. This day shows the S4 old-vs-corrected contrast directly.
+- In SPX cash, the corrected 0DTE row sits at its strike, as it should: F_e = S0.
+
+### Q5 — A/A control: PASS
+
+- 365 pseudo-nodes. Days were drawn without replacement from the 433 usable days and z was drawn with replacement from the actual z_d, both from `default_rng(20261024)` after the Q4 draw.
+- They went through the full L8–L11 harness: entry, race at R = 0.20·IM, leave-one-out placebo, and the month-cluster bootstrap (seed 20260920, 10 000 resamples).
+- 87 pseudo-events were touched and resolved, across 26 months. The median placebo n per event is 158.
+- **actual − placebo = +0.78 pts, 95 % CI [−7.08, +9.38]. The CI covers 0, so the harness shows no bias at this n.**
+- The CI is about 16 pts wide at n 87. At n ≈ 100, the +8-pt pass bar would sit inside the noise band.
+
+### Q6 — IM source: PASS
+
+- Canonical version: `v0.6.1-nyse-sessions` (`packages/shared/canonical_version.py`), ticker SPX, `active`. IM is `feature_vector->>'implied_move_1d'`.
+- 521 rows in [2024-04-03, 2026-06-05], with 0 duplicate dates.
+- IM is null on 0 rows and ≤ 0 on 1: 2024-04-26 stores 0.0, not NULL.
+- 25 sessions have no row at all (listed under Q2).
+- IM on the usable sessions: median 50.96 pts, IQR 39.07–69.88.
+
+### Decisions needed (Ryan)
+
+The train universe cannot produce 150 touched events under L3 + L7 + L8. Before 2024-04-03 L3 has no valid forward (CR-BT A1.1), so the train window cannot be extended without the re-ingest or forward reconstruction raised in open-question `orats-oi-gamma-stock-price-not-forward-before-2024-04`. Options:
+
+1. **Close CR-BU as underpowered on train.** Record "not testable at n ≥ 150 on 2024-04-03 → 2026-06-05" in State of Knowledge.
+2. **Re-register with a lower n floor.** n ≈ 99 at most, and fewer once unresolved races drop out. Q5 suggests a CI half-width of about ±8 pts at that n, the size of the pass bar.
+3. **Re-register the node or entry definition** (window, bin width, DTE range). Any change must be fixed now, before any outcome is computed. Touch counts reveal nothing about bounces, but choosing a definition by its touch count is still a specification change and needs a new freeze.
+4. **Extend the date range backward** after resolving the pre-2024-04-03 `stock_price` open question. That is a separate CR.
