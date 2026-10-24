@@ -7,6 +7,7 @@ import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
 const FLOW_HEIGHT_STORAGE_KEY = 'ib-react-flow-panel-height'
 const FLOW_EMA_MINUTES_STORAGE_KEY = 'ib-react-flow-ema-minutes'
 const GEX_MIN_ABS_B_STORAGE_KEY = 'ib-react-gex-min-abs-b'
+const GEX_LEVELS_MODE_STORAGE_KEY = 'ib-react-gex-levels-mode'
 const GEX_LANDSCAPE_SPOT_MODE_KEY = 'GEX_LANDSCAPE_SPOT_MODE'
 // LIVE-mode landscape re-fetches only when ES moves materially.
 const GEX_LANDSCAPE_SPOT_DELTA_PTS = 5
@@ -537,6 +538,15 @@ export default function App() {
       )
     } catch (err) {
       return fallback
+    }
+  })
+
+  // CR-BT: GEX level placement — 'current' (discounted_level) or 'corrected'.
+  const [gexLevelsMode, setGexLevelsMode] = useState(() => {
+    try {
+      return window.localStorage.getItem(GEX_LEVELS_MODE_STORAGE_KEY) === 'corrected' ? 'corrected' : 'current'
+    } catch (err) {
+      return 'current'
     }
   })
 
@@ -1090,6 +1100,14 @@ export default function App() {
 
   useEffect(() => {
     try {
+      window.localStorage.setItem(GEX_LEVELS_MODE_STORAGE_KEY, gexLevelsMode)
+    } catch (err) {
+      // ignore
+    }
+  }, [gexLevelsMode])
+
+  useEffect(() => {
+    try {
       const nextUrl = new URL(window.location.href)
       nextUrl.searchParams.set('interval', interval)
       window.history.replaceState(null, '', nextUrl.toString())
@@ -1107,6 +1125,9 @@ export default function App() {
     url.searchParams.set('phase', 'center')
     if (gexMinAbsB != null) {
       url.searchParams.set('gex_min_abs_b', String(gexMinAbsB))
+    }
+    if (gexLevelsMode === 'corrected') {
+      url.searchParams.set('levels', 'corrected')
     }
 
     async function loadCenter() {
@@ -1183,7 +1204,7 @@ export default function App() {
 
     loadCenter()
     return () => controller.abort()
-  }, [apiBase, tradeDate, interval, gexEnabled, gexMinAbsB])
+  }, [apiBase, tradeDate, interval, gexEnabled, gexMinAbsB, gexLevelsMode])
 
   useEffect(() => {
     if (loadingCenter || error || effectiveDaysEitherSide <= 0) return
@@ -1197,6 +1218,9 @@ export default function App() {
     url.searchParams.set('days_either_side', String(effectiveDaysEitherSide))
     if (gexMinAbsB != null) {
       url.searchParams.set('gex_min_abs_b', String(gexMinAbsB))
+    }
+    if (gexLevelsMode === 'corrected') {
+      url.searchParams.set('levels', 'corrected')
     }
 
     async function loadMore() {
@@ -1237,7 +1261,7 @@ export default function App() {
 
     loadMore()
     return () => controller.abort()
-  }, [apiBase, tradeDate, interval, effectiveDaysEitherSide, loadingCenter, error, gexEnabled, gexMinAbsB])
+  }, [apiBase, tradeDate, interval, effectiveDaysEitherSide, loadingCenter, error, gexEnabled, gexMinAbsB, gexLevelsMode])
 
   useEffect(() => {
     if (!flowEnabled || loadingCenter || error) {
@@ -1347,6 +1371,9 @@ export default function App() {
         if (gexMinAbsB != null) {
           url.searchParams.set('gex_min_abs_b', String(gexMinAbsB))
         }
+        if (gexLevelsMode === 'corrected') {
+          url.searchParams.set('levels', 'corrected')
+        }
 
         const response = await fetch(url.toString(), {
           method: 'GET',
@@ -1410,7 +1437,7 @@ export default function App() {
         activeController.abort()
       }
     }
-  }, [apiBase, tradeDate, selectedSessionTradeDateKey, interval, gexEnabled, gexMinAbsB, loadingCenter, error, isLiveTradeDate, isChartInteracting])
+  }, [apiBase, tradeDate, selectedSessionTradeDateKey, interval, gexEnabled, gexMinAbsB, gexLevelsMode, loadingCenter, error, isLiveTradeDate, isChartInteracting])
 
   useEffect(() => {
     if (!isLiveTradeDate || loadingCenter || error) return undefined
@@ -1790,6 +1817,11 @@ export default function App() {
     })
   }, [])
 
+  const handleGexLevelsModeChange = useCallback((nextValue) => {
+    const next = nextValue === 'corrected' ? 'corrected' : 'current'
+    setGexLevelsMode((prev) => (prev === next ? prev : next))
+  }, [])
+
   const handleIntervalChange = useCallback((nextValue) => {
     const next = String(nextValue || '').trim() === '5min' ? '5min' : '1min'
     setInterval((prev) => (prev === next ? prev : next))
@@ -1873,6 +1905,8 @@ export default function App() {
                 gexMinAbsB={gexMinAbsB}
                 expectedMoveLevels={mergedExpectedMoveLevels}
                 onApplyGexMinAbsB={handleGexMinAbsBChange}
+                gexLevelsMode={gexLevelsMode}
+                onApplyGexLevelsMode={handleGexLevelsModeChange}
                 onApplyIntervalChange={handleIntervalChange}
                 onVisibleLogicalRangeChange={handleSharedLogicalRangeChange}
                 onLinkedCrosshairChange={handleLinkedCrosshairChange}
