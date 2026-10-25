@@ -46,3 +46,113 @@ Start CR-CF in its own worktree: git fetch && git worktree add <scratch>/crcf-wt
 Read the vault CR "/Users/ryan/My Drive/Obsidian Vault/Anonymous/Dash/CRs/CR-CF — Which Levels Does Price Respect.md", components/field-conventions.md, and the CR-CB spec's A15.9/A16/A17 (reuse scripts/cr_cb_t0_ra.py's harness; copy, don't import from an unmerged branch).
 Commit 1: spec freeze, verbatim. Commit 2: Step 0 (counts, A/A, the 2026-05-01 worked day). Read-only DB, train only for Step 0. Stop and report. Do not push.
 ```
+
+---
+
+## Step 0 findings (Stage 1, train, 2026-10-25)
+
+**Script and outputs.**
+- Script: `scripts/cr_cf_step0.py` (sha256 `f3ea6c2f…cb9507d9`). Logs (git-ignored): `scripts/logs/cr_cf/step0.log` and `step0.json`.
+- Read-only: `get_backfill_db_conn()` (role asserted) + `default_transaction_read_only = on` (asserted); SELECTs only. Every flow / bar read is asserted inside [2026-01-01 00:00 UTC, 2026-06-05 21:00 UTC). No 2025 data, no R-a, no holdout.
+- Harness: copied (not imported) from `scripts/cr_cb_t0_ra_a17.py` (universe, contract check, A1.1 GEX levels, A17 first test with arming max(0.10·IM, 4) and 2-pt band, restricted-mean time to escape, session weighting); `overnight()` / `swings15()` and the A/A split design from `scripts/cr_cb_step0_v3.py`. The only change is the level source, plus a per-row level array (for VWAP) and an armed-from time (F3 07:00, F7 known time). Every choice the spec leaves open is fixed in the script docstring before the run.
+- **No real-level T0 measure is computed** (asserted in the script): Q1 counts tests, Q2 uses placebo tests only, Q3 lists levels and test times. The Stage 1 screen is unseen.
+
+**Runs: three.**
+- Run 1 completed. Its worked-day table lacked each level's first-test time, so it could not say whether the 08:02 dip would count under L5; that field was added. Q1/Q2 code unchanged.
+- Run 2 crashed on an SSL disconnect from the database (`psycopg.OperationalError`) before any output.
+- **Run 3 is the one reported.** Its Q1 and Q2 output is byte-identical to run 1's. Run 1's outputs are kept as `run1_step0.*`.
+
+**Choices worth knowing (fixed in the docstring):**
+- F1 / F6 use today's front symbol, and only prior sessions whose own front is that symbol. F2 comes from `ironbeam_es_1m_bars` (no symbol column) 15:00 PT prior → 06:30 PT, kept only if the 06:29 PT bar close is within 2 pts of the Databento close.
+- F6 is missing when the prior week has a day before 2026-01-01 (keeps 2025 unread).
+- F4 VWAP = cumulative per-second typical price × volume from 06:30, through the previous second (causal). Arming, test, escape are measured against VWAP at that second.
+- Within a family, levels < 0.5 pt apart are merged.
+- Placebo (L7): the 4 nearest 5-pt bins per real level, same side of the open, within ±1·IM, ≥ 10 pts from every level of that family that session (in or out of window; F7: every kept swing of the day). Placebos inherit the parent's armed-from time. F5: bins > 3 pts from any 25-multiple. F4: 4 offsets per session, ±U[10, 30], `default_rng(20261025)`.
+- A/A: per family × {pooled, below, above} and all families pooled; 200 splits of pseudo-levels (`default_rng(20261025)`), session-weighted half-1 − half-2 mean, 2,000 session resamples per split (`default_rng(20260920)`). Pass: CI excludes 0 in ≤ 10 % of splits and median within ±3 min (the CR-BW ±3 tolerance, in minutes).
+
+### Universe
+
+| rule | removed | remaining |
+|---|---|---|
+| train sessions 2026-01-06 → 06-05 | — | 105 |
+| roll week (03-09 → 03-20) | 10 | 95 |
+| no ES 15:45 ET bar on A (02-18, 02-19) | 2 | 93 |
+| quarterly-expiry Friday / no Databento RTH flow / early close | 0 | 93 |
+| no canonical IM (01-20, 02-17, 04-06, 05-26) | 4 | 89 |
+| no `orats_oi_gamma` rows / contract check | 0 | **89** |
+
+- 89 sessions (ES H26 / M26), the same universe as CR-CB Step 0 v3. No early closes on train.
+- IM median 61.3 (IQR 50.3–84.2). **One session has IM < 25:** 2026-01-12 (24.1). Arming = max(0.10·IM, 4) is ≥ 4 pts everywhere.
+- Families missing: F2 on 1 session (2026-03-05: no 06:29 PT bar); F6 on 4 (01-06 → 01-09, prior week in 2025).
+
+### Q1 — counts per family (no outcomes)
+
+| family | levels / session in window, median [IQR] (share of sessions with 0) | placebo levels / session | tests real / placebo | sessions with a test, real / placebo | real tests below / above (sessions) | placebo tests below / above (sessions) | real tests before / after 10:00 PT | GEX overlap (≤ 5 pts), levels; tests real / placebo |
+|---|---|---|---|---|---|---|---|---|
+| F1 prior H/L/C | 3 [2, 3] (0.01) | 8 | 133 / 281 | 79 / 70 | 74 (53) / 59 (44) | 145 (48) / 136 (45) | 123 / 10 | 0.49; 0.47 / 0.52 |
+| F2 overnight H/L | 2 [2, 2] (0.02) | 8 | 96 / 325 | 82 / 81 | 52 (51) / 44 (44) | 167 (65) / 158 (60) | 90 / 6 | 0.44; 0.44 / 0.46 |
+| F3 opening range | 2 [2, 2] (0.00) | 8 | 116 / 317 | 84 / 88 | 65 (63) / 51 (51) | 176 (66) / 141 (62) | 112 / 4 | 0.49; 0.52 / 0.46 |
+| F4 VWAP | 1 | 4 | 88 / 230 | 88 / 85 | 50 / 38 | 115 (68) / 115 (58) | 88 / 0 | —; 0.50 / 0.42 |
+| F5 R100 | 1 [1, 2] (0.07) | 4 | 53 / 199 | 53 / 67 | 28 / 25 | 100 (39) / 99 (38) | 47 / 6 | 0.31; 0.38 / 0.46 |
+| F5 R50 | 1 [1, 2] (0.04) | 4 | 63 / 217 | 61 / 68 | 34 / 29 | 110 (36) / 107 (38) | 55 / 8 | 0.30; 0.33 / 0.48 |
+| F5 R25 | 3 [2, 4] (0.00) | 10 | 121 / 442 | 84 / 87 | 64 (54) / 57 (52) | 249 (75) / 193 (64) | 104 / 17 | 0.44; 0.50 / 0.47 |
+| F6 prior week H/L | 1 [1, 1] (0.25) | 4 | 35 / 119 | 35 / 48 | 18 / 17 | 66 (30) / 53 (19) | 27 / 8 | 0.55; 0.51 / 0.41 |
+| F7 confirmed swings | 12 [9, 17] (0.00) | 6 | **803 / 46** | 87 / **18** | 421 (86) / 382 (78) | 26 (10) / 20 (8) | 480 / 323 | 0.48; 0.48 / 0.33 |
+
+Real tests by kind: prior close 51, prior high 46, prior low 36; overnight high 53, low 43; OR high 63, low 53; VWAP 88; prior-week high 22, low 13; swing high 419, swing low 384.
+
+**Readings (counts only):**
+- **The F7 placebo is degenerate: 46 placebo tests on 18 sessions against 803 real tests on 87.** With ~15 kept swings a day, "≥ 10 pts from any level of that family" excludes almost every price the session visited, so the surviving bins are prices price did not come back to after the parent's known time. An F7 real − placebo comparison under L7 as written would compare levels in the traded range with levels outside it. **Needs a decision before Stage 1** (decision 1).
+- **Most tests come before 10:00 PT** for every family except F7 (F1 123 / 10, F2 90 / 6, F3 112 / 4, F4 88 / 0). First-test-only spends a static level early, so the L11 time-of-day readout has almost no after-10:00 sample outside F7.
+- **Thin cells.** F6 has 35 real tests (18 / 17 sessions per side); F5 R100 and R50 have 25–34 sessions per side. Cells with < ~30 sessions will have wide CIs.
+- **The L11 GEX-overlap split is near chance.** 44–55 % of family levels sit within 5 pts of a Corrected GEX level, and placebo tests overlap at about the same rate (0.41–0.52). With ~6 GEX levels per session at 5-pt spacing inside ±1·IM, a random price is within 5 pts of one about half the time. The split still answers L11's question, but "overlap" is close to a coin flip, not a property of the family.
+- **About 20 % of non-F5 placebo levels sit on a 25-multiple** (F1 0.21, F2 0.19, F3 0.22, F6 0.20, F7 0.22), because placebo bins are 5-pt multiples. If round numbers are respected, that biases those families' placebo toward "respected" (decision 2).
+- Swings: median 17 per session before the 10-minute hold, 15 after (as CR-CB v3).
+
+### Q2 — A/A on placebo, primary measure (time to escape)
+
+| family | pooled: tests, CI-excludes-0 share, median (min) | below | above |
+|---|---|---|---|
+| F1 | 281, 8.5 %, +0.23 PASS | 145, 2.5 %, −0.38 PASS | 136, 5.5 %, −0.03 PASS |
+| F2 | 325, 4.0 %, +0.51 PASS | 167, 6.5 %, +0.63 PASS | 158, 6.0 %, −0.11 PASS |
+| F3 | 317, 6.0 %, +0.25 PASS | 176, 6.0 %, −0.05 PASS | 141, 3.0 %, −0.76 PASS |
+| F4 | 230, 5.5 %, −0.09 PASS | 115, 8.0 %, −0.02 PASS | 115, 3.5 %, −0.19 PASS |
+| F5 R100 | 199, 3.5 %, −0.37 PASS | 100, 4.5 %, +0.21 PASS | 99, 6.0 %, +0.53 PASS |
+| F5 R50 | 217, 8.0 %, −0.07 PASS | 110, 7.0 %, +0.24 PASS | 107, 6.0 %, −1.34 PASS |
+| F5 R25 | 442, 6.0 %, +0.28 PASS | 249, 7.0 %, +0.77 PASS | 193, 8.0 %, +0.35 PASS |
+| F6 | 119, 3.5 %, +0.49 PASS | 66, 7.5 %, −1.45 PASS | **53, 12.0 %, −0.59 FAIL** |
+| F7 | 46, 5.5 %, −1.10 PASS | 26, 8.0 %, −0.41 PASS | 20, 5.5 %, +2.25 PASS |
+| all families | 2,176, 5.0 %, +0.07 PASS | 1,154, 6.5 %, −0.03 PASS | 1,022, 5.0 %, −0.16 PASS |
+
+- **The bootstrap is calibrated in 26 of 27 family cells and pooled** (5.0 % against nominal 5 %).
+- **F6 / above fails** (12.0 %, 53 placebo tests on 19 sessions). Small-sample miscalibration, consistent with the thin-cell note above (decision 3).
+- F7 passes, but on 46 placebo tests; the A/A says nothing about the F7 comparison while its placebo is degenerate.
+
+### Q3 — worked day 2026-05-01 (price paths only; no outcome)
+
+ES M26; RTH open 7264.50; IM 70.2 (arming 7.0 pts). Price path 07:30 → 08:10 PT: from 7290 down to **7274.50 at 07:37:53**, back up to 7285.50 (07:47), then the **08:00 dip to 7272.00 at 08:02:18**; VWAP 7282.2–7283.4 throughout (≈ 10 pts above the low).
+
+**Family levels in 7266–7282 known by 08:10 PT:**
+
+| family | level | known from | first A17 test (the only one L5 counts) |
+|---|---|---|---|
+| F2 overnight high | **7271.50** | 06:30 | **06:32:14**, from below |
+| F5 R25 | 7275.00 | 06:30 | 06:33:53, from below |
+| F7 swing low (the 07:37:53 low) | 7274.50 | 07:47:53 | **08:00:27, from above** |
+| *(reference)* Corrected GEX | 7272.0 / 7277.0 | 06:30 | 06:32:48 / 06:34:58, from below |
+
+Nothing from F1 (7157.25 / 7238.25 / 7251.75), F3 (OR 7258.75–7293.25), F4 or F6 (7079.25 / 7200.50) is in the band.
+
+**Earlier same-day support.** Minute lows 06:32 → 06:55 PT sat at 7270.25–7275.00 (06:40 7271.50, 06:46–06:47 7270.75, 06:50 7270.25): price held the overnight high from above for about 20 minutes after the open. That shelf is **not an F7 swing**: its retraces (≤ ~7 pts) are below the A15.1 threshold max(8, 0.15·70.2) = 10.5.
+
+**Answer.**
+- **The 71–72 support is the overnight high (F2, 7271.50)**, which was the 06:32–06:55 shelf. The 08:02 low (7272.00) held 0.50 above it. The Corrected GEX 7272 line sits on the same price, and the 07:37 swing low (F7 7274.50) and the 7275 round number are 2.5–3 pts above.
+- **Under L5, the 08:02 dip is not a test of F2, GEX 7272 or 7275.** Each had its one test at 06:32–06:35 from below, at the open. The dip counts only as the **first test of the F7 swing low 7274.50 (08:00:27, from above)**.
+- So on this day, first-test-only scores the support Ryan would have bought as an F7 event. The level Ryan described (the overnight high, retested from above two hours later) is not tested at that moment under the A17 mechanics (decision 4).
+
+### Decisions for Ryan before Stage 1
+
+1. **F7 placebo.** As written (≥ 10 pts from any swing of the day), it leaves 46 placebo tests on 18 sessions. Options: (a) exclude only swings **known at the parent's armed-from time**; (b) distance-match to the parent swing (e.g. parent ± 10–30 pts, like F4) and ignore other swings; (c) drop F7 from the Stage 1 screen.
+2. **Placebo on round numbers.** About 20 % of non-F5 placebo bins are 25-multiples. Keep as written, or apply F5's "> 3 pts from a 25-multiple" rule to every family's placebo.
+3. **Thin cells.** F6 / above fails the A/A (12 %, n 53). Keep F6 in the Holm family (it is unlikely to pass anyway) or screen F6 pooled only.
+4. **First test only vs retests from the other side.** On 2026-05-01 the overnight high was tested at the open from below. The later retest from above (the one Ryan would trade) is not counted. L5 is CR-CB A17's fix for re-arming degeneracy. A variant "first test from each side" (≤ 2 per level per session) would keep that fix and count role-reversal retests. Keep L5 as frozen, or amend before Stage 1.
