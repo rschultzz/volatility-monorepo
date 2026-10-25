@@ -896,3 +896,264 @@ The bootstrap is calibrated. At ~55 placebo trades per half, the resolution of a
 5. **Leg (a) of H-PNB / H-PSD** (3·σ5 in 15 min) is met by almost every test. Options: raise it (e.g. ≥ 5·σ5_d) or rely on the 0.5·IM leg.
 6. **O_c at d = 5 breaks the 10-23 trade by one tick** (7697.00 vs 7696.75). The d = 10 cluster has O_c 11.75 and catches it. No change proposed: this is what the grid's d and O dimensions are for. Noted so the review doesn't read it as a detector fault.
 7. **Placebo thinness at d = 5** (15–27 per cell; A/A ±4.6 pts). Per-cell T2-style comparisons in Stage 1 will be wide; pooled-within-type comparisons (A9.2) are about twice the n.
+
+---
+
+## Step 0 v3 under A1–A15 (Stage 1, Databento flow, 2026-10-25)
+
+**Script and outputs.**
+- Script: `scripts/cr_cb_step0_v3.py` (sha256 `be156966…5b006800`).
+- Logs (git-ignored): `scripts/logs/cr_cb/step0_v3.log` and `step0_v3.json`.
+- Round-2 gallery: `research/gallery/cr-cb-stage1-r2.json` (set `cr-cb:round-2`).
+
+**Read-only setup.** Same guard as v2: train reads < 2026-06-05 21:00 UTC; no 2025 data; 2026-10-23 read only for its own illustration, and its prior session is not read.
+
+**Reused code.** Loaders, universe (89 sessions), levels, A13 clusters, O_c (v2 values) and the edge-feature and rule code are copied unchanged from v2.
+
+**Every choice A15 leaves open is fixed in the docstring before the run.** The main ones:
+- the two-sided zone is [zone core − O_c, zone core + O_c];
+- ref-armed tests are kept only when the ref is the zone's far edge at test time;
+- PL = the pullback low after the confirmed extreme, fixed on a rebound ≥ max(4, 0.10·IM); a new high before PL is fixed extends H;
+- edges count only after the range has held R_min, within the window W;
+- orders are exclusive;
+- the fail / break share is measured from the touch;
+- T0's time to escape is summarised as the restricted mean of min(escape, 120 min, time to 13:00).
+
+**No trade outcome is reported.** The A/A again computes placebo hold-to-close P&L only inside its splits. Attempts ≥ 2 appear only on 10-23 and in the gallery.
+
+**Runs: three.**
+- **Run 1** crashed in the 10-23 table before anything was printed or saved (a `KeyError` on ranges that broke at formation).
+- **Run 2** completed. Its 10-23 table showed a range bottom at the top (PL 7687.00 against H 7687.75): when the PL-fixing bar also made a new high, the code recomputed PL from that bar, so the range collapsed to ticks. That inflated "shortrange" counts. Fixed: PL is the pullback low after the confirmed extreme.
+- **Run 3** is the one reported. Run 2's outputs are kept as `run2_step0_v3.*`.
+
+The A/A failed in both run 2 (13.0 %) and run 3 (12.0 %); the fix was not made because of it.
+
+### T0 (A15.9) — two-sided zone; every armed test; real − placebo, session-cluster 95 % CI
+
+**d 0 / e 0 (single GEX levels; the clean comparison).** Real 1,687 tests, placebo 1,573. Escapes censored at 13:00: 222 real, 244 placebo.
+
+| cell | n real / plc | **(d) time to escape, restricted mean min**: real / plc, diff | escaped ≤ 60 min | (b′) zone dwell s, 60 min | (a′) formed, R_min 10 / 20 / 30 (diff) | (c) log speed ratio diff |
+|---|---|---|---|---|---|---|
+| put / below | 231 / 387 | 39.3 / 47.7, **−8.4 [−18.5, +1.9]** | +4.7 [−6.3, +16.2] | 1,945 / 1,683, **+262 [+3, +527]** | +5.3 [−0.7, +11.7] / +3.6 [−1.0, +9.3] / +1.1 [−1.2, +3.3] | −0.046 [−0.102, +0.006] |
+| put / above | 252 / 428 | 37.4 / 44.0, −6.6 [−19.5, +5.5] | +6.6 [−6.8, +20.7] | 1,563 / 1,467, +96 [−185, +388] | −0.3 [−4.3, +4.1] / +2.0 [−1.7, +6.0] / +0.8 [−1.3, +3.1] | +0.041 [−0.017, +0.104] |
+| call / below | 630 / 409 | 45.0 / 50.4, −5.4 [−15.6, +4.5] | +9.7 [−1.4, +20.5] | 1,847 / 1,697, +150 [−116, +421] | +0.9 [−2.8, +4.3] / −0.7 [−3.5, +2.0] / −0.5 [−3.0, +1.9] | +0.035 [−0.024, +0.093] |
+| call / above | 574 / 349 | 40.8 / 43.1, −2.3 [−13.4, +7.6] | +2.6 [−8.4, +13.9] | 1,493 / 1,351, +142 [−91, +386] | +1.5 [−1.9, +4.9] / −0.3 [−3.0, +2.1] / −0.6 [−3.1, +1.4] | +0.013 [−0.058, +0.077] |
+| all | 1,687 / 1,573 | 41.7 / 46.4, **−4.7 [−11.9, +2.0]** | +5.1 [−2.1, +12.5] | 1,698 / 1,554, +143 [−23, +302] | +0.6 [−1.4, +2.7] / +0.4 [−1.2, +2.1] / +0.1 [−1.2, +1.3] | +0.020 [−0.011, +0.050] |
+
+**Reading:**
+- **On the primary measure (d), price does not stay near real levels longer.** Every cell's point estimate is *faster* escape at real levels (pooled −4.7 min), and no CI excludes 0 in the "slows down" direction.
+- Only zone dwell at put / below clears 0 (+262 s).
+- A15.9's Stage 2 pass needs (d) or (a′) real > placebo with a CI lower bound > 0. On train, no cell meets it.
+- The v2 put / below range-formation signal (+11.0) does not survive the A15 range definition: (a′) at R_min 10 is +5.3 [−0.7, +11.7].
+
+**d 5 / e 4 (the centre) is confounded by placebo construction.** Measured from the level lists:
+- with 4 placebo bins per level at 5-pt spacing, **69 % of placebo clusters at d = 5 are multi-member** (mean span 7.2 pts, p90 15), against **13 %** of real clusters (mean 0.7, p90 5);
+- at d = 10 the shares are 69 % vs 35 %.
+
+So placebo zones are wider, and they form ranges more often: pooled (a′) R_min 20 is 7.8 % real vs 15.2 % placebo, −7.4 [−13.0, −2.1]. Pooled (d) is −2.2 [−9.2, +4.9]. **The d > 0 placebo arm needs its own construction** (decision 3 below); its T0 numbers are not interpretable.
+
+### Range-duration distribution (every PL-fixed range; attempt 1; centre; price paths)
+
+| | n | p10 | p25 | median | p75 | p90 | ≥ 10 min | ≥ 20 min | ≥ 30 min | censored at 13:00 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| real | 283 | 1.4 | 3.5 | **6.8** | 18.0 | 39.0 | 39.2 % | **21.9 %** | 13.8 % | 14 |
+| placebo | 195 | 1.2 | 3.0 | 8.8 | 23.4 | 56.5 | 43.6 % | 28.2 % | 22.6 % | 13 |
+
+- Ranges last longer than under v2 (median 60 s), but most still break within 10 minutes.
+- Placebo ranges last as long as real ones or longer, consistent with T0.
+
+### Episode funnel (centre, attempt 1; real / placebo)
+
+| status | R_min 10 | R_min 20 | R_min 30 |
+|---|---|---|---|
+| episodes | 914 / 394 | 970 / 420 | 986 / 426 |
+| broken before confirmation (beyond arm + O_c) | 198 / 79 | 212 / 88 | 217 / 89 |
+| no range formed (no rebound) | 15 / 10 | 18 / 11 | 18 / 11 |
+| **range outside the zone** (PL beyond the two-sided zone) | **422 / 113** | **447 / 120** | **450 / 121** |
+| short range (broken before R_min, or after the window) | 166 / 107 | 221 / 140 | 248 / 156 |
+| **developed** | **103 / 80** | **62 / 55** | **42 / 43** |
+
+**The binding constraint is the zone, not R_min.** A range must have height ≥ P and form after a rebound ≥ max(4, 0.10·IM) ≈ 7 pts, so its bottom usually falls below level − O_c (O_c 5.5–9.75). About 46 % of real episodes end "outzone".
+
+### Reference levels and zones (A15.1)
+
+- **Swings:** median 17 per session before the 10-minute hold rule and 15 after (swing highs median 7, swing lows 8). That is down from ~90 under A14.
+- **Prior H/L/C and overnight H/L:** 1 each on 89 / 89 sessions.
+
+| e | tests (real) | armed by the GEX level | **armed by a ref** | arming kinds (ref) | zone span p50 / p75 / p90 |
+|---|---|---|---|---|---|
+| 0 | 1,455 | 1,455 | 0 | — | 0 / 0 / 5 |
+| 4 | 1,476 | 777 | **699 (47.4 %)** | swing high 288, swing low 238, overnight high 43, prior high 41, prior close 39, prior low 36, overnight low 14 | 0.75 / 3.1 / 5.0 |
+| 8 | 1,475 | 517 | **958 (64.9 %)** | swing high 383, swing low 294, prior close 71, overnight high 69, prior high 67, prior low 48, overnight low 26 | 2.25 / 5.0 / 7.25 |
+
+A15.1 removes the saturation: spans are ≤ 10 by rule, p90 5–7 pts. But a ref is still the far edge on about half the tests at e = 4.
+
+### Fail / break share (A15.2; from each developed edge touch; price paths; centre)
+
+| | fail | break | fail share |
+|---|---|---|---|
+| real | 17 | 60 | **22.1 %** |
+| placebo | 13 | 53 | 19.7 % |
+
+Per cell (real fail / break): put / below top 1 / 8, bot 0 / 6; put / above top 1 / 2, bot 3 / 3; call / below top 4 / 13, bot 3 / 8; call / above top 2 / 12, bot 3 / 8.
+
+**The two outcomes are asymmetric by definition.** "Break" needs 1 pt beyond the edge; "fail" needs a retreat of P (6 pts). So break dominates at real and placebo alike. At these n the share does not separate real from placebo.
+
+### Counts per cell at each R_min (fade fills after the gap rule and de-dup; centre d 5, e 4)
+
+Each cell shows real / placebo.
+
+| cell | R_min 10 | R_min 20 | R_min 30 |
+|---|---|---|---|
+| put / below / top | 16 / 16 | 9 / 14 | 5 / 10 |
+| put / below / bot | 12 / 12 | 6 / 6 | 3 / 5 |
+| put / above / top | 8 / 10 | 3 / 7 | 2 / 4 |
+| put / above / bot | 9 / 13 | 6 / 8 | 3 / 7 |
+| call / below / top | 30 / 13 | 15 / 7 | 11 / 6 |
+| call / below / bot | 18 / 12 | 11 / 10 | 10 / 8 |
+| call / above / top | 21 / 13 | 14 / 8 | 9 / 8 |
+| call / above / bot | 17 / 9 | 11 / 6 | 11 / 3 |
+| **total** | **131 / 98** | **75 / 66** | **54 / 51** |
+
+- Break-stop fills at R_min 20: 70 real.
+- Shared-fill duplicates: 4 at R_min 20.
+
+**Totals across (d, e) at the A1 centre** (real / placebo fade fills):
+
+| d, e | R_min 10 | R_min 20 | R_min 30 |
+|---|---|---|---|
+| d 0, e 0 | 107 / 101 | 59 / 51 | 39 / 31 |
+| d 0, e 4 | 124 / 124 | 68 / 60 | 46 / 37 |
+| d 0, e 8 | 165 / 150 | 93 / 82 | 64 / 52 |
+| d 5, e 0 | 120 / 93 | 68 / 63 | 48 / 49 |
+| d 5, e 4 | 131 / 98 | 75 / 66 | 54 / 51 |
+| d 5, e 8 | 161 / 102 | 92 / 70 | 65 / 53 |
+| d 10, e 0 | 125 / 109 | 78 / 79 | 56 / 59 |
+| d 10, e 4 | 128 / 110 | 82 / 79 | 62 / 59 |
+| d 10, e 8 | 140 / 113 | 90 / 82 | 68 / 63 |
+
+**The ≥ 40 rule over the A1 grid (81 configurations; d 5, e 4):**
+- Per cell, put cells reach 40 on **0 of 81** at every R_min.
+- Call cells reach 40 only at R_min 10: call / below / top 24, call / below / bot 22, call / above / top 9, call / above / bot 2.
+- At R_min 20, call cells reach 40 on 4 / 3 / 0 / 0 configurations; at R_min 30, on none.
+- Pooled within type and edge (A9.2):
+
+  | R_min | put / top | put / bot | call / top | call / bot |
+  |---|---|---|---|---|
+  | 10 | 11 | 8 | 44 | 36 |
+  | 20 | 0 | 0 | 18 | 18 |
+  | 30 | 0 | 0 | 16 | 18 |
+
+- Max per cell at R_min 20: put 15–20, call 31–44.
+- **Corners.** Fewest: (60, 4, 30, 0.5) at R_min 30, which gives 0 in every cell (W 30 < R_min 30). Most: (95, 6, 180, 2) at R_min 10: put 20–24, call 43–59.
+
+**At R_min ≥ 20, Stage 1's exit choice is possible only for pooled call cells, and barely.**
+
+### Edge-event features and rules (centre; 77 kept events, attempt 1)
+
+- **SS side** (where the range sits relative to the zone core): straddle 75, above 2, below 0. With the range required inside [level ± O_c], almost every range straddles the level.
+- **Range-wide features:**
+  - pushes: 2 pushes 24, 3 pushes 21, 4 pushes 16, 5 pushes 8, 6 pushes 7, 9 pushes 1. PD is now defined on 70 / 77 events.
+  - held before the touch: median 21 min; range height median 9.25 pts.
+  - skew trend available on 77 / 77.
+- **Rule decisions** (fade / break / none):
+
+  | rule | fade | break | none |
+  |---|---|---|---|
+  | FR1 | 13 | 13 | 51 |
+  | FR2 | 48 | 15 | 14 |
+  | FR3 | 26 | 26 | 25 |
+  | FR4 | 4 | 2 | 71 |
+  | FR5 | 19 | 0 | 58 |
+  | FR6 | 10 | 8 | 59 |
+  | FR7 | 20 | 11 | 46 |
+  | FR8 | 28 | 8 | 41 |
+  | FR10 | 22 | — | 55 |
+  | FR11 | 6 | — | 71 |
+  | FR12 | 26 | 26 | 25 |
+  | stall side | 52 | 17 | 8 |
+
+- **Named rules: no real events.**
+  - H-PNB has 3 cell events, of which (a) 1, (b) 0, (c) 2, full 0.
+  - H-PSD has 17 cell events, of which (a) 7, (b) 6, (c) 8, full 0.
+  - Placebo: H-PNB 0, H-PSD 1. H-CNB readout: 2.
+
+### Q5 — A/A — **FAIL**
+
+| | value |
+|---|---|
+| placebo fade trades / pseudo-level clusters | 70 / 41 |
+| statistic (mean net pts, half 1 − half 2), median | +0.09 (gate ±3, passes) |
+| mean / sd | +0.08 / 3.20 |
+| p5 / p95 | −5.12 / +5.18 |
+| CI half-width, median | 6.02 pts |
+| split sd ÷ (median half-width / 1.96) | 1.04 |
+| **share of splits with CI excluding 0** | **12.0 % (24 / 200)** (gate ≤ 10 %) |
+
+- The bootstrap is close to calibrated (ratio 1.04) but slightly anti-conservative at this n: ~35 trades per half on ~20 pseudo-level clusters, with a 6-pt half-width.
+- **Per the A1.3 gate, the run stops here.** No Stage 1 statistic should rest on this placebo arm until it is larger (decision 3).
+
+### 2026-10-23 illustration (Databento; centre params; all attempts; no outcome)
+
+Refs used: overnight high / low 7714.25 / 7660.00, plus swings. Kept swings near the levels:
+
+| price | kind | known from |
+|---|---|---|
+| 7675.00 | swing high | 07:13 |
+| 7693.50 | swing high | 08:10 |
+| 7679.75 | swing low | 08:26 |
+| 7697.25 | swing high | 08:45 |
+| 7676.25 | swing low | 09:46 |
+| 7690.50 | swing high | 09:57 |
+
+**d = 5, e = 4:**
+
+| arm | arm_kind | members | approach | O_c | att | test_t | status | extreme | extreme_t | PL | formed_t | life_min | top_t | fade_t | brk_t | top_entry |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 7681.0 | gex | 7681 | below | 9.75 | 1 | 07:44:49 | shortrange | 7687.75 | 07:50:54 | 7679.25 | 07:50:54 | 2.1 |  |  |  |  |
+| 7687.0 | gex | 7687 | below | 9.75 | 1 | 07:46:06 | shortrange | 7687.75 | 07:50:54 | 7679.25 | 07:50:54 | 2.1 |  |  |  |  |
+| 7681.0 | gex | 7681 | above | 8.25 | 1 | 08:03:21 | outzone | 7682.25 | 08:09:49 | 7690.75 | 08:09:49 |  |  |  |  |  |
+| 7687.0 | gex | 7687 | above | 8.25 | 1 | 08:37:03 | developed | 7681.25 | 08:46:12 | 7693.75 | 09:14:50 | 40.0 | 09:37:52 | 09:37:54 | 09:51:37 | 7682.25 |
+| 7687.0 | gex | 7687 | above | 8.25 | 2 | 08:37:03 | broken |  |  |  |  |  |  |  |  |  |
+| 7679.75 | swing_low | 7681 | above | 8.25 | 1 | 08:44:06 | outzone | 7681.25 | 08:46:12 | 7693.75 | 09:14:50 |  |  |  |  |  |
+| 7679.75 | swing_low | 7681 | above | 8.25 | 1 | 09:21:09 | outzone | 7676.25 | 09:26:05 | 7690.5 | 09:51:29 |  |  |  |  |  |
+| 7687.0 | gex | 7687 | below | 9.75 | 1 | 09:34:11 | shortrange | 7689.0 | 09:45:49 | 7680.5 | 09:45:49 | 8.0 |  |  |  |  |
+
+**d = 10, e = 4:**
+
+| arm | arm_kind | members | approach | O_c | att | test_t | status | extreme | extreme_t | PL | formed_t | life_min | top_t | fade_t | brk_t | top_entry |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 7687.0 | gex | 7681/7687 | below | 11.75 | 1 | 07:46:06 | shortrange | 7687.75 | 07:50:54 | 7679.25 | 07:50:54 | 2.1 |  |  |  |  |
+| 7681.0 | gex | 7681/7687 | above | 9.25 | 1 | 08:03:21 | shortrange | 7682.25 | 08:09:49 | 7690.75 | 08:09:49 | 16.6 |  |  |  |  |
+| 7679.75 | swing_low | 7681/7687 | above | 9.25 | 1 | 08:44:06 | developed | 7681.25 | 08:46:12 | 7693.75 | 09:14:50 | 40.0 | 09:37:52 | 09:37:54 | 09:51:37 | 7682.25 |
+| 7679.75 | swing_low | 7681/7687 | above | 9.25 | 2 | 08:44:06 | broken |  |  |  |  |  |  |  |  |  |
+| 7687.0 | gex | 7681/7687 | below | 11.75 | 1 | 09:34:11 | shortrange | 7689.0 | 09:45:49 | 7680.5 | 09:45:49 | 8.0 |  |  |  |  |
+
+- **Ryan's 08:27 / 08:34 short is not detected under A15.**
+  1. The from-below test at 07:46 forms the range [7679.25, 7687.75] at 07:50:54. It breaks 2.1 min later (≥ H + max(3, 4.25)).
+  2. A9.5′ re-arms only after a stopped fade, and no fade was placed, because the range never developed.
+  3. Price never re-arms 0.10·IM below 7687 until 09:34. So no test, and no range, covers the 07:55 → 08:35 action.
+- The one developed range is from above: [7681.25, 7693.75], formed 09:14:50 and held 40 min. Its top-edge fade fills at 09:37:54 (entry 7682.25, the level-side edge), and its break stop at 09:51:37.
+
+### Gallery round 2 — `research/gallery/cr-cb-stage1-r2.json`
+
+- **42 events,** set `cr-cb:round-2`, `outcome` null, CR-CC L10 fields:
+  - 40 random from the 77 kept centre events, stratified over the 8 edge cells: 3–6 each (put / above / top has only 3);
+  - **0 H-PNB / H-PSD** (none exist);
+  - 2 from 2026-10-23 (the one developed range, at d 5 and at d 10).
+- **`meta` adds:** the zone (core and two-sided), the arming kind (GEX or ref type), the range (top, bottom, height, formation time, minutes held before the touch) and SS side. All round-1 fields are kept.
+
+### Decisions needed
+
+1. **The two-sided zone is the binding constraint** (46 % of episodes end "outzone"). A range of height ≥ P that forms on a rebound ≥ max(4, 0.10·IM) rarely fits inside level ± O_c (O_c 5.5–9.75). Options:
+   - (a) zone = level ± max(O_c, the rebound threshold), or level ± k·O_c;
+   - (b) require only the range's level-side boundary inside the zone;
+   - (c) a smaller rebound for PL.
+2. **The pattern is rare under A15.** About 75 real fade fills at the centre, with put cells ≤ 20 at R_min ≥ 20 on any configuration. Stage 1's ≥ 40 rule can be met only by pooled call cells, and R-a (9 months) may not lift the put cells to 100 (T1). This is a Ryan-level scoping question: keep R_min ≥ 20 and accept call-only, or define a looser range for puts.
+3. **The placebo arm needs rebuilding.**
+   - At d > 0, 4 bins per level 5 pts apart chain into multi-member pseudo-clusters (69 % vs 13 % real), which biases T0.
+   - The A/A fails at 70 trades.
+   - Options: (a) cluster placebo pseudo-levels by their parent, not by distance (one pseudo-cluster per real cluster, with the same span and shift); (b) more pseudo-levels per real level with a ≥ d spacing; (c) a time-shifted placebo (the same levels on another session's path).
+4. **T0's primary measure says no.** The time to escape is shorter at real levels in every cell (pooled −4.7 [−11.9, +2.0] min at d 0). Only zone dwell at put / below clears 0. This is the A15.9 descriptive read on train, and Stage 2 decides. Ryan may want to weigh it before more detector work.
+5. **Fail / break is asymmetric by definition** (1 pt vs P = 6 pts), so it says little about direction. Option: symmetric thresholds, e.g. both at P, or both at 0.5 × range height.
+6. **10-23.** Under A15 the case that motivated the CR is not detected: a 2-minute range at 07:46, then no re-arm until 09:34. If the 07:55 → 08:35 structure is the target, the range needs to re-form after an invalidation inside the zone without a new 0.10·IM test (an A9.5′-style re-arm on range breaks, not only on stopped fades).
