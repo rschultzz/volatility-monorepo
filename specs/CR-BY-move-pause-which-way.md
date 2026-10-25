@@ -96,3 +96,49 @@ Commit 1: spec freeze to specs/CR-BY-move-pause-which-way.md, verbatim.
 Commit 2: Step 0 findings. Answer all six gates; fix f under L4 from counts only. Compute NO race outcomes except inside the A/A splits. Stop and report; stop immediately if any gate fails.
 Read-only DB, train only (2026-01-06 .. 2026-06-05), no holdout. Do not push.
 ```
+
+---
+
+## Step 0 findings (2026-10-25)
+
+Script `scripts/cr_by_step0.py`; log `scripts/logs/cr_by/step0.log` (git-ignored).
+
+**How it ran.**
+- Read-only: `get_backfill_db_conn()` (role asserted), `default_transaction_read_only = on` (asserted), `statement_timeout = 600s`, 3 h Python alarm. SELECTs only.
+- Train only: sessions ≤ 2026-06-05. Holdout not read.
+- CR-BX's universe, σ5_d, impulse detector (k = 3.0), flow loader and gap rule are copied from the unmerged branch `feat/CR-BX-capitulation-seller-exhaustion` (`5906bd7`). The operational choices the spec leaves open (window definition, failure-reason labels, placebo prior window, A/A tercile assignment) are fixed in the script docstring.
+
+**No race outcome was computed.** The script stopped at gate 2, before the placebo and A/A stages.
+
+**Verdict: STOP at gate 2.** Neither f reaches 150 eligible boxes per P tercile. Gates 3–6 were not run, per the kickoff ("stop immediately if any gate fails").
+
+### Gate 1 — universe and impulses — PASS
+
+88 sessions (2026-01-06 → 2026-06-05) and **1,831 impulses** at k = 3.0 (885 down, 946 up). Both match CR-BX Step 0 exactly.
+
+### Gate 2 — box counts (no outcomes) — FAIL
+
+A box is the first 5-minute window within 30 minutes of the impulse extreme that meets both rules:
+- (a) range ≤ f·I;
+- (b) location: every price within [E − 0.25·I, E + 0.5·I] for a down move, mirrored for up.
+
+Eligibility: no RTH flow gap > 15 s in the box window, and V_box > 0.
+
+| f | impulses with a box | no box: neither rule ever met | no box: range met, location never ("location") | no box: location met, range never ("range") | no box: both met, never in one window | gap drops | eligible | per P tercile |
+|---|---|---|---|---|---|---|---|---|
+| 1/3 | 95 (5.2 %) | 1,175 | 113 | 383 | 65 | 4 | **91** | 31 / 30 / 30 |
+| 1/2 | 339 (18.5 %) | 741 | 547 | 98 | 106 | 8 | **331** | **111 / 110 / 110** |
+
+**f: none.** L4 needs ≥ 150 per tercile, i.e. at least about 450 eligible boxes; the best is 331 at f = 1/2. **STOP.**
+
+**What blocks the pause.**
+- **At f = 1/3:** for 1,175 of 1,736 failures, no 5-minute window in the next 30 minutes is narrow enough, and none stays inside the location band either. Range alone is the binding rule on 383 more.
+- **At f = 1/2:** the range rule loosens (only 98 fail on range alone). The location band becomes the main constraint: 547 impulses have narrow windows, but none of them stays within 0.25·I beyond the extreme and 0.5·I back. On those days price usually either keeps extending past the band or retraces more than half the move before it pauses.
+
+### Gates 3–6 — not run
+
+They were stopped by the gate 2 failure. No geometry, placebo, worked event or A/A figures were computed.
+
+### What the gate leaves for Ryan (no redefinition proposed)
+
+Under the locked L4, CR-BY cannot reach its pre-registered n on the 88-session train window. Any change to f, the location band, the 5-minute minimum or k is a redefinition and needs a new amendment.
