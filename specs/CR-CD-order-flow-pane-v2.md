@@ -542,3 +542,83 @@ This is the same arithmetic as Flow v2's on-the-fly query.
 The 1-minute table is used only if it exists (`to_regclass`, cached).
 
 **Ironbeam backfill end.** The run's start time floored to the minute, minus 10 min. The worker covers from there.
+
+### A4 implementation and results (2026-10-25)
+
+| step | commit | what |
+|---|---|---|
+| A4 | `3b2404a` | Amendment A4 and operational readings |
+| 1 | `f9a006e` | DDL (`scripts/cr_cd_a4_ddl.sql`), shared rollup SQL (`packages/shared/flow_1m.py`), backfill script |
+| run | `51e5f4a` | Backfill run; script resumes per month |
+| 2 | `5bf1d5c` | Worker rollup (`apps/cron/ironbeam_flow_1s_aggregate.py`); 8 tests |
+| 3 | `17beb7b` | Flow v2 reads the 1-minute tables; identity script; re-recorded v2 fixture |
+| 3b | (prior commit) | Fallback to on-the-fly aggregation if the 1-minute tables can't be read |
+| wrap | (this commit) | This section |
+
+**DDL.**
+- Applied once as `rschultz` (`DATABASE_URL`). Both tables are owned by `rschultz`.
+- `dash_backfill_writer` has SELECT and INSERT; PUBLIC is revoked.
+- No other role holds grants on the 1-second tables, so none were copied. The worker writes `ironbeam_es_flow_1s` as the owner, and it upserts `ironbeam_es_flow_1m` the same way.
+
+**Backfill** (backfill protocol, `CR-CD-A4`, one run per source-month).
+
+| table | rows | span (UTC) | size | months |
+|---|---|---|---|---|
+| `es_flow_1m_databento` | 294,246 (11 contracts) | 2024-04-03 13:15 → 2026-10-23 19:59 | 66 MB | 31/31 smoke PASS |
+| `ironbeam_es_flow_1m` | 287,280 from the backfill (4 contracts) | 2025-12-26 18:20 → 2026-10-25 22:50 | 65 MB | 11/11 smoke PASS |
+
+- **Smoke per month:** rows = distinct (symbol, minute) in the 1-second table; volume, buy, sell, unknown and trade-count sums equal; Σ `n_seconds` = 1-second rows.
+- **Runs:** 43 `completed`, 1 `aborted`. An SSL connection drop interrupted the Databento 2025-12 month. Its row was left `running` and was marked `aborted` with a note. Its INSERT had already committed, so the re-run inserted 0 and the smoke matched (12,336 = 12,336).
+- The script now opens a fresh connection per month and takes `--from-month`.
+- DB 25 GB after the load.
+
+**Identity (A4.1)** (`scripts/cr_cd_a4_identity.py identity`): **33/33 equal.**
+- **Sessions:** Databento 2024-06-12, 2025-03-18 (roll week), 2026-05-01; Ironbeam 2026-01-14, 2026-03-17 (two contracts), 2026-10-23.
+- **Frames:** `fetch_flow_minutes` through the 1-minute tables vs forced on the fly, on RTH with warm-up, a ragged `until` (07:39:17 PT), ETH and a 5-session baseline chunk. Equal with `check_exact`.
+- **Payloads:** the whole v2 payload JSON, FULL and RTH, both ways — equal.
+- **Golden:** the committed pre-A4 golden `cr_cd_flow_v2_golden_0501.json` is byte-identical to the live response served from the 1-minute tables.
+- **Worker run:** the worker's rollup, run once live as `rschultz`, caught Z26 up from 22:51 to 23:14. Every rolled minute equals the 1-second rollup on all 12 columns.
+
+**Route performance, on top of reading the 1-minute tables.**
+- One DB connection per payload build. Each query used to pay a pool checkout, a pre-ping and a rollback.
+- One fetch of the chart's bar closes for the whole window.
+- The baseline in one query when the 1-minute table covers it; 5-session chunks remain for the 1-second fallback.
+- Both 1-minute tables' existence and last-minute checks in one query each, cached 30 s.
+- A permission or other read error disables the 1-minute path and serves on the fly (test).
+
+Profile of a cold build before these changes: 2.8 s of 3.06 s was psycopg network wait (63 ms round trip laptop → Oregon); Python work was ~0.25 s.
+
+**L9 (A4.5)** (`scripts/cr_cd_a4_identity.py l9`).
+- **Method:** 5 random train sessions, seed 20261025. For each: engine disposed, every in-process cache cleared, the fresh connection timed separately, then one route request (FULL, mode=v2, Flask test client). One warm-up request on 2026-01-05 (not in the sample) absorbs Python first-call costs.
+
+| session | connect | request | total |
+|---|---|---|---|
+| 2026-02-09 | 0.28 s | 0.81 s | 1.10 s |
+| 2026-02-12 | 0.31 s | 0.82 s | 1.14 s |
+| 2026-03-13 | 0.29 s | 0.80 s | 1.09 s |
+| 2026-03-23 | 0.33 s | 0.87 s | 1.20 s |
+| 2026-05-27 | 0.30 s | 0.82 s | 1.11 s |
+
+- **L9 PASS, from Ryan's laptop:** max 1.20 s cold. Before A4: 5–27 s.
+- **Network:** measured over a 63 ms laptop → Oregon round trip. Inside Render (web service and DB in the same region) the round-trip share should be far smaller. Not measured there; it can be checked after deploy.
+- **Not cleared:** Postgres' own buffer cache cannot be cleared from here.
+
+**Render services**
+
+| service | type / id | change | deploys how |
+|---|---|---|---|
+| `ireanbeam_1s_aggregates` | background worker `srv-d57jncbuibrs73a787q0` | 1-minute rollup in its loop | **auto-deploy on commits to `main`: deploys when the PR merges** |
+| `Dash - MonoRepo` | web `srv-d4370d6uk2gs738ps5t0` | Flow v2 reads the 1-minute tables | manual (auto-deploy off); one deploy covers CR-CC #78/#80/#82, CR-CD #84 and this PR |
+
+**Every merge to `main` also redeploys these auto-deploy services, though this PR doesn't change their code:**
+- `ironbeam-trades-ws-worker` (its restart briefly interrupts trade ingest);
+- the crons: `Ironbeam Cron`, `prune-ironbeam-trades`, `pulse-today-ingest-spx`, `ORATS-Gap_Fill_Today`, `orats-eod-gamma`, `open-implied-move`, `sweep_pending_outcomes`, `backfill_outcomes`;
+- the static site `volatility-monorepo`.
+
+**Before or at deploy.**
+- The DDL and backfill are already in the DB; no env vars are required. `IRONBEAM_FLOW_1M_ENABLED=0` disables the rollup.
+- Between now and the worker deploy, `ironbeam_es_flow_1m` lags (last stored minute 23:13 UTC 2026-10-25). Flow v2 then serves minutes after the watermark on the fly, and the worker catches up on its first passes (6 h per pass).
+- **After deploy, check:**
+  - the worker log shows `[flow_1m] XCME:ES.Z26 […] minutes=3` lines;
+  - `max(minute_utc)` in `ironbeam_es_flow_1m` tracks now − 1 min;
+  - a v2 load on the deployed service.
