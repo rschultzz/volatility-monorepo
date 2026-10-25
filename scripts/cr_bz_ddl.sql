@@ -23,4 +23,29 @@ CREATE TABLE IF NOT EXISTS ironbeam_es_1m_bars_revision_log (
     PRIMARY KEY (datetime, snap_open, snap_high, snap_low, snap_close, snap_volume)
 );
 
+-- A1.3: old and new values of every repaired row, both tables, logged before the UPDATE.
+CREATE TABLE IF NOT EXISTS ironbeam_es_1m_bars_repair_log (
+    run_id        uuid NOT NULL,          -- bt_backfill_runs.run_id
+    target_table  text NOT NULL CHECK (target_table IN ('ironbeam_es_1m_bars', 'es_minutes')),
+    bar_ts        timestamptz NOT NULL,   -- bar start (ironbeam_es_1m_bars.datetime as UTC = es_minutes.ts_utc)
+    old_open      double precision,
+    old_high      double precision,
+    old_low       double precision,
+    old_close     double precision,
+    old_volume    double precision,
+    new_open      double precision NOT NULL,
+    new_high      double precision NOT NULL,
+    new_low       double precision NOT NULL,
+    new_close     double precision NOT NULL,
+    new_volume    double precision NOT NULL,  -- flow volume: a lower bound (CR-BZ Step 0 Q3)
+    symbol        text NOT NULL,              -- contract of the flow minute
+    logged_at     timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (run_id, target_table, bar_ts)
+);
+
+-- A1.3: the repair runs as dash_backfill_writer, which has only INSERT/SELECT on these
+-- tables (measured 2026-10-25). Column-level UPDATE on OHLCV only; still no DELETE.
+GRANT UPDATE (open, high, low, close, volume) ON ironbeam_es_1m_bars TO dash_backfill_writer;
+GRANT UPDATE (open, high, low, close, volume) ON es_minutes TO dash_backfill_writer;
+
 COMMIT;
