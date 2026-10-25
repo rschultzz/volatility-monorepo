@@ -84,6 +84,8 @@ def register_gex_landscape_route(server, engine) -> None:
 
         # accuracy is optional; builder owns validation.
         accuracy_arg = request.args.get("accuracy")
+        # levels=corrected (CR-BV); absent or anything else = current.
+        levels_arg = request.args.get("levels")
 
         with engine.connect() as conn:
             # ── Spot resolution (CR-016 hotfix 5) ─────────────────────────
@@ -105,6 +107,7 @@ def register_gex_landscape_route(server, engine) -> None:
                 conn, ticker, date_str, spot_raw,
                 iv=iv_arg, implied_move=move_arg,
                 accuracy=accuracy_arg,
+                levels=levels_arg,
             )
 
         resp = jsonify(payload)

@@ -5,7 +5,7 @@
 //
 // Visual reference: outputs/landscape_2026-05-20_stacked.png.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 export const PANEL_WIDTH = 300
 
@@ -45,6 +45,50 @@ function fmtB(raw) {
   return `${b >= 0 ? '+' : ''}${b.toFixed(0)}B`
 }
 
+// CR-BV L5 — net GEX ($bn) of the total curve at a price, linearly interpolated
+// between grid points; null outside the grid.
+function interpTotalB(landscape, price) {
+  for (let i = 1; i < landscape.length; i += 1) {
+    const p0 = Number(landscape[i - 1].price)
+    const p1 = Number(landscape[i].price)
+    if ((price >= p0 && price <= p1) || (price <= p0 && price >= p1)) {
+      const g0 = Number(landscape[i - 1].gex_total)
+      const g1 = Number(landscape[i].gex_total)
+      const w = p1 === p0 ? 0 : (price - p0) / (p1 - p0)
+      return (g0 + w * (g1 - g0)) / 1e9
+    }
+  }
+  return null
+}
+
+// CR-BV L10 — 3–5 round ticks over [lo, hi] (which always contains 0).
+function gexAxisTicks(lo, hi) {
+  const span = hi - lo
+  if (!(span > 0)) return [0]
+  const mag = 10 ** Math.floor(Math.log10(span / 4))
+  let fallback = null
+  for (const m of [0.5, 1, 2, 2.5, 5, 10, 20]) {
+    const step = m * mag
+    const ticks = []
+    for (let k = Math.ceil(lo / step); k * step <= hi + 1e-9; k += 1) ticks.push(k === 0 ? 0 : k * step)
+    if (ticks.length >= 3 && ticks.length <= 5) return ticks
+    if (ticks.length < 3 && !fallback) fallback = ticks
+  }
+  return fallback || [0]
+}
+
+function fmtTickB(v) {
+  if (v === 0) return '0'
+  return `${v < 0 ? '−' : ''}${String(Number(Math.abs(v).toPrecision(6)))}`
+}
+
+// CR-BV L2 — why a Corrected-mode request has no curve (CR-BT A1.1/A1.2).
+const LEVELS_NOTE_TEXT = {
+  pre_forward_era: 'Corrected levels start on 2024-04-03.',
+  no_es_snapshot: 'No ES 15:45 ET snapshot for the prior session.',
+  no_rows: 'No GEX rows for this session.',
+}
+
 function SpotModeSwitch({ mode, onChange }) {
   return (
     <div style={{ display: 'inline-flex', borderRadius: 6, overflow: 'hidden', border: '1px solid #334155' }}>
@@ -80,8 +124,10 @@ export default function GexLandscape({
   spotMode = 'LIVE',
   onSpotModeChange,
   onClose,
-  // The chart's visible price window { priceTop, priceBot, paneHeight }. When present,
-  // the landscape Y-axis uses chart-pixel coordinates to align with the chart.
+  // The chart's visible price window { priceTop, priceBot, paneHeight[, paneTop] }. When
+  // present, the landscape Y-axis uses chart-pixel coordinates to align with the chart.
+  // paneTop (CR-BV L4) is the chart pane's viewport top; when given, the panel subtracts
+  // the measured offset between its own body and the pane.
   // null before the chart's first rAF sample → fall back to the full stored range.
   visiblePriceRange = null,
   // Ref to MiniPriceChart (via DayView) — { getChart() } — used by the landscape
@@ -92,6 +138,20 @@ export default function GexLandscape({
   // labels are the single visible Y axis for both panes. Default true preserves
   // existing behavior on the main page.
   showPriceAxis = true,
+  // CR-BV L5 — crosshair shared with the price chart. crosshairBus { subscribe(fn) }
+  // delivers the chart's crosshair price (null when the cursor leaves the chart);
+  // onCrosshairPrice(price | null) asks the chart to show its crosshair at the panel
+  // cursor's price. Both absent (today-setup) → no crosshair line on the panel.
+  crosshairBus = null,
+  onCrosshairPrice = null,
+  crosshairColor = 'rgba(191, 219, 254, 0.45)',
+  crosshairDash = '2 2',
+  // CR-BV L6 — the chart's last bar close. When the prop is passed, the amber line
+  // is labelled "regime spot N" and drawn only when it differs from lastPrice by
+  // more than 1 pt. Not passed (today-setup) → the original "spot N" line.
+  lastPrice,
+  // CR-BV L10 — $gamma ticks along the bottom of the plot.
+  showGexAxis = false,
 }) {
   const bodyRef = useRef(null)
   const rootRef = useRef(null)
@@ -101,6 +161,24 @@ export default function GexLandscape({
   useEffect(() => { chartRefRef.current = chartRef }, [chartRef])
 
   const [size, setSize] = useState({ width: PANEL_WIDTH, height: 360, offsetTop: 0 })
+  // CR-BV L5 — crosshair price from the chart, and from this panel's own cursor.
+  const [chartCrosshairPrice, setChartCrosshairPrice] = useState(null)
+  const [panelCrosshairPrice, setPanelCrosshairPrice] = useState(null)
+  useEffect(() => {
+    if (!crosshairBus) return undefined
+    return crosshairBus.subscribe((p) => setChartCrosshairPrice(p))
+  }, [crosshairBus])
+
+  // Viewport top of the plot body (CR-BV L4), re-measured whenever the chart
+  // publishes a new window (its rAF poll) and on resize.
+  const [bodyTop, setBodyTop] = useState(null)
+
+  useLayoutEffect(() => {
+    const el = bodyRef.current
+    if (!el) return
+    const top = el.getBoundingClientRect().top
+    setBodyTop((prev) => (prev === top ? prev : top))
+  }, [visiblePriceRange, size.width, size.height])
 
   useEffect(() => {
     const el = bodyRef.current
@@ -185,8 +263,11 @@ export default function GexLandscape({
 
     // CR-018 — when the chart publishes its visible price window (with paneHeight),
     // map prices directly to chart-pixel coordinates: yOf(price) = 0 at priceTop,
-    // yOf(price) = paneHeight at priceBot. No PAD.top offset — the landscape SVG
-    // body's y=0 corresponds to the chart's y=0 (plot-area top).
+    // yOf(price) = paneHeight at priceBot. No PAD.top offset.
+    // CR-BV L4 — the SVG body does not start at the chart pane's top (it sits below
+    // the header row), so y_panel = y_chart − (panelBodyTop − chartPaneTop), both
+    // measured from the DOM. Without paneTop (today-setup, which pads its chart to
+    // line the two up) the offset is 0.
     const synced =
       visiblePriceRange &&
       Number.isFinite(visiblePriceRange.priceTop) &&
@@ -197,12 +278,16 @@ export default function GexLandscape({
     let pLo
     let pHi
     let yOf
+    let bodyOffset = 0
+    let priceOf = null
     if (synced) {
-      const { priceTop, priceBot, paneHeight } = visiblePriceRange
+      const { priceTop, priceBot, paneHeight, paneTop } = visiblePriceRange
       pLo = Math.min(priceTop, priceBot)
       pHi = Math.max(priceTop, priceBot)
       const span = pHi - pLo
-      yOf = (price) => ((priceTop - price) / span) * paneHeight
+      if (Number.isFinite(paneTop) && Number.isFinite(bodyTop)) bodyOffset = bodyTop - paneTop
+      yOf = (price) => ((priceTop - price) / span) * paneHeight - bodyOffset
+      priceOf = (y) => priceTop - ((y + bodyOffset) / paneHeight) * span
     } else {
       pLo = pMin
       pHi = pMax
@@ -214,7 +299,11 @@ export default function GexLandscape({
       pMin: pLo,
       pMax: pHi,
       synced,
+      bodyOffset,
       yOf,
+      priceOf,
+      gMin,
+      gMax,
       xOf: (gexB) => PAD.left + ((gexB - gMin) / gexSpan) * plotW,
     }
   }
@@ -241,6 +330,31 @@ export default function GexLandscape({
   // Keep geomRef in sync with current render so the wheel handler sees
   // the latest pMin/pMax without stale closure.
   geomRef.current = geom
+
+  const crosshairEnabled = Boolean(geom?.synced && (crosshairBus || onCrosshairPrice))
+  const crosshairPrice = panelCrosshairPrice ?? chartCrosshairPrice
+  const crosshairY = crosshairEnabled && crosshairPrice != null ? geom.yOf(crosshairPrice) : null
+  const crosshairNetB = crosshairY != null ? interpTotalB(landscape, crosshairPrice) : null
+
+  const handlePlotMouseMove = (e) => {
+    if (!crosshairEnabled || !geom.priceOf) return
+    const y = e.clientY - e.currentTarget.getBoundingClientRect().top
+    const price = geom.priceOf(y)
+    setPanelCrosshairPrice(price)
+    onCrosshairPrice?.(price)
+  }
+  const handlePlotMouseLeave = () => {
+    if (!crosshairEnabled) return
+    setPanelCrosshairPrice(null)
+    onCrosshairPrice?.(null)
+  }
+
+  const regimeSpotLabel = lastPrice !== undefined
+  const showSpotLine =
+    data?.spot != null &&
+    (!regimeSpotLabel || lastPrice == null || Math.abs(Number(data.spot) - Number(lastPrice)) > 1)
+  const gexTicks = geom && showGexAxis ? gexAxisTicks(geom.gMin, geom.gMax) : []
+  const gexAxisY = size.height - PAD.bottom
 
   return (
     <div
@@ -326,12 +440,22 @@ export default function GexLandscape({
           <div style={{ color: '#64748b', fontSize: 12, textAlign: 'center', padding: '24px 0' }}>
             Loading landscape…
           </div>
+        ) : data.levels_note ? (
+          <div style={{ color: '#64748b', fontSize: 12, textAlign: 'center', padding: '24px 12px' }}>
+            Corrected landscape unavailable. {LEVELS_NOTE_TEXT[data.levels_note] || data.levels_note}
+          </div>
         ) : !geom ? (
           <div style={{ color: '#64748b', fontSize: 12, textAlign: 'center', padding: '24px 0' }}>
             No landscape data for this session.
           </div>
         ) : (
-          <svg width={size.width} height={size.height} style={{ display: 'block' }}>
+          <svg
+            width={size.width}
+            height={size.height}
+            style={{ display: 'block' }}
+            onMouseMove={handlePlotMouseMove}
+            onMouseLeave={handlePlotMouseLeave}
+          >
             {/* zero-GEX axis */}
             <line
               x1={geom.xOf(0)}
@@ -432,8 +556,9 @@ export default function GexLandscape({
               )
             })}
 
-            {/* spot line — dashed amber, horizontal */}
-            {data.spot != null && (
+            {/* spot line — dashed amber, horizontal. CR-BV L6: with lastPrice it is
+                the classifier's spot, shown only when it differs from the last bar. */}
+            {showSpotLine && (
               <g>
                 <line
                   x1={PAD.left}
@@ -451,8 +576,56 @@ export default function GexLandscape({
                   fontWeight="700"
                   fill={SPOT_COLOR}
                 >
-                  spot {Number(data.spot).toFixed(0)}
+                  {regimeSpotLabel ? 'regime spot' : 'spot'} {Number(data.spot).toFixed(0)}
                 </text>
+              </g>
+            )}
+
+            {/* CR-BV L10 — $gamma axis: round ticks in $bn of net GEX, 0 always labelled */}
+            {gexTicks.map((t) => (
+              <g key={`gex-tick-${t}`}>
+                <line
+                  x1={geom.xOf(t)}
+                  x2={geom.xOf(t)}
+                  y1={gexAxisY}
+                  y2={gexAxisY + 4}
+                  stroke="#64748b"
+                  strokeWidth="1"
+                />
+                <text x={geom.xOf(t)} y={gexAxisY - 3} textAnchor="middle" fontSize="8.5" fill="#64748b">
+                  {fmtTickB(t)}
+                </text>
+              </g>
+            ))}
+
+            {/* CR-BV L5 — the chart's horizontal crosshair continued across the panel,
+                with net GEX ($bn, total curve) at that price on the right edge */}
+            {crosshairY != null && (
+              <g pointerEvents="none">
+                <line
+                  x1={0}
+                  x2={size.width}
+                  y1={crosshairY}
+                  y2={crosshairY}
+                  stroke={crosshairColor}
+                  strokeWidth="1"
+                  strokeDasharray={crosshairDash}
+                />
+                {crosshairNetB != null && (
+                  <text
+                    x={size.width - 4}
+                    y={crosshairY - 4}
+                    textAnchor="end"
+                    fontSize="9"
+                    fontWeight="700"
+                    fill="#dbeafe"
+                    stroke="#0b1220"
+                    strokeWidth="3"
+                    paintOrder="stroke"
+                  >
+                    {`${crosshairNetB >= 0 ? '+' : '−'}${Math.abs(crosshairNetB).toFixed(1)}B`}
+                  </text>
+                )}
               </g>
             )}
 
