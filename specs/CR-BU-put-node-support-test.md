@@ -235,3 +235,80 @@ A1 replaces L7/L8/L10's single-node rule; all else (L1–L6, L9 race with R = 0.
 | A1.1 | **Candidates:** up to 3 per day — the most negative-net 5-pt bins of corrected L (0–7 DTE rows, P_target = S0) with L in [open − 1.5·IM, open − 0.25·IM], greedy by most negative net, each ≥ 10 pts from any already chosen. Only bins with net < 0. |
 | A1.2 | **Event:** scan RTH minutes from the open; the event is the first candidate whose entry E = N + 0.05·IM satisfies low ≤ E. One event per day. Race (L9) runs from that minute and that E. |
 | A1.3 | **Placebo:** for event day d with candidate z-set {z_1..z_k} (z_i = (open_d − N_i)/IM_d), on each other usable day e place pseudo-levels P_i = open_e − z_i·IM_e, apply the same first-touch rule and race. Placebo rate for d = win share over touched, resolved e. Statistic = mean(actual − placebo) over event days. |
+
+---
+
+## Step 0 re-count under A1 (2026-10-24)
+
+Script `scripts/cr_bu_step0_a1.py` (committed with this section). Connection: `get_backfill_db_conn()` with `SET default_transaction_read_only = on`, SELECTs only. Log: `scripts/logs/cr_bu/step0_a1.log` (git-ignored). The universe, the loads and L1–L6/L14 are unchanged from Step 0; the script asserts **433 usable sessions**.
+
+Definitions were fixed in the docstring before the run:
+- **Greedy order:** net ascending; on a tie, the higher bin first.
+- **Same-minute tie:** if several candidates are touched in the same minute, the one with the highest E wins (the first level the falling path crosses). This tie occurred **0 times**.
+
+The pipeline was run twice, before and after the pseudo unresolved counter was added. Both runs produced the same numbers.
+
+No race was run at any actual node. The race harness ran only at A/A pseudo-levels and their placebo levels.
+
+**Verdict: the touched gate passes, at 151 against a minimum of 150.** The A/A control passes. Two power caveats are listed at the end of this section; neither is a gate.
+
+### Counts (low path only)
+
+**Days with ≥ 1 candidate: 365 of 433.** This equals Step 0's node days: a day has candidates exactly when it has a negative window bin.
+
+| candidates per day | days |
+|---|---|
+| 1 | 36 |
+| 2 | 24 |
+| 3 | 305 |
+
+Mean: 2.74 candidates per day.
+
+**Touched days: 151 of 365 (41.4 %).** Under the single-node rule it was 99.
+
+**Rank of the touched candidate:**
+
+| rank | days |
+|---|---|
+| 1 (most negative) | 61 |
+| 2 | 44 |
+| 3 | 46 |
+
+**z of the touched candidate:** median 0.441, IQR 0.334–0.622, range 0.252–1.465.
+
+**First touch:** 125 before 10:00 PT, 26 after.
+
+**Touched node |net|** (stored gex ÷ 1e9, the chart's $bn): median 45.32, IQR 25.18–87.51.
+
+| year | n | median | p25 | p75 |
+|---|---|---|---|---|
+| 2024 | 56 | 47.45 | 31.85 | 81.34 |
+| 2025 | 71 | 36.39 | 19.37 | 85.94 |
+| 2026 | 24 | 55.06 | 40.21 | 121.69 |
+
+Candidate days by year: 2024 120, 2025 168, 2026 77.
+
+### Net-floor counts (counts only; no floor adopted)
+
+In these variants the same greedy selection runs only on window bins that clear the floor.
+
+| floor | candidate days | touched | 2024 | 2025 | 2026 |
+|---|---|---|---|---|---|
+| net ≤ −100 $bn | 101 | 43 | 15 | 18 | 10 |
+| net ≤ −50 $bn | 210 | 81 | 30 | 36 | 15 |
+
+### A/A control under A1: PASS
+
+**Design:**
+- 365 pseudo z-sets, drawn with replacement from the actual candidate z-sets.
+- They were placed on 365 usable days, drawn without replacement, using `default_rng(20261024)`.
+- They ran through the full A1 harness: first touch, race at R = 0.20·IM, leave-one-out z-set placebo, and the month-cluster bootstrap (seed 20260920, 10 000 resamples).
+
+**Result:**
+- Of the 365 pseudo z-sets, 151 were touched and 1 of those ended unresolved, leaving 150 resolved events over 27 months. The median placebo n per event was 203.
+- **actual − placebo = +1.65 pts, 95 % CI [−8.05, +11.45]. The CI covers 0.**
+
+### Power caveats (not gates; the spec is unchanged)
+
+1. **Resolved n.** The pass criterion requires n ≥ 150 *resolved* events, and there are 151 touched. If 2 or more actual events end unresolved, T1 cannot pass whatever the win rate. In the A/A, 1 of 151 pseudo touches was unresolved.
+2. **CI width.** At n 150 the A/A CI half-width is about ±9.8 pts. A true +8-pt edge would therefore probably not clear "CI lower bound > 0". An actual − placebo of roughly ≥ +10 pts is needed for the lower bound to clear 0.
