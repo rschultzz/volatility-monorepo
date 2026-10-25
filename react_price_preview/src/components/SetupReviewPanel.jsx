@@ -17,6 +17,7 @@
 // T / S / U label, R reveal.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import ReviewMeta from './ReviewMeta'
 
 export const PANEL_WIDTH = 340
 
@@ -382,10 +383,6 @@ export default function SetupReviewPanel({
     return [...out].sort()
   }, [sets, filters.cr, filters.set])
 
-  const metaEntries = useMemo(
-    () => Object.entries(activeCandidate?.meta || {}).filter(([k]) => k !== 'level_frame'),
-    [activeCandidate]
-  )
   const outcome = revealed ? activeCandidate?.outcome : null
 
   return (
@@ -485,9 +482,8 @@ export default function SetupReviewPanel({
                 <KV k="stop" v={fmtNum(activeCandidate.stop_price)} />
                 <KV k="extreme" v={fmtNum(activeCandidate.extreme_price)} />
                 <KV k="frame" v={activeCandidate.meta?.level_frame || '—'} />
-                {metaEntries.map(([k, v]) => (
-                  <KV key={k} k={k} v={typeof v === 'object' ? JSON.stringify(v) : fmtNum(v)} />
-                ))}
+                {/* CR-CC A3.1: meta as readable rows; raw JSON only behind "show raw" */}
+                <ReviewMeta meta={activeCandidate.meta} candidate={activeCandidate} />
               </div>
 
               <div style={{ display: 'flex', gap: 6 }}>
