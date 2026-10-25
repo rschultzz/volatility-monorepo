@@ -289,3 +289,18 @@ COMMIT;
    - (d) Times are naive PT on the D2 convention.
 5. **D5 — Insert-only enforcement.** Trigger-based (DDL above), because the web role owns the tables. Alternative: a separate least-privilege web role, which is a Render env change and out of L1's scope.
 6. **D6 — Loader connection.** `scripts/load_setup_candidates.py` is an attended, insert-only run. Recommended: the backfill protocol anyway (`get_backfill_db_conn` / `assert_role_or_die` / `backfill_run`). `dash_backfill_writer` already gets `INSERT, SELECT` by default ACL and has no DELETE. Rows go in with `ON CONFLICT (id) DO NOTHING`, and the run reports inserted vs skipped. A corrected re-load needs a new `set_name`, because candidates are immutable.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-25, after Step 0)
+
+D1–D6 from the Step 0 findings are accepted as recommended, with these additions. L1–L11 stand except where a clause below says otherwise.
+
+| # | Clause |
+|---|---|
+| A1.1 (D1) | `tradeDate` becomes React state, seeded from the URL. While a candidate is active a **"Review: <date>"** banner is shown. Leaving review restores the URL date. |
+| A1.2 (D2) | `entry_ts_pt` = the close of the signal bar. Replay shows complete bars with start < `entry_ts_pt`. |
+| A1.3 (D3) | With `until` active: truncate the ATM IV series and the flow at `until`; hide the SIGNALS, smile/skew and condor pricing panels until reveal; compute the GEX line band from bars up to `until` (not the full session high/low); suppress expected-move lines when `entry_ts_pt` < 06:33 PT. All of it is restored on reveal. Without `until`, every response is byte-identical to today. |
+| A1.4 (D4–D6) | As recommended: gallery `level_frame`; the loader rejects outcome-like `meta` keys, `session_date` ≥ today, and non-PT times; insert-only enforced by triggers; the loader runs under the backfill protocol with `ON CONFLICT (id) DO NOTHING`. Gallery converters for CR-BU / CR-BW are **out of scope**. |
+| A1.5 (web DB role) | The web service's role is unknown. The DDL must work regardless: grant `SELECT, INSERT` on `setup_candidates` and `setup_reviews`, and `UPDATE (revealed_at)` on `setup_reviews`, to the role that owns the existing app tables (determined from `pg_tables` / `pg_class`, e.g. `trade_log_trades`), and to explicit roles only, never `PUBLIC`. The web service logs the connected role name once at startup (the role name only, never the URL), so it can be confirmed after deploy. If the web role turns out to lack the privileges, the review routes return a clear "permission" error rather than crash. |
+| A1.6 (sequence) | Record a golden for the flow route before step 3. Apply the DDL once with `DATABASE_URL`. Implement steps 1–6, one commit each. Smoke with a 5-event fixture from real 2026 train sessions, loaded as set `cc:fixture` (outcome stored, hidden); Playwright walks label → reveal. Push and open a PR (deploy = "Dash - MonoRepo"); do not merge. |
