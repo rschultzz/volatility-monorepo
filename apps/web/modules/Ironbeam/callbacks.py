@@ -1603,6 +1603,7 @@ def _build_react_flow_v2_route_payload(
         return flow_v2.build_flow_v2_payload(
             engine, trade_date, session=session, until_pt=until_pt,
             params=flow_v2.parse_marker_params(args), session_date=session_date, session_note=session_note,
+            effort=flow_v2.parse_effort(args),
         )
     except Exception as e:
         return {"error": f"Database error when loading flow v2: {e}", "mode": "v2", "bars": [], "markers": [],

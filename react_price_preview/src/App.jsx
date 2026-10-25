@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
-import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS } from './components/AggressorFlowV2Panel'
+import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS, effortChartMarkers } from './components/AggressorFlowV2Panel'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import { PANEL_WIDTH as ANALOGUES_PANEL_WIDTH } from './components/AnaloguesPanel'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
@@ -12,6 +12,8 @@ const FLOW_EMA_MINUTES_STORAGE_KEY = 'ib-react-flow-ema-minutes'
 // CR-CD: Flow pane mode (Current | v2) and the v2 marker settings, per viewer.
 const FLOW_MODE_STORAGE_KEY = 'ib-react-flow-mode'
 const FLOW_V2_MARKERS_STORAGE_KEY = 'ib-react-flow-v2-markers'
+// CR-CD A5: swing effort labels (off by default), per viewer.
+const FLOW_V2_EFFORT_STORAGE_KEY = 'ib-react-flow-v2-effort'
 const GEX_MIN_ABS_B_STORAGE_KEY = 'ib-react-gex-min-abs-b'
 const GEX_LEVELS_MODE_STORAGE_KEY = 'ib-react-gex-levels-mode'
 const GEX_LANDSCAPE_SPOT_MODE_KEY = 'GEX_LANDSCAPE_SPOT_MODE'
@@ -540,6 +542,13 @@ export default function App() {
       return raw && typeof raw === 'object' ? { ...DEFAULT_MARKER_SETTINGS, ...raw } : DEFAULT_MARKER_SETTINGS
     } catch (err) {
       return DEFAULT_MARKER_SETTINGS
+    }
+  })
+  const [flowEffort, setFlowEffort] = useState(() => {
+    try {
+      return window.localStorage.getItem(FLOW_V2_EFFORT_STORAGE_KEY) === '1'
+    } catch (err) {
+      return false
     }
   })
   const [flowV2Payloads, setFlowV2Payloads] = useState([])
@@ -1188,6 +1197,14 @@ export default function App() {
 
   useEffect(() => {
     try {
+      window.localStorage.setItem(FLOW_V2_EFFORT_STORAGE_KEY, flowEffort ? '1' : '0')
+    } catch (err) {
+      // ignore
+    }
+  }, [flowEffort])
+
+  useEffect(() => {
+    try {
       window.localStorage.setItem(GEX_MIN_ABS_B_STORAGE_KEY, String(gexMinAbsB))
     } catch (err) {
       // ignore
@@ -1457,10 +1474,22 @@ export default function App() {
       url.searchParams.set('m_fade', String(flowMarkerSettings.fade))
       url.searchParams.set('m_gap', String(flowMarkerSettings.gap))
       if (reviewUntil) url.searchParams.set('until', reviewUntil)
+      if (flowEffort) url.searchParams.set('effort', '1')
       return url
     },
     [flowSession, flowMarkerSettings.swing, flowMarkerSettings.push, flowMarkerSettings.div,
-      flowMarkerSettings.fade, flowMarkerSettings.gap, reviewUntil]
+      flowMarkerSettings.fade, flowMarkerSettings.gap, reviewUntil, flowEffort]
+  )
+
+  // CR-CD A5: swing effort labels for the price chart — only while Flow v2 is shown with Effort on
+  // (null otherwise, so the chart draws nothing extra).
+  const flowEffortLegs = useMemo(() => {
+    if (!flowEnabled || flowMode !== 'v2' || !flowEffort) return null
+    return flowV2Payloads.flatMap((p) => (Array.isArray(p.payload?.legs) ? p.payload.legs : []))
+  }, [flowEnabled, flowMode, flowEffort, flowV2Payloads])
+  const effortMarkers = useMemo(
+    () => (flowEffortLegs ? effortChartMarkers(flowEffortLegs, flowMarkerSettings.effortRatio) : null),
+    [flowEffortLegs, flowMarkerSettings.effortRatio]
   )
 
   useEffect(() => {
@@ -2251,6 +2280,7 @@ export default function App() {
                 reviewHide={reviewHide}
                 reviewUntil={reviewUntil}
                 onReviewTimesChange={reviewCandidate ? setReviewTimes : null}
+                effortMarkers={effortMarkers}
               />
             </div>
 
@@ -2290,6 +2320,9 @@ export default function App() {
                       onFlowModeChange={setFlowMode}
                       markerSettings={flowMarkerSettings}
                       onMarkerSettingsChange={setFlowMarkerSettings}
+                      effortOn={flowEffort}
+                      onEffortChange={setFlowEffort}
+                      effortLegs={flowEffortLegs}
                     />
                   ) : (
                     <AggressorFlowPanel
