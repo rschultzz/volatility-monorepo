@@ -99,3 +99,81 @@ Restart note: a cloud run of this CR made unpushed commits (93d9f4d, be55a33) th
 - **A1.4 Window** [06:15:00, 13:00:00) America/Los_Angeles, end-exclusive. (Amends L4.)
 - **A1.5 DDL:** Ryan approves running the spec's CREATE TABLE (with the A1.1 column), plus `GRANT SELECT, INSERT ON es_flow_1s_databento TO dash_backfill_writer`, once, with `DATABASE_URL`, **after Step 0 passes — not before**. (Amends L9.)
 - **A1.6 Step 0 order:** `get_cost` first (trades for the full window, plus MBP-1 for information); the Q2 overlap pull (2026-01-12 .. 2026-01-23, ESH6) only if the full-window trades total ≤ $150. Q1 size is measured from that real pulled window. No DB writes in Step 0.
+
+## Step 0 findings (2026-10-25) — **STOP at the L8 cost gate**
+
+Script: `scripts/cr_ca_step0.py` (phases `cost`, `pull`, `overlap`, `size`, `roll`, `bars`, `ddl`); outputs under `scripts/logs/cr_ca/` (git-ignored). No Databento download was made and nothing was written to the DB. The only Databento calls were `metadata.get_cost` / `get_billable_size` (free).
+
+### Q1 — cost and size
+
+**Trades** (GLBX.MDP3, `stype_in=raw_symbol`, one `get_cost` per session-contract window [06:15, 13:00) PT; 439 NYSE sessions, 507 session-contracts under L3):
+
+| | USD | billable |
+|---|---|---|
+| R, front contract only (439) | 188.41 | 7.23 GB |
+| R, dying contract in roll weeks (68) | 19.44 | 0.74 GB |
+| **R total** | **207.85** | 7.97 GB |
+| Q2 overlap (ESH6, 2026-01-12 .. 01-23, 10 sessions) | 4.39 | |
+| **Full-window total** | **212.24** | |
+
+Rate ≈ $26.08 per billable GB. Monthly per-contract figures: `scripts/logs/cr_ca/q1_cost.txt`, `cost_trades.csv`. Range $3.3–15.3 per contract-month; heaviest 2025-04 ($15.26, ESM5).
+
+**L8 gate: $212.24 > $150 → STOP.** Per A1.6 the Q2 overlap pull was not run. Even front-only plus Q2 ($192.80) exceeds the cap.
+
+**MBP-1** (information only): R $364.95 (217.7 GB billable, $1.68/GB), Q2 $9.29, total $374.24.
+
+**DB free space:** database 23.15 GB on the 30 GB disk (spec; autoscaling off) → ≈ 6.85 GB free, 3.85 GB headroom to the 27 GB stop. `ironbeam_es_flow_1s`: 10,281,770 rows, 2.543 GB total (1.686 GB heap), 247 B/row with its PK and three secondary indexes (two of them duplicate `trade_date` indexes).
+
+**Table size — not measured from a real month** (needs the Q2 pull). Provisional bound from Ironbeam's own density in the Q2 window: 22,176 rows per session in [06:15, 13:00) PT (9 NYSE sessions; 2026-01-19 MLK excluded). At 261 B/row (Ironbeam's 247 + two text columns): front-only 2.54 GB, upper bound (all 507 session-contracts at the front rate) 2.94 GB → DB 25.7–26.1 GB after the load, under the 27 GB stop by ≈ 0.9–1.3 GB. Provisional; Q1c stays open until a real Databento window is aggregated.
+
+### Q2 — overlap validation
+
+**Not run** (L8 stop). Script phases `pull` → `overlap` → `size` are written and gated on `cost_summary.json` ≤ $150.
+
+### Q3 — roll calendar (L3)
+
+| contract | `symbol` (A1.1) | front | front n | stored through | stored n |
+|---|---|---|---|---|---|
+| ESM4 | XCME:ES.M24 | 2024-04-03 .. 06-07 | 47 | 06-21 | 56 |
+| ESU4 | XCME:ES.U24 | 2024-06-10 .. 09-06 | 62 | 09-20 | 72 |
+| ESZ4 | XCME:ES.Z24 | 2024-09-09 .. 12-06 | 64 | 12-20 | 74 |
+| ESH5 | XCME:ES.H25 | 2024-12-09 .. 2025-03-07 | 60 | 03-21 | 70 |
+| ESM5 | XCME:ES.M25 | 2025-03-10 .. 06-06 | 63 | 06-20 | 72 |
+| ESU5 | XCME:ES.U25 | 2025-06-09 .. 09-05 | 62 | 09-19 | 72 |
+| ESZ5 | XCME:ES.Z25 | 2025-09-08 .. 12-05 | 64 | 12-19 | 74 |
+| ESH6 | XCME:ES.H26 | 2025-12-08 .. 12-31 | 17 | 12-31 | 17 |
+
+Two contracts stored on 68 of 439 sessions: the roll Monday (expiry Friday − 11 days) through expiry Friday — 2024-06-10..21 (9, Juneteenth), 09-09..20, 12-09..20, 2025-03-10..21, 06-09..20 (9), 09-08..19, 12-08..19 (10 each). No session without a contract. Note: Ironbeam's own 2026 data rolled H26 → M26 on 2026-03-23 (after the 03-20 expiry), not on the L3 Monday; the A1.1 `symbol` matches Ironbeam's format, not its roll timing.
+
+### Q4 — bars cross-check
+
+Sample (seed 20261025, `random.Random(seed).sample` of the 2025 NYSE sessions, 10): 2025-03-18 (roll wk), 03-27, 05-23, 06-10 (roll wk), 06-17 (roll wk), 08-05, 09-12 (roll wk), 09-29, 10-20, 11-25. **Not run:** it needs a Databento trades download for those sessions ($3.75), which the frozen kickoff does not allow in Step 0 beyond the Q2 window. The script phase (`bars --allow-q4-pull`) is ready. Caveat: the sample was regenerated with the seed; whether it matches the lost cloud run's draw method is not verifiable.
+
+### Q5 — schema / DDL
+
+`dash_backfill_writer`: no CREATE on schema `public` or the database → the DDL runs under A1.5 (`DATABASE_URL`, after Step 0 passes). `es_flow_1s_databento` does not exist yet. Proposed DDL (also in the script):
+
+```sql
+CREATE TABLE es_flow_1s_databento (
+  ts_utc timestamptz NOT NULL,
+  symbol text NOT NULL,              -- XCME:ES.H26 (A1.1)
+  raw_symbol text NOT NULL,          -- ESH6 (A1.1)
+  trade_date date NULL,              -- UTC date of ts_utc (A1.2)
+  volume integer NOT NULL DEFAULT 0, notional double precision NOT NULL DEFAULT 0,
+  trade_count integer NOT NULL DEFAULT 0,
+  buy_vol integer NOT NULL DEFAULT 0, sell_vol integer NOT NULL DEFAULT 0, unknown_vol integer NOT NULL DEFAULT 0,
+  buy_count integer NOT NULL DEFAULT 0, sell_count integer NOT NULL DEFAULT 0, unknown_count integer NOT NULL DEFAULT 0,
+  open double precision, high double precision, low double precision, close double precision,
+  first_trade_ms bigint, last_trade_ms bigint,
+  source text NOT NULL DEFAULT 'databento',
+  PRIMARY KEY (ts_utc, symbol)
+);
+CREATE INDEX idx_es_flow_1s_databento_trade_date ON es_flow_1s_databento (trade_date);
+GRANT SELECT, INSERT ON es_flow_1s_databento TO dash_backfill_writer;
+```
+
+One secondary index (trade_date) instead of Ironbeam's three; the (ts_utc, symbol) PK serves time-range reads.
+
+### Decision needed (Ryan)
+
+The cap blocks everything downstream of Q1. Options: raise the L8 cap to ≥ $213 (or ≥ $193 for front-only + Q2, which would amend L3's both-contracts rule); or shorten R. Q2 ($4.39) and Q4 ($3.75) could also be authorized on their own to validate before committing the full spend.
