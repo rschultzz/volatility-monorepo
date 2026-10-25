@@ -102,3 +102,100 @@ Commit 1: spec freeze to specs/CR-BW-aggressor-absorption-at-levels.md, locked d
 Commit 2: Step 0 findings appended. Answer all six gate questions. Compute NO race outcomes at real or placebo levels except inside the A/A control (report only its difference and CI). Stop and report; stop immediately if any gate fails.
 Read-only DB (get_backfill_db_conn, default_transaction_read_only on, statement_timeout). Train only: sessions 2025-12-26 .. 2026-06-05 with CR-BT exclusions; do not read the holdout. Import place_levels unchanged. Do not push.
 ```
+
+---
+
+## Step 0 findings (2026-10-25)
+
+Script `scripts/cr_bw_step0.py` (log `scripts/logs/cr_bw/step0.log`, git-ignored). Read-only: `get_backfill_db_conn()` (role asserted) + `default_transaction_read_only = on` (asserted), `statement_timeout = 600s`, 3 h Python alarm; SELECTs only. Every read bounded to sessions ≤ 2026-06-05 (flow `ts_utc` < 2026-06-05 21:00 UTC); holdout not read. `place_levels` / `bucket_levels` imported unchanged. All operational definitions (touch, arming, approach side, fill, D, ΔP, baseline windows, placebo construction, A/A statistic, seeds) are fixed in the script docstring before the run. The script ran twice with identical output (the first run crashed inside Q6 on a tuple-access bug, before any race result was printed).
+
+**No race outcome was computed at real levels or at the L9 placebo levels.** The race ran only on the two A/A placebo draws; only their difference and CI are reported.
+
+**Verdict: STOP — gate Q6 (A/A) FAILS.** Q1–Q3 pass; Q4 and Q5 answered. The run is not started.
+
+### Q1 — flow OHLC vs `ironbeam_es_1m_bars` — PASS
+
+10 usable sessions (seed 20261025: 2026-02-09, 02-11, 02-12, 03-06, 04-13, 04-15, 04-21, 05-06, 05-21, 06-01). Flow 1-s rows aggregated to minutes (open = first, high = max, low = min, close = last) and joined to the 1m bar with the same UTC start, RTH only: 3,899 joined minutes (one bar missing on 05-06).
+
+| field | median \|diff\| | p90 | p99 | max | exact |
+|---|---|---|---|---|---|
+| open | 0.000 | 0.000 | 0.50 | 11.75 | 96.9 % |
+| high | 0.000 | 0.000 | 0.25 | 11.50 | 98.3 % |
+| low | 0.000 | 0.000 | 0.25 | 8.00 | 98.4 % |
+| close | 0.000 | 0.000 | 0.25 | 2.50 | 98.9 % |
+
+Median 0 ≤ 0.25 → pass. The flow OHLC is the same price series as the 1m bars to the tick on ~98 % of minutes; rare multi-point outliers (max 11.75) exist and were not traced.
+
+### Q2 — symbol
+
+- One RTH symbol on every session (0 sessions with > 1): `XCME:ES.H26` 2025-12-26 → 2026-03-19 (03-20 has no flow), `XCME:ES.M26` from 2026-03-23. The switch falls inside the excluded March roll week (and 03-20 has no flow). The flow table's `trade_date` is the UTC date; RTH lies inside one UTC date.
+- Every usable session uses one contract. P_target (1m bar starting 15:45 ET on A) vs the same symbol's last flow print in that minute: n 52, median |diff| 0.00, p90 0.00, max 1.75 (2026-04-08); one session (of 53) has no flow print in that minute. Levels and the traded path are in the same contract frame.
+
+### Q3 — universe and counts (no outcomes) — PASS
+
+Sequential exclusions over 111 trading sessions 2025-12-26 → 2026-06-05:
+
+| step | removed | remaining |
+|---|---|---|
+| L14a roll week (2026-03-09 → 03-20) | 10 | 101 |
+| L14b no ES 15:45 ET bar on A (2025-12-26, 2026-02-18, 02-19) | 3 | 98 |
+| L14c roll mismatch | 0 | 98 |
+| flow incomplete (Step 0 data rule: first RTH row ≤ 06:30:59, last ≥ 12:59:00, no gap > 60 s) | 22 | 76 |
+| no canonical `bt_daily_features` row (01-20, 02-17, 04-06, 05-26) | 4 | 72 |
+| IM null / ≤ 0 | 0 | 72 |
+| no `orats_oi_gamma` rows | 0 | 72 |
+| < 20 prior baseline sessions (B_d) | 19 | **53** |
+
+- **Usable: 53 sessions, 2026-01-29 → 2026-06-02.**
+- Flow-incomplete detail: 2026-03-03 no flow; 03-02 ends 08:22 PT; 03-04 starts 07:57; 04-27 and 05-14 have 1–1¼ h holes; the rest have one or more 61–619 s gaps in RTH (01-02, 02-04/05/06/13, 04-16, 05-08/11/13/15/18/19/20/29, 06-03/04/05). ES trades every second in RTH, so these are feed gaps, not quiet tape. The 60 s threshold is a Step 0 choice; 13 of the 22 have a maximum gap of 61–120 s.
+- Levels: per session median 17 (IQR 13–20, min 5, max 32); 906 total; 287 negative-net, 619 positive-net; |net| median 57.7 $bn; |distance from open| median 33.8 pts; IM median 68.3.
+- Armed touch events: **1,572** (per session median 28, IQR 17–37, max 88). Approach from above 769, from below 803, undetermined 0. Crossings between consecutive 1-s bars with no print at L (not events): 7. Touches before 06:35 PT whose 300 s window reaches pre-open flow: 49.
+- T1-eligible (D > 0): **1,144**; D ≤ 0 (S6): 428.
+- A_rel tercile cut points 1.608 / 3.397. A_rel percentiles 1/5/25/50/75/95/99: −6.44 / 0.25 / 1.31 / 2.34 / 4.16 / 19.2 / 84.4. Median A_rel 2.3 > 1: events are selected on price having just travelled ≥ 0.10·IM toward the level, so their impact runs above the unconditional baseline. Terciles are within-event, so this does not bias T1.
+
+| tercile | eligible | entry filled | fill rate |
+|---|---|---|---|
+| low (absorption) | 382 | 347 | 0.908 |
+| mid | 381 | 343 | 0.900 |
+| high (continuation) | 381 | 348 | 0.913 |
+
+- Entry-fill rate: all events 0.912, eligible 0.907. Gate: ≥ 150 could-resolve (filled) eligible events per tercile → **pass (min 343)**.
+- S3 / S4 counts (eligible, filled): negative-net 397 / positive-net 641; before / after 10:00 PT 722 / 316.
+- **Placebo (L9 draw, seed 20261025):** 261 pseudo-levels (vs 906 real); 430 events; 315 eligible; 293 filled; per tercile (eligible / filled) 119/109, 97/91, 99/93. **Below 150 per tercile.** At 17 levels per session inside ±1·IM (≈ 27 five-point bins), about two thirds of the bins near the open are "levels", so the 5-pt separation rule drops ~70 % of pseudo-levels. The placebo arm is about a quarter the size of the real arm, and T2 is correspondingly under-powered.
+
+### Q4 — baseline B_d
+
+- B_d (pts per 1,000 contracts, median A_w pooled over 20 prior flow-complete, non-roll-week sessions, 78 windows each): median **4.25**, IQR 3.98–5.03, range 3.32–5.71; none ≤ 0.
+- Stable: day-to-day ratio median 1.000, p5 0.963, p95 1.063. Monthly medians: Jan 3.33, Feb 3.94, Mar 5.13, Apr 4.92, May 3.97, Jun 4.15.
+- Single-session median A_w (78 baseline-eligible sessions): median 4.20, IQR 3.27–5.62. corr(B_d, same-session median A_w) = 0.07: the trailing baseline carries the regime level but not the day's own impact.
+- First session with 20 prior baseline sessions: 2026-01-29. 22 sessions of the window fall before it; 19 of them are removed by the B_d clause after the earlier exclusions.
+
+### Q5 — worked event (seed 20261025; outcome hidden)
+
+- Session 2026-02-20 (A = 02-19), `XCME:ES.H26`. P_target 6866.25, RTH open 6852.75, IM 80.98.
+- Level L = 6895 (bin net −25.23 $bn, just over the 25 $bn floor). Rows: 6880 0DTE (L 6893.60, −13.65 $bn), 6885 02-26 (6896.53, −9.17), 6880 02-23 (6893.15, −3.16), 6885 02-25 (−0.67), 6880 02-24 (+0.03), 6885 02-27 (+1.39).
+- Touch 09:11:06 PT, approached from above (fade long); entry filled.
+- 300 s window: reference close 6908.00 → last close before touch 6895.50. Buy 6,360 / sell 6,909 over ten 30 s slots.
+- **D = 549, ΔP = +12.50 pts, A = 22.77 pts/1k, B_d = 4.18, A_rel = 5.44 → high tercile** (easy continuation). S7: A_60 45.28 (D 127), A_900 9.78 (D 2,403).
+
+### Q6 — A/A control — **FAIL**
+
+Two independent placebo draws (`SeedSequence(20261025).spawn(2)`), full harness: touch, fill, predictor, real-level tercile cut points, R = 8-tick race. Statistic in T2 form: [low − high tercile win rate](draw 1) − [same](draw 2). Session-cluster bootstrap, 10,000 resamples, seed 20260920.
+
+| | resolved events (low / mid / high) |
+|---|---|
+| draw 1 | 317 (116 / 93 / 108) |
+| draw 2 | 321 (107 / 114 / 100) |
+
+**A/A = +16.22 pts, 95 % CI [+2.91, +31.08] — does not cover 0 → STOP.**
+
+No further outcome was computed. What the A/A says, without diagnosing further:
+- With ~100 resolved events per tercile per arm on 53 sessions, a placebo-vs-placebo difference of 16 pts falls outside the bootstrap CI. Either the session-cluster bootstrap understates the variance of this statistic, or chance (a 5 % event). The harness cannot currently tell a T2 of ±15 pts from noise.
+- The placebo arm's size is the binding constraint (Q3): T2 compares ~1,040 filled real events with ~290 placebo events.
+
+### Decisions needed (before any run)
+
+1. **A/A failure.** Options: (a) repeat the A/A over many independent draw pairs (e.g. 200) to measure the A/A statistic's actual spread and calibrate the CI. This reads placebo outcomes only. (b) Change the bootstrap, e.g. cluster by week, or resample donors as well as host sessions so donor-draw variance enters the CI. (c) Enlarge the placebo arm (next item). The Step 0 gate is defined on one A/A pair, so (a) or (b) changes the gate and needs an amendment.
+2. **Placebo thinness.** At 25 $bn, real levels fill most of the ±1·IM grid. Options: (a) average over K placebo donors per session (e.g. K = 10), which raises n and lowers donor variance; (b) relax the 5-pt separation rule; (c) raise the level threshold (e.g. 50 $bn), which leaves more room for pseudo-levels but cuts real n.
+3. **Sample size.** 53 usable sessions. Over half the losses are the B_d warm-up (19) and flow gaps (22). Options: relax the flow-gap rule (13 of 22 have a maximum gap ≤ 120 s), or shorten the baseline warm-up (e.g. 10 sessions).
+4. **Field-conventions row** for `ironbeam_es_flow_1s` OHLC (Q1 measured: equals `ironbeam_es_1m_bars` per minute to the tick on ~98 %; median 0; p99 0.25–0.5; rare outliers to 11.75 pts). Also: one symbol per session, `trade_date` = UTC date, RTH feed gaps on 22 of 111 train sessions. To be written at session end.
