@@ -658,6 +658,26 @@ export default function App() {
     [centerExpectedMoveLevels, extraExpectedMoveLevels]
   )
 
+  // CR-CC A3.2 — in a review replay the GEX segment and expected-move lines end at the
+  // last loaded bar instead of the session end, so the time axis ends at the entry.
+  const replayLastBarTime = useMemo(() => {
+    if (!reviewUntil || mergedBars.length === 0) return null
+    const t = Number(mergedBars[mergedBars.length - 1]?.time)
+    return Number.isFinite(t) ? t : null
+  }, [reviewUntil, mergedBars])
+  const chartGexSegments = useMemo(() => {
+    if (replayLastBarTime == null) return mergedGexSegments
+    return mergedGexSegments
+      .filter((seg) => Number(seg?.start_time) <= replayLastBarTime)
+      .map((seg) => (Number(seg?.end_time) > replayLastBarTime ? { ...seg, end_time: replayLastBarTime } : seg))
+  }, [mergedGexSegments, replayLastBarTime])
+  const chartExpectedMoveLevels = useMemo(() => {
+    if (replayLastBarTime == null) return mergedExpectedMoveLevels
+    return mergedExpectedMoveLevels
+      .filter((lvl) => Number(lvl?.start_time) <= replayLastBarTime)
+      .map((lvl) => (Number(lvl?.end_time) > replayLastBarTime ? { ...lvl, end_time: replayLastBarTime } : lvl))
+  }, [mergedExpectedMoveLevels, replayLastBarTime])
+
   // ── Sigma bands anchor state ──────────────────────────────────────
   // Active anchor (a snapshot from smile-data, or null when off).
   // Snapshot shape from backend:
@@ -2031,10 +2051,10 @@ export default function App() {
                 interval={interval}
                 liveTradeCandles={liveTradeBars}
                 selectedTimes={smileTimes}
-                gexSegments={mergedGexSegments}
+                gexSegments={chartGexSegments}
                 gexEnabled={Boolean(meta?.gex_enabled ?? gexEnabled)}
                 gexMinAbsB={gexMinAbsB}
-                expectedMoveLevels={mergedExpectedMoveLevels}
+                expectedMoveLevels={chartExpectedMoveLevels}
                 onApplyGexMinAbsB={handleGexMinAbsBChange}
                 gexLevelsMode={activeLevelsMode}
                 onApplyGexLevelsMode={handleGexLevelsModeChange}
