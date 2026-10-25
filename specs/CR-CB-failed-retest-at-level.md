@@ -112,6 +112,19 @@ Ryan: test all the parameters; the concern is discarding real patterns because t
 | A5.4 | **Skew readout (S1-f, not a rule):** 0DTE put skew from `orats_monies_minute` (vol75 − vol50, PM expiry, `expir_date = trade_date`). Change from range formation to the edge touch, **net of the change predicted by the price move**: regress Δskew on Δspot (log) over all 5-minute RTH windows of the prior 20 sessions, and use the residual. Exclude events before 07:00 PT (open-time field quirks; field-conventions). Report residual-skew terciles vs the flow-directed outcome, per cell. |
 | A5.5 | **Step 0 additions:** distributions of PD, LE, RA, DV, SS; push counts per range; range duration (median, IQR; share ≥ 30 min); how often each of FR5–FR9 says fade / break / no trade per cell; the residual-skew availability count. The Q4 detector table and the gallery JSON include all features and each rule's decision. |
 
+## Amendment A6 (Ryan, 2026-10-25, before Step 0 outcomes): the named confluence — "puts not getting bid into a decline"
+
+**Ryan's hypothesis:** a big move down into a **put** level, with order flow supporting a turn (sellers exhausting or being absorbed) **and** the put wing collapsing (puts not bid into the decline), is a strong long. The mirror (a rally into a call level, buyers exhausting, the call wing not bid) is the short. A6 pre-registers it as one named rule with its own gate, so it is not lost in the A1–A5 search.
+
+| # | Clause |
+|---|---|
+| A6.1 | **H-PNB (long), all must hold at a bottom-edge event of a range at a put-heavy level approached from above:**<br>(a) **Big move in:** the decline into the level test is ≥ 3·σ5_d within 15 min (CR-BX impulse), or ≥ 0.5·IM_d from the session high within 60 min. Either counts.<br>(b) **Flow supports the turn:** FR5 (exhaustion) **or** FR6 (absorption) says fade at this edge.<br>(c) **Put wing collapsing:** residual 25Δ put skew (A5.4 method, vol75 − vol50, net of the price-move-predicted change) from the start of the decline to the edge touch is in its **lowest tercile** (Stage 1 cut per cell, frozen). |
+| A6.2 | **H-CNB (short, mirror):** a top-edge event at a call-heavy level approached from below; a rally ≥ 3·σ5_d within 15 min or ≥ 0.5·IM_d from the session low within 60 min; FR5 or FR6 says fade; residual 25Δ call skew (vol25 − vol50, net of the move-predicted change) in its lowest tercile. |
+| A6.3 | **Entry/exit:** the A4.5 fade action; exits from the L9 grid with the A1.2 plateau choice; A2 stop-free readouts. Placebo: the same three conditions at placebo ranges. |
+| A6.4 | **Readouts:** each condition's contribution (a)+(b) without (c), (a)+(c) without (b), (b)+(c) without (a), so it is visible which leg carries the result; the 10Δ wing (vol90 − vol50 for puts, vol10 − vol50 for calls) instead of 25Δ; events before 07:00 PT excluded (A5.4). |
+| A6.5 | **Stage 2 gate T5 (per rule):** H-PNB and H-CNB each: net expectancy > 0 after costs, CI lower bound > 0, **and** above the same-cell always-fade baseline, CI lower bound > 0. Minimum 40 events per rule in R; below that, the verdict is **inconclusive (underpowered)**, not a fail. |
+| A6.6 | **Step 0:** event counts for H-PNB and H-CNB, and for each two-condition subset; skew-field coverage on those events. No outcomes. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
