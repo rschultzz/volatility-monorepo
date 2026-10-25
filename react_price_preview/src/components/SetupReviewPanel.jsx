@@ -10,6 +10,9 @@
 // The outcome is rendered only once the candidate is revealed, even though the
 // detail route returns it as soon as a review exists.
 //
+// A Summary tab shows, per CR / set, counts by label, the mean outcome of revealed
+// Take / Skip / Unsure candidates with n, and the reasons tally on Skips (L9).
+//
 // Keys (when focus is not in a text field): N / P next / previous,
 // T / S / U label, R reveal.
 
@@ -136,6 +139,57 @@ function KV({ k, v }) {
   )
 }
 
+function SummaryView({ groups, loading, error }) {
+  if (loading) return <div style={{ padding: 12, fontSize: 11, color: '#64748b' }}>Loading…</div>
+  if (error) return <div style={{ padding: 12, fontSize: 11, color: '#f87171' }}>{error}</div>
+  if (!groups.length) return <div style={{ padding: 12, fontSize: 11, color: '#64748b' }}>No candidates.</div>
+  return (
+    <div data-testid="review-summary" style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {groups.map((g) => (
+        <div key={`${g.cr_id}:${g.set_name}`}>
+          <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 4 }}>
+            {g.cr_id} · {g.set_name}
+          </div>
+          <div style={{ fontSize: 10, color: '#94a3b8', marginBottom: 6 }}>
+            {g.n_candidates} candidates · {g.n_reviewed} reviewed · {g.n_revealed} revealed · {g.unreviewed} unreviewed
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10 }}>
+            <thead>
+              <tr style={{ color: '#64748b', textAlign: 'right' }}>
+                <th style={{ textAlign: 'left', fontWeight: 600 }}>label</th>
+                <th style={{ fontWeight: 600 }}>n</th>
+                <th style={{ fontWeight: 600 }}>revealed</th>
+                <th style={{ fontWeight: 600 }}>mean pts</th>
+                <th style={{ fontWeight: 600 }}>wins</th>
+              </tr>
+            </thead>
+            <tbody>
+              {LABELS.map(({ key, text, color }) => {
+                const s = g.by_label?.[key]
+                return (
+                  <tr key={key} style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    <td style={{ textAlign: 'left', color, fontWeight: 700 }}>{text}</td>
+                    <td>{s?.n ?? 0}</td>
+                    <td>{s?.n_revealed ?? 0}</td>
+                    <td>{s?.n_outcome ? fmtSigned(s.mean_pnl_pts) : '—'}</td>
+                    <td>{s?.n_outcome ? `${s.n_win}/${s.n_outcome}` : '—'}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          {g.skip_reasons?.length > 0 && (
+            <div style={{ marginTop: 6, fontSize: 10, color: '#cbd5e1' }}>
+              <span style={{ color: '#64748b' }}>Skip reasons: </span>
+              {g.skip_reasons.map((r) => `${r.reason} (${r.n})`).join(' · ')}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function SetupReviewPanel({
   apiBase = '',
   activeCandidate = null,
@@ -149,6 +203,8 @@ export default function SetupReviewPanel({
   const [reasonOptions, setReasonOptions] = useState([])
   const [listError, setListError] = useState('')
   const [listLoading, setListLoading] = useState(false)
+  const [tab, setTab] = useState('queue')
+  const [summary, setSummary] = useState({ groups: [], loading: false, error: '' })
 
   const [label, setLabel] = useState(null)
   const [chosenReasons, setChosenReasons] = useState([])
@@ -190,6 +246,23 @@ export default function SetupReviewPanel({
   useEffect(() => {
     loadList()
   }, [loadList])
+
+  const loadSummary = useCallback(async () => {
+    setSummary((s) => ({ ...s, loading: true, error: '' }))
+    try {
+      const url = new URL(`${base}/summary`, window.location.origin)
+      if (filters.cr) url.searchParams.set('cr', filters.cr)
+      if (filters.set) url.searchParams.set('set', filters.set)
+      const body = await fetchJson(url.toString())
+      setSummary({ groups: body.groups || [], loading: false, error: '' })
+    } catch (err) {
+      setSummary({ groups: [], loading: false, error: err.message })
+    }
+  }, [base, filters.cr, filters.set])
+
+  useEffect(() => {
+    if (tab === 'summary') loadSummary()
+  }, [tab, loadSummary])
 
   const resetForm = useCallback(() => {
     setLabel(null)
@@ -337,7 +410,24 @@ export default function SetupReviewPanel({
       {/* Header */}
       <div style={{ padding: '10px 12px', borderBottom: '1px solid #1e293b', display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.08em' }}>REVIEW</span>
-        <span style={{ flex: 1 }} />
+        <span style={{ display: 'flex', gap: 4, flex: 1 }}>
+          {['queue', 'summary'].map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              style={{
+                ...buttonBase,
+                padding: '2px 8px',
+                fontSize: 10,
+                color: tab === t ? '#e2e8f0' : '#64748b',
+                background: tab === t ? '#1e293b' : 'transparent',
+              }}
+            >
+              {t === 'queue' ? 'Queue' : 'Summary'}
+            </button>
+          ))}
+        </span>
         <button
           type="button"
           onClick={onClose}
@@ -373,7 +463,12 @@ export default function SetupReviewPanel({
         </select>
       </div>
 
-      <>
+      {tab === 'summary' ? (
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          <SummaryView groups={summary.groups} loading={summary.loading} error={summary.error} />
+        </div>
+      ) : (
+        <>
           {/* Active candidate */}
           {activeCandidate && (
             <div data-testid="review-active" style={{ padding: '8px 10px', borderBottom: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -529,7 +624,8 @@ export default function SetupReviewPanel({
               ))
             )}
           </div>
-      </>
+        </>
+      )}
     </div>
   )
 }
