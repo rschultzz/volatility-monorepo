@@ -240,3 +240,112 @@ Family B: not run (dropped).
 - **Family A runs:** T1, T2 and S1–S7, S14.
 - **Family B does not:** T3, T4 and S8–S13 are not computed.
 - Under the verdict table, "neither family passes" then rests on family A alone.
+
+---
+
+## Results (single run, 2026-10-25) — family A only
+
+**The run.**
+- `scripts/cr_bx_capitulation.py` at commit `f18a928` (sha256 `6f37d5b0…95cd49`), one run, exit 0.
+- Read-only: `default_transaction_read_only = on`, `statement_timeout = 600s`, 3 h alarm. Train only; holdout not read.
+- Every statistic was written to `scripts/logs/cr_bx/results.json` before anything was printed. The printout is `scripts/logs/cr_bx/run.log` (git-ignored).
+- The script asserted Step 0 consistency before any race: 88 sessions, 1,831 events, 1,291 eligible, 431 / 430 / 430. All held.
+
+**Family B: dropped at Step 0, no outcome computed.**
+- The box rule is too narrow: 0.5·σ5_d ≈ 1.1 pts (median 1.25 pts, 5 ticks).
+- Only 11 of 1,831 impulses found a qualifying 180 s box within 15 minutes; 7 were eligible.
+- S11(b): 10-minute window 1 eligible, 30-minute window 0.
+- T3, T4 and S8–S13 were not computed.
+
+**Universe.**
+- 88 sessions, k = 3.0, 1,291 eligible events.
+- X cut points 1.757 / 3.767.
+- 6,121 placebo entries, 5 per event within ±30 min, same trade direction.
+
+**Drops (R = 8):**
+- Race-window gap rule: real 1 / 0 / 2 by tercile; placebo 6 / 9 / 1.
+- Unresolved by 13:00 PT: 0 for both.
+
+### T1 — exhaustion → reversal — **FAIL**
+
+| X tercile | resolved | win rate (R = 8) |
+|---|---|---|
+| low (exhausted) | 430 | 39.30 % |
+| mid | 430 | 46.74 % |
+| high | 428 | 39.25 % |
+
+**Low − high = +0.05 pts, 95 % CI [−7.74, +7.45].**
+- ≥ +8: no.
+- CI lower bound > 0: no.
+- ≥ 150 resolved per tercile: yes.
+
+### T2 — exhausted capitulation vs random entry — **FAIL**
+
+Matched placebo: the 2,012 placebo entries whose parent event is in the low tercile, win rate 36.43 %.
+
+**T2 = 39.30 − 36.43 = +2.87 pts, 95 % CI [−2.79, +8.33].**
+- ≥ +8: no.
+- CI lower bound > 0: no.
+
+### Verdict (locked rules)
+
+**Family A: neither T1 nor T2 passes. Recorded.** Family B was dropped at Step 0. **Neither family passes, so under the verdict table the order-flow scalping line stops here on train.** No holdout read.
+
+### Secondary readouts (not gated; no conclusion drawn)
+
+**S1 cost reality.** Expectancy is per resolved trade, in ticks: win +R, loss −(R + 1), minus 0.36 tick.
+
+| R | break-even WR | real WR low / mid / high | real exp. low / mid / high | real all (n, WR, exp.) | placebo all (n, WR, exp.) |
+|---|---|---|---|---|---|
+| 4 | 59.56 % | 34.57 / 32.09 / 29.53 | −2.25 / −2.47 / −2.70 | 1,291, 32.07 %, −2.47 | 6,115, 30.22 %, −2.64 |
+| 6 | 56.62 % | 38.98 / 40.93 / 36.05 | −2.29 / −2.04 / −2.67 | 1,291, 38.65 %, −2.34 | 6,109, 34.90 %, −2.82 |
+| 8 | 55.06 % | 39.30 / 46.74 / 39.25 | −2.68 / −1.41 / −2.69 | 1,288, 41.77 %, −2.26 | 6,105, 37.31 %, −3.02 |
+
+Every cell is negative. Fading a 3σ5 move loses 1.4–2.7 ticks per trade after costs.
+
+**S2 move size:**
+
+| move | real resolved (low / mid / high) | T1 | T2 |
+|---|---|---|---|
+| 3–4σ | 303 / 367 / 344 | +0.34 [−8.52, +9.03] | +2.25 [−4.54, +8.98] |
+| ≥ 4σ | 127 / 63 / 84 | −5.12 [−16.27, +6.00] | +3.73 [−6.98, +13.95] |
+
+There are no 2–3σ events at k = 3.
+
+**S3 direction:**
+
+| direction | T1 | T2 |
+|---|---|---|
+| buy after down | −1.21 [−11.79, +9.00] | +0.01 [−8.61, +8.65] |
+| sell after up | +0.71 [−9.18, +10.17] | +5.28 [−2.76, +12.60] |
+
+**S4 at levels** (event extreme within 2 pts of a CR-BW A1.1 level; 256 events):
+
+| | T1 | T2 |
+|---|---|---|
+| near a level (resolved 95 / 83 / 78) | +3.87 [−12.01, +19.38] | +2.87 [−8.87, +15.66] |
+| not near | −0.91 [−9.60, +7.31] | +2.86 [−3.83, +9.40] |
+
+**S5 time of day:**
+
+| | T1 | T2 |
+|---|---|---|
+| before 10:00 PT | +0.78 [−8.19, +9.45] | +2.26 [−4.01, +8.37] |
+| after 10:00 PT | −1.95 [−14.15, +9.16] | +4.00 [−5.00, +12.71] |
+
+**S6 flow flipped (X ≤ 0).** Real 48.39 % (n 93) vs matched placebo 32.51 % (n 443): **diff +15.88 [+3.24, +28.78].** This is the only interval clear of 0 among the win-rate readouts. It is unregistered, n 93, and one of many readouts. Even at 48.4 % it sits below the 55.1 % break-even at R = 8.
+
+**S7 30 s window.** X30 cut points 2.337 / 5.865. T1 −0.09 [−6.42, +6.12]; T2-form +3.96 [−0.88, +8.67].
+
+**S14 eventual outcome.** Signed move in the fade direction from the entry price, in σ5_d units (mean by X tercile low / mid / high).
+
+| horizon | real | placebo | low − high | low − matched placebo | share on fade side, real (placebo) |
+|---|---|---|---|---|---|
+| +30 min | −0.23 / +0.06 / −0.19 | −1.48 / −0.72 / −0.69 | −0.05 [−0.93, +0.78] | +1.24 [+0.78, +1.70] | 46–48 % (38–43 %) |
+| +60 min | −0.35 / −0.10 / −0.02 | −1.42 / −0.84 / −0.96 | −0.33 [−1.50, +0.80] | +1.07 [+0.48, +1.62] | 46–49 % (41–43 %) |
+| close | −0.49 / −0.91 / +0.24 | −1.30 / −1.69 / −0.82 | −0.73 [−2.15, +0.71] | +0.81 [+0.23, +1.31] | 48–51 % (44–47 %) |
+
+**How to read S14.**
+- Real capitulation fades drift slightly against the trade on average, and X does not sort them.
+- The placebo entries drift against the trade by more, about 1–1.5 σ5. They trade the same fade direction at random seconds within ±30 min of a 3σ move, so they sit inside the trend that produced it.
+- So the real-minus-placebo margin, and the T2 margin, reflect continuation drag on the placebo more than any edge at the extreme. Fading a capitulation is less bad than fading a random point of the same trend window, but it is still negative.
