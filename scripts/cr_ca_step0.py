@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time, timedelta
@@ -39,12 +40,48 @@ load_dotenv(ROOT / ".env")
 
 from packages.shared.trading_calendar import is_trading_day  # noqa: E402
 
+
+# ---------------------------------------------------------------- redaction (A2.4)
+
+_URL_RE = re.compile(r"postgres(?:ql)?(?:\+\w+)?://[^\s'\"]+")
+
+
+def redact(text: str) -> str:
+    """Mask DATABASE_URL / BACKFILL_DATABASE_URL (and any postgres URL) in output."""
+    for k in ("DATABASE_URL", "BACKFILL_DATABASE_URL"):
+        v = os.environ.get(k)
+        if v:
+            for form in {v, v.replace("+psycopg", "")}:
+                text = text.replace(form, f"<{k}>")
+    return _URL_RE.sub("<postgres-url>", text)
+
+
+class _RedactingStream:
+    def __init__(self, stream):
+        self._s = stream
+
+    def write(self, text):
+        return self._s.write(redact(text))
+
+    def __getattr__(self, name):
+        return getattr(self._s, name)
+
+
+def install_redaction():
+    """Route stdout/stderr (including tracebacks) through redact()."""
+    if not isinstance(sys.stdout, _RedactingStream):
+        sys.stdout = _RedactingStream(sys.stdout)
+        sys.stderr = _RedactingStream(sys.stderr)
+
+
+install_redaction()
+
 DATASET = "GLBX.MDP3"
 PT = ZoneInfo("America/Los_Angeles")
 WIN_START, WIN_END = time(6, 15), time(13, 0)
 R_START, R_END = date(2024, 4, 3), date(2025, 12, 31)
 OVL_START, OVL_END, OVL_SYM = date(2026, 1, 12), date(2026, 1, 23), "ESH6"
-COST_CAP = 150.0
+COST_CAP = 215.0  # A2.1 (was 150, L8)
 Q4_SEED = 20261025
 
 RAW_DIR = ROOT / "data" / "databento" / "raw"
@@ -366,7 +403,7 @@ def phase_size():
     print(f"Q2 window measured: {len(dbf):,} 1 s rows over {n_sess} sessions = {rows_per_sess:,.0f} rows/session "
           f"(max possible {6.75 * 3600:,.0f})")
     print(f"ironbeam_es_flow_1s: {ib_exact:,} rows, {ib_total / 1e9:.3f} GB total ({ib_heap / 1e9:.3f} GB heap) "
-          f"= {bpr_total:.1f} bytes/row incl. indexes (2 secondary indexes + PK)")
+          f"= {bpr_total:.1f} bytes/row incl. indexes (PK + 3 secondary indexes)")
     # rows ~ scale with seconds that have >= 1 trade; activity proxy = billable trade bytes per session
     front = cost[cost.is_front]
     dying = cost[~cost.is_front]

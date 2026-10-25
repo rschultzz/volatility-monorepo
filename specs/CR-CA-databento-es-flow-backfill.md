@@ -177,3 +177,50 @@ One secondary index (trade_date) instead of Ironbeam's three; the (ts_utc, symbo
 ### Decision needed (Ryan)
 
 The cap blocks everything downstream of Q1. Options: raise the L8 cap to ≥ $213 (or ≥ $193 for front-only + Q2, which would amend L3's both-contracts rule); or shorten R. Q2 ($4.39) and Q4 ($3.75) could also be authorized on their own to validate before committing the full spend.
+
+## Amendment A2 (Ryan, 2026-10-25, after the Step 0 L8 stop)
+
+- **A2.1** L8 cost cap raised to **$215 total for trades** (Step 0 measured $212.24). MBP-1 stays information only, not pulled.
+- **A2.2 Step 1:** authorize the Q2 overlap ($4.39) and Q4 bars-check ($3.75) downloads only; complete Q2 (volume ratio, delta correlation, OHLC diffs, sign test with B = buy / A = sell) and Q4; measure Q1 table size from the real Q2 window; commit as the Step 0 completion. If any Q2 stop rule fires, stop — no further downloads.
+- **A2.3 Step 2**, only if Q2 passes **and** the projected DB size after load is ≤ 27 GB: DDL approved (run once with `DATABASE_URL`, then `GRANT SELECT, INSERT` to `dash_backfill_writer`); full trades pull and load (total spend ≤ $215), month by month under the backfill protocol, with a per-month smoke (rows, symbols, sign test). Stop and report after the load; do not push.
+- **A2.4** Never print connection strings: the CR-CA scripts mask `DATABASE_URL` / `BACKFILL_DATABASE_URL` in all log and exception output (redaction helper).
+
+## Step 0 completion under A2 (2026-10-25) — **STOP at the Q2 volume-ratio rule**
+
+Downloads made: the Q2 window only (ESH6, 9 NYSE sessions 2026-01-12 .. 01-23 excluding the 01-19 MLK holiday, [06:15, 13:00) PT; 9 DBN files, 59.7 MB, under `data/databento/raw/`; priced at $4.39). **Q4 was not downloaded**: A2.2 stops all further downloads once a Q2 stop rule fires. No DB writes; no DDL. Connection strings are now masked in all script output (A2.4, `redact()` / `install_redaction()` in `scripts/cr_ca_step0.py`).
+
+### Q2 — overlap validation (Databento ESH6 vs `ironbeam_es_flow_1s` `XCME:ES.H26`)
+
+Raw: 3,486,666 trades, all `action = T`, `flags = 0`; side B 1,751,762 / A 1,734,904 / N 0. Aggregated to 1 s on `ts_event` (A1.3): 199,597 rows, 10,709,233 contracts. Ironbeam over the same 9 sessions: 9,947,511 contracts. Ironbeam `trade_date` equals the UTC date of `ts_utc` on 100 % of rows (A1.2 confirmed). Minutes: 3,645 in both (9 × 405). The 225 Ironbeam-only minutes are the 2026-01-19 MLK Globex session (06:15–10:00 PT), which is not an NYSE session.
+
+| measure | value | rule | result |
+|---|---|---|---|
+| per-minute volume ratio Ironbeam / Databento | median **0.943**; p5 0.860, p25 0.920, p75 0.961, p95 0.979; pooled 0.921 (per session 0.904–0.933) | median in 0.95–1.05 | **FAIL** |
+| per-minute delta (buy − sell) correlation | **0.908** (buy 0.9965, sell 0.9976; sign agreement 0.913; slope Ironbeam on Databento 0.71) | ≥ 0.9 | pass |
+| per-minute OHLC Databento − Ironbeam | median 0.00 on all four; equal to the tick on 99.95 / 99.09 / 99.18 / 99.37 % of minutes (O/H/L/C); max abs 0.25 / 0.75 / 0.25 / 0.25; none > 1 pt | report | — |
+| sign test corr(minute delta, close − open), B = buy / A = sell | Databento **+0.650**; Ironbeam +0.546 | > 0 | pass |
+
+**L6 aggressor mapping confirmed** (B = buy, A = sell): positive sign test, and buy/sell volumes correlate 0.997 with Ironbeam's BUY/SELL.
+
+**Where the volume gap comes from** (diagnostic on the downloaded window; `scripts/logs/cr_ca/q2_diag.txt`):
+- Per second, Databento has more volume than Ironbeam in 36.8 % of seconds and less in only 0.2 %. Missing from Ironbeam: 844,712 contracts; extra in Ironbeam: 2,071.
+- Prints, not size: trade count ratio 0.932; mean print size 3.07 (Databento) vs 3.04 (Ironbeam). Ironbeam drops whole prints.
+- More are dropped when the market is busier: median ratio 0.960 → 0.951 → 0.945 → 0.938 → 0.921 by Databento minute-volume quintile. By PT hour the ratio is 0.91–0.93, lowest at 06:xx and 11–12:xx.
+- Even across sides: 7.83 % of buy volume and 7.90 % of sell volume missing. But per second, the missing delta correlates **0.64** with Databento's delta, which is why the delta slope is 0.71. On minutes where Ironbeam has ≥ 95 % of Databento's volume (1,445 of 3,645), delta correlation is **0.990**.
+- Consistent with the existing measurement that Ironbeam's feed misses trades in fast minutes (field-conventions, `ironbeam_es_1m_bars` row; open question `ironbeam-1m-bars-miss-trades-in-fast-minutes`). The gap is all one-sided (Ironbeam short), so this reads as **Ironbeam under-capturing, not Databento over-counting**. That is an inference: neither feed was checked against an independent volume print (e.g. CME cleared volume via Databento `statistics`, which would be a download).
+
+The rule fired as written, so per A2.2 this is a stop. Implication for any later use: the 2026 Ironbeam flow and the Databento R table would not be on the same volume scale (Ironbeam ≈ 0.92× and short more in busy seconds). Delta magnitudes are ~0.7× in Ironbeam. Any test that pools the two, or carries thresholds from 2026 over to R, must account for this.
+
+### Q1c — size from the real Q2 window
+
+22,177 1 s rows per session (of 24,300 possible), matching Ironbeam's density (22,176). Projection at 261 B/row (Ironbeam's 247 B/row with PK + three secondary indexes, + two text columns; the proposed DDL has one secondary index, so this is conservative):
+- Front rows scaled by billable trade bytes: 7.66 M rows, 2.00 GB.
+- Flat upper bound (all 507 session-contracts at the Q2 rate): 11.24 M rows, 2.94 GB.
+
+DB 23.15 GB → **25.16–26.09 GB after the load: Q1 gate PASS** (≤ 27 GB).
+
+### Q4 — not run (A2.2 stop; sample unchanged above).
+
+### Status
+
+Step 2 (DDL, full pull, load) **not started**: A2.3 requires Q2 to pass. Spend so far: $4.39 of $215. Decision needed: whether the 0.95–1.05 volume rule is the right test against an incomplete reference feed. Options: (a) amend the rule to an independent reference, e.g. Databento `statistics` cleared volume for the same days (a small extra download), with Databento ≈ 1.0 of cleared volume as the gate; (b) accept Q2 as is on the evidence above; (c) stop CR-CA.
