@@ -327,3 +327,32 @@ Histogram (5-pt bins, −30 → +40): 1, 3, 10, 18, 33, 36, 28, 26, 20, 16, 4, 3
 The session-cluster bootstrap is calibrated on this harness: the spread of the split statistic matches the bootstrap CI width (ratio 0.96), and it excludes 0 at about the nominal rate. The first Step 0's single-pair failure (+16.22) sits inside the A1 split distribution (p95 +18.4).
 
 **Power, for the record (not a redefinition):** each A/A half holds about 200 placebo events, and the split CI half-width is about 23 pts. T2 compares about 640 real events with about 410 placebo events, so its CI will be narrower than the A/A's, but likely still above ±10 pts. T2 (≥ +5 with lower bound > 0) is under-powered for effects smaller than about 15 pts.
+
+---
+
+## Amendment A2 (Ryan, 2026-10-25, after the A1 Step 0; no outcome computed at real or run-placebo levels)
+
+| # | Clause |
+|---|---|
+| A2.1 | A1.6's event drop is revoked. Step 0 showed the 1-minute bars, not the 1-second flow, are the defective series in fast minutes, and CR-BW uses only the flow (L2). Keep all events A1.6 dropped. Take every session's RTH open from the flow (first 1-second print >= 06:30 PT), including 2026-03-04. |
+| A2.2 | New readout S9 (not gated): T1 and T2 recomputed with the A1.6 drop applied, for comparison. |
+| A2.3 | The race-window gap rule (A1.4) applies as written to real and placebo events: drop an event whose race window, from entry to resolution or 13:00 PT, contains an RTH flow gap > 15 s. Count drops per tercile. |
+
+Everything else unchanged (A1.1–A1.5, A1.7, L6 trade with R = 8 ticks primary, T1/T2 pass rules, 150 per tercile).
+
+### Tercile counts under A2 (no outcomes)
+
+Produced by `scripts/cr_bw_absorption.py --counts-only` (sha256 `e426a959…b7bd84`). That mode stops after building the events and runs no race. The file is committed unchanged in the next commit, before the outcome run. Log: `scripts/logs/cr_bw/a2_counts.log`.
+
+- **Sessions.** 88 (2026-01-06 → 2026-06-05), unchanged. The 2026-03-04 open now comes from the flow (first print ≥ 06:30 PT, at 07:57:31): 6876.75.
+- **Levels.** 522 real, of which 400 are ≥ 100 $bn (399 under A1; the 03-04 open moved). 427 placebo.
+- **Events.** Real: 1,071 touches; 1,057 kept after the A1.4 pre-window gap rule (no A1.6 drop); 801 eligible (D > 0); 256 with D ≤ 0. Placebo: 757 touches, 742 kept, 543 eligible.
+- **A_rel cut points.** 1.655 / 3.187.
+
+| tercile | real eligible | real filled | placebo eligible | placebo filled |
+|---|---|---|---|---|
+| low (absorption) | 267 | **251** | 178 | 163 |
+| mid | 267 | 244 | 152 | 138 |
+| high (continuation) | 267 | **238** | 213 | 199 |
+
+**Gate: every real tercile ≥ 150 filled → PASS (min 238).** The A2.3 race-window drops depend on where each race ends, so they are counted per tercile in the run.
