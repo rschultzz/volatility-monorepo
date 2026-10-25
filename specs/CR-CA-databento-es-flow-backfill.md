@@ -224,3 +224,49 @@ DB 23.15 GB → **25.16–26.09 GB after the load: Q1 gate PASS** (≤ 27 GB).
 ### Status
 
 Step 2 (DDL, full pull, load) **not started**: A2.3 requires Q2 to pass. Spend so far: $4.39 of $215. Decision needed: whether the 0.95–1.05 volume rule is the right test against an incomplete reference feed. Options: (a) amend the rule to an independent reference, e.g. Databento `statistics` cleared volume for the same days (a small extra download), with Databento ≈ 1.0 of cleared volume as the gate; (b) accept Q2 as is on the evidence above; (c) stop CR-CA.
+
+## Amendment A3 (Ryan, 2026-10-25, after the Q2 stop under A2)
+
+- **A3.1 Reference feed:** Databento is the reference. The Q2 volume-ratio rule (median 0.95–1.05) is replaced. Q2 passes if: Databento ≥ Ironbeam volume on ≥ 95 % of minutes; OHLC matches to the tick on ≥ 99 % (read per field: O, H, L, C each); sign test > 0; and delta correlation ≥ 0.9 on minutes where Ironbeam is ≥ 95 % complete.
+- **A3.2** The Ironbeam undercount (≈ 0.94× volume, ≈ 0.7× delta, worse in busy minutes) is recorded as a finding, with a field-conventions row for `ironbeam_es_flow_1s` and an open question.
+- **A3.3 Scope extended:** window **2024-04-03 → 2026-10-23**, same table `es_flow_1s_databento`. Loading 2026 sessions after 2026-06-05 (holdout) is allowed; **reading the holdout is not** (smokes are mechanical row/symbol/sign checks only).
+- **A3.4 Cost cap $330 total for trades** (supersedes A2.1); `get_cost` for the extension first; stop if total > $330.
+- **A3.5 DB size stop raised to 32 GB** (disk is now 35 GB; supersedes the 27 GB rule in Q1).
+- **A3.6** Then: run Q4, apply the DDL with `DATABASE_URL` (A1.5), full backfill month by month under the protocol with the per-month smoke. Stop and report after the load; do not push.
+
+## Step 0 under A3 (2026-10-25) — **PASS; Step 2 proceeds**
+
+### Q2 under A3.1 — PASS (same downloaded window; `scripts/logs/cr_ca/q2_a3.txt`)
+
+| rule | value | result |
+|---|---|---|
+| Databento ≥ Ironbeam volume on ≥ 95 % of minutes | **100.0 %** of 3,645 | pass |
+| OHLC equal to the tick on ≥ 99 % (per field) | O 99.95, H 99.09, L 99.18, C 99.37 % | pass |
+| sign test > 0 (B = buy, A = sell) | +0.650 | pass |
+| delta corr ≥ 0.9 where Ironbeam ≥ 95 % complete | **0.990** (n 1,445) | pass |
+
+Reading note: all four fields equal in the same minute on 97.6 % of minutes. The rule is read per field, matching the per-field figures A3 was written from. All 33 high and 30 low mismatches have Databento's range wider (Ironbeam missed the extreme print). Ironbeam undercount (A3.2): field-conventions row "`ironbeam_es_flow_1s` vs Databento trades"; open question `ironbeam-es-flow-1s-undercounts-trades`.
+
+### Q1 under A3 — cost PASS
+
+`get_cost` for the extension (2026-01-01 .. 2026-10-23, 232 session-contracts): **$98.10** trades (3.76 GB billable); MBP-1 $200.50 (information). Whole window 2024-04-03 .. 2026-10-23: 739 session-contracts, **trades $305.95** (11.73 GB) ≤ $330 → PASS. This total includes the Q2 and Q4 sessions; their DBN files are reused by the load, so actual spend stays at the priced total. MBP-1 whole window $565.46, not pulled.
+
+Roll calendar extension (L3): ESH6 front 2025-12-08 .. 2026-03-06, ESM6 from 2026-03-09, ESU6 from 2026-06-08, ESZ6 from 2026-09-08 (Labor Day 09-07); two contracts on each roll span through expiry Friday. Full table in the `roll` phase output (`scripts/logs/cr_ca/q3.txt`, regenerated for the A3 window).
+
+### Q4 — bars cross-check ($3.75; seed 20261025)
+
+| session | front | roll wk | close diff median | close equal | bar vol / Databento front vol |
+|---|---|---|---|---|---|
+| 2025-03-18 | ESM5 | yes | +51.25 | 0.000 | 0.29 |
+| 2025-03-27 | ESM5 | | 0.00 | 1.000 | 1.000 |
+| 2025-05-23 | ESM5 | | 0.00 | 1.000 | 1.000 |
+| 2025-06-10 | ESU5 | yes | +53.75 | 0.000 | 83.8 |
+| 2025-06-17 | ESU5 | yes | +53.50 | 0.000 | 0.19 |
+| 2025-08-05 | ESU5 | | 0.00 | 0.995 | 1.000 |
+| 2025-09-12 | ESZ5 | yes | +56.00 | 0.000 | 10.6 |
+| 2025-09-29 | ESZ5 | | 0.00 | 1.000 | 1.000 |
+| 2025-10-20 | ESZ5 | | 0.00 | 1.000 | 1.000 |
+| 2025-11-25 | ESZ5 | | 0.00 | 0.998 | 1.000 |
+
+- **Outside roll weeks** (6 sessions) the Databento-built front minutes equal the 2025 `ironbeam_es_1m_bars` (`source = 'databento'`, `ES.c.0`). Close equal on 99.5–100 % of minutes, max |diff| 0.25, volume ratio 1.000. Same source, same trades.
+- **Inside roll weeks** (4 sessions) the bars are the dying contract: +51 to +56 pts against the new front, the dying-contract problem in open question `databento-2025-backfill-calendar-roll-dying-contract`. On 2025-06-10 the bar contract (ESM5) carried 84× the L3 front's (ESU5) volume, and on 2025-09-12 10.6×. On those days the L3 "front" was the thin contract. Both contracts are stored on roll-week sessions, so readers choose. No fix here.

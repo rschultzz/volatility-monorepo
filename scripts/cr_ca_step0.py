@@ -79,9 +79,10 @@ install_redaction()
 DATASET = "GLBX.MDP3"
 PT = ZoneInfo("America/Los_Angeles")
 WIN_START, WIN_END = time(6, 15), time(13, 0)
-R_START, R_END = date(2024, 4, 3), date(2025, 12, 31)
+R_START, R_END = date(2024, 4, 3), date(2026, 10, 23)  # A3.3 (was 2025-12-31)
 OVL_START, OVL_END, OVL_SYM = date(2026, 1, 12), date(2026, 1, 23), "ESH6"
-COST_CAP = 215.0  # A2.1 (was 150, L8)
+COST_CAP = 330.0  # A3.4 (A2.1 215, L8 150)
+DISK_GB, DB_STOP_GB = 35.0, 32.0  # A3.5 (was 30 / 27)
 Q4_SEED = 20261025
 
 RAW_DIR = ROOT / "data" / "databento" / "raw"
@@ -162,12 +163,21 @@ def client():
 
 
 def cost_rows(schema: str) -> pd.DataFrame:
-    jobs = []
+    """One get_cost per session-contract window; reuses rows already in cost_<schema>.csv."""
+    cache = {}
+    p = LOG_DIR / f"cost_{schema}.csv"
+    if p.exists():
+        for r in pd.read_csv(p).to_dict("records"):
+            cache[(str(r["session"]), r["raw_symbol"])] = r
+    jobs, rows = [], []
     for d in sessions(R_START, R_END):
         for c in contracts_for(d):
-            jobs.append((d, c, "R"))
-    for d in sessions(OVL_START, OVL_END):
-        jobs.append((d, (2026, 3), "Q2"))
+            hit = cache.get((str(d), raw_symbol(*c)))
+            if hit:
+                rows.append(dict(hit, session=d, part="R"))
+            else:
+                jobs.append((d, c, "R"))
+    print(f"  {schema}: {len(rows)} cached session-contracts, {len(jobs)} to price")
     cl = client()
 
     def one(j):
@@ -180,8 +190,8 @@ def cost_rows(schema: str) -> pd.DataFrame:
         return dict(session=d, raw_symbol=raw_symbol(y, m), part=part, usd=float(usd), bytes=int(size))
 
     with ThreadPoolExecutor(8) as ex:
-        rows = list(ex.map(one, jobs))
-    return pd.DataFrame(rows)
+        rows += list(ex.map(one, jobs))
+    return pd.DataFrame(rows).sort_values(["session", "raw_symbol"]).reset_index(drop=True)
 
 
 def phase_cost():
@@ -197,10 +207,15 @@ def phase_cost():
         print(f"\n--- {schema}: USD per month per contract (R window) ---")
         with pd.option_context("display.width", 200, "display.max_columns", 20):
             print(piv.round(2).to_string())
-        tot_r, tot_q2 = r.usd.sum(), df[df.part == "Q2"].usd.sum()
+        tot_r, tot_q2 = r.usd.sum(), 0.0  # Q2 window now inside R (A3.3)
         gb_r = r.bytes.sum() / 1e9
         print(f"{schema}: R total ${tot_r:,.2f} ({gb_r:,.2f} GB billable, {len(r)} session-contracts); "
               f"Q2 overlap ${tot_q2:,.2f}; total ${tot_r + tot_q2:,.2f}")
+        sd = pd.to_datetime(r["session"]).dt.date
+        ext = r[sd >= date(2026, 1, 1)]
+        print(f"{schema}: 2024-04-03 .. 2025-12-31 ${r[sd < date(2026, 1, 1)].usd.sum():,.2f}; "
+              f"A3 extension 2026-01-01 .. {R_END} ${ext.usd.sum():,.2f} ({len(ext)} session-contracts, "
+              f"{ext.bytes.sum() / 1e9:.2f} GB)")
         out[schema] = dict(r_usd=tot_r, q2_usd=tot_q2, total_usd=tot_r + tot_q2, r_gb=gb_r)
     (LOG_DIR / "cost_summary.json").write_text(json.dumps(out, indent=2))
     ok = out["trades"]["total_usd"] <= COST_CAP
@@ -397,8 +412,7 @@ def phase_size():
     cost["session"] = pd.to_datetime(cost["session"]).dt.date
     fr = {d: raw_symbol(*front_for(d)) for d in sessions(R_START, R_END)}
     cost["is_front"] = [fr[d] == s for d, s in zip(cost.session, cost.raw_symbol)]
-    q2 = pd.read_csv(LOG_DIR / "cost_trades.csv")
-    q2 = q2[q2.part == "Q2"]
+    q2 = cost[cost.session.isin(sessions(OVL_START, OVL_END)) & (cost.raw_symbol == OVL_SYM)]
     q2_bytes_per_sess = q2.bytes.sum() / len(q2)
     print(f"Q2 window measured: {len(dbf):,} 1 s rows over {n_sess} sessions = {rows_per_sess:,.0f} rows/session "
           f"(max possible {6.75 * 3600:,.0f})")
@@ -419,9 +433,9 @@ def phase_size():
     print(f"projected rows: front scaled by trade bytes {rows_front:,.0f}; flat upper bound "
           f"(every session-contract at the Q2 rate) {rows_front_flat + rows_dying_upper:,.0f}")
     print(f"projected size at {bpr_new:.0f} bytes/row: {lo:.2f} GB (scaled, front only) .. {hi:.2f} GB (flat upper bound)")
-    print(f"current DB size {db_bytes / 1e9:.2f} GB on a 30 GB disk (spec; autoscaling off) -> "
-          f"free ≈ {30 - db_bytes / 1e9:.2f} GB; after load {db_bytes / 1e9 + lo:.2f} .. {db_bytes / 1e9 + hi:.2f} GB")
-    print(f"Q1 gate (projected <= 27 GB): {'PASS' if db_bytes / 1e9 + hi <= 27 else 'STOP'}")
+    print(f"current DB size {db_bytes / 1e9:.2f} GB on a {DISK_GB:.0f} GB disk -> "
+          f"free ≈ {DISK_GB - db_bytes / 1e9:.2f} GB; after load {db_bytes / 1e9 + lo:.2f} .. {db_bytes / 1e9 + hi:.2f} GB")
+    print(f"Q1 gate (projected <= {DB_STOP_GB:.0f} GB): {'PASS' if db_bytes / 1e9 + hi <= DB_STOP_GB else 'STOP'}")
 
 
 def phase_roll():
