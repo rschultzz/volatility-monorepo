@@ -72,6 +72,18 @@ Ryan: test all the parameters; the concern is discarding real patterns because t
 | A2.3 | **Interpretation rule, fixed now:** "real" (for Stage 2 to confirm) means the stop-free move at +30 or +60 min beats placebo with a CI lower bound > 0 in a cell, whatever the stopped P&L does. A real move that the stop grid loses on points to a stop / expression problem (wider stop, scaled entry, or options), not to "no edge". |
 | A2.4 | Stage 2 adds T3 per cell: the A2.3 stop-free move at the Stage 1 horizon, real > placebo, CI lower bound > 0. |
 
+## Amendment A3 (Ryan, 2026-10-25, before Step 0 outcomes): both resolutions — fade the failure, follow the break
+
+**Ryan:** the level only says price will slow down there; something else must give the direction. The direction comes from how the stall resolves. A3 tests both resolutions on the same setups.
+
+| # | Clause |
+|---|---|
+| A3.1 | **Branch F (fade, unchanged):** L7 failed retest → trade against the approach (short below a level approached from below). |
+| A3.2 | **Branch K (break, new):** after the L6 extreme is confirmed, within the same retest window, price trades through the extreme by ≥ 1 pt (above H for a level approached from below; below L for one approached from above) → trade **with** the approach. **Entry:** stop order at H + 1 pt, filled at + 1 tick slippage. **Stop:** below the pullback low between confirmation and the break, or 4 pts, whichever is tighter, + 1 tick slippage. Same exit grid (L9), cost model, A1 parameter grid and A2 stop-free readouts. |
+| A3.3 | **Resolution share:** per cell, the share of confirmed extremes that resolve F, K, or neither within the window. Reported in Step 0 from price paths only. |
+| A3.4 | **Cells become 8:** {put, call} × {from below, from above} × {F, K}. Placebo, A/A and the A1.2 plateau rule apply per cell. Stage 2 freezes one configuration and exit per cell and tests T1–T3 per cell. |
+| A3.5 | **Flow stays a readout** (S1-c, now per branch): net aggressor flow in the 60 s before entry, signed with the trade. A later CR may promote it to a filter on R. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
