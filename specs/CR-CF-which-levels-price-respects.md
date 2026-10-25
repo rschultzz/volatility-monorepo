@@ -313,3 +313,39 @@ Sessions real / placebo per cell: 43–88 / 59–87. Real / placebo means: F7 po
 - **D3 for the rule** uses the Stage 1 placebo pool (kept tests, A1.1 as approved), because D3 is listed separately from D2. D3 on the restored pool is printed too, as a readout.
 - **"Pooled"** (both approach sides) is the cell the rule reads. Below / above are printed.
 - **Dropped tests are recovered** by running the unchanged `cr_cf_lib.run` under a family label that bypasses the A1.1 drop; dropped = recovered tests not in the Stage 1 kept set. `scripts/cr_cf_lib.py` is not modified.
+
+## A2 result — F7 diagnostic (post-hoc, not a test; train; single run, 2026-10-25)
+
+**Run.** `scripts/cr_cf_f7_posthoc.py`, commit `293efb3` (sha256 `a267234e…30a1dd25`), on the unchanged `cr_cf_lib.py`. One run, exit 0. JSON `scripts/logs/cr_cf/f7_posthoc.json` written before printing (git-ignored). Counts reproduced the Stage 1 run exactly (asserted): real 1,228, kept placebo 324, dropped 282. Kept-pool check: +8.22 [+2.00, +14.44], as Stage 1.
+
+**Every number below is post-hoc, not a test.** Cells: tests real / placebo, sessions real / placebo. Session-weighted means in minutes (restricted mean time to escape 0.25·IM); diff [95 % CI].
+
+| readout (post-hoc, not a test) | pooled | below | above |
+|---|---|---|---|
+| **D1** dropped − kept placebo (282 / 324; 71 / 76 sessions) | **+8.51 [−0.31, +17.35]** (55.86 vs 47.35) | +6.95 [−4.27, +18.63] | +8.20 [−1.80, +18.21] |
+| Stage 1 check: real − kept placebo | +8.22 [+2.00, +14.44] (1,228 / 324; 87 / 76) | +8.29 [−0.37, +16.83] | +8.60 [−0.06, +16.83] |
+| **D2** real − restored placebo | **+3.54 [−1.32, +8.46]** (1,228 / 606; 87 / 85) | +7.01 [+0.58, +13.53] (613 / 317) | +2.55 [−3.75, +8.66] (615 / 289) |
+| **D3** EDGE, real − kept placebo | **+8.83 [+0.09, +17.50]** (291 / 203; 84 / 67) | +8.48 [−3.29, +20.35] (161 / 112; 67 / 40) | +9.87 [−0.26, +19.93] (130 / 91; 53 / 34) |
+| D3 INTERIOR, real − kept placebo | +2.42 [−7.21, +11.58] (937 / 121; 86 / 52) | +5.18 [−9.06, +19.01] (452 / 61) | −1.80 [−14.21, +9.59] (485 / 60) |
+| D3 EDGE, real − restored placebo | +4.88 [−1.95, +11.58] (291 / 298) | +4.77 [−4.69, +14.29] | +7.56 [−0.70, +15.60] |
+| D3 INTERIOR, real − restored placebo | +3.31 [−3.28, +9.92] (937 / 308) | +11.00 [+1.56, +20.60] (452 / 153) | −3.23 [−11.41, +4.42] |
+| **D4** first side: real − kept | +8.19 [+1.57, +14.88] (803 / 255) | +6.85 [−2.66, +16.43] | +11.24 [+1.26, +20.88] |
+| D4 first side: real − restored (D2) | +4.31 [−0.70, +9.18] (803 / 388) | +2.57 [−5.20, +10.17] | +10.35 [+2.07, +18.59] |
+| D4 first side: EDGE, real − kept (D3) | +8.83 [+0.09, +17.50] (291 / 203) | +8.48 | +9.87 |
+| D4 first side: INTERIOR, real − kept (D3) | −1.39 [−16.43, +12.71] (512 / 52; 82 / 31) | −2.10 (27 placebo tests, 21 sessions) **underpowered** | −1.02 (25 / 18) **underpowered** |
+
+**EDGE share** (post-hoc): real 0.237, kept placebo **0.627**, restored 0.492, dropped 0.337. On first-side tests: real 0.362, kept 0.796. Every real EDGE test is a first-side test: a second-side test comes only after price has crossed the level, so the level is interior then. That is why the D4 EDGE cells equal the all-test ones.
+
+D1 distribution (post-hoc): dropped median 34.2 min (IQR 14.6–93.3), mean 50.4; kept median 29.1 (IQR 10.7–100.1), mean 49.3. Censored at 13:00: 53 / 48; at the 120-min cap: 51 / 66.
+
+### Verdict (A2 ruling 3, applied as recorded)
+
+- D2 pooled CI lower bound = **−1.32**, not > 0. **Fails.**
+- D3 EDGE pooled = +8.83 (≥ 4.11) with lower bound +0.09 > 0. Would pass, but the rule needs both.
+- **F7: placebo artifact likely. CR-CF closes INCONCLUSIVE for all families.**
+
+**Reading (post-hoc, not a test):**
+- **The dropped placebo tests are slow escapers.** Session-weighted they are +8.5 min slower than the kept ones, the same size as the Stage 1 F7 effect. The A1.1 drop rule did make the placebo faster.
+- **Restoring them roughly halves the F7 effect** to +3.5, and its CI covers 0.
+- **The kept placebo is dominated by EDGE tests** (63 %, against 24 % of real tests). Within EDGE the real − kept gap stays about +9, while INTERIOR is about +2.
+- Both readings point to construction (which placebo tests survive, and where they sit in the range), not to swings holding price.
