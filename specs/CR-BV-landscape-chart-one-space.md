@@ -264,3 +264,15 @@ Neither route was modified in Step 0. For implementation step 1, use CR-BT's L7 
    - Recommendation: in Corrected mode, `table_spot` = `prior_spot` = P_target, the ES 15:45 ET close on A, used for placement. Then all classifier inputs are ES.
 2. **Clipping after the L4 shift.** With the 35-px shift, prices in the chart's top 35 px land above the panel body and are not drawn. The panel body also ends 9 px above the pane bottom.
    - Recommendation: accept, since L9 forbids layout changes. The L4 acceptance (three prices at 10 / 50 / 90 % of the visible range) is unaffected.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-25, after Step 0)
+
+L1–L10 stand. These clauses settle the two Step 0 decisions and correct the "Why" narrative.
+
+| # | Clause |
+|---|---|
+| A1.1 | **Corrected-mode prior spot.** In Corrected mode the classifier's `prior_spot` (and the payload's `table_spot`) is the close of the ES bar starting 15:45 ET on the prior session A (the CR-BT snapshot, the same P_target used for placement), so every classifier input is ES. Current mode is unchanged. |
+| A1.2 | **Clipping accepted.** After the L4 offset fix, prices in the chart's top 35 px fall above the panel body and are not drawn there, and the panel body ends a few px above the pane bottom. Accepted; no layout change (L9). |
+| A1.3 | **"Why" correction (OPEN mode).** OPEN mode does not freeze the ES RTH open. It freezes the first `liveEsSpot` seen, which is the last merged bar's close at that moment (measured on 2026-10-19: `spot=7759` in both LIVE and OPEN). On a historical date `liveEsSpot` is the last bar of all loaded sessions, including the `days_either_side` extras. |
