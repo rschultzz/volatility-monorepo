@@ -152,6 +152,25 @@ function snapToCandleTime(candles, t, strict = false) {
   return found
 }
 
+// CR-CC A3.4 — zone bounds from a review candidate's meta: `zone` {lo, hi} (CR-CB round 2)
+// or the min/max price of `zone_e4` members (round 1). Null when absent or zero-width.
+function reviewZoneBounds(meta) {
+  const z = meta?.zone
+  if (z && typeof z === 'object' && !Array.isArray(z)) {
+    const lo = Number(z.lo)
+    const hi = Number(z.hi)
+    return Number.isFinite(lo) && Number.isFinite(hi) && hi > lo ? { lo, hi } : null
+  }
+  if (Array.isArray(meta?.zone_e4)) {
+    const ps = meta.zone_e4.map((x) => Number(x && typeof x === 'object' ? x.price : x)).filter(Number.isFinite)
+    if (ps.length && Math.max(...ps) > Math.min(...ps)) return { lo: Math.min(...ps), hi: Math.max(...ps) }
+  }
+  return null
+}
+
+const REVIEW_RANGE_COLOR = '96, 165, 250' // Dash blue #60a5fa (up candles, pills)
+const REVIEW_ZONE_COLOR = '251, 191, 36' // amber #fbbf24 (confluence)
+
 const REVIEW_LINE_COLORS = {
   level: '#e879f9',
   extreme: '#94a3b8',
@@ -2363,11 +2382,26 @@ export default function PriceChart({
       const t = snapToCandleTime(displayCandles, ptIsoToShiftedEpoch(iso), strict)
       if (t != null) markers.push({ time: t, ...m })
     }
-    pushMarker(cand.test_ts_pt, false, { position: long ? 'belowBar' : 'aboveBar', shape: 'circle', color: '#fbbf24', text: 'test' })
-    pushMarker(cand.confirm_ts_pt, false, { position: long ? 'belowBar' : 'aboveBar', shape: 'square', color: '#fb923c', text: 'confirm' })
-    pushMarker(cand.retest_ts_pt, false, { position: long ? 'belowBar' : 'aboveBar', shape: 'circle', color: '#f472b6', text: 'retest' })
+    // CR-CC A3.3: the entry keeps the trade side; test / confirm / retest alternate
+    // sides in time order (the one nearest the entry on the opposite side), so
+    // neighbouring labels don't overlap.
+    const entrySide = long ? 'belowBar' : 'aboveBar'
+    const otherSide = long ? 'aboveBar' : 'belowBar'
+    const steps = [
+      { iso: cand.test_ts_pt, shape: 'circle', color: '#fbbf24', text: 'test' },
+      { iso: cand.confirm_ts_pt, shape: 'square', color: '#fb923c', text: 'confirm' },
+      { iso: cand.retest_ts_pt, shape: 'circle', color: '#f472b6', text: 'retest' },
+    ]
+      .map((m) => ({ ...m, t: ptIsoToShiftedEpoch(m.iso) }))
+      .filter((m) => m.t != null)
+      .sort((a, b) => a.t - b.t)
+    steps.forEach((m, i) => {
+      const fromEnd = steps.length - 1 - i
+      const position = fromEnd % 2 === 0 ? otherSide : entrySide
+      pushMarker(m.iso, false, { position, shape: m.shape, color: m.color, text: m.text })
+    })
     pushMarker(cand.entry_ts_pt, true, {
-      position: long ? 'belowBar' : 'aboveBar',
+      position: entrySide,
       shape: long ? 'arrowUp' : 'arrowDown',
       color: REVIEW_LINE_COLORS.entry,
       text: 'entry',
@@ -2383,6 +2417,64 @@ export default function PriceChart({
     markers.sort((a, b) => a.time - b.time)
     reviewMarkersRef.current.api.setMarkers(markers)
     return undefined
+  }, [reviewCandidate, displayCandles])
+
+  // CR-CC A3.4 — the candidate's range (translucent box, bottom → top, formation →
+  // touch time) and zone (faint full-width band) over the price pane. Positions come
+  // from the chart's own coordinate transforms, re-read every animation frame so
+  // they follow pans and zooms; state updates only when a coordinate changes.
+  const [reviewShapes, setReviewShapes] = useState(null)
+  useEffect(() => {
+    const meta = reviewCandidate?.meta || {}
+    const range = meta.range && typeof meta.range === 'object' ? meta.range : null
+    const boxSpec = range && Number.isFinite(Number(range.top)) && Number.isFinite(Number(range.bottom))
+      && range.formed_ts_pt && meta.edge_touch_ts_pt
+      ? {
+          top: Number(range.top),
+          bottom: Number(range.bottom),
+          t0: snapToCandleTime(displayCandles, ptIsoToShiftedEpoch(range.formed_ts_pt)),
+          t1: snapToCandleTime(displayCandles, ptIsoToShiftedEpoch(meta.edge_touch_ts_pt)),
+        }
+      : null
+    const zoneSpec = reviewZoneBounds(meta)
+    if (!reviewCandidate || (!(boxSpec && boxSpec.t0 != null && boxSpec.t1 != null) && !zoneSpec)) {
+      setReviewShapes(null)
+      return undefined
+    }
+    let raf = 0
+    let lastKey = ''
+    const tick = () => {
+      raf = requestAnimationFrame(tick)
+      const chart = chartRef.current
+      const series = seriesRef.current
+      const stage = stageRef.current
+      const paneEl = chart?.panes?.()[0]?.getHTMLElement?.()
+      if (!chart || !series || !stage || !paneEl) return
+      const sr = stage.getBoundingClientRect()
+      const pr = paneEl.getBoundingClientRect()
+      const next = { pane: { left: pr.left - sr.left, top: pr.top - sr.top, width: pr.width, height: pr.height } }
+      if (boxSpec && boxSpec.t0 != null && boxSpec.t1 != null) {
+        const x0 = chart.timeScale().timeToCoordinate(boxSpec.t0)
+        const x1 = chart.timeScale().timeToCoordinate(boxSpec.t1)
+        const yTop = series.priceToCoordinate(boxSpec.top)
+        const yBot = series.priceToCoordinate(boxSpec.bottom)
+        if ([x0, x1, yTop, yBot].every((v) => v != null && Number.isFinite(v))) {
+          next.box = { left: Math.min(x0, x1), width: Math.max(Math.abs(x1 - x0), 2), top: Math.min(yTop, yBot), height: Math.max(Math.abs(yBot - yTop), 1) }
+        }
+      }
+      if (zoneSpec) {
+        const yHi = series.priceToCoordinate(zoneSpec.hi)
+        const yLo = series.priceToCoordinate(zoneSpec.lo)
+        if (yHi != null && yLo != null) next.zone = { top: Math.min(yHi, yLo), height: Math.max(Math.abs(yLo - yHi), 1) }
+      }
+      const key = JSON.stringify(next, (k, v) => (typeof v === 'number' ? Math.round(v * 2) / 2 : v))
+      if (key !== lastKey) {
+        lastKey = key
+        setReviewShapes(next)
+      }
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
   }, [reviewCandidate, displayCandles])
 
   useEffect(() => {
@@ -3126,6 +3218,53 @@ export default function PriceChart({
               { key: 'review', label: 'REVIEW', isOpen: reviewOpen, onToggle: onToggleReview || (() => {}), title: 'Show setup review panel' },
             ]}
           />
+
+          {reviewShapes && (
+            <div
+              data-testid="review-shapes"
+              style={{
+                position: 'absolute',
+                left: reviewShapes.pane.left,
+                top: reviewShapes.pane.top,
+                width: reviewShapes.pane.width,
+                height: reviewShapes.pane.height,
+                overflow: 'hidden',
+                pointerEvents: 'none',
+                // above .chart-host (z 2; opaque canvas), like LandscapeChartOverlay
+                zIndex: 4,
+              }}
+            >
+              {reviewShapes.zone && (
+                <div
+                  data-testid="review-zone-band"
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    right: 0,
+                    top: reviewShapes.zone.top,
+                    height: reviewShapes.zone.height,
+                    background: `rgba(${REVIEW_ZONE_COLOR}, 0.08)`,
+                    borderTop: `1px dashed rgba(${REVIEW_ZONE_COLOR}, 0.55)`,
+                    borderBottom: `1px dashed rgba(${REVIEW_ZONE_COLOR}, 0.55)`,
+                  }}
+                />
+              )}
+              {reviewShapes.box && (
+                <div
+                  data-testid="review-range-box"
+                  style={{
+                    position: 'absolute',
+                    left: reviewShapes.box.left,
+                    width: reviewShapes.box.width,
+                    top: reviewShapes.box.top,
+                    height: reviewShapes.box.height,
+                    background: `rgba(${REVIEW_RANGE_COLOR}, 0.14)`,
+                    border: `1.5px solid rgba(${REVIEW_RANGE_COLOR}, 0.9)`,
+                  }}
+                />
+              )}
+            </div>
+          )}
 
           {landscapeOpen && (
             <LandscapeChartOverlay
