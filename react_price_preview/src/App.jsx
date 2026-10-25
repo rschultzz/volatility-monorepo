@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
+import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
+import { PANEL_WIDTH as ANALOGUES_PANEL_WIDTH } from './components/AnaloguesPanel'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
 
 
@@ -434,8 +436,21 @@ function rangesClose(a, b, eps = 1) {
 
 export default function App() {
   const params = useMemo(() => new URLSearchParams(window.location.search), [])
-  const tradeDate = params.get('trade_date') || new Date().toISOString().slice(0, 10)
-  const expirationDate = params.get('expiration_date') || tradeDate
+  const urlTradeDate = params.get('trade_date') || new Date().toISOString().slice(0, 10)
+  const urlExpirationDate = params.get('expiration_date') || urlTradeDate
+
+  // CR-CC A1.1 — the chart's date is state: the URL date, or the active REVIEW
+  // candidate's session while it is replayed. Clearing the candidate (leaving
+  // review) restores the URL date. Dash's date picker is not told.
+  const [reviewOpen, setReviewOpen] = useState(false)
+  const [reviewCandidate, setReviewCandidate] = useState(null)
+  const tradeDate = reviewCandidate?.session_date || urlTradeDate
+  const expirationDate = reviewCandidate ? tradeDate : urlExpirationDate
+  // A1.2 / A1.3 — replay cutoff: bars with start < entry_ts_pt until reveal. While it
+  // is set, SIGNALS / smile / skew / condor are hidden and the ATM IV series and flow
+  // are truncated; reveal clears it and the full session is re-fetched (L8).
+  const reviewUntil = reviewCandidate && !reviewCandidate.revealed ? reviewCandidate.entry_ts_pt : null
+  const reviewHide = Boolean(reviewUntil)
   const expectedOn = params.get('expected') !== 'off'
 
   const initialInterval = useMemo(() => {
@@ -550,6 +565,10 @@ export default function App() {
     }
   })
 
+  // CR-CC L6 — a review candidate is always shown in Corrected levels mode; the
+  // stored preference is left untouched and applies again after review.
+  const activeLevelsMode = reviewCandidate ? 'corrected' : gexLevelsMode
+
   const [liveSessionKey, setLiveSessionKey] = useState(() => currentSessionTradeDateKey())
 
   const selectedSessionTradeDateKey = useMemo(() => {
@@ -594,9 +613,10 @@ export default function App() {
   }, [])
 
   const isLiveTradeDate = useMemo(() => {
+    if (reviewCandidate) return false // CR-CC L5: no live polls during review
     const selected = normalizeTradeDateKey(selectedSessionTradeDateKey)
     return Boolean(selected) && selected === normalizeTradeDateKey(liveSessionKey)
-  }, [selectedSessionTradeDateKey, liveSessionKey])
+  }, [selectedSessionTradeDateKey, liveSessionKey, reviewCandidate])
 
   const mergedBars = useMemo(
     () => dedupeAndSortBars([...centerBars, ...extraBars]),
@@ -706,6 +726,11 @@ export default function App() {
     }
   }, [bandsAnchor])
 
+  // CR-CC A1.3 — condor pricing is hidden during replay: drop the anchor.
+  useEffect(() => {
+    if (reviewHide) setBandsAnchor(null)
+  }, [reviewHide])
+
   // --- Condor Pricing Fetch ---
   // Initial fetch when bandsAnchor is set; poll every 10s when isLiveTradeDate.
   // Stops when anchor is cleared OR (non-live session) after the single fetch.
@@ -791,7 +816,7 @@ export default function App() {
     landscapeOpenSpotRef.current = null
     landscapeFetchSpotRef.current = null
     landscapeFetchKeyRef.current = null
-  }, [tradeDate, landscapeOpen, landscapeSpotMode, gexLevelsMode])
+  }, [tradeDate, landscapeOpen, landscapeSpotMode, activeLevelsMode])
 
   // Fetch the landscape. Triggers: panel open, date change, mode change, and
   // — in LIVE mode only — ES moving more than 5pt since the last fetch.
@@ -832,7 +857,7 @@ export default function App() {
         url.searchParams.set('spot', String(spot))
         if (landscapeIv != null) url.searchParams.set('iv', String(landscapeIv))
         // CR-BV L2/L3 — same levels state as the bars requests.
-        if (gexLevelsMode === 'corrected') url.searchParams.set('levels', 'corrected')
+        if (activeLevelsMode === 'corrected') url.searchParams.set('levels', 'corrected')
 
         const response = await fetch(url.toString(), {
           method: 'GET',
@@ -874,7 +899,7 @@ export default function App() {
         landscapeDebounceRef.current = null
       }
     }
-  }, [landscapeOpen, tradeDate, apiBase, landscapeSpotMode, liveEsSpot, landscapeIv, gexLevelsMode])
+  }, [landscapeOpen, tradeDate, apiBase, landscapeSpotMode, liveEsSpot, landscapeIv, activeLevelsMode])
 
   // ── Day analogues fetch (CR-013) ──────────────────────────────────────
   // Pulls from /api/analogues whenever the panel is open and the
@@ -1128,8 +1153,11 @@ export default function App() {
     if (gexMinAbsB != null) {
       url.searchParams.set('gex_min_abs_b', String(gexMinAbsB))
     }
-    if (gexLevelsMode === 'corrected') {
+    if (activeLevelsMode === 'corrected') {
       url.searchParams.set('levels', 'corrected')
+    }
+    if (reviewUntil) {
+      url.searchParams.set('until', reviewUntil)
     }
 
     async function loadCenter() {
@@ -1206,7 +1234,7 @@ export default function App() {
 
     loadCenter()
     return () => controller.abort()
-  }, [apiBase, tradeDate, interval, gexEnabled, gexMinAbsB, gexLevelsMode])
+  }, [apiBase, tradeDate, interval, gexEnabled, gexMinAbsB, activeLevelsMode, reviewUntil])
 
   useEffect(() => {
     if (loadingCenter || error || effectiveDaysEitherSide <= 0) return
@@ -1221,8 +1249,11 @@ export default function App() {
     if (gexMinAbsB != null) {
       url.searchParams.set('gex_min_abs_b', String(gexMinAbsB))
     }
-    if (gexLevelsMode === 'corrected') {
+    if (activeLevelsMode === 'corrected') {
       url.searchParams.set('levels', 'corrected')
+    }
+    if (reviewUntil) {
+      url.searchParams.set('until', reviewUntil)
     }
 
     async function loadMore() {
@@ -1263,7 +1294,7 @@ export default function App() {
 
     loadMore()
     return () => controller.abort()
-  }, [apiBase, tradeDate, interval, effectiveDaysEitherSide, loadingCenter, error, gexEnabled, gexMinAbsB, gexLevelsMode])
+  }, [apiBase, tradeDate, interval, effectiveDaysEitherSide, loadingCenter, error, gexEnabled, gexMinAbsB, activeLevelsMode, reviewUntil])
 
   useEffect(() => {
     if (!flowEnabled || loadingCenter || error) {
@@ -1289,6 +1320,7 @@ export default function App() {
             url.searchParams.set('session', flowSession)
             url.searchParams.set('resample', flowResample)
             url.searchParams.set('ema_len', String(flowEmaLen))
+            if (reviewUntil) url.searchParams.set('until', reviewUntil)
 
             const response = await fetch(url.toString(), {
               method: 'GET',
@@ -1342,7 +1374,7 @@ export default function App() {
 
     loadFlow()
     return () => controller.abort()
-  }, [apiBase, tradeDate, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error, loadedFlowDates])
+  }, [apiBase, tradeDate, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error, loadedFlowDates, reviewUntil])
 
 
   useEffect(() => {
@@ -1373,7 +1405,7 @@ export default function App() {
         if (gexMinAbsB != null) {
           url.searchParams.set('gex_min_abs_b', String(gexMinAbsB))
         }
-        if (gexLevelsMode === 'corrected') {
+        if (activeLevelsMode === 'corrected') {
           url.searchParams.set('levels', 'corrected')
         }
 
@@ -1439,7 +1471,7 @@ export default function App() {
         activeController.abort()
       }
     }
-  }, [apiBase, tradeDate, selectedSessionTradeDateKey, interval, gexEnabled, gexMinAbsB, gexLevelsMode, loadingCenter, error, isLiveTradeDate, isChartInteracting])
+  }, [apiBase, tradeDate, selectedSessionTradeDateKey, interval, gexEnabled, gexMinAbsB, activeLevelsMode, loadingCenter, error, isLiveTradeDate, isChartInteracting])
 
   useEffect(() => {
     if (!isLiveTradeDate || loadingCenter || error) return undefined
@@ -1586,6 +1618,10 @@ export default function App() {
   // --- Skew Data Fetching ---
   useEffect(() => {
     if (loadingCenter || error) return undefined
+    if (reviewHide) {
+      setSkewData([]) // CR-CC A1.3: hidden until reveal; no fetch
+      return undefined
+    }
 
     let disposed = false
     let inFlight = false
@@ -1646,11 +1682,15 @@ export default function App() {
       window.clearInterval(timer)
       if (activeController) activeController.abort()
     }
-  }, [apiBase, tradeDate, expirationDate, selectedTimes, expectedOn, loadingCenter, error])
+  }, [apiBase, tradeDate, expirationDate, selectedTimes, expectedOn, loadingCenter, error, reviewHide])
 
   // --- Smile Data Fetching ---
   useEffect(() => {
     if (loadingCenter || error) return undefined
+    if (reviewHide) {
+      setSmileData(null) // CR-CC A1.3: hidden until reveal; no fetch
+      return undefined
+    }
 
     let disposed = false
     let inFlight = false
@@ -1708,7 +1748,7 @@ export default function App() {
       window.clearInterval(timer)
       if (activeController) activeController.abort()
     }
-  }, [apiBase, tradeDate, expirationDate, selectedTimes, expectedOn, loadingCenter, error])
+  }, [apiBase, tradeDate, expirationDate, selectedTimes, expectedOn, loadingCenter, error, reviewHide])
 
   // --- ATM IV minute-series fetch (0DTE: per-session trade_date == expir) ---
   // Pulls the 0DTE ATM IV series for every session visible on the chart so
@@ -1834,6 +1874,26 @@ export default function App() {
     setIsChartInteracting((prev) => (prev === next ? prev : next))
   }, [])
 
+  // CR-CC A1.3 — ATM IV series truncated at the replay cutoff: minutes of the
+  // candidate session before entry_ts_pt, earlier sessions in full, later none.
+  const visibleAtmIvSeries = useMemo(() => {
+    if (!reviewUntil) return atmIvSeries
+    const untilDate = String(reviewUntil).slice(0, 10)
+    const untilHhmm = String(reviewUntil).slice(11, 16)
+    return (Array.isArray(atmIvSeries) ? atmIvSeries : []).filter((p) => {
+      const d = String(p?.date || '')
+      return d < untilDate || (d === untilDate && String(p?.time || '') < untilHhmm)
+    })
+  }, [atmIvSeries, reviewUntil])
+
+  const closeReview = useCallback(() => {
+    setReviewOpen(false)
+    setReviewCandidate(null)
+  }, [])
+
+  const reviewRightOffset =
+    (landscapeOpen ? LANDSCAPE_PANEL_WIDTH : 0) + (analoguesOpen ? ANALOGUES_PANEL_WIDTH : 0)
+
   const handleLinkedCrosshairChange = useCallback((nextValue) => {
     if (!nextValue) {
       setLinkedCrosshair(null)
@@ -1866,7 +1926,63 @@ export default function App() {
 
   return (
     <div className="app-shell compact-shell" style={{ width: '100%', minWidth: 0, height: '100%', minHeight: '100%' }}>
-      <div className="card compact-card" style={{ width: '100%', minWidth: 0, height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div className="card compact-card" style={{ width: '100%', minWidth: 0, height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        {reviewCandidate && (
+          <div
+            data-testid="review-banner"
+            style={{
+              position: 'absolute',
+              top: 46,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 12,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '4px 10px',
+              borderRadius: 8,
+              background: reviewHide ? 'rgba(120, 53, 15, 0.95)' : 'rgba(30, 27, 75, 0.95)',
+              border: `1px solid ${reviewHide ? '#f59e0b' : '#a78bfa'}`,
+              color: reviewHide ? '#fde68a' : '#e0e7ff',
+              fontSize: 12,
+              fontWeight: 700,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <span>Review: {reviewCandidate.session_date}</span>
+            <span style={{ fontWeight: 500 }}>
+              {reviewHide
+                ? `replay to ${String(reviewCandidate.entry_ts_pt).slice(11, 16)} PT`
+                : 'revealed — full session'}
+            </span>
+            <button
+              type="button"
+              onClick={closeReview}
+              style={{
+                background: 'transparent',
+                border: '1px solid currentColor',
+                borderRadius: 6,
+                color: 'inherit',
+                fontSize: 11,
+                fontWeight: 700,
+                padding: '1px 8px',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+              }}
+            >
+              Exit review
+            </button>
+          </div>
+        )}
+        {reviewOpen && (
+          <SetupReviewPanel
+            apiBase={apiBase}
+            activeCandidate={reviewCandidate}
+            onActivate={setReviewCandidate}
+            onClose={closeReview}
+            rightOffset={reviewRightOffset}
+          />
+        )}
         {error ? (
           <div className="status-card status-card-error">
             <div className="status-title">React preview could not load data</div>
@@ -1907,7 +2023,7 @@ export default function App() {
                 gexMinAbsB={gexMinAbsB}
                 expectedMoveLevels={mergedExpectedMoveLevels}
                 onApplyGexMinAbsB={handleGexMinAbsBChange}
-                gexLevelsMode={gexLevelsMode}
+                gexLevelsMode={activeLevelsMode}
                 onApplyGexLevelsMode={handleGexLevelsModeChange}
                 onApplyIntervalChange={handleIntervalChange}
                 onVisibleLogicalRangeChange={handleSharedLogicalRangeChange}
@@ -1916,7 +2032,7 @@ export default function App() {
                 skewData={skewData}
                 smileData={smileData}
                 smileSnapshots={smileSnapshots}
-                atmIvSeries={atmIvSeries}
+                atmIvSeries={visibleAtmIvSeries}
                 activeBandsAnchorTime={bandsAnchor?.time ?? null}
                 onBandsAnchorChange={setBandsAnchor}
                 bandsLevels={bandsLevels}
@@ -1933,6 +2049,10 @@ export default function App() {
                 analoguesError={analoguesError}
                 analoguesK={analoguesK}
                 onAnaloguesKChange={setAnaloguesK}
+                reviewOpen={reviewOpen}
+                onToggleReview={() => (reviewOpen ? closeReview() : setReviewOpen(true))}
+                reviewCandidate={reviewCandidate}
+                reviewHide={reviewHide}
               />
             </div>
 
@@ -1951,8 +2071,9 @@ export default function App() {
                     // item 0's .chart-host shrink, so the flow chart's candle
                     // area stays the same pixel width as the price chart's
                     // and the shared time-axis range still aligns.
-                    width: landscapeOpen
-                      ? `calc(100% - ${LANDSCAPE_PANEL_WIDTH}px)`
+                    // CR-CC: and by the REVIEW panel width while it is open.
+                    width: landscapeOpen || reviewOpen
+                      ? `calc(100% - ${(landscapeOpen ? LANDSCAPE_PANEL_WIDTH : 0) + (reviewOpen ? REVIEW_PANEL_WIDTH : 0)}px)`
                       : '100%',
                     minWidth: 0,
                     height: `${flowPanelHeight}px`,
