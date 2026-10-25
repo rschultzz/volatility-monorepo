@@ -366,3 +366,22 @@ These are written down here so the implementation can be checked against them.
   - Flagged when the ratio is ≤ the p20 of the prior-20 sessions' rolling ratios (pooled, same source), and |delta share (EMA 3)| ≥ 0.15.
 - **ETH (D10).** The ETH segment shows delta, CVD and delta share only. Absorption and markers are RTH-only, because the baseline is RTH. Marker windows never reach into ETH.
 - **Delta-share axis (D8).** Symmetric autoscale, with reference lines at ±0.15.
+
+## Amendment A2 (Ryan, 2026-10-25, during step 1) — marker settings
+
+**Context.** The A1.3 definitions, implemented as written, give 33 / 48 / 42 markers per session on 2026-01-06 / 03-02 / 05-01 (Databento, RTH). The target was "a handful". Measured alternatives (markers per session, 01-06 | 03-02 | 05-01):
+
+| setting | markers |
+|---|---|
+| A — A1 as written | 33 \| 48 \| 42 |
+| B — swing retrace 8 pts | 22 \| 35 \| 25 |
+| C — one per kind per 30 min | 21 \| 30 \| 27 |
+| D — floors: previous push ≥ 500, divergence ΔCVD ≥ 300, fading only when the dominant side's 30-min \|share\| ≥ 0.10 | 9 \| 20 \| 19 |
+| E — B + D | 2 \| 11 \| 7 |
+| **F — B + C + D** | **2 \| 7 \| 7** |
+
+| # | Clause |
+|---|---|
+| A2.1 | **Ryan's ruling: the marker settings are settable in the pane.** Defaults = **F**: swing retrace 8 pts, previous push > 500, divergence ΔCVD ≥ 300 (and ≥ 10 % of the CVD range), fading only when the dominant side's trailing 30-min \|delta share\| ≥ 0.10, at most one marker of a kind per 30 min. A small markers-settings dialog in the pane edits these five values; they persist in localStorage (try/catch) and are sent to the server as query parameters. A1 as written stays reachable by setting 4 / 0 / 0 / 0 / 15. |
+| A2.2 | The test band (2 pts), the 0.6 push ratio, the 10 % divergence fraction and the fading construction are unchanged. |
+| A2.3 | The smoke reports per-session marker counts for the defaults and for A1 as written. |
