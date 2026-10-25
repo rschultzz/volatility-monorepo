@@ -82,6 +82,13 @@ function fmtTickB(v) {
   return `${v < 0 ? '−' : ''}${String(Number(Math.abs(v).toPrecision(6)))}`
 }
 
+// CR-BV L2 — why a Corrected-mode request has no curve (CR-BT A1.1/A1.2).
+const LEVELS_NOTE_TEXT = {
+  pre_forward_era: 'Corrected levels start on 2024-04-03.',
+  no_es_snapshot: 'No ES 15:45 ET snapshot for the prior session.',
+  no_rows: 'No GEX rows for this session.',
+}
+
 function SpotModeSwitch({ mode, onChange }) {
   return (
     <div style={{ display: 'inline-flex', borderRadius: 6, overflow: 'hidden', border: '1px solid #334155' }}>
@@ -432,6 +439,10 @@ export default function GexLandscape({
         {!data ? (
           <div style={{ color: '#64748b', fontSize: 12, textAlign: 'center', padding: '24px 0' }}>
             Loading landscape…
+          </div>
+        ) : data.levels_note ? (
+          <div style={{ color: '#64748b', fontSize: 12, textAlign: 'center', padding: '24px 12px' }}>
+            Corrected landscape unavailable. {LEVELS_NOTE_TEXT[data.levels_note] || data.levels_note}
           </div>
         ) : !geom ? (
           <div style={{ color: '#64748b', fontSize: 12, textAlign: 'center', padding: '24px 0' }}>

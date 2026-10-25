@@ -785,13 +785,13 @@ export default function App() {
   }, [landscapeSpotMode])
 
   // Reset the fetch memory whenever the panel (re)opens, the session date
-  // changes, or the spot mode flips — each warrants a fresh fetch and, in
-  // OPEN mode, a fresh spot capture.
+  // changes, the spot mode flips, or the GEX levels mode flips (CR-BV L3) —
+  // each warrants a fresh fetch and, in OPEN mode, a fresh spot capture.
   useEffect(() => {
     landscapeOpenSpotRef.current = null
     landscapeFetchSpotRef.current = null
     landscapeFetchKeyRef.current = null
-  }, [tradeDate, landscapeOpen, landscapeSpotMode])
+  }, [tradeDate, landscapeOpen, landscapeSpotMode, gexLevelsMode])
 
   // Fetch the landscape. Triggers: panel open, date change, mode change, and
   // — in LIVE mode only — ES moving more than 5pt since the last fetch.
@@ -831,6 +831,8 @@ export default function App() {
         url.searchParams.set('date', tradeDate)
         url.searchParams.set('spot', String(spot))
         if (landscapeIv != null) url.searchParams.set('iv', String(landscapeIv))
+        // CR-BV L2/L3 — same levels state as the bars requests.
+        if (gexLevelsMode === 'corrected') url.searchParams.set('levels', 'corrected')
 
         const response = await fetch(url.toString(), {
           method: 'GET',
@@ -872,7 +874,7 @@ export default function App() {
         landscapeDebounceRef.current = null
       }
     }
-  }, [landscapeOpen, tradeDate, apiBase, landscapeSpotMode, liveEsSpot, landscapeIv])
+  }, [landscapeOpen, tradeDate, apiBase, landscapeSpotMode, liveEsSpot, landscapeIv, gexLevelsMode])
 
   // ── Day analogues fetch (CR-013) ──────────────────────────────────────
   // Pulls from /api/analogues whenever the panel is open and the
