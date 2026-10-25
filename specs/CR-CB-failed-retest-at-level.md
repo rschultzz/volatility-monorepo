@@ -174,6 +174,17 @@ A9 settles these before Step 0 is re-run on the full design (A1–A8).
 | A9.6 | **One trade per fill.** When adjacent levels produce the same fill (same session, side and fill second), it is one trade, not one per level. |
 | A9.7 | **2026-10-23 illustration** uses Databento flow (`es_flow_1s_databento`), still detector-only with no outcome. |
 
+### A9.5′ — ruling on A9.5 (Ryan, 2026-10-25)
+
+As written, A9.5 is nearly inert. A limit fade at H − tol fills before price can make a new high, so after confirmation H could only move on a jump between seconds. Ryan chose re-arming after a stop.
+
+| # | Clause |
+|---|---|
+| A9.5′ | **Re-arm after a stop (replaces A9.5; amends L7's one setup per level).** After a fade is stopped, if price is still inside the cell's zone (level + O_c), H (or L) resets to the new extreme and a new setup at the same level is allowed. At most **3 attempts per level per session**. Every attempt is a trade and is counted. |
+| A9.5′.1 | **Range-edge events (A4.2) re-arm the same way.** After a stopped trade, the range boundaries re-form from the new extreme. |
+| A9.8 | **Accepted assumptions (Ryan, 2026-10-25):**<br>• the gallery `outcome` is null in Step 0 (the review reveal shows the price path; P&L is backfilled after the Stage 1 run);<br>• a fill shared by adjacent levels is one trade, credited to the higher-magnitude level, which also sets its cell;<br>• FR9's inputs are reported in Step 0, but the model is not fitted. |
+| A9.9 | **Gallery export (Step 0).** `research/gallery/cr-cb-stage1.json` per CR-CC L10, `outcome` null. Contents: 40 random edge events stratified across cells (seed 20261024); all H-PNB / H-PSD events; and the 2026-10-23 7686/7687 events (all attempts). `meta` carries: range bounds, attempt number, O_c, flow features (P, A_rel, Q, PD, LE, RA, DV, SS), put/call skew divergence and trend, and each FR rule's decision. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
