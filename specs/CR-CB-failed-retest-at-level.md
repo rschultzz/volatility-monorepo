@@ -43,6 +43,18 @@ Entering on the first touch at 7686 would have lost.
 | L10 | Placebo | The **same pattern** (test zone, extreme, failed retest, using the cell's O_c) at pseudo-levels: same session, prices ≥ 15 pts from any real level, at matched distances from the open (CR-BW A1.2 style, 2 per real level). Same entries and exits. |
 | L11 | Bootstrap | Session-cluster, 10 000 resamples, seed 20260920, 95 % percentile. |
 
+## Amendment A1 (Ryan, 2026-10-25, before Step 0 outcomes): sweep the setup parameters too
+
+Ryan: test all the parameters; the concern is discarding real patterns because they are defined too tightly. Stage 1 therefore searches the setup parameters as well as the exit. Stage 2 still freezes one configuration per cell and decides.
+
+| # | Clause |
+|---|---|
+| A1.1 | **Stage 1 grid** (pre-declared, nothing else): overshoot allowance O_c at the {60th, 80th, 95th} percentile; confirmation pullback {4, 6, 10} pts (with the ≥ 0.10·IM floor); retest window {30, 90, 180} min; stop buffer beyond the extreme {1, 2, 4} pts; retest tolerance {0.5, 1, 2} pts below the extreme. That is 243 setups, each crossed with the 13 L9 exits. |
+| A1.2 | **Choice rule: a plateau, not a peak.** For each cell, score each configuration by the **mean net expectancy of it and its immediate grid neighbours** (one step in any one parameter). Pick the configuration with the best neighbourhood score among those with ≥ 40 trades. Report the raw best too, and how far it sits from the plateau choice. |
+| A1.3 | **Overfitting report:** for each cell, the distribution of net expectancy across all configurations, and the same distribution at placebo levels. A real effect shifts the whole real distribution above placebo, not just its top. |
+| A1.4 | **Stage 2 unchanged:** one frozen configuration plus exit per cell (the A1.2 choice), run once on R. |
+| A1.5 | **Step 0 Q3/Q4** report counts and the detector table at the L5–L8 defaults (the centre of the grid). Counts at the grid corners too: fewest and most setups. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
