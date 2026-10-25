@@ -185,6 +185,18 @@ As written, A9.5 is nearly inert. A limit fade at H − tol fills before price c
 | A9.8 | **Accepted assumptions (Ryan, 2026-10-25):**<br>• the gallery `outcome` is null in Step 0 (the review reveal shows the price path; P&L is backfilled after the Stage 1 run);<br>• a fill shared by adjacent levels is one trade, credited to the higher-magnitude level, which also sets its cell;<br>• FR9's inputs are reported in Step 0, but the model is not fitted. |
 | A9.9 | **Gallery export (Step 0).** `research/gallery/cr-cb-stage1.json` per CR-CC L10, `outcome` null. Contents: 40 random edge events stratified across cells (seed 20261024); all H-PNB / H-PSD events; and the 2026-10-23 7686/7687 events (all attempts). `meta` carries: range bounds, attempt number, O_c, flow features (P, A_rel, Q, PD, LE, RA, DV, SS), put/call skew divergence and trend, and each FR rule's decision. |
 
+## Amendment A10 (Ryan, 2026-10-25, before Step 0 outcomes): each variation is a candidate setup; promotion pipeline and data split
+
+**Ryan:** the cells and rules are potentially **different trade setups**. If one works among several that don't, focus on optimizing that one. The goal is several setups, taken one at a time.
+
+| # | Clause |
+|---|---|
+| A10.1 | **A setup** = one cell (level type × approach × edge) + one direction rule (FR1–FR12, H-PNB, H-PSD, always-fade, always-break) + its plateau-chosen configuration and exit. Each setup is tracked on its own in `research/setup-registry.md`. |
+| A10.2 | **Data split, fixed now** (R from CR-CA): **R-a** = 2024-04-03 → 2024-12-31 (confirmation); **R-b** = 2025-01-01 → 2025-12-31 (final confirmation of optimized setups); **H** = after 2026-06-05 (holdout, untouched). |
+| A10.3 | **Pipeline per setup:**<br>**(1) Screen:** Stage 1 on 2026 train. A setup is **shortlisted** if its stop-free move (A2) or its net expectancy beats placebo and both baselines with a CI lower bound > 0. Cap: 5 setups.<br>**(2) Confirm:** Stage 2 runs on **R-a only**, frozen as chosen in Stage 1. A Holm correction applies across the shortlisted setups.<br>**(3) Optimize:** for each confirmed setup, a dedicated CR tunes it (finer parameter and exit grids, an optional flow or skew filter, sizing) on 2026 train + R-a, with the plateau rule.<br>**(4) Final confirm:** the optimized setup runs once on **R-b**.<br>**(5) Holdout and paper:** one read on H, then paper trading via the live indicator. |
+| A10.4 | **Amends Stage 2:** "Stage 2 on R" means Stage 2 on R-a. R-b is not read until a setup reaches pipeline step 4. |
+| A10.5 | **Losers are recorded too:** every non-shortlisted setup is logged in the registry as refuted or inconclusive (three-verdict rule), with its key numbers, so it is not re-tested by accident. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
