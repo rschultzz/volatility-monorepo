@@ -384,6 +384,7 @@ assert len(BE) == 608 and INFO["per_tercile"] == [203, 202, 203] and len(PB) == 
 def race(d, j, dirn, bhi, blo, I):
     """L5 from the row after j: 1 reversal / 0 continuation / -1 same-second tie / -2 unresolved; end time."""
     f = FLOW[d]
+    j = int(j)
     up_t, dn_t = bhi + TGT_FRAC * I, blo - TGT_FRAC * I
     ui = np.nonzero(f["h"][j + 1:] >= up_t)[0]
     di = np.nonzero(f["l"][j + 1:] <= dn_t)[0]
@@ -401,6 +402,7 @@ def trade(d, j, long, bhi, blo, tgt_dist, stop_mode):
     Target entry ± tgt_dist, hit on a trade 1 tick through. Entry row counts a stop, not a target; same row both
     -> loss. Returns (1 win / 0 loss / -2 unresolved / -3 no entry, pnl ticks before cost, entry t, end t)."""
     f = FLOW[d]
+    j = int(j)
     if long:
         trig = bhi + TICK
         hit = np.nonzero(f["h"][j + 1:] >= trig)[0]
