@@ -11,7 +11,10 @@ Intended usage:
     * Subscribes to 1-minute timeBars
     * Collects up to LOAD_SIZE bars as a snapshot
     * Normalizes timestamps to bar *start* times (Ironbeam's 't' appears to be bar end)
+    * Drops any bar still forming (end later than now - FORMING_GRACE_SEC) (CR-BZ A1.2)
     * Writes any bars with datetime > max(datetime) in the DB into ironbeam_es_1m_bars
+    * Logs every older snapshot bar whose OHLCV differs from the stored row into
+      ironbeam_es_1m_bars_revision_log (insert-only; stored bars are never changed)
 
 Environment variables expected:
 
@@ -26,6 +29,7 @@ Environment variables expected:
 
   DATABASE_URL              (required – Postgres URL)
   IRONBEAM_BARS_TABLE       (optional – default "ironbeam_es_1m_bars")
+  IRONBEAM_BARS_REVISION_TABLE (optional – default "ironbeam_es_1m_bars_revision_log")
 """
 
 import os
@@ -56,6 +60,11 @@ PASSWORD_OR_APIKEY = os.environ.get("IRONBEAM_PASSWORD")
 TENANT_API_KEY = os.environ.get("IRONBEAM_TENANT_API_KEY", "")
 
 DB_TABLE_NAME = os.environ.get("IRONBEAM_BARS_TABLE", "ironbeam_es_1m_bars")
+REVISION_TABLE_NAME = os.environ.get("IRONBEAM_BARS_REVISION_TABLE", "ironbeam_es_1m_bars_revision_log")
+
+# A bar is complete once its end (start + 1 min) is at least this many seconds in the past.
+FORMING_GRACE_SEC = 2
+OHLCV = ["open", "high", "low", "close", "volume"]
 
 LOAD_SIZE = int(os.environ.get("IRONBEAM_LOAD_SIZE", "2000"))
 
@@ -276,7 +285,8 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
             # Heuristic: ms vs s
             if ts > 10_000_000_000:
                 ts /= 1000.0
-            dt_utc_end = dt.datetime.utcfromtimestamp(ts)
+            # naive UTC, as stored (utcfromtimestamp is deprecated)
+            dt_utc_end = dt.datetime.fromtimestamp(ts, dt.timezone.utc).replace(tzinfo=None)
         except Exception:
             continue
 
@@ -312,10 +322,99 @@ def parse_time_bars_from_message(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
 # DB WRITE
 # ---------------------------------------------------------------------------
 
-def write_snapshot_to_db(all_bars: List[Dict[str, Any]], engine):
+def drop_forming_bars(df: pd.DataFrame, now_utc: dt.datetime) -> pd.DataFrame:
+    """Keep only bars whose end (start + 1 min) is <= now_utc - FORMING_GRACE_SEC.
+
+    `datetime` is the naive-UTC bar start; `now_utc` is naive UTC.
     """
-    Take the collected bars, de-duplicate, and insert any bars strictly newer
-    than the latest datetime in DB_TABLE_NAME.
+    cutoff = now_utc - dt.timedelta(seconds=FORMING_GRACE_SEC)
+    return df[df["datetime"] + dt.timedelta(minutes=1) <= cutoff]
+
+
+def _same(a, b) -> bool:
+    if a is None or b is None or pd.isna(a) or pd.isna(b):
+        return (a is None or pd.isna(a)) and (b is None or pd.isna(b))
+    return abs(float(a) - float(b)) < 1e-9
+
+
+def find_revisions(snapshot: pd.DataFrame, stored: pd.DataFrame) -> pd.DataFrame:
+    """Snapshot bars whose OHLCV differs from the stored row with the same datetime.
+
+    Returns columns datetime, stored_<f>, snap_<f> for f in OHLCV. Bars absent from
+    `stored` are not revisions (they are new bars or gaps) and are not returned.
+    """
+    cols = ["datetime"] + [f"stored_{f}" for f in OHLCV] + [f"snap_{f}" for f in OHLCV]
+    if snapshot.empty or stored.empty:
+        return pd.DataFrame(columns=cols)
+    m = snapshot[["datetime"] + OHLCV].merge(
+        stored[["datetime"] + OHLCV], on="datetime", suffixes=("_snap", "_stored")
+    )
+    differs = [
+        not all(_same(r[f"{f}_snap"], r[f"{f}_stored"]) for f in OHLCV)
+        for _, r in m.iterrows()
+    ]
+    m = m[differs]
+    out = pd.DataFrame({"datetime": m["datetime"]})
+    for f in OHLCV:
+        out[f"stored_{f}"] = m[f"{f}_stored"]
+    for f in OHLCV:
+        out[f"snap_{f}"] = m[f"{f}_snap"]
+    return out.reset_index(drop=True)
+
+
+def log_revisions(df: pd.DataFrame, max_dt, engine) -> None:
+    """CR-BZ A1.2: record snapshot bars that differ from the stored rows (insert-only).
+
+    Runs in its own transaction after the bar insert, so a missing log table (or any
+    error here) never blocks new bars. A revision already logged (same datetime and
+    snapshot OHLCV) is skipped by the primary key.
+    """
+    older = df[df["datetime"] <= max_dt] if max_dt is not None else df.iloc[0:0]
+    if older.empty:
+        return
+    try:
+        with engine.begin() as conn:
+            stored = pd.read_sql(
+                text(
+                    f"SELECT datetime, open, high, low, close, volume FROM {DB_TABLE_NAME} "
+                    "WHERE datetime >= :lo AND datetime <= :hi"
+                ),
+                conn,
+                params={"lo": older["datetime"].min(), "hi": older["datetime"].max()},
+                parse_dates=["datetime"],
+            )
+            rev = find_revisions(older, stored)
+            # snap_volume is part of the log's primary key: -1 = snapshot carried no volume
+            rev["snap_volume"] = rev["snap_volume"].fillna(-1)
+            if rev.empty:
+                print("[REVISION] Snapshot matches stored bars.")
+                return
+            stored_cols = ", ".join(f"stored_{f}" for f in OHLCV)
+            snap_cols = ", ".join(f"snap_{f}" for f in OHLCV)
+            binds = ", ".join(f":{c}" for c in ["datetime"] + [f"stored_{f}" for f in OHLCV] + [f"snap_{f}" for f in OHLCV])
+            res = conn.execute(
+                text(
+                    f"INSERT INTO {REVISION_TABLE_NAME} (datetime, {stored_cols}, {snap_cols}) "
+                    f"VALUES ({binds}) ON CONFLICT DO NOTHING"
+                ),
+                [
+                    {k: (None if pd.isna(v) else (v.to_pydatetime() if k == "datetime" else float(v)))
+                     for k, v in row.items()}
+                    for row in rev.to_dict("records")
+                ],
+            )
+            print(f"[REVISION] {len(rev)} snapshot bars differ from stored rows; "
+                  f"{res.rowcount} new revision rows in {REVISION_TABLE_NAME}.")
+    except Exception as e:
+        first = str(e).splitlines()[0] if str(e) else type(e).__name__
+        print(f"[REVISION] WARNING: revision logging failed ({first}); bars were written normally.")
+
+
+def write_snapshot_to_db(all_bars: List[Dict[str, Any]], engine, now_utc: dt.datetime | None = None):
+    """
+    Take the collected bars, de-duplicate, drop any still-forming bar, insert any bars
+    strictly newer than the latest datetime in DB_TABLE_NAME, then log revisions of
+    older bars (CR-BZ A1.2).
     """
     if not all_bars:
         print("[DB] No bars collected in this run, nothing to write.")
@@ -326,6 +425,13 @@ def write_snapshot_to_db(all_bars: List[Dict[str, Any]], engine):
         .drop_duplicates(subset=["datetime"])
         .sort_values("datetime")
     )
+
+    if now_utc is None:
+        now_utc = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    n_before = len(df)
+    df = drop_forming_bars(df, now_utc)
+    if len(df) < n_before:
+        print(f"[DB] Dropped {n_before - len(df)} still-forming bar(s) (now={now_utc}).")
 
     if df.empty:
         print("[DB] Snapshot dataframe is empty after dedup.")
@@ -343,6 +449,8 @@ def write_snapshot_to_db(all_bars: List[Dict[str, Any]], engine):
         )
         row = result.fetchone()
         max_dt = row.max_dt if row and row.max_dt is not None else None
+        if isinstance(max_dt, str):  # sqlite (tests) returns text
+            max_dt = pd.Timestamp(max_dt).to_pydatetime()
 
         if max_dt is not None:
             print(f"[DB] Current DB max(datetime) = {max_dt}")
@@ -353,10 +461,11 @@ def write_snapshot_to_db(all_bars: List[Dict[str, Any]], engine):
 
         if df_new.empty:
             print("[DB] No new bars to insert; DB is up to date for this snapshot.")
-            return
+        else:
+            df_new.to_sql(DB_TABLE_NAME, conn, if_exists="append", index=False)
+            print(f"[DB] Inserted {len(df_new)} new bars into {DB_TABLE_NAME}.")
 
-        df_new.to_sql(DB_TABLE_NAME, conn, if_exists="append", index=False)
-        print(f"[DB] Inserted {len(df_new)} new bars into {DB_TABLE_NAME}.")
+    log_revisions(df, max_dt, engine)
 
 
 # ---------------------------------------------------------------------------
