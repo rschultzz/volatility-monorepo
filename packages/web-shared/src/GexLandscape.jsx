@@ -5,7 +5,7 @@
 //
 // Visual reference: outputs/landscape_2026-05-20_stacked.png.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 export const PANEL_WIDTH = 300
 
@@ -80,8 +80,10 @@ export default function GexLandscape({
   spotMode = 'LIVE',
   onSpotModeChange,
   onClose,
-  // The chart's visible price window { priceTop, priceBot, paneHeight }. When present,
-  // the landscape Y-axis uses chart-pixel coordinates to align with the chart.
+  // The chart's visible price window { priceTop, priceBot, paneHeight[, paneTop] }. When
+  // present, the landscape Y-axis uses chart-pixel coordinates to align with the chart.
+  // paneTop (CR-BV L4) is the chart pane's viewport top; when given, the panel subtracts
+  // the measured offset between its own body and the pane.
   // null before the chart's first rAF sample → fall back to the full stored range.
   visiblePriceRange = null,
   // Ref to MiniPriceChart (via DayView) — { getChart() } — used by the landscape
@@ -101,6 +103,16 @@ export default function GexLandscape({
   useEffect(() => { chartRefRef.current = chartRef }, [chartRef])
 
   const [size, setSize] = useState({ width: PANEL_WIDTH, height: 360, offsetTop: 0 })
+  // Viewport top of the plot body (CR-BV L4), re-measured whenever the chart
+  // publishes a new window (its rAF poll) and on resize.
+  const [bodyTop, setBodyTop] = useState(null)
+
+  useLayoutEffect(() => {
+    const el = bodyRef.current
+    if (!el) return
+    const top = el.getBoundingClientRect().top
+    setBodyTop((prev) => (prev === top ? prev : top))
+  }, [visiblePriceRange, size.width, size.height])
 
   useEffect(() => {
     const el = bodyRef.current
@@ -185,8 +197,11 @@ export default function GexLandscape({
 
     // CR-018 — when the chart publishes its visible price window (with paneHeight),
     // map prices directly to chart-pixel coordinates: yOf(price) = 0 at priceTop,
-    // yOf(price) = paneHeight at priceBot. No PAD.top offset — the landscape SVG
-    // body's y=0 corresponds to the chart's y=0 (plot-area top).
+    // yOf(price) = paneHeight at priceBot. No PAD.top offset.
+    // CR-BV L4 — the SVG body does not start at the chart pane's top (it sits below
+    // the header row), so y_panel = y_chart − (panelBodyTop − chartPaneTop), both
+    // measured from the DOM. Without paneTop (today-setup, which pads its chart to
+    // line the two up) the offset is 0.
     const synced =
       visiblePriceRange &&
       Number.isFinite(visiblePriceRange.priceTop) &&
@@ -197,12 +212,14 @@ export default function GexLandscape({
     let pLo
     let pHi
     let yOf
+    let bodyOffset = 0
     if (synced) {
-      const { priceTop, priceBot, paneHeight } = visiblePriceRange
+      const { priceTop, priceBot, paneHeight, paneTop } = visiblePriceRange
       pLo = Math.min(priceTop, priceBot)
       pHi = Math.max(priceTop, priceBot)
       const span = pHi - pLo
-      yOf = (price) => ((priceTop - price) / span) * paneHeight
+      if (Number.isFinite(paneTop) && Number.isFinite(bodyTop)) bodyOffset = bodyTop - paneTop
+      yOf = (price) => ((priceTop - price) / span) * paneHeight - bodyOffset
     } else {
       pLo = pMin
       pHi = pMax
@@ -214,6 +231,7 @@ export default function GexLandscape({
       pMin: pLo,
       pMax: pHi,
       synced,
+      bodyOffset,
       yOf,
       xOf: (gexB) => PAD.left + ((gexB - gMin) / gexSpan) * plotW,
     }

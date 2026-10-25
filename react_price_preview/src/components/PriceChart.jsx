@@ -1916,7 +1916,9 @@ export default function PriceChart({
   // we poll the candlestick series each animation frame while the panel is
   // open. coordinateToPrice(0) / coordinateToPrice(paneHeight) give the prices
   // at the top and bottom pixels of the price pane; the panel rebuilds the
-  // chart's exact affine transform from those three numbers.
+  // chart's exact affine transform from those three numbers. CR-BV L4: paneTop is
+  // the pane's viewport top (getBoundingClientRect), so the panel can subtract the
+  // vertical offset between its own body and the chart pane.
   useEffect(() => {
     if (!landscapeOpen) {
       setVisiblePriceRange(null)
@@ -1931,6 +1933,8 @@ export default function PriceChart({
         const paneHeight = getPlotHeight(stage)
         const priceTop = series.coordinateToPrice(0)
         const priceBot = series.coordinateToPrice(paneHeight)
+        const paneEl = chartRef.current?.panes?.()?.[0]?.getHTMLElement?.() || stage
+        const paneTop = paneEl.getBoundingClientRect().top
         if (
           Number.isFinite(priceTop) &&
           Number.isFinite(priceBot) &&
@@ -1940,9 +1944,10 @@ export default function PriceChart({
             !last ||
             last.priceTop !== priceTop ||
             last.priceBot !== priceBot ||
-            last.paneHeight !== paneHeight
+            last.paneHeight !== paneHeight ||
+            last.paneTop !== paneTop
           ) {
-            last = { priceTop, priceBot, paneHeight }
+            last = { priceTop, priceBot, paneHeight, paneTop }
             setVisiblePriceRange(last)
           }
         }
@@ -2923,6 +2928,7 @@ export default function PriceChart({
               onSpotModeChange={onLandscapeSpotModeChange}
               onClose={onToggleLandscape || undefined}
               visiblePriceRange={visiblePriceRange}
+              showPriceAxis={!visiblePriceRange}
             />
           )}
 
