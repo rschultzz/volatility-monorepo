@@ -84,6 +84,22 @@ Ryan: test all the parameters; the concern is discarding real patterns because t
 | A3.4 | **Cells become 8:** {put, call} × {from below, from above} × {F, K}. Placebo, A/A and the A1.2 plateau rule apply per cell. Stage 2 freezes one configuration and exit per cell and tests T1–T3 per cell. |
 | A3.5 | **Flow stays a readout** (S1-c, now per branch): net aggressor flow in the 60 s before entry, signed with the trade. A later CR may promote it to a filter on R. |
 
+## Amendment A4 (Ryan, 2026-10-25, before Step 0 outcomes): order flow chooses the direction at the range edge
+
+**Ryan:** order flow must be a major signal. The level and the local highs/lows only set up a developing range; order flow says whether to go short or long off its top or bottom. A4 makes flow the direction signal. A3's fade (F) and break (K) entries become the two possible actions at an edge, and A3's always-fade and always-break become **baselines**.
+
+| # | Clause |
+|---|---|
+| A4.1 | **Range.** After the L5 test and the L6 extreme (H for a level approached from below, L from above) is confirmed, the opposite range boundary is the pullback extreme reached before price returns toward H (PL, the pullback low; or PH for approaches from above). Range = [PL, H]. It is valid until either boundary is broken by > the stop buffer, or the A1 retest window ends. |
+| A4.2 | **Edge events.** Price trades within the retest tolerance (A1 grid) of **either** boundary. The first touch of each boundary after the range forms is one event; at most one event per boundary per range. Each event belongs to a cell: {put, call} × {approached from below, from above} × {top edge, bottom edge}. |
+| A4.3 | **Flow features at the edge** (1-second flow, from the 120 s before the touch; same sign conventions as CR-BW L7):<br>• **Push P** = net aggressor volume toward the edge (buyers into the top, sellers into the bottom);<br>• **Impact A_rel** = (price move toward the edge / P) ÷ the session's prior-20-session baseline (CR-BW L7/A1.5), defined when P > 0;<br>• **Second-push ratio Q** = P ÷ the push into the same boundary when it was set (the 120 s before H or PL was made). |
+| A4.4 | **Direction rules (Stage 1 grid dimension; pick by the A1.2 plateau rule).** Tercile cut points are computed on Stage 1 events per cell and frozen for Stage 2.<br>• **FR1 impact:** A_rel low tercile → fade; high tercile → break; else no trade.<br>• **FR2 divergence:** Q < 0.75 → fade; Q > 1.25 → break; else no trade.<br>• **FR3 push:** P ≤ 0 → fade; P high tercile → break; else no trade.<br>• **FR4 agree:** FR1 and FR2 give the same action; else no trade. |
+| A4.5 | **Actions.** **Fade** = limit at the edge −/+ 1 pt against the push (A3 F entry), stop = edge ± the stop buffer. **Break** = stop order 1 pt beyond the edge (A3 K entry), stop = back inside the range by the stop buffer (max 4 pts). Exits from the L9 grid, with the cost model and A2 stop-free readouts per action. |
+| A4.6 | **Baselines at the same events:** always-fade and always-break (A3 F / K) with the same entries, stops and exits. |
+| A4.7 | **Primary question — does flow add direction?** T-flow per cell: net expectancy of flow-directed trades − the better of the two baselines, CI lower bound > 0. Also flow-directed at real levels vs placebo ranges. Stage 2 freezes one rule, configuration and exit per cell and tests: **T1** net > 0, **T2** real > placebo, **T3** stop-free move > placebo (A2), **T4 = T-flow**. A cell is a **candidate** only if T1 and T4 pass. |
+| A4.8 | **Step 0 additions:** edge-event counts per cell; the distributions of P, A_rel and Q; how often each FR rule says fade / break / no-trade per cell (price and flow only, no outcomes); the detector table (Q4) shows the range, both edges, the flow features and the rule decision for each event. |
+| A4.9 | **Data.** Flow exists from 2025-12-26 for Stage 1; Stage 2 uses `es_flow_1s_databento` (CR-CA). Same conventions; the Databento side sign is verified in CR-CA Q2. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
