@@ -320,3 +320,96 @@ In these variants the same greedy selection runs only on window bins that clear 
 Secondary readout added to S1–S7:
 
 - **S8 node size** (readout only, not gated, cannot change the verdict): T1 (R = 0.20·IM) restricted to events whose touched node has net ≤ −50 $bn, and separately ≤ −100 $bn (stored gex ÷ 1e9, same units as the chart). Same placebo design (A1.3); report n, actual, placebo, difference and CI, plus the same split by year.
+
+---
+
+## Results (single run, 2026-10-25)
+
+Script `scripts/cr_bu_support.py`, committed before its run as `6471dd1`. It ran once, exit 0. Raw output is in `scripts/logs/cr_bu/` (git-ignored): `run.log`, `results.json`, `events_primary.csv`, `s5_rows.csv`.
+
+Run conditions:
+- Read-only: `get_backfill_db_conn()` with `default_transaction_read_only = on` and `statement_timeout = 600s`, plus a 1800-s Python `SIGALRM` wall guard over the loads.
+- The asserts held before any outcome was computed: 433 usable sessions, 365 candidate days, 151 touched (the Step 0 A1 figures).
+- Every statistic was computed and written to `results.json` before anything printed.
+
+### T1 — bounce at the put node (R = 0.20·IM, A1): **FAIL**
+
+| touched | unresolved | resolved n | actual | placebo | actual − placebo | 95 % month-cluster CI |
+|---|---|---|---|---|---|---|
+| 151 | 5 | **146** | 36.30 % | 37.75 % | **−1.45 pts** | **[−9.03, +6.50]** |
+
+The pass rule needs all three of diff ≥ +8, CI lower bound > 0 and n ≥ 150. **All three fail:** diff −1.45, lower bound −9.03, n 146. **Verdict: FAIL.**
+
+Near-dated put nodes do not separate from placebo at this power. Points per resolved event: −3.61 actual vs −3.04 placebo.
+
+### Secondary readouts (not gated; cannot change the verdict)
+
+The win rate is below 50 % for actual and placebo alike: about 37 % at R = 0.20·IM. With the race measured from E and the touch print at or below E, a first touch is more often followed by continuation through E − R than by a bounce to E + R. This is a property of the harness's touch-then-race base rate, not of the nodes.
+
+**S1 — time of day** (placebo matched on time bucket)
+
+| first touch | n | actual | placebo | diff | CI |
+|---|---|---|---|---|---|
+| < 10:00 PT | 125 | 40.00 % | 37.98 % | +2.02 | [−6.04, +10.88] |
+| ≥ 10:00 PT | 21 | 14.29 % | 34.30 % | −20.01 | [−30.06, −6.86] |
+
+The late-touch cell is the opposite of the physics prediction (late-day nodes stronger). n is 21 and this is a readout: it is not a finding.
+
+**S2 — approach speed** (|move over 15 min| / IM before the touch): actual 0.321 vs placebo 0.307, diff +0.014 [−0.008, +0.036]. There is no separation from placebo, so this shows no gamma-acceleration signature either.
+
+**S3 — node definitions**
+
+| definition | touched | n | actual | placebo | diff | CI |
+|---|---|---|---|---|---|---|
+| 0DTE only | 161 | 153 | 32.03 % | 37.43 % | −5.41 | [−14.13, +4.47] |
+| all expiries | 136 | 133 | 34.59 % | 37.66 % | −3.07 | [−11.14, +4.66] |
+
+**S4 — old placement** (`discounted_level` × S0 ÷ ES): touched 121, n 117, actual 41.88 % vs placebo 38.28 %, diff +3.60 [−5.11, +12.51]. Not separable from corrected placement or from 0.
+
+**S5 — monetization** (relative change in put OI from D to D+1 at node-bin rows with expiry > D)
+- 150 events: the event on 2026-06-05 was dropped because D+1 falls after the train end, so no holdout was read. 0 rows were missing on D+1.
+
+| group | n | mean | median |
+|---|---|---|---|
+| bounce | 52 | +0.186 | +0.176 |
+| non-bounce | 93 | +0.210 | +0.128 |
+| unresolved | 5 | | |
+
+- Bounce − non-bounce: −0.024 [−0.088, +0.047]. **No OI drop on bounce days.** Monetization predicted put OI falls; on node days it rose about 13–18 % either way.
+- Event vs matched-distance control: +0.203 vs +1.848, diff −1.646 [−1.757, −1.527]. **This comparison is not interpretable.** The pre-registered control is a mean of ratios: each event's control is the mean relative ΔOI over ~280 non-event days, and those means are dominated by bins with tiny base OI. A post-run look at the saved per-event control values (no re-run) shows a median of 1.61, IQR 1.42–2.67. Recorded as a design flaw of the S5 control; no conclusion is drawn from it.
+
+**S6 — close above N** (all 151 touched events): actual 55.63 % vs placebo 51.52 %, diff +4.11 [−1.30, +10.18].
+
+**S7 — target ladder.** "pts" is the mean points per resolved event, (2p − 1)·R_d.
+
+| R | n | actual | placebo | diff | CI | pts actual | pts placebo |
+|---|---|---|---|---|---|---|---|
+| 0.10·IM | 148 | 32.43 % | 34.77 % | −2.34 | [−8.57, +4.08] | −2.25 | −1.90 |
+| 0.20·IM (T1) | 146 | 36.30 % | 37.75 % | −1.45 | [−9.03, +6.50] | −3.61 | −3.04 |
+| 0.30·IM | 140 | 40.71 % | 39.11 % | +1.60 | [−6.14, +9.49] | −3.11 | −3.92 |
+| 0.40·IM | 132 | 41.67 % | 38.70 % | +2.97 | [−3.42, +9.28] | −3.26 | −5.48 |
+| 15 pts | 144 | 40.28 % | 37.62 % | +2.66 | [−4.77, +10.08] | −2.92 | −3.71 |
+
+No rung separates from placebo, and every rung loses points before costs, for actual and placebo alike.
+
+**S8 — node size** (touched node net, stored gex ÷ 1e9)
+
+| subset | n | actual | placebo | diff | CI |
+|---|---|---|---|---|---|
+| ≤ −50 $bn, all | 66 | 39.39 % | 36.62 % | +2.77 | [−10.54, +17.04] |
+| ≤ −50 $bn, 2024 | 26 | 23.08 % | 36.07 % | −13.00 | [−28.59, +0.21] |
+| ≤ −50 $bn, 2025 | 28 | 50.00 % | 36.29 % | +13.71 | [−9.67, +37.42] |
+| ≤ −50 $bn, 2026 | 12 | 50.00 % | 38.57 % | +11.43 | [−25.22, +60.89] |
+| ≤ −100 $bn, all | 26 | 42.31 % | 36.69 % | +5.62 | [−16.04, +33.11] |
+| ≤ −100 $bn, 2024 | 7 | 42.86 % | 35.38 % | +7.48 | [−21.14, +36.52] |
+| ≤ −100 $bn, 2025 | 11 | 36.36 % | 36.12 % | +0.24 | [−28.67, +42.82] |
+| ≤ −100 $bn, 2026 | 8 | 50.00 % | 38.62 % | +11.38 | [−31.86, +63.44] |
+
+Every CI covers 0, and the sign flips by year at ≤ −50 $bn.
+
+### Verdict
+
+**FAIL** (locked rule). In this train window (2024-04-03 → 2026-06-05, L14 universe), near-dated negative-gamma nodes below the open do not act as intraday support that separates from placebo. Per the CR:
+- Record the result in State of Knowledge.
+- The corrected levels stay display-only.
+- No holdout confirmation and no CR "C" follow.
