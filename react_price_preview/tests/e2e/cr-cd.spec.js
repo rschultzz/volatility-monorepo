@@ -156,3 +156,76 @@ test('screenshots and marker counts on 3 train days', async ({ page, request }) 
   fs.writeFileSync(path.join(ASSETS, 'smoke-counts.json'), JSON.stringify(counts, null, 2) + '\n')
   for (const day of DAYS) expect(counts[day].source).toBe('databento')
 })
+
+// A3 — review replay fits the price axis to the setup zone ± max(25, 0.5·IM). The cc:fixture
+// candidates are all revealed, so the review API responses are intercepted to present candidate 5
+// (2026-05-01) as unreviewed (read-only: nothing is posted). Needs scripts/cr_cc_smoke_backend.py
+// on 8061 (review routes); CRCD_REVIEW_API_BASE overrides.
+const REVIEW_API = process.env.CRCD_REVIEW_API_BASE || 'http://127.0.0.1:8061'
+
+async function priceRange(page) {
+  return page.evaluate(() => {
+    const chartEl = document.querySelector('.tv-lightweight-charts')
+    const key = Object.keys(chartEl.parentElement).find((k) => k.startsWith('__reactFiber'))
+    let f = chartEl.parentElement[key]
+    for (let d = 0; f && d < 30; d += 1, f = f.return) {
+      for (let h = f.memoizedState; h; h = h.next) {
+        const v = h.memoizedState
+        const c = v && typeof v === 'object' && 'current' in v ? v.current : null
+        if (c && typeof c.timeScale === 'function') {
+          const s = c.priceScale('right')
+          return { ...s.getVisibleRange(), auto: s.options().autoScale }
+        }
+      }
+    }
+    return null
+  })
+}
+
+test('A3: replay fits the price axis to the setup zone; exit restores autoscale', async ({ page }) => {
+  const asUnreviewed = (c) => {
+    const { outcome, reviews, ...rest } = c
+    return { ...rest, reviewed: false, revealed: false, n_reviews: 0, label: null, revealed_at: null, reviews: [] }
+  }
+  await page.route('**/api/setup-review/candidates?*', async (route) => {
+    const r = await route.fetch()
+    const body = await r.json()
+    body.candidates = body.candidates.map((c) => (c.id === 'CR-CC:cc:fixture:5' ? asUnreviewed(c) : c))
+    await route.fulfill({ response: r, json: body })
+  })
+  await page.route('**/api/setup-review/candidates/CR-CC%3Acc%3Afixture%3A5', async (route) => {
+    const r = await route.fetch()
+    const body = await r.json()
+    body.candidate = asUnreviewed(body.candidate)
+    await route.fulfill({ response: r, json: body })
+  })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/?trade_date=2026-10-23&interval=1min&api_base=${encodeURIComponent(REVIEW_API)}`)
+  await page.locator('.tv-lightweight-charts').first().waitFor()
+  await settle(page)
+  const normal = await priceRange(page)
+  expect(normal.auto).toBe(true)
+
+  await page.getByRole('button', { name: 'Show setup review panel' }).click()
+  await page.getByTestId('review-panel').getByLabel('Set', { exact: true }).selectOption('cc:fixture')
+  const detail = page.waitForResponse((r) => r.url().includes('/candidates/CR-CC%3Acc%3Afixture%3A5'))
+  await page.locator('[data-testid="review-row"][data-candidate-id="CR-CC:cc:fixture:5"]').click()
+  const cand = (await (await detail).json()).candidate
+  await expect(page.getByTestId('review-banner')).toContainText('Review: 2026-05-01')
+  await settle(page)
+
+  const pad = Math.max(25, 0.5 * cand.implied_move_1d)
+  const prices = [cand.level_price, cand.extreme_price, cand.entry_price, cand.stop_price]
+  const fit = await priceRange(page)
+  expect(fit.auto).toBe(false)
+  expect(fit.from).toBeCloseTo(Math.min(...prices) - pad, 1)
+  expect(fit.to).toBeCloseTo(Math.max(...prices) + pad, 1)
+  expect(fit.to - fit.from).toBeLessThan(normal.to - normal.from)
+  await page.screenshot({ path: path.join(ASSETS, 'a3-replay-fit-2026-05-01.png') })
+
+  await page.getByRole('button', { name: 'Exit review' }).click()
+  await expect(page.getByTestId('review-banner')).toHaveCount(0)
+  await settle(page)
+  expect((await priceRange(page)).auto).toBe(true)
+})

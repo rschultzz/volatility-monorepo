@@ -16,6 +16,8 @@ import datetime as dt
 
 from psycopg.rows import dict_row
 
+from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
+
 LABELS = ("take", "skip", "unsure")
 DEFAULT_REASONS = (
     "overshoot too big",
@@ -141,7 +143,28 @@ def get_candidate(conn, candidate_id: str) -> dict | None:
     if not out["reviewed"]:
         out.pop("outcome", None)
     out["reviews"] = _reviews(conn, candidate_id)
+    out["implied_move_1d"] = implied_move(conn, row["session_date"], row["entry_ts_pt"])
     return out
+
+
+IM_IV_TIME_PT = dt.time(6, 33)
+
+
+def implied_move(conn, session_date, entry_ts_pt) -> float | None:
+    """CR-CD A3: the session's canonical `implied_move_1d` (bt_daily_features, SPX points), used to
+    size the replay's price-axis fit. None when the entry is before 06:33 PT (the IV print it is
+    built from comes after the cutoff; CR-CC A1.3) or when there is no canonical row."""
+    if isinstance(entry_ts_pt, dt.datetime) and entry_ts_pt.time() < IM_IV_TIME_PT:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT (feature_vector->>'implied_move_1d')::float FROM bt_daily_features "
+            "WHERE feature_version = %s AND ticker = 'SPX' AND active AND trade_date = %s LIMIT 1",
+            (CANONICAL_FEATURE_VERSION, session_date),
+        )
+        r = cur.fetchone()
+    v = r[0] if r else None
+    return float(v) if v is not None and v > 0 else None
 
 
 class ReviewError(ValueError):

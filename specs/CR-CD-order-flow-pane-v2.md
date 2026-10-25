@@ -473,3 +473,21 @@ Markers on; RTH framed.
 **Not verified here:**
 - the deployed service ("Dash - MonoRepo") and the Dash-embedded iframe;
 - a live session: v2 on a live day is Ironbeam with the 15 s poll, untested until the next RTH.
+
+## Amendment A3 (Ryan, 2026-10-25, during step 4) — review replay price-axis fit
+
+| # | Clause |
+|---|---|
+| A3.1 | **Small visible change, authorised.** When a review candidate loads in replay, the price axis auto-fits to the zone/range **± 25 pts, or ± 0.5·IM, whichever is larger**, instead of the full GEX-line span. The user can still zoom out. The normal chart is unaffected. |
+
+**Readings (Claude Code).**
+- **Zone/range** = min/max of the candidate's level, extreme, entry and stop prices.
+- **IM** = the session's canonical `implied_move_1d` (`bt_daily_features`, SPX points, the CR-CB `load_im` query). The review detail route now returns it as `implied_move_1d`.
+- **IM is omitted when `entry_ts_pt` < 06:33 PT**: its 06:33 IV print is after the cutoff (CR-CC A1.3's expected-move rule). The fit then uses 25 pts.
+- **When it applies.** Once per candidate load, and again if the chart remounts. It is not re-applied after the user zooms. It applies only while the candidate is unrevealed; reveal and Exit review restore autoscale.
+- **Implementation.** `priceScale('right').setAutoScale(false)` + `setVisibleRange`. Manual zoom and pan work as before, and a double-click on the axis restores autoscale.
+
+**Smoke.**
+- Playwright `A3: replay fits …`: the review API responses are intercepted so that the revealed fixture candidate 5 is presented as unreviewed. Read-only; nothing is posted.
+- 2026-05-01: IM 70.2 → pad 35.1 → fit 7238.4 – 7314.4 (asserted to 0.05). It is narrower than the normal view, and Exit review restores autoscale. Screenshot `specs/assets/cr-cd/a3-replay-fit-2026-05-01.png`.
+- Unit tests for the IM rule: `apps/web/modules/SetupReview/tests/test_implied_move.py`, 3 tests.
