@@ -38,7 +38,7 @@ function partsForZone(epochSec, timeZone = 'America/Los_Angeles') {
   return out
 }
 
-function utcEpochShowingZoneTime(originalEpochSec, timeZone = 'America/Los_Angeles') {
+export function utcEpochShowingZoneTime(originalEpochSec, timeZone = 'America/Los_Angeles') {
   const p = partsForZone(originalEpochSec, timeZone)
   return (
     Date.UTC(
@@ -56,14 +56,14 @@ function shiftedEpochToDate(epochSec) {
   return new Date(epochSec * 1000)
 }
 
-function formatShiftedHHMM(epochSec) {
+export function formatShiftedHHMM(epochSec) {
   const dt = shiftedEpochToDate(epochSec)
   const hh = String(dt.getUTCHours()).padStart(2, '0')
   const mm = String(dt.getUTCMinutes()).padStart(2, '0')
   return `${hh}:${mm}`
 }
 
-function normalizeLogicalRange(range) {
+export function normalizeLogicalRange(range) {
   if (!range) return null
   const from = Number(range.from)
   const to = Number(range.to)
@@ -71,7 +71,7 @@ function normalizeLogicalRange(range) {
   return { from, to }
 }
 
-function rangesClose(a, b, eps = 0.001) {
+export function rangesClose(a, b, eps = 0.001) {
   if (!a || !b) return false
   return (
     Math.abs(Number(a.from) - Number(b.from)) <= eps &&
@@ -94,7 +94,7 @@ function normalizeShiftedFlowPoints(points) {
     .sort((a, b) => a.time - b.time)
 }
 
-function normalizeShiftedCandleTimes(candles) {
+export function normalizeShiftedCandleTimes(candles) {
   const seen = new Set()
   const out = []
 
@@ -111,7 +111,7 @@ function normalizeShiftedCandleTimes(candles) {
   return out
 }
 
-function inferStepSeconds(times, fallback = 60) {
+export function inferStepSeconds(times, fallback = 60) {
   if (!Array.isArray(times) || times.length < 2) return fallback
 
   const diffs = []
@@ -190,7 +190,7 @@ function shiftedDateKey(epochSec) {
   return `${yyyy}-${mm}-${dd}`
 }
 
-function computeSessionBands(chart, shiftedTimes, viewportWidth) {
+export function computeSessionBands(chart, shiftedTimes, viewportWidth) {
   if (!chart || !Array.isArray(shiftedTimes) || !shiftedTimes.length) {
     return []
   }
@@ -250,7 +250,7 @@ function computeSessionBands(chart, shiftedTimes, viewportWidth) {
   return out
 }
 
-function coordinateForLinkedCrosshair(chart, linkedCrosshair) {
+export function coordinateForLinkedCrosshair(chart, linkedCrosshair) {
   if (!chart || !linkedCrosshair) return null
 
   const logical = Number(linkedCrosshair.logical)
@@ -268,6 +268,48 @@ function coordinateForLinkedCrosshair(chart, linkedCrosshair) {
   return null
 }
 
+// CR-CD L1: "Flow: Current | v2" toggle, shown in both flow panes' headers.
+export function FlowModeToggle({ mode = 'current', onChange }) {
+  if (typeof onChange !== 'function') return null
+  const btn = (value, label) => (
+    <button
+      type="button"
+      data-testid={`flow-mode-${value}`}
+      aria-pressed={mode === value}
+      onClick={() => onChange(value)}
+      style={{
+        height: '22px',
+        padding: '0 8px',
+        border: 'none',
+        background: mode === value ? 'rgba(96,165,250,0.22)' : 'transparent',
+        color: mode === value ? '#e2e8f0' : '#94a3b8',
+        cursor: 'pointer',
+        fontSize: '12px',
+      }}
+    >
+      {label}
+    </button>
+  )
+  return (
+    <div
+      role="group"
+      aria-label="Flow pane mode"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        border: '1px solid rgba(148, 163, 184, 0.22)',
+        borderRadius: '8px',
+        overflow: 'hidden',
+        background: 'rgba(15, 23, 42, 0.96)',
+      }}
+    >
+      <span style={{ fontSize: '11px', color: '#94a3b8', padding: '0 6px' }}>Flow:</span>
+      {btn('current', 'Current')}
+      {btn('v2', 'v2')}
+    </div>
+  )
+}
+
 export default function AggressorFlowPanel({
   candles,
   dataPoints,
@@ -279,6 +321,8 @@ export default function AggressorFlowPanel({
   loading = false,
   error = '',
   histAlpha = 0.30,
+  flowMode = 'current',
+  onFlowModeChange,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -605,6 +649,7 @@ export default function AggressorFlowPanel({
           ⚙
         </button>
         <div className="flow-panel-title">Aggressor Flow</div>
+        <FlowModeToggle mode={flowMode} onChange={onFlowModeChange} />
       </div>
       {settingsOpen && (
         <div
