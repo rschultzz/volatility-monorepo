@@ -1157,3 +1157,36 @@ Refs used: overnight high / low 7714.25 / 7660.00, plus swings. Kept swings near
 4. **T0's primary measure says no.** The time to escape is shorter at real levels in every cell (pooled −4.7 [−11.9, +2.0] min at d 0). Only zone dwell at put / below clears 0. This is the A15.9 descriptive read on train, and Stage 2 decides. Ryan may want to weigh it before more detector work.
 5. **Fail / break is asymmetric by definition** (1 pt vs P = 6 pts), so it says little about direction. Option: symmetric thresholds, e.g. both at P, or both at 0.5 × range height.
 6. **10-23.** Under A15 the case that motivated the CR is not detected: a 2-minute range at 07:46, then no re-arm until 09:34. If the 07:55 → 08:35 structure is the target, the range needs to re-form after an invalidation inside the zone without a new 0.10·IM test (an A9.5′-style re-arm on range breaks, not only on stopped fades).
+
+---
+
+## Status after Step 0 v3 (Ryan, 2026-10-25): detector refinement paused
+
+**Step 0 v3 result** (A1–A15, Databento flow, train 2026-01-06 → 2026-06-05, 89 sessions; no trade outcomes; details in `specs/CR-CB-failed-retest-at-level.md`, "Step 0 v3"):
+
+- **T0, primary (A15.9 (d), time to escape 0.25·IM, single levels d 0 / e 0): no slowdown on train.**
+  - Real levels are escaped *faster* than placebo in every cell; pooled −4.7 min [−11.9, +2.0].
+  - No cell has real > placebo with a CI lower bound > 0.
+  - Zone dwell (b′) clears 0 only at put-heavy from below (+262 s [+3, +527]).
+  - Range formation (a′) at R_min 10: pooled +0.6 [−1.4, +2.7]; put / below +5.3 [−0.7, +11.7].
+  - At d 5 / e 4 the placebo arm is confounded: 69 % of placebo clusters are multi-member vs 13 % real.
+- **A/A (A1.3): FAIL**, 12.0 % of 200 splits exclude 0 (gate ≤ 10 %), on 70 placebo trades.
+- **Counts** (centre d 5, e 4, R_min 20, attempt 1):
+  - about 75 real fade fills (put cells 3–9, call cells 11–15) against 66 placebo;
+  - put cells never reach 40 on any A1 configuration at any R_min;
+  - pooled call cells reach 40 on 18 / 81 at R_min 20.
+  - Range life median 6.8 min (22 % ≥ 20 min). 46 % of episodes end "outzone".
+  - Fail / break share 22 % real vs 20 % placebo. H-PNB / H-PSD: 0 events.
+
+**The six v3 decisions are parked**, with no A16 detector change:
+1. zone width;
+2. scope (calls only vs looser put ranges);
+3. placebo rebuild;
+4. whether to continue detector work given T0;
+5. symmetric fail / break;
+6. range re-forming after a break inside the zone.
+
+They wait for:
+- **(a)** a pre-registered T0 read on R-a (Amendment A16);
+- **(b)** Ryan's review of gallery rounds 1 (`cr-cb:round-1`) and 2 (`cr-cb:round-2`).
+
