@@ -392,3 +392,17 @@ Candidates 3–5 are unreviewed.
 **Other behaviour to know:**
 - A REVIEW date switch clears an active trade-log annotation, through PriceChart's existing date-change effect.
 - The landscape IV comes from smile snapshots, so during a replay the landscape has no IV and no confluences.
+
+---
+
+## Amendment A2 (Ryan, 2026-10-25, after merge `f11b1de`) — smile/skew time-capped in replay
+
+Branch `feat/CR-CC-review-smile-capped`. It replaces the smile/skew part of A1.3 (D3). Everything else in A1 stands.
+
+| # | Clause |
+|---|---|
+| A2.1 | During a review replay the **SMILE chip stays visible** and the smile/skew panel works, with its time selection limited to ORATS snapshots with snapshot time ≤ `until` (`entry_ts_pt`). With no selection it defaults to the last snapshot ≤ `until`. Live / latest refresh is off while `until` is active (no polling, no live row). The skew table's "expected" mode runs on the capped snapshots. On reveal or on exit from review, normal behaviour returns. |
+| A2.2 | **SIGNALS and condor pricing stay hidden until reveal** (unchanged from A1.3). The smile panel's bands-anchor control, which drives condor pricing, is disabled during replay. |
+| A2.3 | `/api/ironbeam/smile-data` and `/api/ironbeam/skew-data` gain the optional `until` cap: requested `times` after `until` are dropped; with none left, the latest snapshot ≤ `until` for that trade date / expiry is used; live data is ignored. Replay responses add `until` and the `times` used. **Without `until`, responses are byte-identical** (golden test, recorded from `f11b1de` before the change). |
+| A2.4 (implementation detail, Claude Code) | The review replay keeps its own time selection, which starts empty (server default) and is not posted to Dash. Dash's time list belongs to the URL date, not the candidate's session. Candle clicks and the panel's remove buttons edit the review selection while a candidate is active. |
+| A2.5 | Playwright: open an unreviewed candidate and open SMILE; no snapshot after entry is selectable or shown. Then reveal, and later snapshots appear. |
