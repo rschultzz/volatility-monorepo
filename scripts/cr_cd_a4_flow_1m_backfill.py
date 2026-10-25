@@ -1,6 +1,6 @@
 """CR-CD A4.2 — backfill es_flow_1m_databento / ironbeam_es_flow_1m from the 1-second tables.
 
-    apps/web/.venv/bin/python scripts/cr_cd_a4_flow_1m_backfill.py --source databento|ironbeam [--month 2026-05] [--dry-run]
+    apps/web/.venv/bin/python scripts/cr_cd_a4_flow_1m_backfill.py --source databento|ironbeam [--month 2026-05 | --from-month 2025-12] [--dry-run]
 
 Backfill protocol (CLAUDE.md): get_backfill_db_conn, assert_role_or_die, one backfill_run(conn,
 "CR-CD-A4") per (source, calendar month UTC), update_run_smoke. INSERT ... SELECT <rollup> ...
@@ -66,6 +66,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", choices=sorted(TABLE_1S), required=True)
     ap.add_argument("--month", help="YYYY-MM (UTC) only")
+    ap.add_argument("--from-month", help="YYYY-MM (UTC): resume from this month")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -85,6 +86,10 @@ def main():
     for a, b in months(a0, b0):
         if args.month and a.strftime("%Y-%m") != args.month:
             continue
+        if args.from_month and a.strftime("%Y-%m") < args.from_month:
+            continue
+        conn = get_backfill_db_conn()   # fresh connection per month: an SSL drop costs one month, not the run
+        assert_role_or_die(conn)
         exp = stats_1s(conn, t1s, a, b)
         if args.dry_run:
             print(a.strftime("%Y-%m"), "1s distinct minutes", exp[0], "1s rows", exp[6])
