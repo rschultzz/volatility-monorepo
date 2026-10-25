@@ -44,6 +44,9 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from dotenv import load_dotenv  # noqa: E402
+load_dotenv(REPO_ROOT / ".env")
+
 from packages.shared.backfill_safety import (  # noqa: E402
     assert_role_or_die,
     backfill_run,
@@ -182,12 +185,14 @@ def check_preconditions(conn) -> list[str]:
     if conn.execute("SELECT to_regclass(%s)", (LOG_TABLE,)).fetchone()[0] is None:
         problems.append(f"{LOG_TABLE} does not exist (apply scripts/cr_bz_ddl.sql)")
     for table in ("ironbeam_es_1m_bars", "es_minutes"):
-        for col in OHLCV:
-            ok = conn.execute(
+        missing = [
+            col for col in OHLCV
+            if not conn.execute(
                 "SELECT has_column_privilege(current_user, %s, %s, 'UPDATE')", (table, col)
             ).fetchone()[0]
-            if not ok:
-                problems.append(f"no UPDATE on {table}.{col} for current_user (apply scripts/cr_bz_ddl.sql)")
+        ]
+        if missing:
+            problems.append(f"no UPDATE on {table} ({', '.join(missing)}) for current_user (apply scripts/cr_bz_ddl.sql)")
     return problems
 
 
