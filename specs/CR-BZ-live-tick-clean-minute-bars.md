@@ -306,3 +306,26 @@ Verbatim:
   - New tables owned by `rschultz` give `dash_backfill_writer` INSERT/SELECT through the existing default ACL.
 - **The revision log table must exist before "Ironbeam Cron" is deployed with step 2.** The writer degrades to a printed warning if the table is missing, and still inserts bars.
 - **Revision log key.** The PK is `(datetime, snapshot OHLCV)`, with `ON CONFLICT DO NOTHING`. Each distinct revision is logged once; repeated identical snapshots on later runs are not logged again. `seen_at` = first sighting.
+
+## Repair dry-run (2026-10-25, `scripts/cr_bz_repair_fragment_bars.py --dry-run`, read-only, as `dash_backfill_writer`)
+
+**Window:** 2026-01-01 → 2026-10-25 00:00 UTC, CR-BF patch window excluded.
+
+| Item | Value |
+|---|---|
+| Fragment bars | **783** (RTH 649, ETH 134), the same as Step 0 Q3 |
+| Skipped (multi-symbol minutes) | 0 |
+| Bars to update | 783, all `source='ironbeam'` |
+| `es_minutes` rows to update | 783 (missing 0; differing from the bar 0) |
+| Price error, max(\|ΔH\|, \|ΔL\|, \|ΔC\|) | median 2.25, p90 8.0, max 34.0 pts |
+| Bar / flow volume | median 0.617 |
+| Flow seconds per minute | median 60 |
+| First / last | 2026-01-02 14:47 / 2026-10-22 14:30 UTC |
+| By month (RTH / ETH) | Jan 26/1, Feb 169/10, Mar 97/25, Apr 172/75, May 32/2, Jun 61/8, Jul 30/11, Aug 22/0, Sep 27/1, Oct 13/1 |
+
+**Preconditions for the write: not met.**
+- `ironbeam_es_1m_bars_repair_log` does not exist.
+- No UPDATE grant on either table.
+- Both come from `scripts/cr_bz_ddl.sql`, which is not applied.
+
+The plan CSV is in `scripts/logs/cr_bz/` (git-ignored, machine-local).
