@@ -304,3 +304,91 @@ D1–D6 from the Step 0 findings are accepted as recommended, with these additio
 | A1.4 (D4–D6) | As recommended: gallery `level_frame`; the loader rejects outcome-like `meta` keys, `session_date` ≥ today, and non-PT times; insert-only enforced by triggers; the loader runs under the backfill protocol with `ON CONFLICT (id) DO NOTHING`. Gallery converters for CR-BU / CR-BW are **out of scope**. |
 | A1.5 (web DB role) | The web service's role is unknown. The DDL must work regardless: grant `SELECT, INSERT` on `setup_candidates` and `setup_reviews`, and `UPDATE (revealed_at)` on `setup_reviews`, to the role that owns the existing app tables (determined from `pg_tables` / `pg_class`, e.g. `trade_log_trades`), and to explicit roles only, never `PUBLIC`. The web service logs the connected role name once at startup (the role name only, never the URL), so it can be confirmed after deploy. If the web role turns out to lack the privileges, the review routes return a clear "permission" error rather than crash. |
 | A1.6 (sequence) | Record a golden for the flow route before step 3. Apply the DDL once with `DATABASE_URL`. Implement steps 1–6, one commit each. Smoke with a 5-event fixture from real 2026 train sessions, loaded as set `cc:fixture` (outcome stored, hidden); Playwright walks label → reveal. Push and open a PR (deploy = "Dash - MonoRepo"); do not merge. |
+
+---
+
+## Implementation (2026-10-25)
+
+Built in its own worktree on `feat/CR-CC-setup-review-mode`, off `origin/main` `59e2fa8`.
+
+| step | commit | what |
+|---|---|---|
+| A1 | `45732a3` | Amendment A1 (spec and vault note) |
+| prep | `c5ff188` | `/api/ironbeam/flow` golden (2026-10-23 FULL 1m, RTH 15s), recorded from the unmodified `callbacks.py` before step 3 |
+| 1 | `6729e2c` | `scripts/cr_cc_ddl.sql` and `scripts/load_setup_candidates.py` with L10 / A1.4 validation; 10 tests. **DDL applied once with `DATABASE_URL`** |
+| 2 | `1f32ac4` | `/api/setup-review/*` (list, detail, review, reveal, summary); the web DB role is logged once at startup; 8 tests |
+| 3 | `95daa69` | `until` on bars / live overlay / flow; 11 tests; Ironbeam suite 47/47 |
+| 4 | `bb37d96` | REVIEW panel, replay, labelling, reveal (frontend) |
+| 5 | `98ebb84` | Summary tab |
+| 6 | (this commit) | Fixture, smoke backend, Playwright, screenshots, this section |
+
+### DDL (step 1)
+
+- **How it was applied.** Applied as `rschultz`. The owner of `trade_log_trades` resolved to `rschultz`, so the A1.5 grants went to that role: `SELECT, INSERT` on both tables, `UPDATE (revealed_at)` and sequence `USAGE` on `setup_reviews`. `dash_backfill_writer` got `INSERT, SELECT` on `setup_candidates`, and the default ACL also gives it `INSERT, SELECT` on `setup_reviews`. `PUBLIC` was revoked.
+- **Guard function re-created once.** The first version refused `setup_candidates` UPDATEs, but with a plpgsql field error (`record "old" has no field "revealed_at"`, because plpgsql's AND does not short-circuit) instead of the insert-only message. The fixed function (nested IF) was re-created on its own; the tables and grants were not re-applied.
+- **Verified in a rolled-back transaction:**
+  - `revealed_at` can be set once;
+  - a second set, any other UPDATE and every DELETE on either table are refused;
+  - 0 rows were left afterwards.
+- **Not known yet:** the web service's real DB role on Render. The startup log line `CR-CC setup-review: web DB role = <name>` confirms it after deploy. If that role lacks a privilege, the routes return 403 `error: "permission"` with the role name (tested with the connection mocked).
+
+### Byte identity (step 3)
+
+- **Bars:** `/api/ironbeam/bars` with `until` absent, empty or unparseable returns the CR-BT goldens (center and multi, `cr_bt_bars_golden_*.json`) byte for byte.
+- **Flow:** `/api/ironbeam/flow` returns the CR-CC flow goldens recorded at `59e2fa8`.
+- **Replay responses** differ only by carrying an extra `until` key.
+- **Lookahead removed by the cutoff.** On 2026-10-23 the GEX band under a 07:37 cutoff equals the full-session band, because the session high and low are set by then. Under a 05:10 cutoff the band, and so the GEX line set, differ.
+- **5-minute bars.** The interval resampler labels buckets right / closed-right on bar starts (existing behaviour). So under a 07:37 cutoff the bucket labelled 07:40 holds only the 07:36 bar: a partial bucket, not lookahead.
+
+### Smoke fixture and load (step 6)
+
+- **Fixture.** `scripts/cr_cc_build_fixture.py` → `research/gallery/cc-fixture.json`: 5 events, one per month Jan–May 2026 (train; March roll week excluded). Each is the first CR-BW real level touch at or after 07:00 PT that confirms under a simple rule: entry at the signal-bar close, stop 1 pt past the extreme, 8-pt target race on 1-minute bars. `level_frame` is `es_corrected`. **UI smoke data, not a research result.**
+- **Load.** Loaded as set `cc:fixture` under the backfill protocol: run `d2d2bbb2-780f-435f-9ef2-3dab1e57acec` inserted 5; a re-run (`0a72ff00-…`) inserted 0 and skipped 5.
+
+| id | session | dir | entry PT | entry | stop | outcome (hidden until reveal) |
+|---|---|---|---|---|---|---|
+| 1 | 2026-01-06 | long | 07:47 | 6966.25 | 6962.75 | stop −3.50 |
+| 2 | 2026-02-02 | long | 08:04 | 6991.50 | 6988.25 | stop −3.25 |
+| 3 | 2026-03-02 | long | 07:02 | 6858.50 | 6842.75 | target +8.00 |
+| 4 | 2026-04-01 | short | 08:39 | 6638.00 | 6643.00 | stop −5.00 |
+| 5 | 2026-05-01 | long | 07:39 | 7279.25 | 7273.50 | stop −5.75 |
+
+### Playwright (`react_price_preview/tests/e2e/cr-cc.spec.js`)
+
+**Setup.** Servers: `scripts/cr_cc_smoke_backend.py` on port 8061 (Ironbeam routes read-only on the backfill role; review routes on `DATABASE_URL`) and the worktree's Vite on 5176; viewport 1440×900, Min |GEX| 40.
+
+1. **replay** (read-only; passed on 3 runs). On the first unreviewed candidate (2026-03-02 at the time):
+   - the last candle is the signal bar (entry − 1 min), with none at or after `entry_ts_pt`;
+   - every bars request carries `levels=corrected` and `until=<entry>`;
+   - the level / entry / stop price lines are present;
+   - the SMILE and SIGNALS pills are absent and there is no outcome element;
+   - no list/detail response contains `pnl_pts` before a review;
+   - Exit review restores 2026-10-23 and the SMILE pill.
+2. **label → reveal** (writes; ran once). On candidates 1 and 2:
+   - Reveal is disabled until Save;
+   - candidate 1: **T** key → Take with a comment, Save, **R** key → outcome "−3.50 pts · stop", banner "revealed", full session re-fetched (candles after entry), exit line drawn;
+   - candidate 2: Skip with chip "trend day" and the custom reason "fixture smoke reason", Save, Reveal;
+   - the API then shows both revealed with outcomes;
+   - Summary shows Take 1 (−3.50), Skip 1 (−3.25), and Skip reasons "fixture smoke reason (1) · trend day (1)".
+3. **revealed view** (read-only; passed on 3 runs). Reopens the revealed candidates and frames test → exit: the test, confirm and entry markers, the exit marker with its P&L, and the exit line.
+
+**Rows written by the smoke (permanent; the tables are insert-only):**
+- `setup_reviews` id 1 (`CR-CC:cc:fixture:1`, take, revealed);
+- `setup_reviews` id 2 (`CR-CC:cc:fixture:2`, skip, revealed).
+
+Candidates 3–5 are unreviewed.
+
+**Screenshots** (`specs/assets/cr-cc/`):
+- `replay-2026-03-02.png`: replay to 07:02, banner, Corrected lines, candidate lines, flow cut at the cutoff;
+- `saved-2026-01-06.png`: Take saved, Reveal enabled. A GEX-level popup is open because the test's blur click landed on a line; the spec now blurs with `activeElement.blur()`;
+- `revealed-2026-01-06.png` and `revealed-2026-02-02.png`: full session, markers, exit and outcome;
+- `summary.png`.
+
+**Not verified here:**
+- the deployed web service, including the role log line and the Render build of `react_price_preview`;
+- the Dash-embedded iframe: there, Dash's date picker does not follow a review date (A1.1 / D1);
+- Today Setup (untouched).
+
+**Other behaviour to know:**
+- A REVIEW date switch clears an active trade-log annotation, through PriceChart's existing date-change effect.
+- The landscape IV comes from smile snapshots, so during a replay the landscape has no IV and no confluences.

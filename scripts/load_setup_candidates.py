@@ -199,9 +199,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return 0
 
+    from dotenv import load_dotenv
     from packages.shared.backfill_safety import (
         assert_role_or_die, backfill_run, get_backfill_db_conn, update_run_smoke,
     )
+
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
     conn = get_backfill_db_conn()
     assert_role_or_die(conn)

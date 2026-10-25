@@ -1,0 +1,163 @@
+{
+  "cr_id": "CR-CC",
+  "set_name": "cc:fixture",
+  "level_frame": "es_corrected",
+  "generated_at": "2026-10-25T12:15:20",
+  "events": [
+    {
+      "id": 1,
+      "session_date": "2026-01-06",
+      "cell": "net+",
+      "direction": "long",
+      "level_price": 6964.0,
+      "level_net_bn": 52.83,
+      "level_gross_bn": 113.75,
+      "test_ts_pt": "2026-01-06T07:45:00",
+      "confirm_ts_pt": "2026-01-06T07:46:00",
+      "retest_ts_pt": null,
+      "entry_ts_pt": "2026-01-06T07:47:00",
+      "entry_price": 6966.25,
+      "stop_price": 6962.75,
+      "extreme_price": 6963.75,
+      "meta": {
+        "overshoot_pts": 0.25,
+        "touch_utc": "2026-01-06T15:45:30",
+        "source": "CR-BW events_real touch"
+      },
+      "outcome": {
+        "exit_ts_pt": "2026-01-06T07:52:00",
+        "exit_price": 6962.75,
+        "pnl_pts": -3.5,
+        "result": "stop",
+        "by_exit": {
+          "target_pts": 8.0,
+          "stop_pad_pts": 1.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "session_date": "2026-02-02",
+      "cell": "net-",
+      "direction": "long",
+      "level_price": 6991.0,
+      "level_net_bn": -26.03,
+      "level_gross_bn": 93.94,
+      "test_ts_pt": "2026-02-02T08:01:00",
+      "confirm_ts_pt": "2026-02-02T08:03:00",
+      "retest_ts_pt": null,
+      "entry_ts_pt": "2026-02-02T08:04:00",
+      "entry_price": 6991.5,
+      "stop_price": 6988.25,
+      "extreme_price": 6989.25,
+      "meta": {
+        "overshoot_pts": 1.75,
+        "touch_utc": "2026-02-02T16:01:01",
+        "source": "CR-BW events_real touch"
+      },
+      "outcome": {
+        "exit_ts_pt": "2026-02-02T08:05:00",
+        "exit_price": 6988.25,
+        "pnl_pts": -3.25,
+        "result": "stop",
+        "by_exit": {
+          "target_pts": 8.0,
+          "stop_pad_pts": 1.0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "session_date": "2026-03-02",
+      "cell": "net-",
+      "direction": "long",
+      "level_price": 6845.0,
+      "level_net_bn": -21.86,
+      "level_gross_bn": 44.85,
+      "test_ts_pt": "2026-03-02T07:00:00",
+      "confirm_ts_pt": "2026-03-02T07:01:00",
+      "retest_ts_pt": null,
+      "entry_ts_pt": "2026-03-02T07:02:00",
+      "entry_price": 6858.5,
+      "stop_price": 6842.75,
+      "extreme_price": 6843.75,
+      "meta": {
+        "overshoot_pts": 1.25,
+        "touch_utc": "2026-03-02T15:00:54",
+        "source": "CR-BW events_real touch"
+      },
+      "outcome": {
+        "exit_ts_pt": "2026-03-02T07:03:00",
+        "exit_price": 6866.5,
+        "pnl_pts": 8.0,
+        "result": "target",
+        "by_exit": {
+          "target_pts": 8.0,
+          "stop_pad_pts": 1.0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "session_date": "2026-04-01",
+      "cell": "net+",
+      "direction": "short",
+      "level_price": 6641.0,
+      "level_net_bn": 60.18,
+      "level_gross_bn": 139.9,
+      "test_ts_pt": "2026-04-01T08:37:00",
+      "confirm_ts_pt": "2026-04-01T08:38:00",
+      "retest_ts_pt": null,
+      "entry_ts_pt": "2026-04-01T08:39:00",
+      "entry_price": 6638.0,
+      "stop_price": 6643.0,
+      "extreme_price": 6642.0,
+      "meta": {
+        "overshoot_pts": 1.0,
+        "touch_utc": "2026-04-01T15:37:05",
+        "source": "CR-BW events_real touch"
+      },
+      "outcome": {
+        "exit_ts_pt": "2026-04-01T08:45:00",
+        "exit_price": 6643.0,
+        "pnl_pts": -5.0,
+        "result": "stop",
+        "by_exit": {
+          "target_pts": 8.0,
+          "stop_pad_pts": 1.0
+        }
+      }
+    },
+    {
+      "id": 5,
+      "session_date": "2026-05-01",
+      "cell": "net+",
+      "direction": "long",
+      "level_price": 7277.0,
+      "level_net_bn": 157.8,
+      "level_gross_bn": 181.22,
+      "test_ts_pt": "2026-05-01T07:37:00",
+      "confirm_ts_pt": "2026-05-01T07:38:00",
+      "retest_ts_pt": null,
+      "entry_ts_pt": "2026-05-01T07:39:00",
+      "entry_price": 7279.25,
+      "stop_price": 7273.5,
+      "extreme_price": 7274.5,
+      "meta": {
+        "overshoot_pts": 2.5,
+        "touch_utc": "2026-05-01T14:37:45",
+        "source": "CR-BW events_real touch"
+      },
+      "outcome": {
+        "exit_ts_pt": "2026-05-01T08:01:00",
+        "exit_price": 7273.5,
+        "pnl_pts": -5.75,
+        "result": "stop",
+        "by_exit": {
+          "target_pts": 8.0,
+          "stop_pad_pts": 1.0
+        }
+      }
+    }
+  ]
+}
