@@ -56,6 +56,11 @@ const CONFLUENCE_LINE_STYLE = {
   feature: LineStyle.Dotted,
 }
 
+// Crosshair line style, shared with the landscape panel's mirrored line (CR-BV L5).
+// style 2 = LineStyle.Dashed, which lightweight-charts draws as a [2w, 2w] dash.
+const CROSSHAIR_LINE_COLOR = 'rgba(191, 219, 254, 0.45)'
+const CROSSHAIR_LINE_DASH = '2 2'
+
 const TOOLTIP_OFFSET_X = 14
 const TOOLTIP_OFFSET_Y = 14
 const TOOLTIP_EDGE_PAD = 8
@@ -999,6 +1004,57 @@ export default function PriceChart({
   // before the first sample (panel falls back to its full stored range).
   const [visiblePriceRange, setVisiblePriceRange] = useState(null)
 
+  // CR-BV L5 — crosshair across chart and landscape panel. Chart → panel: the
+  // chart's crosshair price is pushed through a small bus the panel subscribes
+  // to, so only the panel re-renders on mouse moves. Panel → chart: the panel
+  // reports its cursor price and the chart shows its horizontal crosshair there.
+  // setCrosshairPosition fires crosshairMove on the next frame without a
+  // sourceEvent; handleCrosshairMove ignores those while the panel is driving.
+  // The vertical line is hidden while the panel drives the crosshair, since the
+  // panel has no time of its own, and restored when the cursor leaves the panel.
+  const crosshairBusRef = useRef(null)
+  if (!crosshairBusRef.current) {
+    const listeners = new Set()
+    crosshairBusRef.current = {
+      subscribe(fn) {
+        listeners.add(fn)
+        return () => listeners.delete(fn)
+      },
+      emit(price) {
+        listeners.forEach((fn) => fn(price))
+      },
+    }
+  }
+  const panelCrosshairActiveRef = useRef(false)
+  const handlePanelCrosshairPrice = useCallback((price) => {
+    const chart = chartRef.current
+    const series = seriesRef.current
+    if (!chart || !series) return
+    if (price == null || !Number.isFinite(price)) {
+      if (panelCrosshairActiveRef.current) {
+        panelCrosshairActiveRef.current = false
+        chart.clearCrosshairPosition()
+        chart.applyOptions({ crosshair: { vertLine: { visible: true, labelVisible: true } } })
+      }
+      return
+    }
+    const time = chart.timeScale().getVisibleRange()?.to
+    if (time == null) return
+    if (!panelCrosshairActiveRef.current) {
+      panelCrosshairActiveRef.current = true
+      chart.applyOptions({ crosshair: { vertLine: { visible: false, labelVisible: false } } })
+    }
+    chart.setCrosshairPosition(price, time, series)
+  }, [])
+
+  // CR-BV L6 — the last bar's close, so the panel can show its classifier spot
+  // only when it differs from the price on the chart.
+  const lastBarClose = useMemo(() => {
+    if (!Array.isArray(candles) || candles.length === 0) return null
+    const close = Number(candles[candles.length - 1]?.close)
+    return Number.isFinite(close) ? close : null
+  }, [candles])
+
   // CR-009 items 2 & 4 — IPriceLine handles for the confluence lines and the
   // intraday-subtarget annotation drawn on the candlestick series.
   const landscapeLinesRef = useRef([])
@@ -1329,13 +1385,13 @@ export default function PriceChart({
       crosshair: {
         mode: CrosshairMode.Normal,
         vertLine: {
-          color: 'rgba(191, 219, 254, 0.45)',
+          color: CROSSHAIR_LINE_COLOR,
           width: 1,
           style: 2,
           labelBackgroundColor: '#1e293b',
         },
         horzLine: {
-          color: 'rgba(191, 219, 254, 0.45)',
+          color: CROSSHAIR_LINE_COLOR,
           width: 1,
           style: 2,
           labelBackgroundColor: '#1e293b',
@@ -1704,7 +1760,14 @@ export default function PriceChart({
     }
 
     const handleCrosshairMove = (param) => {
+      // CR-BV L5 — setCrosshairPosition fires crosshairMove on the next frame with
+      // no sourceEvent. While the landscape panel drives the crosshair, ignore those
+      // so the floating tooltip, the linked flow crosshair and the panel bus stay put.
+      if (!param?.sourceEvent && panelCrosshairActiveRef.current) return
       updateFloatingTooltip(param)
+      const y = param?.point ? Number(param.point.y) : NaN
+      const price = Number.isFinite(y) && seriesRef.current ? seriesRef.current.coordinateToPrice(y) : null
+      crosshairBusRef.current.emit(Number.isFinite(price) ? price : null)
     }
 
     const setInteractionActive = (active, releaseDelay = 0) => {
@@ -2929,6 +2992,12 @@ export default function PriceChart({
               onClose={onToggleLandscape || undefined}
               visiblePriceRange={visiblePriceRange}
               showPriceAxis={!visiblePriceRange}
+              crosshairBus={crosshairBusRef.current}
+              onCrosshairPrice={handlePanelCrosshairPrice}
+              crosshairColor={CROSSHAIR_LINE_COLOR}
+              crosshairDash={CROSSHAIR_LINE_DASH}
+              lastPrice={lastBarClose}
+              showGexAxis
             />
           )}
 
