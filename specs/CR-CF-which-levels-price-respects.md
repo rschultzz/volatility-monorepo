@@ -221,3 +221,67 @@ Re-run Step 0 counts and the A/A under A1 (no outcomes); the A/A must pass for e
 | all families | 4.5 %, +0.13 | 8.0 %, −0.16 | 6.5 %, +0.24 | 8.0 %, −0.04 |
 
 **A1.5 gate: PASS.** All 24 Holm cells pass. F7 / above passes at the limit (10.0 %, i.e. 20 of 200 splits). F6 passes in every cell under A1 (it is a readout regardless). Stage 1 may run.
+
+## Stage 1 result — screen on train (single run, 2026-10-25)
+
+**Run.**
+- `scripts/cr_cf_stage1.py`, commit `8ada987` (sha256 `3f9f6275…f45142768a`), on `scripts/cr_cf_lib.py` unchanged since the A1 gate run (`b9414a0`).
+- One run, exit 0, 129 s. All statistics were written to `scripts/logs/cr_cf/stage1.json` before printing (log `stage1.log`; both git-ignored).
+- Read-only, train only (89 sessions, 2026-01-06 → 06-05). No trade outcome.
+
+**Tests.** 2,387 real, 3,564 placebo. Escapes censored at 13:00: 309 / 470. Placebo tests dropped: F7 282 (swing confirmed within 10 pts, A1.1), F4 78 (at a 25-multiple, A1.2).
+
+### Primary — time to escape 0.25·IM, session-weighted (restricted mean, min; real − placebo; Holm over 24, one-sided α 0.025)
+
+| family | pooled | below | above | verdict |
+|---|---|---|---|---|
+| F1 prior H/L/C | −5.24 [−14.88, +3.79] | −7.36 [−17.48, +2.49] | −1.12 [−14.01, +11.65] | inconclusive |
+| F2 overnight H/L | −3.30 [−11.60, +5.33] | −7.17 [−17.19, +3.32] | +3.65 [−6.08, +13.68] | inconclusive |
+| F3 opening range | +0.50 [−8.48, +9.48] | −2.82 [−12.19, +6.83] | +3.65 [−8.01, +15.19] | inconclusive |
+| F4 VWAP | −1.95 [−10.48, +6.57] | −4.68 [−14.50, +5.24] | +0.92 [−10.86, +12.51] | inconclusive |
+| F5 R100 | +4.08 [−4.37, +12.86] | +5.21 [−6.46, +17.10] | +2.85 [−10.02, +16.10] | inconclusive |
+| F5 R50 | −5.45 [−13.68, +2.88] | −10.08 [−21.03, +0.90] | −6.42 [−16.54, +3.41] | inconclusive |
+| F5 R25 | −1.62 [−8.76, +5.71] | +0.47 [−9.50, +10.51] | −1.34 [−9.73, +7.22] | inconclusive |
+| **F7 swings** | **+8.22 [+2.00, +14.44]**, p 0.0052 | +8.29 [−0.37, +16.83], p 0.030 | +8.60 [−0.06, +16.83], p 0.026 | inconclusive (not Holm-rejected) |
+| *F6 prior week (readout)* | +7.54 [−6.22, +21.99] | +8.27 [−7.15, +24.47] | +10.17 [−9.63, +30.72] | no gate |
+| *Corrected GEX (reference, CR-CB A17, R-a; not re-run)* | −5.98 [−13.35, +1.21] | | | inconclusive |
+
+Sessions real / placebo per cell: 43–88 / 59–87. Real / placebo means: F7 pooled 55.6 vs 47.4 min; other families 36.5–52.5 vs 39.2–55.4.
+
+**Stage 1: no family is shortlisted.** No hypothesis is Holm-rejected; the smallest p is F7 / pooled at 0.0052, against a first-step threshold of 0.025 / 24 = 0.0010. Under L9, Stage 2 (R-a) has nothing to confirm. No hypothesis is refuted either (no CI upper bound < 0).
+
+### Secondary (no gate)
+
+- **Zone dwell:** no CI excludes 0 except **F2 / above +211 s [+13, +413]**. F5 R50 and R25 lean negative (−134 to −189 s, CIs touching 0). F7 pooled +10 [−119, +139].
+- **Velocity drop** (log path-length ratio, after / before; negative = slows down):
+  - F3 / below −0.11 [−0.18, −0.03] and F5 R25 / below −0.09 [−0.16, −0.01] slow down;
+  - **F5 R50 speeds up**: pooled +0.23 [+0.09, +0.39], above +0.32;
+  - F4 pooled +0.10 [+0.02, +0.17] speeds up;
+  - F6 pooled −0.20 [−0.37, −0.05] slows down;
+  - F7 pooled −0.03 [−0.07, +0.02].
+  - These signs are mixed and 27 cells per measure are uncorrected.
+
+### Readouts (no gate)
+
+- **First side only (L5):** close to the per-side picture.
+  - F7 pooled +8.19 [+1.57, +14.88], above +11.24 [+1.26, +20.88].
+  - F4 / above +22.76 [+7.63, +38.22] (38 sessions).
+  - F1 / below −17.94 [−31.45, −4.92]: faster escape.
+- **Excluding IM < 25** (one session, 2026-01-12): unchanged to two decimals except F4 and F5 R25 (≤ 0.6 min).
+- **GEX overlap (L11, pooled):** no subset CI excludes 0.
+  - Real overlap − real non-overlap: F1 +3.8, F2 −5.8, F3 −6.8, F4 −9.3, R100 +8.4, R50 +0.5, R25 −9.6, F7 −3.8, F6 +4.0. All CIs cover 0.
+  - **On train, being near a Corrected GEX level adds nothing measurable on top of any family.**
+- **Time of day (L11, pooled):**
+  - F7 before 10:00 PT +9.78 [+2.05, +17.54] (705 / 265 tests); after 10:00 −3.87 [−19.57, +11.71] (523 / 59).
+  - Every other family has ≤ 34 real tests after 10:00, so no after-10:00 read.
+
+### Reading (descriptive; the verdict is the Holm table)
+
+- **On train, none of the seven families slows price measurably relative to its placebo** once 24 hypotheses are corrected for.
+  - Prior day, overnight, opening range, VWAP and the 50 / 25 round numbers all have point estimates within ±6 min of placebo, mostly negative (faster escape), like Corrected GEX in CR-CB.
+- **F7 (same-day confirmed swings) is the one consistent positive.** Real swings hold price about 8 min longer than placebo in both approach cells, on first-side-only too, before 10:00 PT. The pooled 95 % CI excludes 0, but the result does not survive Holm. It is a lead, not a finding.
+- **Construction caveat on F7, stated before any follow-up:**
+  - A1.1 drops a placebo test whenever a swing has been confirmed within 10 pts by the test second. That happened to 282 tests, against 324 kept.
+  - A swing confirming near a placebo price is evidence that price stalled there. So the drop rule may remove the placebo tests that escape slowly, making the placebo faster and inflating F7's real − placebo.
+  - Whether it does is unmeasured. Measuring it needs the dropped placebo tests' escape times: a post-hoc diagnostic, to be disclosed as such, not run in this pass.
+- The 2026-05-01 support (overnight high, Step 0 Q3) belongs to F2, which shows no slowdown on train (−3.3 pooled; from above, the side Ryan would buy, +3.65 [−6.08, +13.68]).
