@@ -154,6 +154,26 @@ Ryan: test all the parameters; the concern is discarding real patterns because t
 | A8.7 | **Readouts:**<br>• divergence by level type: put-skew divergence at call levels and at put levels, both directions;<br>• call-skew divergence (same definitions with CS) for comparison;<br>• raw vs residual divergence;<br>• FR12 trend alone vs FR10 alone vs FR11, per cell. |
 | A8.8 | **Step 0 additions:** divergence counts (bullish, bearish, none) per cell on the move in; PS trend distributions in the range; event counts for H-PNB (new (c)) and H-PSD; PS/CS field coverage. No outcomes. |
 
+## Amendment A9 (Ryan, 2026-10-25, after the pre-A2 Step 0; no trade outcome computed)
+
+**Context.** The first Step 0 ran on the pre-A2 design (L5–L8 plus A1). It found:
+- the put-heavy cells never reach 40 fills on the A1 grid (max 31 / 29);
+- the 0.10·IM floor on the confirmation pullback, together with keeping the first confirmed extreme, kept the detector from matching Ryan's 2026-10-23 trade;
+- adjacent levels sometimes share one fill;
+- the Ironbeam flow has a 07:52 → 09:56 PT hole on 2026-10-23.
+
+A9 settles these before Step 0 is re-run on the full design (A1–A8).
+
+| # | Clause |
+|---|---|
+| A9.1 | **Flow source.** Stage 1 (2026-01-06 → 2026-06-05) uses `es_flow_1s_databento` (CR-CA). `ironbeam_es_flow_1s` is a fallback only, for seconds or sessions Databento lacks, and every fallback use is counted. All flow thresholds and baselines are on the Databento scale throughout: the CR-BW-style impact baseline, terciles, and the A1.4/A2.3 gap rule. This amends A4.9 and the Framework's "Stage 1 (2026, Ironbeam flow)". |
+| A9.2 | **Pooling for the exit choice.** Under A1.2, when a cell has < 40 trades, its short and long sides are pooled within the same level type (put-heavy with put-heavy, call-heavy with call-heavy) for the configuration and exit choice. **Stage 2 stays per cell.** |
+| A9.3 | **O_c reading confirmed.** O_c is measured from the running extreme after the test: overshoot up to the first 0.10·IM pullback from it (the first Step 0's reading). |
+| A9.4 | **No 0.10·IM floor on the confirmation pullback.** L6 confirmation uses the A1 grid value P ∈ {4, 6, 10} pts alone. |
+| A9.5 | **The range keeps developing (amends L6 / A4.1).** Until a fill, a later, more extreme high (low for approaches from above) inside the zone replaces H (L). The range [PL, H] updates accordingly. |
+| A9.6 | **One trade per fill.** When adjacent levels produce the same fill (same session, side and fill second), it is one trade, not one per level. |
+| A9.7 | **2026-10-23 illustration** uses Databento flow (`es_flow_1s_databento`), still detector-only with no outcome. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
