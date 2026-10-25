@@ -61,6 +61,17 @@ Ryan: test all the parameters; the concern is discarding real patterns because t
 | A1.4 | **Stage 2 unchanged:** one frozen configuration plus exit per cell (the A1.2 choice), run once on R. |
 | A1.5 | **Step 0 Q3/Q4** report counts and the detector table at the L5–L8 defaults (the centre of the grid). Counts at the grid corners too: fewest and most setups. |
 
+## Amendment A2 (Ryan, 2026-10-25, before Step 0 outcomes): a stop-free "is it real" readout
+
+**Ryan:** futures first; the first question is whether the pattern is real. A fixed stop mixes two things: whether price moves the predicted way, and whether the overshoot hunts the stop first. A2 separates them.
+
+| # | Clause |
+|---|---|
+| A2.1 | **S1-d, stop-free move (the "is it real" readout).** Per setup, the signed move in the setup direction from entry to +15, +30 and +60 min and to 13:00 PT, in points, with **no stop**. Reported per cell, at real levels vs placebo, as mean with CI, and as the share positive. Grid centre and the A1.2 plateau configuration. |
+| A2.2 | **S1-e, adverse excursion before the move.** Per setup, the maximum adverse excursion before the first +10 pts (or by the close). Its distribution per cell answers how much overshoot room a real move needs, and informs the stop grid. |
+| A2.3 | **Interpretation rule, fixed now:** "real" (for Stage 2 to confirm) means the stop-free move at +30 or +60 min beats placebo with a CI lower bound > 0 in a cell, whatever the stopped P&L does. A real move that the stop grid loses on points to a stop / expression problem (wider stop, scaled entry, or options), not to "no edge". |
+| A2.4 | Stage 2 adds T3 per cell: the A2.3 stop-free move at the Stage 1 horizon, real > placebo, CI lower bound > 0. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
