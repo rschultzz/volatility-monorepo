@@ -329,3 +329,64 @@ Verbatim:
 - Both come from `scripts/cr_bz_ddl.sql`, which is not applied.
 
 The plan CSV is in `scripts/logs/cr_bz/` (git-ignored, machine-local).
+
+## Smoke and wrap (2026-10-25, approved by Ryan)
+
+### DDL (`scripts/cr_bz_ddl.sql`, applied once as `rschultz` via DATABASE_URL)
+
+- `ironbeam_es_1m_bars_revision_log` and `ironbeam_es_1m_bars_repair_log` exist, owner `rschultz`.
+- `dash_backfill_writer` grants after the DDL:
+  - INSERT, SELECT on both log tables;
+  - INSERT, SELECT on `ironbeam_es_1m_bars` and `es_minutes`, plus **column-level UPDATE on `open, high, low, close, volume` only**;
+  - no DELETE, TRUNCATE or table-wide UPDATE.
+
+### Repair run `88139854-3605-4d94-ab03-7bc34af5da5c`
+
+`bt_backfill_runs`, `cr_id` CR-BZ, status `completed`, 17:12:50 → 17:17:08 UTC. Window 2026-01-01 → 2026-10-25 UTC.
+
+| Item | Result |
+|---|---|
+| Repair log rows | **1,566** (783 `ironbeam_es_1m_bars` + 783 `es_minutes`) |
+| Bars updated | **783** (RTH 649, ETH 134) |
+| `es_minutes` rows updated | **783** |
+| Guard misses / aborts | **0** (single transaction committed) |
+| Fragments remaining (after-state re-selection) | **0** |
+| `es_minutes` = bar on all 783 minutes | yes |
+| Bar = logged new values on all 783 minutes | yes |
+
+**Spot check: 5 repaired minutes (pseudo-random by `md5(bar_ts)`) re-aggregated from `ironbeam_es_flow_1s` on the logged symbol.** O/H/L/C/V equal the stored bar and the `es_minutes` row on all five.
+
+| bar_ts (UTC) | flow O/H/L/C/V = bar = es_minutes | old bar O/H/L/C/V |
+|---|---|---|
+| 2026-01-21 19:29 | 6897.25 / 6907.5 / 6896.75 / 6901.25 / 14,351 | 6906.75 / 6906.75 / 6900.75 / 6901.25 / 4,304 (TAIL) |
+| 2026-02-21 15:23 | 6877.5 / 6878.5 / 6872.5 / 6876.0 / 11,639 | 6875.5 / 6877.25 / 6872.5 / 6876.0 / 10,510 |
+| 2026-04-01 13:18 | 6601.25 / 6604.5 / 6600.5 / 6601.0 / 1,807 | 6601.25 / 6604.5 / 6601.0 / 6604.0 / 915 (HEAD) |
+| 2026-06-29 19:59 (12:59 PT) | 7499.0 / 7505.0 / 7496.0 / 7497.0 / 57,346 | 7498.25 / 7498.25 / 7496.75 / 7496.75 / 6,738 |
+| 2026-07-02 23:46 | 7535.25 / 7537.25 / 7535.0 / 7535.0 / 91 | 7535.25 / 7537.25 / 7535.0 / 7535.5 / 87 |
+
+**Reversal.** Every changed row's old values are in `ironbeam_es_1m_bars_repair_log` (`run_id`, `target_table`, `bar_ts`). A reverse UPDATE from `old_*` restores both tables exactly.
+
+**Repaired volumes are lower bounds.** On clean minutes, bar volume runs 2–7 % above flow volume (Step 0 Q3).
+
+**Saturday 2026-02-21.** 62 of the repaired minutes are on Saturday 2026-02-21 UTC, the known mis-stamped day (field conventions: 100 bars). The flow has rows on that Saturday too. The repair matched those bars to the flow; it did not address the date stamping, which remains a known gap.
+
+### L3 (Render)
+
+Ryan reported on 2026-10-25:
+- the "Dash - MonoRepo" env is cleaned of per-service `IRONBEAM_*` symbol values;
+- the service is linked to the "Volatility Dash Shared" group.
+
+Under A1.1 the env value is a fallback only.
+
+### Deploy (after merge, by chat)
+
+1. "Dash - MonoRepo": the step 1 symbol resolution.
+2. "Ironbeam Cron": the step 2 writer.
+
+The DDL is already applied, so the revision log table exists before the cron deploy.
+
+### Verification still to do (L7 as amended by A1.2)
+
+- **Live tick.** On a live session, `/api/ironbeam/live-trades-overlay` returns `symbol = XCME:ES.Z26` with trades in the last minute, and the last candle updates between minute boundaries (two screenshots ≥ 10 s apart).
+- **Revision log.** After one trading day, count `ironbeam_es_1m_bars_revision_log` rows to see whether Ironbeam revises bars.
+- **New fragment bars.** The writer does not prevent vendor TAIL fragments. Re-running the repair script repairs any that occur.
