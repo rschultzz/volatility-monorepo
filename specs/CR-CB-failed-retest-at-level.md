@@ -135,6 +135,25 @@ Ryan: test all the parameters; the concern is discarding real patterns because t
 | A7.4 | **H-CNB is a readout, not a gate** (amends A6.5): T5 applies to H-PNB only. H-CNB assumed call skew behaves like put skew, which is now an open question (A7.3). |
 | A7.5 | **Step 0 additions:** the T0 descriptive counts: tests, range-formation shares and dwell, real vs placebo, per cell. These come from price paths and are allowed in Step 0, because T0 is not a trade outcome. Report them before any trade outcome is computed. |
 
+## Amendment A8 (Ryan, 2026-10-25, before Step 0 outcomes): put skew everywhere, skew divergence as Ryan defines it, skew trend in the range
+
+**Ryan:**
+- look at **put skew at call levels** too, not only at put levels;
+- call skew is worth checking everywhere but is probably less telling;
+- the skew signal is **divergence from the move**: a move down with *falling* put skew is a divergence, and so is a move up with *climbing* put skew;
+- also check whether the **trend of skew during range formation** matters.
+
+| # | Clause |
+|---|---|
+| A8.1 | **Put skew is the primary skew everywhere.** PS = vol75 − vol50 (25Δ put minus ATM), 0DTE PM expiry, `orats_monies_minute`, at put **and** call levels. Call skew CS = vol25 − vol50 is computed everywhere as a secondary readout. Events before 07:00 PT are excluded (A5.4). |
+| A8.2 | **Skew divergence, Ryan's definition (primary):**<br>• over the **move into the level** (from the move's start, per A6.1(a), or the session extreme within 60 min, to the level test): ΔP = price change, ΔPS = put-skew change;<br>• **bullish divergence** = ΔP < 0 and ΔPS < 0 (puts not bid into a decline);<br>• **bearish divergence** = ΔP > 0 and ΔPS > 0 (protection bid into a rally);<br>• otherwise no divergence.<br>Magnitude: ΔPS per 10 pts of move. The **residual** version (A5.4: ΔPS net of the move-predicted change) is reported alongside as a variant, not the primary. |
+| A8.3 | **Skew trend in the range:** the slope of PS (raw, and residual) from range formation to the edge touch, per 10 minutes, signed with the setup (falling PS at a bottom edge counts as positive for a long). Plus the change in PS slope between the move-in and the range (did the divergence continue, stop or reverse while the range formed?). |
+| A8.4 | **New direction rules** (added to the grid; the plateau choice still applies):<br>• **FR10 skew divergence:** bullish divergence on the move in → fade a bottom edge (long); bearish divergence → fade a top edge (short); else no trade.<br>• **FR11 flow + skew agree:** FR5 or FR6 says fade **and** FR10 gives the same direction.<br>• **FR12 skew trend:** the range PS trend in its favourable tercile (A8.3 sign) → fade at that edge; unfavourable tercile → break. |
+| A8.5 | **H-PNB condition (c) redefined** (amends A6.1): (c) = **bullish divergence** on the move in (A8.2, primary). The A6.1 residual-tercile version becomes a readout variant. |
+| A8.6 | **H-PSD (short), new named rule, replacing H-CNB:** a top-edge event at a **call-heavy** level approached from below; (a) a rally ≥ 3·σ5_d within 15 min or ≥ 0.5·IM_d off the session low within 60 min; (b) FR5 or FR6 says fade; (c) **bearish put-skew divergence** on the rally (A8.2). Same handling as H-PNB, with its own Stage 2 gate **T5b** (≥ 40 events in R, else inconclusive). H-CNB (call skew) stays a readout. |
+| A8.7 | **Readouts:**<br>• divergence by level type: put-skew divergence at call levels and at put levels, both directions;<br>• call-skew divergence (same definitions with CS) for comparison;<br>• raw vs residual divergence;<br>• FR12 trend alone vs FR10 alone vs FR11, per cell. |
+| A8.8 | **Step 0 additions:** divergence counts (bullish, bearish, none) per cell on the move in; PS trend distributions in the range; event counts for H-PNB (new (c)) and H-PSD; PS/CS field coverage. No outcomes. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
