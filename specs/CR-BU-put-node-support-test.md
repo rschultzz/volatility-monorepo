@@ -413,3 +413,7 @@ Every CI covers 0, and the sign flips by year at ≤ −50 $bn.
 - Record the result in State of Knowledge.
 - The corrected levels stay display-only.
 - No holdout confirmation and no CR "C" follow.
+
+### Open question — the ~37 % touch-then-race base rate (added at PR time, 2026-10-25)
+
+To check: does the entry-minute rule bias absolute win rates downward? Under that rule the fill is at E once the minute's low is ≤ E, and a minute that hits both barriers counts as a loss. On the one-print-per-minute SPX-cash series, the same-minute tie cannot occur. The bias that can occur is the gap-through: the touch print can sit well below E while the race is measured from E, so the E − R barrier starts closer. This affects actual and placebo equally, so **the T1 difference stands**; only the absolute rates are in question. Not registered and not measured here.
