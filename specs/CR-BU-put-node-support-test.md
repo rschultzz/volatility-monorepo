@@ -312,3 +312,11 @@ In these variants the same greedy selection runs only on window bins that clear 
 
 1. **Resolved n.** The pass criterion requires n ≥ 150 *resolved* events, and there are 151 touched. If 2 or more actual events end unresolved, T1 cannot pass whatever the win rate. In the A/A, 1 of 151 pseudo touches was unresolved.
 2. **CI width.** At n 150 the A/A CI half-width is about ±9.8 pts. A true +8-pt edge would therefore probably not clear "CI lower bound > 0". An actual − placebo of roughly ≥ +10 pts is needed for the lower bound to clear 0.
+
+---
+
+## Addendum — S8 (Ryan, 2026-10-24, after the A1 re-count; added before any outcome is computed)
+
+Secondary readout added to S1–S7:
+
+- **S8 node size** (readout only, not gated, cannot change the verdict): T1 (R = 0.20·IM) restricted to events whose touched node has net ≤ −50 $bn, and separately ≤ −100 $bn (stored gex ÷ 1e9, same units as the chart). Same placebo design (A1.3); report n, actual, placebo, difference and CI, plus the same split by year.
