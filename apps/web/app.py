@@ -53,6 +53,7 @@ from modules.AuditFlags.routes import register_audit_flags_routes
 from modules.DayBrowser.routes import register_day_browser_routes
 from modules.Proposals.routes import register_proposals_routes
 from modules.SetupV2.routes import register_setup_v2_routes
+from modules.SetupReview.routes import register_setup_review_routes, log_db_role_once
 
 # ===== IDs =====
 CLOCK_ID = "CLOCK"
@@ -217,6 +218,10 @@ register_proposals_routes(server)
 
 # Mount the Setup v2 tab: /setup-v2 page + /api/setup-v2/card (CR-AW)
 register_setup_v2_routes(server)
+
+# Mount the setup review queue API: /api/setup-review/* (CR-CC); log the DB role once
+register_setup_review_routes(server)
+log_db_role_once()
 
 # Mount the React Price Chart preview
 REACT_PREVIEW_DIST_DIR = (REPO_ROOT / "react_price_preview" / "dist").resolve()
