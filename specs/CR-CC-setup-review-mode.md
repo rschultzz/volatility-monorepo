@@ -392,3 +392,63 @@ Candidates 3–5 are unreviewed.
 **Other behaviour to know:**
 - A REVIEW date switch clears an active trade-log annotation, through PriceChart's existing date-change effect.
 - The landscape IV comes from smile snapshots, so during a replay the landscape has no IV and no confluences.
+
+---
+
+## Amendment A2 (Ryan, 2026-10-25, after merge `f11b1de`) — smile/skew time-capped in replay
+
+Branch `feat/CR-CC-review-smile-capped`. It replaces the smile/skew part of A1.3 (D3). Everything else in A1 stands.
+
+| # | Clause |
+|---|---|
+| A2.1 | During a review replay the **SMILE chip stays visible** and the smile/skew panel works, with its time selection limited to ORATS snapshots with snapshot time ≤ `until` (`entry_ts_pt`). With no selection it defaults to the last snapshot ≤ `until`. Live / latest refresh is off while `until` is active (no polling, no live row). The skew table's "expected" mode runs on the capped snapshots. On reveal or on exit from review, normal behaviour returns. |
+| A2.2 | **SIGNALS and condor pricing stay hidden until reveal** (unchanged from A1.3). The smile panel's bands-anchor control, which drives condor pricing, is disabled during replay. |
+| A2.3 | `/api/ironbeam/smile-data` and `/api/ironbeam/skew-data` gain the optional `until` cap: requested `times` after `until` are dropped; with none left, the latest snapshot ≤ `until` for that trade date / expiry is used; live data is ignored. Replay responses add `until` and the `times` used. **Without `until`, responses are byte-identical** (golden test, recorded from `f11b1de` before the change). |
+| A2.4 (implementation detail, Claude Code) | The review replay keeps its own time selection, which starts empty (server default) and is not posted to Dash. Dash's time list belongs to the URL date, not the candidate's session. Candle clicks and the panel's remove buttons edit the review selection while a candidate is active. |
+| A2.5 | Playwright: open an unreviewed candidate and open SMILE; no snapshot after entry is selectable or shown. Then reveal, and later snapshots appear. |
+
+### A2 implementation and smoke (2026-10-25)
+
+| commit | what |
+|---|---|
+| `df5830c` | Amendment A2 |
+| `7aad280` | smile/skew goldens (2026-10-23 0DTE, 4 snapshots, expected on and off), recorded from `f11b1de` before any change |
+| `84340f8` | backend `until` cap on `/smile-data` and `/skew-data`; 7 tests; Ironbeam suite 54/54 |
+| `687ec45` | review-local selection, SMILE visible in replay, no polling or live data under `until`, bands anchor disabled until reveal |
+| (this commit) | Playwright A2 tests, screenshots, this section |
+
+**Backend.**
+- `_cap_times_until` keeps the selected HH:MM times whose snapshot time is ≤ `until` (the `until` minute included). With none left, it uses `max(snapshot_pt) ≤ until` from `orats_monies_minute` for that trade date / expiry.
+- Replay responses add `until` and `times`; live data is ignored.
+- **Byte identity:** with `until` absent, empty or garbage, all four goldens match.
+- On 2026-10-23 with `until` 08:00:
+  - 07:00 / 07:30 are kept, and 08:15 / 10:00 dropped;
+  - an empty selection, or one with only times after the cutoff, falls back to 08:00;
+  - a 05:10 cutoff gives no snapshot.
+- **Expected mode on capped snapshots:** the 07:30 skew deltas and the "Exp (SS) - 07:30" curve equal the uncapped ones, since they depend only on 07:00.
+
+**Frontend.**
+- Dash's time list belongs to the URL date, so review keeps its own selection. It starts empty (server default), is edited by candle clicks and the remove buttons, and is never posted to Dash. During replay, times after the cutoff are refused.
+- Time slices keep the app's existing convention: a slice is labelled by the bar's close, so clicking the 06:45 bar gives 06:46.
+- The reveal re-fetch remounts the chart, as any session reload does, which closes the SMILE window; reopening it shows the uncapped panel.
+
+**Playwright** (`cr-cc.spec.js`; same servers as step 6).
+- **"A2: smile capped …"** (writes one review). Ran on candidate 5 (2026-05-01, entry 07:39), the only unreviewed one at the time.
+  - The SMILE chip is present and SIGNALS absent.
+  - The default selection is `[07:39]`.
+  - Every smile/skew request carries `until=2026-05-01T07:39:00` and no `live_data`.
+  - A Dash message with 10:00 / 11:30 is ignored.
+  - The API caps 10:00 / 11:30 to times ≤ 07:39.
+  - Adding the 06:45 bar gives `[06:46, 07:39]`, all ≤ entry.
+  - Saved Unsure, then revealed: outcome −5.75, stop.
+
+  Its last check failed on that run, because the reveal remount had closed the SMILE window. The check now reopens SMILE and lives in a helper shared with the read-only test below. With no unreviewed fixture candidates left, this test now skips.
+- **"A2 (read-only): on a revealed candidate …"** passed (twice, and in the full-file run). On candidate 5 after reveal: SIGNALS is back, and the 09:30 bar (09:31) is selected with no `until` on its request; 09:31 is after entry.
+- **Full file:** replay, revealed view and A2 read-only pass; the label → reveal and A2 writing tests skip.
+
+**Fixture state.**
+- `setup_reviews` id 19 is the A2 smoke review: candidate 5, unsure, revealed.
+- Candidates 3 and 4 were reviewed (take) and revealed at 20:03 / 20:06 UTC, rows 17 and 18, outside these tests.
+- All 5 `cc:fixture` candidates are now revealed. A fresh writing run needs new fixture candidates.
+
+**Screenshots:** `specs/assets/cr-cc/a2-smile-capped-2026-05-01.png` and `a2-smile-revealed-2026-05-01.png`.

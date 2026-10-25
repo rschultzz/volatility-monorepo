@@ -26,6 +26,7 @@ from sqlalchemy import create_engine, text
 from flask import jsonify, request
 
 from packages.shared.utils import fetch_atm_iv_minute_series, fetch_skew_data, is_market_hours, fetch_live_orats_data, fetch_data_from_db
+from packages.shared.utils.data_io import DB_TABLE_NAME as ORATS_MINUTE_TABLE
 from packages.shared.surface_compare import k_for_abs_delta
 from packages.shared.options_orats import pt_minute_to_et
 from packages.shared.options_cache.pricing import build_condor_pricing_payload
@@ -1763,15 +1764,65 @@ def _build_react_atm_iv_series_payload(
     return {"series": series}, 200
 
 
+# CR-CC A2: in a review replay the smile/skew panel only sees ORATS snapshots with
+# snapshot time <= until (entry_ts_pt); with none selected, the latest such snapshot.
+_HHMM_RE = re.compile(r"^\d{2}:\d{2}$")
+
+
+def _fetch_latest_snapshot_hhmm(trade_date: str, expiration_date: str, until_naive: dt.datetime) -> str | None:
+    """HH:MM of the latest `orats_monies_minute` snapshot on trade_date/expiry at or before until_naive (PT)."""
+    q = text(
+        f"""
+        SELECT max(snapshot_pt) FROM "{ORATS_MINUTE_TABLE}"
+        WHERE trade_date = :trade_date AND expir_date = :expir_date
+          AND snapshot_pt >= :day_start AND snapshot_pt <= :until
+        """
+    )
+    day_start = dt.datetime.combine(dt.date.fromisoformat(trade_date), dt.time(0, 0))
+    with engine.connect() as conn:
+        v = conn.execute(q, {"trade_date": trade_date, "expir_date": expiration_date,
+                             "day_start": day_start, "until": until_naive}).scalar()
+    return None if v is None else pd.Timestamp(v).strftime("%H:%M")
+
+
+def _cap_times_until(trade_date: str, expiration_date: str, times: list[str] | None,
+                     until_pt: dt.datetime) -> list[str]:
+    """Selected HH:MM times with snapshot time <= until; if none, the latest snapshot <= until."""
+    try:
+        td = dt.date.fromisoformat(str(trade_date))
+    except ValueError:
+        return []
+    until_naive = until_pt.replace(tzinfo=None)
+    kept = sorted({
+        t for t in (times or [])
+        if _HHMM_RE.match(str(t))
+        and dt.datetime.combine(td, dt.time(int(t[:2]), int(t[3:]))) <= until_naive
+    })
+    if kept:
+        return kept
+    latest = _fetch_latest_snapshot_hhmm(str(trade_date), str(expiration_date), until_naive)
+    return [latest] if latest else []
+
+
+def _until_cap(trade_date, expiration_date, times, live_data_json, until_pt):
+    """(times, live_data_json, extra payload keys) — unchanged when until_pt is None."""
+    if until_pt is None:
+        return times, live_data_json, {}
+    capped = _cap_times_until(trade_date, expiration_date, times, until_pt)
+    return capped, None, {"until": until_pt.replace(tzinfo=None).isoformat(), "times": capped}
+
+
 def _build_react_skew_data_payload(
         trade_date: str | None,
         expiration_date: str | None,
         times: list[str] | None,
         expected: bool = True,
         live_data_json: str | None = None,
+        until_pt: dt.datetime | None = None,
 ) -> tuple[dict, int]:
     if not trade_date or not expiration_date:
         return {"error": "Missing trade_date or expiration_date"}, 400
+    times, live_data_json, until_keys = _until_cap(trade_date, expiration_date, times, live_data_json, until_pt)
 
     expected_on = expected
     is_0dte = (trade_date == expiration_date)
@@ -1904,7 +1955,7 @@ def _build_react_skew_data_payload(
         except Exception:
             pass
 
-    return {"skew_data": rows}, 200
+    return {"skew_data": rows, **until_keys}, 200
 
 
 def _build_react_smile_payload(
@@ -1913,9 +1964,11 @@ def _build_react_smile_payload(
     times: list[str] | None,
     expected: bool = True,
     live_data_json: str | None = None,
+    until_pt: dt.datetime | None = None,
 ) -> tuple[dict, int]:
     if not trade_date or not expiration_date:
         return {"error": "Missing trade_date or expiration_date"}, 400
+    times, live_data_json, until_keys = _until_cap(trade_date, expiration_date, times, live_data_json, until_pt)
 
     expected_on = expected
     times_sorted = sorted(times or [])
@@ -2097,7 +2150,7 @@ def _build_react_smile_payload(
                         except Exception: pass
         except Exception: pass
 
-    return {"traces": traces, "snapshots": snapshots}, 200
+    return {"traces": traces, "snapshots": snapshots, **until_keys}, 200
 
 
 def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
@@ -3076,7 +3129,8 @@ def register_ironbeam_callbacks(app):
                     expiration_date,
                     times,
                     expected=expected,
-                    live_data_json=live_data_json
+                    live_data_json=live_data_json,
+                    until_pt=_parse_until_pt(request.args.get("until"), ZoneInfo("America/Los_Angeles")),
                 )
 
                 resp = jsonify(payload)
@@ -3102,7 +3156,8 @@ def register_ironbeam_callbacks(app):
                 times = times_str.split(",") if times_str else []
                 payload, status = _build_react_smile_payload(
                     trade_date, expiration_date, times,
-                    expected=expected, live_data_json=live_data_json
+                    expected=expected, live_data_json=live_data_json,
+                    until_pt=_parse_until_pt(request.args.get("until"), ZoneInfo("America/Los_Angeles")),
                 )
                 
                 resp = jsonify(payload)
