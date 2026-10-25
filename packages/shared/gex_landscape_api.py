@@ -25,8 +25,15 @@ it from raw orats_oi_gamma strikes at request time with the caller's spot as
 the grid center — closing the stored grid's table_spot-centering limitation
 documented in CR-008's wrap-up.
 
-See specs/CR-008-gex-landscape-delivery-layer.md and
-specs/CR-010-gex-landscape-high-accuracy-path.md.
+CR-BV adds levels=corrected: the same request-time recompute, but each row's
+kernel centre is the CR-BT corrected level L = strike x (ES / F_e) (P_target =
+the ES bar starting 15:45 ET on the prior session), so the landscape, its spot
+and the classifier inputs are all in the ES chart's frame. Current mode (the
+parameter absent or anything else) is unchanged.
+
+See specs/CR-008-gex-landscape-delivery-layer.md,
+specs/CR-010-gex-landscape-high-accuracy-path.md and
+specs/CR-BV-landscape-chart-one-space.md.
 """
 from __future__ import annotations
 
@@ -56,6 +63,12 @@ from packages.shared.gex_landscape import (
     find_walls,
     summarize_per_bucket,
 )
+from packages.shared.level_placement import (
+    corrected_levels_defined,
+    es_snapshot_bar_start_utc,
+    place_levels,
+)
+from packages.shared.trading_calendar import prev_trading_day
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +109,24 @@ _PARAMS_QUERY = text("""
     WHERE ticker = :ticker AND trade_date = :trade_date
 """)
 
+# Corrected-levels path (CR-BV L2): the rows and filters of CR-BT's
+# _fetch_gex_rows_for_placement (apps/web/modules/Ironbeam/callbacks.py), so the
+# landscape is built from exactly the rows behind the chart's corrected lines.
+_CORRECTED_ROWS_QUERY = text("""
+    SELECT expir_date, dte, strike, stock_price, gex_call, gex_put
+    FROM orats_oi_gamma
+    WHERE ticker = :ticker
+      AND trade_date = :trade_date
+      AND expir_date >= :trade_date
+      AND discounted_level IS NOT NULL
+    ORDER BY expir_date, strike
+""")
+
+# Close of the ES 1-min bar starting 15:45 ET on the API trade date (CR-BT L4).
+_ES_SNAPSHOT_QUERY = text("""
+    SELECT close FROM ironbeam_es_1m_bars WHERE datetime = :t
+""")
+
 # Documented defaults for the high-accuracy path when no orats_gex_landscape row
 # exists — match the cron config (job_orats_eod.py passes range_pts=300.0).
 _DEFAULT_RANGE_PTS = 300.0
@@ -114,6 +145,45 @@ def _fetch_oi_gamma_strikes(conn, ticker: str, trade_date: dt.date) -> pd.DataFr
         _STRIKES_QUERY, {"ticker": ticker, "trade_date": trade_date}
     ).mappings().all()
     return pd.DataFrame([dict(r) for r in rows])
+
+
+def _fetch_corrected_strikes(conn, ticker: str, trade_date: dt.date):
+    """Rows for the corrected-levels recompute (CR-BV L2, CR-BT A1.1/A1.2).
+
+    Returns (strikes, es_snapshot, note). On success note is None and strikes has
+    the compute_landscape columns with discounted_level = the corrected level L.
+    Otherwise strikes is None and note is 'pre_forward_era', 'no_es_snapshot' or
+    'no_rows' — the caller draws no curve.
+    """
+    if not corrected_levels_defined(trade_date):
+        return None, None, "pre_forward_era"
+
+    row = conn.execute(
+        _ES_SNAPSHOT_QUERY,
+        {"t": es_snapshot_bar_start_utc(prev_trading_day(trade_date))},
+    ).fetchone()
+    p_es = float(row[0]) if row is not None and row[0] is not None else math.nan
+    if not (math.isfinite(p_es) and p_es > 0):
+        return None, None, "no_es_snapshot"
+
+    rows = conn.execute(
+        _CORRECTED_ROWS_QUERY, {"ticker": ticker, "trade_date": trade_date}
+    ).mappings().all()
+    df = place_levels(pd.DataFrame([dict(r) for r in rows]), p_es)
+    if df.empty:
+        return None, p_es, "no_rows"
+    df = df[df["level_corrected"].notna()]
+    if df.empty:
+        return None, p_es, "no_rows"
+
+    strikes = pd.DataFrame({
+        "discounted_level": df["level_corrected"].to_numpy(dtype=float),
+        "dte": df["dte"].to_numpy(),
+        "gex_call": df["gex_call"].to_numpy(),
+        "gex_put": df["gex_put"].to_numpy(),
+        "stock_price": df["stock_price"].to_numpy(),
+    })
+    return strikes, p_es, None
 
 
 def _fetch_landscape_params(conn, ticker: str, trade_date: dt.date) -> Optional[dict]:
@@ -179,6 +249,7 @@ def build_gex_landscape_response(
     iv: Optional[float] = None,
     implied_move: Optional[float] = None,
     accuracy: Optional[str] = "low",
+    levels: Optional[str] = None,
 ) -> tuple[dict, int]:
     """
     Build the GET /api/gex-landscape response payload.
@@ -204,6 +275,14 @@ def build_gex_landscape_response(
             the stored orats_gex_landscape row when present, else documented
             defaults — params_source distinguishes the two.
     Invalid accuracy values → 400.
+
+    levels (CR-BV): "corrected" (case-insensitive) recomputes at request time as
+    the high path does, with each row's kernel centre at the CR-BT corrected
+    level (ES frame) and table_spot / prior_spot = that ES snapshot (A1.1). The
+    payload then carries levels="corrected", levels_note and es_snapshot; when no
+    corrected placement exists (pre_forward_era / no_es_snapshot / no_rows) it is
+    a 200 with levels_note set and an empty landscape. Any other value, or None,
+    is Current mode and the response is unchanged.
 
     walls and peaks_by_bucket in the response are always recomputed from the
     landscape field — the stored extracted arrays are cron diagnostics.
@@ -253,12 +332,28 @@ def build_gex_landscape_response(
     else:
         move = 0.0
 
+    corrected = levels is not None and str(levels).strip().lower() == "corrected"
+
     # ── resolve the landscape: stored fast path vs high-accuracy recompute ─
     try:
-        if accuracy_mode == "high":
+        if accuracy_mode == "high" or corrected:
             # High-accuracy path (CR-010): recompute the landscape from raw
             # orats_oi_gamma strikes with the caller's spot as the grid center.
-            strikes = _fetch_oi_gamma_strikes(conn, ticker, td)
+            # Corrected levels (CR-BV) take the same path with ES-frame centres.
+            if corrected:
+                strikes, es_snapshot, levels_note = _fetch_corrected_strikes(conn, ticker, td)
+                if levels_note is not None:
+                    return (_to_native({
+                        "ticker": ticker,
+                        "trade_date": td.isoformat(),
+                        "spot": spot_f,
+                        "landscape": [],
+                        "levels": "corrected",
+                        "levels_note": levels_note,
+                        "es_snapshot": es_snapshot,
+                    }), 200)
+            else:
+                strikes = _fetch_oi_gamma_strikes(conn, ticker, td)
             if strikes.empty:
                 return (
                     {"error": f"no orats_oi_gamma strikes for "
@@ -268,12 +363,16 @@ def build_gex_landscape_response(
 
             # table_spot / prior_spot come from the strikes' stock_price — the
             # same EOD reference compute_and_upsert_landscape records.
+            # Corrected (CR-BV A1.1): the ES snapshot, so every classifier input is ES.
             raw_spot = strikes["stock_price"].iloc[0]
-            table_spot = (
-                float(raw_spot)
-                if raw_spot is not None and not pd.isna(raw_spot)
-                else None
-            )
+            if corrected:
+                table_spot = es_snapshot
+            else:
+                table_spot = (
+                    float(raw_spot)
+                    if raw_spot is not None and not pd.isna(raw_spot)
+                    else None
+                )
 
             # Compute params come from the stored row so the recompute is
             # parameter-compatible with the stored landscape. If no stored row
@@ -405,6 +504,11 @@ def build_gex_landscape_response(
             "recomputed_at": recomputed_at,
             "params_source": params_source,
         }
+        if corrected:
+            payload["accuracy"] = "high"
+            payload["levels"] = "corrected"
+            payload["levels_note"] = None
+            payload["es_snapshot"] = es_snapshot
         return (_to_native(payload), 200)
 
     except Exception as e:  # noqa: BLE001 — boundary: never leak a 500 traceback
