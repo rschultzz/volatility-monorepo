@@ -848,6 +848,25 @@ def _current_session_trade_date(pt_tz: ZoneInfo) -> dt.date:
     return _roll_forward_to_weekday(d)
 
 
+# CR-CC L5 / A1.2: replay cutoff. Bars with start < `until` are shown (until = the close
+# of the signal bar). Absent, empty or unparseable `until` means no cutoff, and the
+# responses stay byte-identical to the pre-CR-CC ones.
+_EM_ATM_IV_TIME_PT = dt.time(6, 33)
+
+
+def _parse_until_pt(raw, pt_tz: ZoneInfo) -> dt.datetime | None:
+    """`until` query value (naive PT ISO, e.g. 2026-10-23T07:37:00) → aware PT, floored to the minute."""
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    try:
+        ts = dt.datetime.fromisoformat(s.replace(" ", "T"))
+    except ValueError:
+        return None
+    ts = ts.replace(tzinfo=pt_tz) if ts.tzinfo is None else ts.astimezone(pt_tz)
+    return ts.replace(second=0, microsecond=0)
+
+
 def _effective_trade_date(selected_date: dt.date, pt_tz: ZoneInfo) -> tuple[dt.date, str | None]:
     """
     Map the user-selected trade date to the session date used for loading bars/GEX.
@@ -1041,6 +1060,7 @@ def _build_react_preview_bars_payload(
         phase: str = "center",
         days_either_side: int | None = None,
         levels_mode: str = "current",
+        until_pt: dt.datetime | None = None,
 ) -> tuple[dict, int]:
     interval = str(interval or "1min").strip()
     corrected = levels_mode == "corrected"
@@ -1087,6 +1107,12 @@ def _build_react_preview_bars_payload(
 
     for load_date in target_dates:
         day_start_pt, day_end_pt = _session_window_pt(load_date, pt_tz)
+        if until_pt is not None:
+            # CR-CC L5: sessions starting at/after the cutoff are not loaded; the rest end at it,
+            # so segments, the GEX band and gex_levels see only pre-cutoff bars (A1.3).
+            if day_start_pt >= until_pt:
+                continue
+            day_end_pt = min(day_end_pt, until_pt)
         try:
             df_day = _fetch_bars_pt(day_start_pt, day_end_pt, interval, pt_tz)
         except Exception as e:
@@ -1161,6 +1187,8 @@ def _build_react_preview_bars_payload(
     SQRT_TERM = math.sqrt(402.0 / 525600.0)
 
     for load_date, df_day in loaded_frames:
+        if until_pt is not None and until_pt < dt.datetime.combine(load_date, _EM_ATM_IV_TIME_PT, tzinfo=pt_tz):
+            continue  # CR-CC A1.3: the 06:30 open / 06:33 IV are after the cutoff
         try:
             mask_630 = df_day["time_hhmm_pt"] == "06:30"
             if not mask_630.any():
@@ -1258,12 +1286,17 @@ def _build_react_preview_bars_payload(
     if corrected:
         payload["levels"] = "corrected"
         payload["levels_notes"] = levels_notes
+    # CR-CC: only replay responses carry `until` (no-cutoff responses stay byte-identical).
+    if until_pt is not None:
+        payload["until"] = until_pt.replace(tzinfo=None).isoformat()
     return payload, 200
 
 
 def _build_react_live_trades_overlay_payload(
         trade_date: str | None,
         interval: str | None,
+        *,
+        until_pt: dt.datetime | None = None,
 ) -> tuple[dict, int]:
     interval = str(interval or "1min").strip()
     # Until a trades window exists the echo is the env fallback; then the resolved symbol.
@@ -1291,6 +1324,18 @@ def _build_react_live_trades_overlay_payload(
 
     pt_tz = ZoneInfo("America/Los_Angeles")
     session_date, session_note = _effective_trade_date(selected_date, pt_tz)
+
+    if until_pt is not None:
+        # CR-CC L5: a replay never shows the live overlay; no DB read.
+        return {
+            "bars": [],
+            "trade_date": str(trade_date),
+            "effective_trade_date": session_date.isoformat(),
+            "interval": interval,
+            "is_live_day": False,
+            "source": "live_trades_overlay",
+            "until": until_pt.replace(tzinfo=None).isoformat(),
+        }, 200
 
     try:
         is_live_day = (session_date == _current_session_trade_date(pt_tz))
@@ -1542,6 +1587,7 @@ def _build_react_flow_payload(
         session: str | None = None,
         resample: str | None = None,
         ema_len: int | None = None,
+        until_pt: dt.datetime | None = None,
 ) -> tuple[dict, int]:
     if not trade_date:
         return {
@@ -1582,6 +1628,11 @@ def _build_react_flow_payload(
         view_start_pt = full_start_pt
         view_end_pt = full_end_pt
 
+    if until_pt is not None:
+        # CR-CC L5: end the window (and so the per-second reindex) at the cutoff.
+        view_end_pt = max(view_start_pt, min(view_end_pt, until_pt))
+    until_key = {} if until_pt is None else {"until": until_pt.replace(tzinfo=None).isoformat()}
+
     start_utc = view_start_pt.astimezone(ZoneInfo("UTC"))
     end_utc = view_end_pt.astimezone(ZoneInfo("UTC"))
 
@@ -1612,6 +1663,7 @@ def _build_react_flow_payload(
             "symbol": symbol,
             "symbol_note": symbol_note,
             "point_count": 0,
+            **until_key,
         }, 200
 
     df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True, errors="coerce")
@@ -1668,6 +1720,7 @@ def _build_react_flow_payload(
         "symbol": symbol,
         "symbol_note": symbol_note,
         "point_count": len(flow_points),
+        **until_key,
     }, 200
 
 
@@ -2904,6 +2957,7 @@ def register_ironbeam_callbacks(app):
                 phase=phase,
                 days_either_side=days_either_side,
                 levels_mode=levels_mode,
+                until_pt=_parse_until_pt(request.args.get("until"), ZoneInfo("America/Los_Angeles")),
             )
             resp = jsonify(payload)
 
@@ -2940,6 +2994,7 @@ def register_ironbeam_callbacks(app):
                 payload, status = _build_react_live_trades_overlay_payload(
                     trade_date,
                     interval,
+                    until_pt=_parse_until_pt(request.args.get("until"), ZoneInfo("America/Los_Angeles")),
                 )
 
                 resp = jsonify(payload)
@@ -2985,6 +3040,7 @@ def register_ironbeam_callbacks(app):
                     session=session,
                     resample=resample,
                     ema_len=ema_len,
+                    until_pt=_parse_until_pt(request.args.get("until"), ZoneInfo("America/Los_Angeles")),
                 )
 
                 resp = jsonify(payload)
