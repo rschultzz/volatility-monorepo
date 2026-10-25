@@ -644,21 +644,22 @@ Branch `feat/CR-CD-swing-effort`, off `origin/main` `2b908c6`.
 
 **Leg rule (A5.1).** The marker swing rule (A1 readings, "Swing"), applied as one alternating zig-zag on the flow-built 1-minute highs and lows, RTH bars only (06:30 PT on; markers are RTH-only too, A1 D10):
 - During an up leg, track the running high since the leg's start. The high at bar k is **confirmed** at the first later bar i whose low ≤ high_k − swing (k < i; the running extreme is updated with bar i first, exactly as the marker code does). The up leg ends at k; a down leg starts there. Mirror for down legs.
-- Before the first confirmation the direction is unknown: the running high and low since 06:30 are both tracked, and whichever is confirmed first ends the first leg. If both are confirmed on the same bar, the earlier extreme is taken first (so two legs can be confirmed on one bar).
-- The **first leg** starts at the first RTH bar's open, not at a confirmed extreme, and is flagged `first`.
+- Before the first confirmation the direction is unknown. The running high and low since 06:30 are both tracked, and whichever is confirmed first **starts** the first leg. If both are confirmed on the same bar, the earlier extreme is taken; on a tie, the high.
+- **No leg is anchored at the session open.** Every leg runs from a confirmed extreme to the next one, so every leg moves at least the swing size.
+  - *Changed while writing the step-1 tests (before any implementation commit):* the first draft started the first leg at the 06:30 open. On a session that opens and trends, that gives a junk first "leg" of a few ticks, from the open to the first bar's low.
 - The swing size is the ⚙ marker swing (`m_swing`, default 8, clamped 1–50); no new parameter.
 - The last, unconfirmed leg is never shown.
 
 **Per-leg stats (A5.2).**
-- The leg's bars are (start bar, end bar]. The first leg includes its first bar.
+- The leg's bars are (start bar, end bar].
 - **pts** = end price − start price (positive for up legs).
 - **vol** and **delta** (buy − sell) are sums over the leg's bars.
-- **cpp** = vol ÷ \|pts\| and **dpp** = delta ÷ \|pts\|. Both are null when pts = 0, which only the first leg can produce.
+- **cpp** = vol ÷ \|pts\| and **dpp** = delta ÷ \|pts\|. Both are null when pts = 0. The leg rule never produces such a leg, but `leg_effort` guards against it and it is tested.
 - **ratio** = cpp ÷ the cpp of the previous leg in the same direction, within the session. Null for the first leg in each direction, and when either cpp is null or the previous cpp is 0.
 
 **Source.** The legs come from the same flow minutes as the pane: Databento ≤ 2026-06-05 (A1.1), otherwise Ironbeam. On Ironbeam the volume is about 0.94× and the delta about 0.7× of Databento, so **contracts per point is not comparable across the source change**. The ratio compares two legs from the same session and source, so it is the robust number.
 
-**Route.** `/api/ironbeam/flow?mode=v2&effort=1` adds `legs` to the v2 payload. Without `effort=1` (or with any other value) the v2 payload is unchanged (v2 golden), and Current mode is untouched (Current goldens). Each leg carries `start_time`, `end_time` and `confirm_time` (bar starts, UTC epoch s), `dir` (`up` / `down`), `start_px`, `end_px`, `pts`, `vol`, `delta`, `cpp`, `dpp`, `ratio` and `first`. Under `until` (L7), legs are computed only from bars before `until`, so a leg confirmed after it is absent.
+**Route.** `/api/ironbeam/flow?mode=v2&effort=1` adds `legs` to the v2 payload. Without `effort=1` (or with any other value) the v2 payload is unchanged (v2 golden), and Current mode is untouched (Current goldens). Each leg carries `start_time`, `end_time` and `confirm_time` (bar starts, UTC epoch s), `dir` (`up` / `down`), `start_px`, `end_px`, `pts`, `vol`, `delta`, `cpp`, `dpp` and `ratio`. Under `until` (L7), legs are computed only from bars before `until`, so a leg confirmed after it is absent.
 
 **Display (A5.4).**
 - **Where the toggle lives.** "Effort off/on" sits in the **Flow v2** header, next to Markers. The legs come from the v2 route and its source, so Effort needs v2 mode. The Current header gets no new control: Current stays byte-identical.
