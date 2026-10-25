@@ -1279,3 +1279,92 @@ Real tests run at ~96 per session against 19 on train, and placebo at 9.5. A pos
 | A17.7 | **Disclosure.** This is the **second T0 read on R-a**, after a mechanical fix to a design flaw found in the first (A16). The script (`scripts/cr_cb_t0_ra_a17.py`) is committed before its single run; statistics are written to JSON before printing; no trade outcome. |
 | A17.8 | **Readout R1 (Ryan, 2026-10-25; not gated; no effect on the A17 verdict): uncorrected "Current" levels.**<br>• Same T0 measures (time to escape, zone dwell), A17 test rules (first test per level per session; arming max(0.10·IM, 4)), session weighting, IM < 25 flag with exclusion readout, frozen O_c, the A15.6 placebo design built around these levels, and the same 147 R-a sessions.<br>• Levels = `discounted_level`, Current-mode bucketing (1-pt, as `_fetch_gex_grouped_by_level`; the `bucket_levels` half-away-from-zero rule), selected exactly as A1.1 (≥ 40 $bn gross, 5-pt spacing, ±1·IM_d of the open, top 6). They are mapped to ES **as displayed**: the chart drew them at the `discounted_level` price on the ES axis with no offset (frame B on frame C).<br>• Expiry window: A1.1's [D, D + 30], so that only the placement differs from the primary. The live Current chart summed every live expiry; that difference is stated, not tested.<br>• Reported per cell and pooled next to the A17 primary table. Script `scripts/cr_cb_t0_ra_r1.py`, committed before its single run. |
 
+## A17 result — second T0 read on R-a (single run, 2026-10-25), with readout R1
+
+**Disclosure.** This is the second T0 read on R-a. It follows a mechanical fix (A17) to the design flaw found in the first read (A16: re-arming degeneracy). Nothing else changed.
+
+**Runs.**
+- A17: `scripts/cr_cb_t0_ra_a17.py`, commit `82a2e73` (sha256 `05ac3b64…24462966`).
+- R1: `scripts/cr_cb_t0_ra_r1.py`, commit `471d7dc` (sha256 `ea3ad3bd…a984d100b`).
+- One run each, exit 0. JSON written before printing: `scripts/logs/cr_cb/t0_ra_a17.json` and `t0_ra_r1.json` (git-ignored).
+- Read-only. Every read is dated < 2025-01-01. No trade outcome.
+
+**Universe (same as A16).** 147 sessions, 2024-04-04 → 2024-12-31.
+- A17 levels: 868 real (put 324, call 544), 535 placebo.
+- R1 Current levels: 830 real (put 243, call 587), 555 placebo.
+- First-test-only tests:
+  - A17: 511 real on 144 sessions (median 3 per session), 226 placebo on 81 sessions;
+  - R1: 483 real, 243 placebo.
+
+### Primary — time to escape 0.25·IM, session-weighted (restricted mean, min; real − placebo [95 % CI])
+
+| hypothesis | **A17 (Corrected), sessions real / plc** | **A17 diff** | Holm verdict | R1 (Current), sessions | R1 diff (not gated) |
+|---|---|---|---|---|---|
+| put / below | 48 / 19 | −4.58 [−24.29, +12.78] (42.70 vs 47.28) | inconclusive | 29 / 19 | −20.26 [−38.97, −1.62] |
+| put / above | 62 / 31 | −9.43 [−21.13, +1.72] (27.53 vs 36.96) | inconclusive | 47 / 25 | −12.02 [−26.95, +2.53] |
+| call / below | 87 / 36 | −9.15 [−20.95, +2.33] (43.49 vs 52.65) | inconclusive | 92 / 50 | −0.62 [−12.69, +10.74] |
+| call / above | 84 / 20 | −8.33 [−22.88, +4.41] (25.54 vs 33.87) | inconclusive | 100 / 22 | +0.37 [−11.00, +10.16] |
+| pooled | 144 / 81 | −5.98 [−13.35, +1.21] (37.96 vs 43.94) | inconclusive | 147 / 92 | −6.18 [−13.97, +1.28] |
+
+One-sided p (A17): 0.680 / 0.949 / 0.943 / 0.890 / 0.947. Holm thresholds 0.005–0.025; none rejected.
+
+**A17: FAIL — inconclusive in every cell and pooled.** No hypothesis shows slower escape at real levels. Every point estimate is faster escape, but no CI excludes 0, so none is refuted either.
+
+**Excluding IM < 25** (readout; A17 / R1):
+- put / below −4.58 / −20.26;
+- put / above −8.58 [−20.39, +2.64] / −12.02;
+- call / below −5.50 [−17.27, +6.29] / +1.11;
+- call / above −5.04 [−19.67, +7.86] / +3.33;
+- pooled −3.31 [−10.57, +3.88] / −4.46 [−12.60, +3.28].
+
+### Secondary — zone dwell, session-weighted (s in [L ± O_c] over 60 min; real − placebo)
+
+| | A17 | R1 |
+|---|---|---|
+| put / below | +490 [−48, +1,013] | −198 [−668, +302] |
+| put / above | −197 [−595, +211] | +157 [−297, +628] |
+| call / below | −79 [−417, +268] | +180 [−155, +505] |
+| call / above | +354 [−43, +753] | +306 [−80, +700] |
+| pooled | −2 [−208, +206] | +40 [−188, +263] |
+
+**With the test mechanics fixed, the A16 dwell excess (+660 s pooled) disappears.**
+
+### Low-IM sessions and the IM cross-check (A17.4–A17.5)
+
+**14 sessions have IM < 25:**
+
+| session | IM | session | IM |
+|---|---|---|---|
+| 2024-04-29 | 23.09 | 07-15 | 22.37 |
+| 05-06 | 22.56 | 08-19 | 23.49 |
+| 05-13 | 16.94 | 08-26 | 23.94 |
+| 05-20 | 15.79 | 10-14 | 22.39 |
+| 06-03 | 20.91 | 10-21 | 20.69 |
+| 07-01 | 24.40 | 11-11 | 21.18 |
+| 07-08 | 16.44 | 11-25 | 20.98 |
+
+**All 14 are Mondays.**
+
+**The low IM is not a data error.**
+- Recomputed `atmiv` × spot × √(1/252) at 06:33 PT equals the stored IM to within 1 % (all R-a sessions: ratio p10 / p50 / p90 0.996 / 1.001 / 1.006).
+- The 06:33 PT 0DTE ATM straddle mid agrees on the flagged days, at 0.89–1.11× IM. Examples:
+
+  | session | straddle | IM |
+  |---|---|---|
+  | 05-13 | 17.55 | 16.94 |
+  | 05-20 | 15.65 | 15.79 |
+  | 07-08 | 17.50 | 16.44 |
+  | 10-21 | 20.65 | 20.69 |
+
+- Over unflagged sessions the straddle runs **0.67× IM** (p10 0.56, p90 0.81). So on Mondays the 06:33 `atmiv` is low *and* the straddle is relatively rich: the two price-space measures meet.
+- `vol50` gives 1.6× IM (p10 1.3, p90 2.7): the open-time `vol50` quirk in field-conventions.
+- The realised ES RTH range on flagged days is 22–67 pts, against 0.7–1.9× IM typical (median 1.07).
+- So on these Mondays the implied move at the open is genuinely small, and the 0DTE straddle confirms it.
+- A field-conventions row is proposed: `implied_move_1d` < 25 on R-a Mondays matches the open straddle; the Monday 0DTE expiry at 06:33 explains the low value.
+
+### Reading (descriptive; the verdict is the A17 table)
+
+- On R-a, with one test per level per session and session weighting, **price does not stay longer near Corrected GEX levels than near placebo prices**, on either the primary or the secondary measure. Point estimates lean toward faster escape at real levels; none is significant.
+- **R1 (Current placement)** gives the same picture pooled (−6.18 [−13.97, +1.28]). Its one CI that clears 0 is put / below, −20.3 [−39.0, −1.6], which is faster escape at real levels; at 29 sessions this is not a finding. The uncorrected placement shows no slowdown either.
+- Under A16.8 / A17, no detector or trade work follows without Ryan's decision. The six v3 decisions stay parked, pending Ryan's review of gallery rounds 1–2.
+
