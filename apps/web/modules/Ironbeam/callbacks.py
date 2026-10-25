@@ -39,6 +39,7 @@ from packages.shared.level_placement import (
 )
 from packages.shared.trading_calendar import prev_trading_day
 from modules.Ironbeam.routes import register_gex_landscape_route
+from modules.Ironbeam import flow_v2
 
 # Import skew helpers for the React API
 from modules.Skew.callbacks import (
@@ -1582,6 +1583,32 @@ def _build_react_live_trades_overlay_payload(
     }, 200
 
 
+def _build_react_flow_v2_route_payload(
+        trade_date: str | None,
+        *,
+        session: str | None,
+        until_pt: dt.datetime | None,
+        args,
+) -> tuple[dict, int]:
+    """CR-CD: `/api/ironbeam/flow?mode=v2` (modules/Ironbeam/flow_v2.py)."""
+    if not trade_date:
+        return {"error": "trade_date is required", "mode": "v2", "bars": [], "markers": []}, 400
+    try:
+        selected_date = dt.datetime.strptime(str(trade_date), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return {"error": "Invalid trade date", "mode": "v2", "bars": [], "markers": []}, 400
+    pt_tz = ZoneInfo("America/Los_Angeles")
+    session_date, session_note = _effective_trade_date(selected_date, pt_tz)
+    try:
+        return flow_v2.build_flow_v2_payload(
+            engine, trade_date, session=session, until_pt=until_pt,
+            params=flow_v2.parse_marker_params(args), session_date=session_date, session_note=session_note,
+        )
+    except Exception as e:
+        return {"error": f"Database error when loading flow v2: {e}", "mode": "v2", "bars": [], "markers": [],
+                "trade_date": str(trade_date), "effective_trade_date": session_date.isoformat()}, 500
+
+
 def _build_react_flow_payload(
         trade_date: str | None,
         *,
@@ -3088,13 +3115,23 @@ def register_ironbeam_callbacks(app):
                 except Exception:
                     ema_len = FLOW_EMA_LEN
 
-                payload, status = _build_react_flow_payload(
-                    trade_date,
-                    session=session,
-                    resample=resample,
-                    ema_len=ema_len,
-                    until_pt=_parse_until_pt(request.args.get("until"), ZoneInfo("America/Los_Angeles")),
-                )
+                if str(request.args.get("mode") or "").strip().lower() == "v2":
+                    # CR-CD: Flow v2. Every other `mode` value (absent, empty, current, unknown)
+                    # takes the existing builder below, unchanged.
+                    payload, status = _build_react_flow_v2_route_payload(
+                        trade_date,
+                        session=session,
+                        until_pt=_parse_until_pt(request.args.get("until"), ZoneInfo("America/Los_Angeles")),
+                        args=request.args,
+                    )
+                else:
+                    payload, status = _build_react_flow_payload(
+                        trade_date,
+                        session=session,
+                        resample=resample,
+                        ema_len=ema_len,
+                        until_pt=_parse_until_pt(request.args.get("until"), ZoneInfo("America/Los_Angeles")),
+                    )
 
                 resp = jsonify(payload)
 

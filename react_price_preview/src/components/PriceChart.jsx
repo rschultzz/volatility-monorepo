@@ -171,6 +171,8 @@ function reviewZoneBounds(meta) {
 const REVIEW_RANGE_COLOR = '96, 165, 250' // Dash blue #60a5fa (up candles, pills)
 const REVIEW_ZONE_COLOR = '251, 191, 36' // amber #fbbf24 (confluence)
 
+// CR-CD A3: replay price-axis fit pads the setup zone by max(this, 0.5·IM) points.
+const REVIEW_FIT_MIN_PTS = 25
 const REVIEW_LINE_COLORS = {
   level: '#e879f9',
   extreme: '#94a3b8',
@@ -2417,6 +2419,48 @@ export default function PriceChart({
     markers.sort((a, b) => a.time - b.time)
     reviewMarkersRef.current.api.setMarkers(markers)
     return undefined
+  }, [reviewCandidate, displayCandles])
+
+  // CR-CD A3 — when a candidate loads in replay (not yet revealed), fit the price axis to the
+  // setup zone/range (range box, zone band, level, extreme, entry, stop) ± max(25 pts, 0.5·IM) instead of the full GEX-line
+  // span. Applied once per candidate load (again if the chart remounts); the user can still zoom
+  // out (manual scaling as usual). Reveal or leaving review restores autoscale.
+  const reviewFitRef = useRef({ key: null, chart: null })
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    const cand = reviewCandidate
+    const key = cand && !cand.revealed ? String(cand.id) : null
+    const prev = reviewFitRef.current
+    if (prev.key === key && prev.chart === chart) return
+    const scale = chart.priceScale('right')
+    if (!key) {
+      reviewFitRef.current = { key: null, chart }
+      if (prev.key) {
+        try { scale.setAutoScale(true) } catch { /* ignore */ }
+      }
+      return
+    }
+    // zone/range: the CR-CC A3.4 range box and zone band when the gallery has them, plus the
+    // level / extreme / entry / stop lines.
+    const meta = cand.meta || {}
+    const zone = reviewZoneBounds(meta)
+    const prices = [cand.level_price, cand.extreme_price, cand.entry_price, cand.stop_price,
+      meta.range?.top, meta.range?.bottom, zone?.lo, zone?.hi]
+      .map(Number)
+      .filter((p) => Number.isFinite(p) && p > 0)
+    if (!prices.length || !displayCandles?.length) return
+    const im = Number(cand.implied_move_1d)
+    const pad = Math.max(REVIEW_FIT_MIN_PTS, Number.isFinite(im) && im > 0 ? 0.5 * im : 0)
+    const range = { from: Math.min(...prices) - pad, to: Math.max(...prices) + pad }
+    reviewFitRef.current = { key, chart }
+    requestAnimationFrame(() => {
+      if (chartRef.current !== chart) return
+      try {
+        scale.setAutoScale(false)
+        scale.setVisibleRange(range)
+      } catch { /* ignore */ }
+    })
   }, [reviewCandidate, displayCandles])
 
   // CR-CC A3.4 — the candidate's range (translucent box, bottom → top, formation →

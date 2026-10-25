@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
+import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS } from './components/AggressorFlowV2Panel'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import { PANEL_WIDTH as ANALOGUES_PANEL_WIDTH } from './components/AnaloguesPanel'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
@@ -8,6 +9,9 @@ import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
 
 const FLOW_HEIGHT_STORAGE_KEY = 'ib-react-flow-panel-height'
 const FLOW_EMA_MINUTES_STORAGE_KEY = 'ib-react-flow-ema-minutes'
+// CR-CD: Flow pane mode (Current | v2) and the v2 marker settings, per viewer.
+const FLOW_MODE_STORAGE_KEY = 'ib-react-flow-mode'
+const FLOW_V2_MARKERS_STORAGE_KEY = 'ib-react-flow-v2-markers'
 const GEX_MIN_ABS_B_STORAGE_KEY = 'ib-react-gex-min-abs-b'
 const GEX_LEVELS_MODE_STORAGE_KEY = 'ib-react-gex-levels-mode'
 const GEX_LANDSCAPE_SPOT_MODE_KEY = 'GEX_LANDSCAPE_SPOT_MODE'
@@ -19,6 +23,7 @@ const FLOW_MAX_HEIGHT = 520
 const FULL_BARS_LIVE_POLL_MS = 30000
 const LIVE_OVERLAY_POLL_MS = 1000
 const FLOW_LIVE_POLL_MS = 3000
+const FLOW_V2_LIVE_POLL_MS = 15000
 const SKEW_DATA_POLL_MS = 10000
 const SMILE_DATA_POLL_MS = 10000
 const CONDOR_PRICING_POLL_MS = 10000
@@ -520,6 +525,26 @@ export default function App() {
   const [flowPoints, setFlowPoints] = useState([])
   const [flowLoading, setFlowLoading] = useState(false)
   const [flowError, setFlowError] = useState('')
+
+  // CR-CD: Flow v2 (default Current; remembered per viewer).
+  const [flowMode, setFlowMode] = useState(() => {
+    try {
+      return window.localStorage.getItem(FLOW_MODE_STORAGE_KEY) === 'v2' ? 'v2' : 'current'
+    } catch (err) {
+      return 'current'
+    }
+  })
+  const [flowMarkerSettings, setFlowMarkerSettings] = useState(() => {
+    try {
+      const raw = JSON.parse(window.localStorage.getItem(FLOW_V2_MARKERS_STORAGE_KEY) || 'null')
+      return raw && typeof raw === 'object' ? { ...DEFAULT_MARKER_SETTINGS, ...raw } : DEFAULT_MARKER_SETTINGS
+    } catch (err) {
+      return DEFAULT_MARKER_SETTINGS
+    }
+  })
+  const [flowV2Payloads, setFlowV2Payloads] = useState([])
+  const [flowV2Loading, setFlowV2Loading] = useState(false)
+  const [flowV2Error, setFlowV2Error] = useState('')
 
   const [loadingCenter, setLoadingCenter] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -1147,6 +1172,22 @@ export default function App() {
 
   useEffect(() => {
     try {
+      window.localStorage.setItem(FLOW_MODE_STORAGE_KEY, flowMode)
+    } catch (err) {
+      // ignore
+    }
+  }, [flowMode])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(FLOW_V2_MARKERS_STORAGE_KEY, JSON.stringify(flowMarkerSettings))
+    } catch (err) {
+      // ignore
+    }
+  }, [flowMarkerSettings])
+
+  useEffect(() => {
+    try {
       window.localStorage.setItem(GEX_MIN_ABS_B_STORAGE_KEY, String(gexMinAbsB))
     } catch (err) {
       // ignore
@@ -1325,7 +1366,7 @@ export default function App() {
   }, [apiBase, tradeDate, interval, effectiveDaysEitherSide, loadingCenter, error, gexEnabled, gexMinAbsB, activeLevelsMode, reviewUntil])
 
   useEffect(() => {
-    if (!flowEnabled || loadingCenter || error) {
+    if (!flowEnabled || flowMode !== 'current' || loadingCenter || error) {
       setFlowPoints([])
       setFlowError('')
       setFlowLoading(false)
@@ -1402,7 +1443,81 @@ export default function App() {
 
     loadFlow()
     return () => controller.abort()
-  }, [apiBase, tradeDate, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error, loadedFlowDates, reviewUntil])
+  }, [apiBase, tradeDate, flowEnabled, flowMode, flowSession, flowResample, flowEmaLen, loadingCenter, error, loadedFlowDates, reviewUntil])
+
+  // CR-CD: Flow v2 — one /api/ironbeam/flow?mode=v2 request per loaded session. Markers are
+  // computed server-side with the viewer's settings; `until` truncates everything in a review replay.
+  const flowV2Query = useCallback(
+    (url) => {
+      url.searchParams.set('session', flowSession)
+      url.searchParams.set('mode', 'v2')
+      url.searchParams.set('m_swing', String(flowMarkerSettings.swing))
+      url.searchParams.set('m_push', String(flowMarkerSettings.push))
+      url.searchParams.set('m_div', String(flowMarkerSettings.div))
+      url.searchParams.set('m_fade', String(flowMarkerSettings.fade))
+      url.searchParams.set('m_gap', String(flowMarkerSettings.gap))
+      if (reviewUntil) url.searchParams.set('until', reviewUntil)
+      return url
+    },
+    [flowSession, flowMarkerSettings.swing, flowMarkerSettings.push, flowMarkerSettings.div,
+      flowMarkerSettings.fade, flowMarkerSettings.gap, reviewUntil]
+  )
+
+  useEffect(() => {
+    if (!flowEnabled || flowMode !== 'v2' || loadingCenter || error) {
+      setFlowV2Payloads([])
+      setFlowV2Error('')
+      setFlowV2Loading(false)
+      return undefined
+    }
+    const controller = new AbortController()
+    const datesToLoad = loadedFlowDates.length ? loadedFlowDates : [tradeDate]
+
+    async function loadFlowV2() {
+      try {
+        setFlowV2Loading(true)
+        setFlowV2Error('')
+        const settled = await Promise.allSettled(
+          datesToLoad.map(async (dateStr) => {
+            const url = new URL(`${apiBase}/api/ironbeam/flow`)
+            url.searchParams.set('trade_date', dateStr)
+            flowV2Query(url)
+            const response = await fetch(url.toString(), {
+              method: 'GET',
+              credentials: 'include',
+              signal: controller.signal,
+              cache: 'no-store',
+            })
+            if (response.status === 401) {
+              throw new Error(
+                `Unauthorized from Dash backend at ${apiBase}. Open the Dash app first and make sure you are logged in there.`
+              )
+            }
+            if (!response.ok) {
+              throw new Error(`Flow v2 request failed for ${dateStr}: ${response.status} ${response.statusText || ''}`.trim())
+            }
+            return { dateStr, payload: await response.json() }
+          })
+        )
+        const ok = settled.filter((r) => r.status === 'fulfilled').map((r) => r.value)
+        const failures = settled
+          .filter((r) => r.status === 'rejected' && r.reason?.name !== 'AbortError')
+          .map((r) => r.reason?.message || 'Unknown flow v2 load error')
+        if (!ok.length && failures.length) throw new Error(failures[0])
+        setFlowV2Payloads(ok)
+        setFlowV2Error('')
+      } catch (err) {
+        if (err?.name === 'AbortError') return
+        setFlowV2Payloads([])
+        setFlowV2Error(err?.message || 'Could not load Flow v2')
+      } finally {
+        setFlowV2Loading(false)
+      }
+    }
+
+    loadFlowV2()
+    return () => controller.abort()
+  }, [apiBase, tradeDate, flowEnabled, flowMode, flowV2Query, loadingCenter, error, loadedFlowDates])
 
 
   useEffect(() => {
@@ -1572,7 +1687,7 @@ export default function App() {
   }, [apiBase, tradeDate, selectedSessionTradeDateKey, interval, loadingCenter, error, isLiveTradeDate])
 
   useEffect(() => {
-    if (!isLiveTradeDate || !flowEnabled || loadingCenter || error || isChartInteracting) return undefined
+    if (!isLiveTradeDate || !flowEnabled || flowMode !== 'current' || loadingCenter || error || isChartInteracting) return undefined
 
     let disposed = false
     let inFlight = false
@@ -1641,7 +1756,55 @@ export default function App() {
         activeController.abort()
       }
     }
-  }, [apiBase, tradeDate, selectedSessionTradeDateKey, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error, isLiveTradeDate])
+  }, [apiBase, tradeDate, selectedSessionTradeDateKey, flowEnabled, flowMode, flowSession, flowResample, flowEmaLen, loadingCenter, error, isLiveTradeDate])
+
+  // CR-CD D7: live Flow v2 refresh every 15 s (the server recomputes the session; Current keeps 3 s).
+  useEffect(() => {
+    if (!isLiveTradeDate || !flowEnabled || flowMode !== 'v2' || loadingCenter || error || isChartInteracting) return undefined
+    let disposed = false
+    let inFlight = false
+    let activeController = null
+    const liveDate = selectedSessionTradeDateKey || tradeDate
+
+    const tick = async () => {
+      if (disposed || inFlight) return
+      inFlight = true
+      const controller = new AbortController()
+      activeController = controller
+      try {
+        const url = new URL(`${apiBase}/api/ironbeam/flow`)
+        url.searchParams.set('trade_date', liveDate)
+        flowV2Query(url)
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          credentials: 'include',
+          signal: controller.signal,
+          cache: 'no-store',
+        })
+        if (!response.ok) throw new Error(`Flow v2 request failed for ${liveDate}: ${response.status}`)
+        const payload = await response.json()
+        if (disposed) return
+        setFlowV2Payloads((prev) => {
+          const rest = prev.filter((p) => p.dateStr !== liveDate && p.payload?.effective_trade_date !== payload.effective_trade_date)
+          return [...rest, { dateStr: liveDate, payload }]
+        })
+      } catch (err) {
+        if (err?.name !== 'AbortError') {
+          console.error('React preview live flow v2 refresh failed', err)
+        }
+      } finally {
+        if (activeController === controller) activeController = null
+        inFlight = false
+      }
+    }
+
+    const timer = window.setInterval(tick, FLOW_V2_LIVE_POLL_MS)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+      if (activeController) activeController.abort()
+    }
+  }, [apiBase, tradeDate, selectedSessionTradeDateKey, flowEnabled, flowMode, flowV2Query, loadingCenter, error, isLiveTradeDate, isChartInteracting])
 
   // CR-CC A2 — the times the smile/skew panel shows: the review selection while a
   // candidate is active, else Dash's time list.
@@ -2114,18 +2277,36 @@ export default function App() {
                     height: `${flowPanelHeight}px`,
                   }}
                 >
-                  <AggressorFlowPanel
-                    dataPoints={flowPoints}
-                    candles={mergedBarsWithLiveTimeline}
-                    visibleLogicalRange={sharedLogicalRange}
-                    height={flowPanelHeight}
-                    loading={flowLoading}
-                    error={flowError}
-                    histAlpha={flowHistAlpha}
-                    linkedCrosshair={linkedCrosshair}
-                    emaMinutes={flowEmaMinutes}
-                    onApplyEmaMinutes={handleFlowEmaMinutesChange}
-                  />
+                  {flowMode === 'v2' ? (
+                    <AggressorFlowV2Panel
+                      payloads={flowV2Payloads.map((p) => p.payload)}
+                      candles={mergedBarsWithLiveTimeline}
+                      visibleLogicalRange={sharedLogicalRange}
+                      height={flowPanelHeight}
+                      loading={flowV2Loading}
+                      error={flowV2Error}
+                      linkedCrosshair={linkedCrosshair}
+                      flowMode={flowMode}
+                      onFlowModeChange={setFlowMode}
+                      markerSettings={flowMarkerSettings}
+                      onMarkerSettingsChange={setFlowMarkerSettings}
+                    />
+                  ) : (
+                    <AggressorFlowPanel
+                      dataPoints={flowPoints}
+                      candles={mergedBarsWithLiveTimeline}
+                      visibleLogicalRange={sharedLogicalRange}
+                      height={flowPanelHeight}
+                      loading={flowLoading}
+                      error={flowError}
+                      histAlpha={flowHistAlpha}
+                      linkedCrosshair={linkedCrosshair}
+                      emaMinutes={flowEmaMinutes}
+                      onApplyEmaMinutes={handleFlowEmaMinutesChange}
+                      flowMode={flowMode}
+                      onFlowModeChange={setFlowMode}
+                    />
+                  )}
                 </div>
               </>
             )}

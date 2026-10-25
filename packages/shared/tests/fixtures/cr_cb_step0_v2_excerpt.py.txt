@@ -1,0 +1,192 @@
+# Verbatim excerpt of scripts/cr_cb_step0_v2.py (CR-CB worktree, untracked at the time),
+# sha256 954c7deeeac3b906bd2d4f4e46787225ba6da93c59aa4712d5026e1d362bb522, lines 205-211, 313-326, 358-402,
+# 511-513, 744-748, 754-867. Used only as the CR-CD identity-test oracle (test_flow_features.py), executed
+# in a namespace that supplies the globals it reads. Do not edit.
+def pt(d: date, hh: int, mm: int, ss: int = 0) -> datetime:
+    return datetime.combine(d, time(hh, mm, ss), PT).astimezone(UTC)
+
+
+def ep(x: datetime) -> int:
+    return int(x.timestamp())
+
+def rth_slice(F, d):
+    return np.searchsorted(F["t"], ep(pt(d, 6, 30))), np.searchsorted(F["t"], ep(pt(d, 13, 0)))
+
+
+def max_gap(F, d, t0, t1):
+    """Largest RTH flow gap (s) within [t0, t1], clipped to [06:30, 13:00] PT."""
+    f = F["t"]
+    t0 = max(t0, ep(pt(d, 6, 30)))
+    t1 = min(t1, ep(pt(d, 13, 0)))
+    if t1 <= t0:
+        return 0
+    a, b = np.searchsorted(f, t0), np.searchsorted(f, t1, side="right")
+    return int(np.diff(np.concatenate([[t0], f[a:b], [t1]])).max())
+
+def windows(F, d):
+    t0 = ep(pt(d, 6, 30))
+    for k in range(78):
+        ws, we = t0 + BASE_W * k, t0 + BASE_W * (k + 1)
+        a, b = np.searchsorted(F["t"], ws), np.searchsorted(F["t"], we)
+        if a == 0 or b <= a or max_gap(F, d, ws, we) > GAP_MAX:
+            continue
+        yield a, b
+
+
+def sess_stats(d):
+    F = FLOW[d]
+    dc, imp = [], []
+    for a, b in windows(F, d):
+        dc.append(abs(F["c"][b - 1] - F["c"][a - 1]))
+        net = int(F["buy"][a:b].sum() - F["sell"][a:b].sum())
+        if net:
+            imp.append(np.sign(net) * (F["c"][b - 1] - F["c"][a - 1]) / (abs(net) / 1000.0))
+    sk = SKEW.get(d)
+    xs, ys_p, ys_c = [], [], []
+    if sk is not None and len(sk["t"]) > 10:
+        t0 = ep(pt(d, 7, 0))
+        for k in range(72):
+            ta, tb = t0 + 300 * k, t0 + 300 * (k + 1)
+            ia, ib = np.searchsorted(sk["t"], ta, side="right") - 1, np.searchsorted(sk["t"], tb, side="right") - 1
+            if ia < 0 or ib <= ia or sk["t"][ib] > ep(pt(d, 12, 45)):
+                continue
+            xs.append(np.log(sk["spot"][ib] / sk["spot"][ia]))
+            ys_p.append(sk["ps"][ib] - sk["ps"][ia])
+            ys_c.append(sk["cs"][ib] - sk["cs"][ia])
+    return np.array(dc), np.array(imp), np.array(xs), np.array(ys_p), np.array(ys_c)
+
+
+STATS = {d: sess_stats(d) for d in USABLE}
+SIG5, BD, BETA = {}, {}, {}
+for d in USABLE:
+    prior = [x for x in USABLE if x < d][-BASE_N:]
+    if len(prior) >= BASE_MIN:
+        SIG5[d] = float(np.median(np.concatenate([STATS[x][0] for x in prior])))
+        BD[d] = float(np.median(np.concatenate([STATS[x][1] for x in prior])))
+        x = np.concatenate([STATS[p][2] for p in prior])
+        BETA[d] = {k: float(np.polyfit(x, np.concatenate([STATS[p][j] for p in prior]), 1)[0]) if len(x) > 20
+                   else np.nan for k, j in (("ps", 3), ("cs", 4))}
+
+
+def space(F, side):
+    return (F["h"], F["l"], F["c"], 1.0) if side == 1 else (-F["l"], -F["h"], -F["c"], -1.0)
+
+def flow_sum(F, t0, t1):
+    a, b = np.searchsorted(F["t"], t0), np.searchsorted(F["t"], t1)
+    return int(F["buy"][a:b].sum() - F["sell"][a:b].sum()), int(F["vol"][a:b].sum()), a, b
+
+
+def skew_at(d, tt, key):
+    sk = SKEW.get(d)
+    if sk is None:
+        return np.nan, np.nan
+    tt = max(tt, ep(pt(d, 7, 0)))
+    k = np.searchsorted(sk["t"], tt, side="right") - 1
+    if k < 0 or tt - sk["t"][k] > 300:
+        if tt < sk["t"][0] and sk["t"][0] - tt <= 300:
+            k = 0
+        else:
+            return np.nan, np.nan
+    return float(sk[key][k]), float(sk["spot"][k])
+
+
+def skew_slope(d, t0, t1, key, resid):
+    sk = SKEW.get(d)
+    if sk is None:
+        return np.nan
+    t0 = max(t0, ep(pt(d, 7, 0)))
+    m = (sk["t"] >= t0) & (sk["t"] <= t1)
+    if m.sum() < 3:
+        return np.nan
+    y = sk[key][m].copy()
+    if resid:
+        b = BETA.get(d, {}).get(key, np.nan)
+        if not np.isfinite(b):
+            return np.nan
+        y = y - b * np.log(sk["spot"][m])
+    return float(np.polyfit((sk["t"][m] - t0) / 600.0, y, 1)[0])
+
+
+def edge_features(F, d, e, a, edge):
+    """Features of one edge event (edge 'top' / 'bot', short space). Positive = toward the touched edge."""
+    side, L = e["side"], e["L"]
+    _, _, C, sg = space(F, side)
+    t = F["t"]
+    ti = a["top_i"] if edge == "top" else a["bot_i"]
+    te = int(t[ti])
+    u = 1 if edge == "top" else -1             # short-space direction toward the edge
+    real_dir = sg * u                          # real direction toward the edge
+    x = dict(edge=edge, real_edge="top" if real_dir == 1 else "bottom", t=te)
+    net, vol, i0, _ = flow_sum(F, te - PUSH_W, te)
+    x["P"] = real_dir * net
+    mv = u * (C[ti - 1] - C[max(i0 - 1, 0)]) if ti > 0 else np.nan
+    x["A_rel"] = (mv / (x["P"] / 1000.0) / BD[d]) if (x["P"] > 0 and d in BD) else np.nan
+    set_i = a["hi_i"] if edge == "top" else a["pl_i"]
+    ns, _, _, _ = flow_sum(F, int(t[set_i]) - PUSH_W, int(t[set_i]))
+    pset = real_dir * ns
+    x["Q"] = x["P"] / pset if pset > 0 else np.nan
+    # pushes
+    Hs, Los, _, _ = space(F, side)
+    edge_px = a["H"] if edge == "top" else a["PL"]
+    pushes, inpush = [], False
+    for k in range(set_i, ti + 1):
+        near = (Hs[k] >= edge_px - a["tol"]) if edge == "top" else (Los[k] <= edge_px + a["tol"])
+        far = (Hs[k] < edge_px - a["tol"] - RETREAT) if edge == "top" else (Los[k] > edge_px + a["tol"] + RETREAT)
+        if near and not inpush:
+            n_, _, _, _ = flow_sum(F, int(t[k]) - PUSH_W, int(t[k]))
+            pushes.append(real_dir * n_)
+            inpush = True
+        elif far:
+            inpush = False
+    x["n_push"] = len(pushes)
+    x["PD"] = (float(np.polyfit(np.arange(len(pushes)), pushes, 1)[0]) / np.mean(pushes)
+               if len(pushes) >= 2 and np.mean(pushes) > 0 else np.nan)
+    tc = int(t[a["c"]])
+    x["range_s"] = te - tc
+    th = (te - tc) / 3.0
+    n1, v1, _, _ = flow_sum(F, tc, tc + th)
+    n3, v3, _, _ = flow_sum(F, te - th, te)
+    x["LE"] = (real_dir * n3 / v3 - real_dir * n1 / v1) if v1 > 0 and v3 > 0 else np.nan
+    nr, vr, ra, rb = flow_sum(F, tc, te)
+    netr = real_dir * nr
+    mvr = u * (C[ti - 1] - C[a["c"]]) if ti > a["c"] else 0.0
+    x["RA"] = (mvr / (netr / 1000.0) / BD[d]) if (netr > 0 and d in BD) else np.nan
+    x["DV"] = netr / vr if vr > 0 else np.nan
+    seg = sg * F["c"][ra:rb]
+    x["SS_share"] = float(np.mean(seg > sg * L)) if rb > ra else np.nan
+    w = F["vol"][ra:rb]
+    x["SS_vwap"] = (float(np.sum(seg * w) / w.sum()) - sg * L) if rb > ra and w.sum() else np.nan
+    # skew
+    pre_t = te < ep(pt(d, 7, 0))
+    jt = e["j"]
+    tt = int(t[jt])
+    w0 = np.searchsorted(t, tt - 3600)
+    st_i = w0 + int(np.argmin(Los[w0:jt + 1]))     # opposite extreme of the move in (short-space low)
+    ts_ = int(t[st_i])
+    dP = sg * (Hs[jt] - Los[st_i])                 # real price change over the move in
+    x["move_in_pts"] = dP
+    for key in ("ps", "cs"):
+        s0, sp0 = skew_at(d, ts_, key)
+        s1, sp1 = skew_at(d, tt, key)
+        ds = s1 - s0 if not pre_t else np.nan
+        x[f"d{key}"] = ds
+        b = BETA.get(d, {}).get(key, np.nan)
+        x[f"d{key}_res"] = ds - b * np.log(sp1 / sp0) if np.isfinite(ds) and np.isfinite(b) else np.nan
+        for sfx, val in (("", ds), ("_res", x[f"d{key}_res"])):
+            x[f"div_{key}{sfx}"] = ("na" if not np.isfinite(val) else
+                                    "bull" if (dP < 0 and val < 0) else "bear" if (dP > 0 and val > 0) else "none")
+        x[f"d{key}_per10"] = ds / abs(dP) * 10 if np.isfinite(ds) and dP != 0 else np.nan
+        sgn = 1 if x["real_edge"] == "top" else -1
+        for rs in (False, True):
+            sl = skew_slope(d, tc, te, key, rs) if not pre_t else np.nan
+            x[f"trend_{key}{'_res' if rs else ''}"] = sgn * sl if np.isfinite(sl) else np.nan
+        mv_slope = ds / ((tt - ts_) / 600.0) if np.isfinite(ds) and tt > ts_ else np.nan
+        x[f"trend_chg_{key}"] = x[f"trend_{key}"] - sgn * mv_slope if np.isfinite(mv_slope) else np.nan
+    # big move toward the level (short-space up move into the test)
+    w15 = np.searchsorted(t, tt - 900)
+    big15 = Hs[jt] - Los[w15:jt + 1].min()
+    big60 = Hs[jt] - Los[w0:jt + 1].min()
+    x["big_move"] = bool((d in SIG5 and big15 >= 3 * SIG5[d]) or big60 >= 0.5 * IM.get(d, np.inf))
+    x["big15_sig"] = big15 / SIG5[d] if d in SIG5 else np.nan
+    return x
+
