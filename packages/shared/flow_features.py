@@ -377,3 +377,83 @@ def pane_markers(m: pd.DataFrame, series: pd.DataFrame, start_epoch: int,
              + fading_markers(delta, vol, 0, p))
     return [dict(time=int(times[mk["i"]]), kind=mk["kind"], side=mk["side"], text=mk["text"],
                  detail=mk["detail"]) for mk in cap_markers(marks, p.gap_min)]
+
+
+# ============================================================================ Part C: swing effort (A5)
+def swing_legs(H, L, swing: float) -> list[dict]:
+    """A5.1: alternating swing legs by the marker swing rule, causal.
+
+    An up leg's running high at bar k is confirmed at the first later bar i whose low is <= high_k - swing
+    (the running extreme takes bar i first, as in the marker code); the leg ends at k and a down leg
+    starts there. Mirror for down legs. Before the first confirmation both the running high and low are
+    tracked, and the first confirmed extreme starts the first leg (no leg is anchored at the open), so
+    every leg runs extreme to extreme and moves >= swing. The last, unconfirmed leg is not returned.
+    Returns dicts: dir (+1 up / -1 down), start_i, end_i, confirm_i, start_px, end_px.
+    """
+    n = len(H)
+    legs: list[dict] = []
+    if n == 0:
+        return legs
+    start_i, start_px = None, None
+    hi, hi_i, lo, lo_i = -np.inf, None, np.inf, None    # running extremes (both while dirn == 0)
+    dirn = 0
+    for i in range(n):
+        if dirn >= 0 and H[i] > hi:
+            hi, hi_i = float(H[i]), i
+        if dirn <= 0 and L[i] < lo:
+            lo, lo_i = float(L[i]), i
+        while True:
+            up_conf = dirn >= 0 and hi_i is not None and hi_i < i and L[i] <= hi - swing
+            dn_conf = dirn <= 0 and lo_i is not None and lo_i < i and H[i] >= lo + swing
+            if up_conf and (not dn_conf or hi_i <= lo_i):
+                if dirn != 0:
+                    legs.append(dict(dir=1, start_i=start_i, end_i=hi_i, confirm_i=i, start_px=start_px, end_px=hi))
+                start_i, start_px, dirn = hi_i, hi, -1
+                k = hi_i + 1 + int(np.argmin(L[hi_i + 1:i + 1]))
+                lo, lo_i, hi, hi_i = float(L[k]), k, -np.inf, None
+            elif dn_conf:
+                if dirn != 0:
+                    legs.append(dict(dir=-1, start_i=start_i, end_i=lo_i, confirm_i=i, start_px=start_px, end_px=lo))
+                start_i, start_px, dirn = lo_i, lo, 1
+                k = lo_i + 1 + int(np.argmax(H[lo_i + 1:i + 1]))
+                hi, hi_i, lo, lo_i = float(H[k]), k, np.inf, None
+            else:
+                break
+    return legs
+
+
+def leg_effort(legs: list[dict], vol, delta) -> list[dict]:
+    """A5.2: per leg pts, volume, net delta, contracts per point, delta per point and the ratio of
+    contracts per point to the previous leg in the same direction. A leg's bars are (start_i, end_i].
+    cpp / dpp are None when pts == 0 (swing_legs never yields one; legs from elsewhere might); ratio is
+    None for the first leg in a direction, when either cpp is None, or when the previous cpp is 0."""
+    out, prev_cpp = [], {}
+    for lg in legs:
+        a, b = lg["start_i"] + 1, lg["end_i"] + 1
+        v, dl = float(np.sum(vol[a:b])), float(np.sum(delta[a:b]))
+        pts = float(lg["end_px"] - lg["start_px"])
+        cpp = v / abs(pts) if pts != 0 else None
+        dpp = dl / abs(pts) if pts != 0 else None
+        pc = prev_cpp.get(lg["dir"], "none")
+        ratio = cpp / pc if (pc not in ("none", None) and cpp is not None and pc > 0) else None
+        prev_cpp[lg["dir"]] = cpp
+        out.append({**lg, "pts": pts, "vol": v, "delta": dl, "cpp": cpp, "dpp": dpp, "ratio": ratio})
+    return out
+
+
+def pane_effort_legs(m: pd.DataFrame, start_epoch: int, swing: float) -> list[dict]:
+    """A5: confirmed swing legs with their effort on bars >= start_epoch (RTH; never reaches earlier).
+    Times are bar starts (epoch s); a leg is known once its confirm bar has closed."""
+    mm = m[m.index >= start_epoch]
+    if mm.empty:
+        return []
+    times = mm.index.to_numpy()
+    H, L = mm["h"].to_numpy(float), mm["l"].to_numpy(float)
+    vol, delta = mm["vol"].to_numpy(float), (mm["buy"] - mm["sell"]).to_numpy(float)
+    out = []
+    for lg in leg_effort(swing_legs(H, L, swing), vol, delta):
+        out.append({"start_time": int(times[lg["start_i"]]), "end_time": int(times[lg["end_i"]]),
+                    "confirm_time": int(times[lg["confirm_i"]]), "dir": "up" if lg["dir"] == 1 else "down",
+                    "start_px": lg["start_px"], "end_px": lg["end_px"], "pts": lg["pts"], "vol": lg["vol"],
+                    "delta": lg["delta"], "cpp": lg["cpp"], "dpp": lg["dpp"], "ratio": lg["ratio"]})
+    return out
