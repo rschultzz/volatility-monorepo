@@ -398,6 +398,15 @@ def parse_marker_params(args) -> ff.MarkerParams:
                            gap_min=int(num("m_gap", 1, 390, dflt.gap_min, cast=int)))
 
 
+def parse_effort(args) -> bool:
+    """A5: swing effort legs only for `effort=1`; absent or any other value leaves the payload unchanged."""
+    return str(args.get("effort") or "").strip() == "1"
+
+
+def _legs(legs: list[dict]) -> list[dict]:
+    return [{k: (_num(v) if isinstance(v, float) else v) for k, v in lg.items()} for lg in legs]
+
+
 # ------------------------------------------------------------------------------------------ payload
 def build_flow_v2_payload(engine, trade_date: str | None, **kw) -> tuple[dict, int]:
     """The v2 payload for one session, built on a single DB connection (A4 / L9)."""
@@ -410,7 +419,7 @@ def build_flow_v2_payload(engine, trade_date: str | None, **kw) -> tuple[dict, i
 
 def _build_flow_v2_payload(engine, trade_date: str | None, *, session: str | None, until_pt: dt.datetime | None,
                           params: ff.MarkerParams, session_date: dt.date, session_note: str | None,
-                          now_utc: dt.datetime | None = None) -> tuple[dict, int]:
+                          now_utc: dt.datetime | None = None, effort: bool = False) -> tuple[dict, int]:
     now_utc = now_utc or dt.datetime.now(UTC)
     session_mode = str(session or "RTH").upper().strip()
     if session_mode not in {"RTH", "FULL"}:
@@ -427,7 +436,7 @@ def _build_flow_v2_payload(engine, trade_date: str | None, *, session: str | Non
                                  "gap_min": params.gap_min}}
     if until_pt is not None:
         payload["until"] = until_pt.replace(tzinfo=None).isoformat()
-    segments, bars, markers, gaps = [], [], [], []
+    segments, bars, markers, gaps, legs = [], [], [], [], []
     complete = end.astimezone(UTC) <= now_utc - dt.timedelta(minutes=2) and until_pt is None
     # the chart's bar closes for the whole loaded window, once (contract choice, A1.4)
     bars_from = eth_a if session_mode == "FULL" else rth_a - dt.timedelta(minutes=WARMUP_MIN)
@@ -470,6 +479,8 @@ def _build_flow_v2_payload(engine, trade_date: str | None, *, session: str | Non
             bars += _bars(s, "rth", m["n"])
             gaps += _gaps(m["n"], mm.index[mm.index >= _epoch(a)])
             markers = ff.pane_markers(mm, s, _epoch(a), params)
+            if effort:   # A5: RTH legs by the marker swing rule, from bars before `end` only
+                legs = _legs(ff.pane_effort_legs(mm, _epoch(a), params.swing))
             segments.append({"name": "rth", "source": source, "symbol": sym, "symbol_choice": how,
                              "anchor": rth_a.replace(tzinfo=None).isoformat(), "start": _epoch(a), "end": _epoch(b)})
             payload["baseline"] = base
@@ -481,5 +492,7 @@ def _build_flow_v2_payload(engine, trade_date: str | None, *, session: str | Non
                    symbol=(rth_seg or (segments[0] if segments else {})).get("symbol"),
                    segments=segments, bars=bars, markers=markers, gaps=gaps, notes=notes,
                    point_count=len(bars))
+    if effort:
+        payload["legs"] = legs
     payload.setdefault("baseline", None)
     return payload, 200

@@ -26,7 +26,8 @@ FLOW = "/api/ironbeam/flow?"
 # sha256 of `_build_react_flow_payload`'s source at origin/main 578a8d5 (CR-CD base).
 CURRENT_BUILDER_SHA = "c564a3ed4da95edc4ae05384b46cfdec998285f0bb2355dff365e1dafdc8860b"
 CURRENT_MODE_SUFFIXES = ("", "&mode=", "&mode=current", "&mode=CURRENT", "&mode=bogus", "&mode=v1",
-                         "&m_swing=4&m_gap=15")
+                         "&m_swing=4&m_gap=15", "&effort=1", "&mode=current&effort=1")   # A5: effort is v2-only
+V2_NO_EFFORT_SUFFIXES = ("", "&effort=", "&effort=0", "&effort=true", "&effort=on", "&effort=bogus")
 
 
 def epoch(pt_iso: str) -> int:
@@ -131,11 +132,78 @@ class TestFlowV2(_Base):
         self.assertEqual(junk["marker_params"]["gap_min"], 30)
         self.assertEqual(dflt["bars"], a1["bars"])
 
+    def test_without_effort_1_payload_is_the_v2_golden(self):
+        golden = (vf.FIXTURE_DIR / "cr_cd_flow_v2_golden_0501.json").read_bytes()
+        for suffix in V2_NO_EFFORT_SUFFIXES:
+            with self.subTest(suffix=suffix):
+                self.assertEqual(self.v2(vf.QS_0501 + suffix).data, golden)
+
     def test_bad_requests(self):
         for qs, code in (("mode=v2", 400), ("mode=v2&trade_date=2026-99-99", 400)):
             r = self.client.get(FLOW + qs)
             self.assertEqual(r.status_code, code)
             self.assertEqual(r.get_json()["mode"], "v2")
+
+
+class TestEffortLegs(_Base):
+    """CR-CD A5: `effort=1` adds RTH swing legs and changes nothing else."""
+
+    def test_effort_adds_only_legs(self):
+        base = json.loads((vf.FIXTURE_DIR / "cr_cd_flow_v2_golden_0501.json").read_bytes())
+        p = self.v2(vf.QS_0501 + "&effort=1").get_json()
+        legs = p.pop("legs")
+        self.assertEqual(p, base)
+        self.assertTrue(legs)
+        self.assertEqual(set(legs[0]), {"start_time", "end_time", "confirm_time", "dir", "start_px", "end_px",
+                                        "pts", "vol", "delta", "cpp", "dpp", "ratio"})
+
+    def test_legs_2026_05_01(self):
+        p = self.v2(vf.QS_0501 + "&effort=1").get_json()
+        legs = p["legs"]
+        rth0 = epoch("2026-05-01T06:30:00")
+        rth = {b["time"]: b for b in p["bars"] if b["seg"] == "rth"}
+        for a, b in zip(legs[:-1], legs[1:]):
+            self.assertNotEqual(a["dir"], b["dir"])
+            self.assertEqual((b["start_time"], b["start_px"]), (a["end_time"], a["end_px"]))
+        prev = {}
+        for lg in legs:
+            self.assertGreaterEqual(lg["start_time"], rth0)
+            self.assertLess(lg["end_time"], lg["confirm_time"])
+            self.assertGreaterEqual(abs(lg["pts"]), 8.0)
+            self.assertEqual(lg["pts"] > 0, lg["dir"] == "up")
+            span = [t for t in rth if lg["start_time"] < t <= lg["end_time"]]
+            self.assertAlmostEqual(lg["vol"], sum(rth[t]["vol"] for t in span))
+            self.assertAlmostEqual(lg["delta"], sum(rth[t]["delta"] for t in span))
+            self.assertAlmostEqual(lg["cpp"], lg["vol"] / abs(lg["pts"]))
+            self.assertAlmostEqual(lg["dpp"], lg["delta"] / abs(lg["pts"]))
+            if lg["dir"] in prev:
+                self.assertAlmostEqual(lg["ratio"], lg["cpp"] / prev[lg["dir"]])
+            else:
+                self.assertIsNone(lg["ratio"])
+            prev[lg["dir"]] = lg["cpp"]
+
+    def test_swing_setting_drives_legs(self):
+        d8 = self.v2(vf.QS_0501 + "&effort=1").get_json()["legs"]
+        d4 = self.v2(vf.QS_0501 + "&effort=1&m_swing=4").get_json()["legs"]
+        self.assertGreater(len(d4), len(d8))
+        self.assertTrue(all(abs(lg["pts"]) >= 4.0 for lg in d4))
+
+    def test_until_legs_are_causal(self):
+        full = self.v2(vf.QS_0501 + "&effort=1").get_json()
+        cut = self.v2(vf.QS_0501_UNTIL + "&effort=1").get_json()
+        u = epoch("2026-05-01T07:39:00")
+        self.assertTrue(cut["legs"])
+        self.assertEqual(cut["legs"], [lg for lg in full["legs"] if lg["confirm_time"] < u])
+        cut.pop("legs")
+        self.assertEqual(cut, self.v2(vf.QS_0501_UNTIL).get_json())
+
+    def test_ironbeam_session_and_rth_only_session(self):
+        for qs in (vf.QS_1023, vf.QS_0317):
+            with self.subTest(qs=qs):
+                p = self.v2(qs + "&effort=1").get_json()
+                self.assertTrue(p["legs"])
+                rth = next(s for s in p["segments"] if s["name"] == "rth")
+                self.assertTrue(all(lg["start_time"] >= rth["start"] for lg in p["legs"]))
 
 
 if __name__ == "__main__":
