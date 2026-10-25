@@ -1368,3 +1368,23 @@ One-sided p (A17): 0.680 / 0.949 / 0.943 / 0.890 / 0.947. Holm thresholds 0.005�
 - **R1 (Current placement)** gives the same picture pooled (−6.18 [−13.97, +1.28]). Its one CI that clears 0 is put / below, −20.3 [−39.0, −1.6], which is faster escape at real levels; at 29 sessions this is not a finding. The uncorrected placement shows no slowdown either.
 - Under A16.8 / A17, no detector or trade work follows without Ryan's decision. The six v3 decisions stay parked, pending Ryan's review of gallery rounds 1–2.
 
+## T0 closing note (2026-10-25)
+
+**Verdict: no evidence that GEX levels slow price.**
+
+| read | data | levels | primary (time to escape 0.25·IM, real − placebo) | verdict |
+|---|---|---|---|---|
+| Step 0 v3, T0 (A15.9) | train 2026-01-06 → 06-05, 89 sessions | Corrected, d 0 / e 0 | pooled −4.7 [−11.9, +2.0] min; every cell faster at real levels; no CI clears 0 toward "slower" | no slowdown (descriptive; train) |
+| A16 | R-a 2024-04-03 → 12-31, 147 sessions | Corrected | pooled −17.4 [−24.8, −7.9] | **inconclusive — design flaw** (re-arming degeneracy: 3 low-IM sessions carry 59 % of tests) |
+| **A17** (second R-a read, mechanical fix) | R-a, 147 sessions | Corrected | pooled −6.0 [−13.4, +1.2]; cells −4.6 to −9.4, all CIs cover 0; none Holm-rejected | **inconclusive** in every cell and pooled |
+| A17.8 R1 (readout) | R-a | Current (uncorrected, as displayed) | pooled −6.2 [−14.0, +1.3]; one CI clears 0, toward *faster* escape (put / below) | inconclusive (not gated) |
+
+- **Point estimates lean toward faster escape at real levels.** No read supports the Framework's Layer 1 premise that major GEX levels are where price slows down.
+- **The secondary measure (zone dwell) shows no difference** once the test mechanics were fixed: A17 pooled −2 s [−208, +206].
+- **Low-IM sessions:** 14 R-a sessions have IM < 25, all Mondays. The value is genuine: it matches `atmiv` × spot and the 06:33 0DTE straddle (field-conventions row added). Excluding them changes nothing.
+- **Status:**
+  - the T0 line of CR-CB is **closed**;
+  - the six v3 detector decisions stay **parked**;
+  - range-edge setups are to be re-scoped as **level-agnostic (CR-CF)**, pending Ryan's round-2 gallery review;
+  - no Stage 1 trade outcome has been computed in CR-CB.
+
