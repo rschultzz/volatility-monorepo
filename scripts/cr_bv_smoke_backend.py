@@ -1,7 +1,7 @@
 """CR-BV Step 0 smoke backend: auth-free, read-only (PGOPTIONS default_transaction_read_only=on, backfill role).
 Registers only the Ironbeam (bars + gex-landscape) and Today Setup routes. Port 8060."""
 import os, sys
-REPO = "/Users/ryan/code/volatility-monorepo"
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # the checkout this script lives in
 for line in open(os.path.join(REPO, ".env")):
     line = line.strip()
     if line and not line.startswith("#") and "=" in line:

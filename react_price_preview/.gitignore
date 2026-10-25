@@ -1,0 +1,3 @@
+# Playwright output (CR-BV smoke tests)
+test-results/
+playwright-report/

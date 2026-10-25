@@ -276,3 +276,76 @@ L1–L10 stand. These clauses settle the two Step 0 decisions and correct the "W
 | A1.1 | **Corrected-mode prior spot.** In Corrected mode the classifier's `prior_spot` (and the payload's `table_spot`) is the close of the ES bar starting 15:45 ET on the prior session A (the CR-BT snapshot, the same P_target used for placement), so every classifier input is ES. Current mode is unchanged. |
 | A1.2 | **Clipping accepted.** After the L4 offset fix, prices in the chart's top 35 px fall above the panel body and are not drawn there, and the panel body ends a few px above the pane bottom. Accepted; no layout change (L9). |
 | A1.3 | **"Why" correction (OPEN mode).** OPEN mode does not freeze the ES RTH open. It freezes the first `liveEsSpot` seen, which is the last merged bar's close at that moment (measured on 2026-10-19: `spot=7759` in both LIVE and OPEN). On a historical date `liveEsSpot` is the last bar of all loaded sessions, including the `days_either_side` extras. |
+
+---
+
+## Implementation (2026-10-25)
+
+Built in a separate git worktree. The shared checkout had been switched to another CR's branch; see the Step 0 branch incident. Not pushed.
+
+| step | commit | what |
+|---|---|---|
+| amend | `904ca75` | Amendment A1 |
+| 1 | `843bc37` | `gex_landscape_api.build_gex_landscape_response(levels=…)`. `corrected` runs the CR-010 request-time branch with rows from `_CORRECTED_ROWS_QUERY` (the same WHERE as CR-BT's `_fetch_gex_rows_for_placement`, ordered by expiry and strike) and kernel centres from `place_levels(rows, ES 15:45 ET close on A)`. `table_spot` / `prior_spot` is that ES close (A1.1). A1.1/A1.2 gates return 200 with `levels_note` and an empty landscape. Corrected-only keys: `levels`, `levels_note`, `es_snapshot` (`accuracy` reads `high`). `compute_landscape`, the stored path and the classifiers are untouched. The route forwards `levels`. Tests: `test_gex_landscape_levels.py` (11, below); record/replay harness `landscape_fixture.py`, `record_landscape_fixture.py`, fixtures |
+| 2 | `79fd228` | `PriceChart` rAF poll also publishes `paneTop` (the pane element's viewport top via `chart.panes()[0].getHTMLElement()`). `GexLandscape` measures its body top (`useLayoutEffect` on every published window and resize) and draws y_panel = y_chart − (panelBodyTop − chartPaneTop) (L4). `showPriceAxis={!visiblePriceRange}` on the main page (L7) |
+| 3 | `9545035` | L5 crosshair: chart → panel through a small subscribe/emit bus (only the panel re-renders); panel → chart through `setCrosshairPosition(price, visibleRange.to, candleSeries)`, with the vertical line hidden only while the panel drives it. Net-GEX readout ($bn, linear interpolation of `gex_total`) on the panel's right edge. L6: "regime spot N", drawn only when \|spot − last bar close\| > 1 pt. L10: 3–5 round $bn ticks above the caption, 0 always labelled. All of it is opt-in props passed by `PriceChart`; Today Setup passes none |
+| 4 | `d2c2235` | `App.jsx`: `levels=corrected` on the landscape fetch from `gexLevelsMode` (the bars requests' state); a mode flip resets the fetch memory. Overlays (neg-zone bands, confluence and subtarget price lines) follow the payload. Panel note text for `pre_forward_era` / `no_es_snapshot` / `no_rows` |
+| 5 | (this commit) | Playwright smoke tests, screenshots, this section |
+
+### Smoke (2026-10-25)
+
+**Byte identity, Current mode.** The golden is four `/api/gex-landscape` bodies for 2026-10-23: low with iv, low without iv, `accuracy=high` with iv, and the RTH-open spot path. It was captured by `record_landscape_fixture.py --golden` while `routes.py`, `gex_landscape_api.py` and `gex_landscape.py` were byte-equal to `0e943d8`. The high path's `recomputed_at` is pinned with a frozen clock.
+
+- Test `TestCurrentModeByteIdentity`: every golden request × {absent, `levels=current`, `levels=CURRENT`, `levels=foo`, `levels=`} returns the golden bytes. Current responses gain no key.
+- **Live after step 1:** the recorder re-ran against the read-only DB and asserted live Current bodies == golden (OK).
+- `/api/ironbeam/bars`: CR-BT's golden test (`test_bars_levels_toggle`, 9) passes. `callbacks.py` is unchanged by this CR.
+- All backend suites together: 82 tests OK.
+
+**Corrected, offline** (`TestCorrectedRecorded` / `TestCorrectedSynthetic`, 2026-10-23 recorded rows):
+- `levels = "corrected"`, `es_snapshot` = `table_spot` = 7686.0 (A1.1).
+- The grid is centred on the request spot.
+- The dominant trough is between the 7681 and 7687 Corrected chart lines (7685.75 live).
+- A one-row case puts the kernel centre at 7650 × 7686/7649.4.
+- Notes:
+  - 2024-04-02 → `pre_forward_era` (no DB call);
+  - no ES bar → `no_es_snapshot`;
+  - no rows → `no_rows`.
+
+**Playwright** (`react_price_preview/tests/e2e/cr-bv.spec.js`, `@playwright/test` 1.48.2 devDependency, Chromium). Servers: `scripts/cr_bv_smoke_backend.py` (read-only DB) and the worktree's Vite on 5175. **9 / 9 pass, on two consecutive runs.**
+
+L4 errors: 2 dates × 2 modes × 2 viewports, prices at 10 / 50 / 90 % of the visible range. y_panel is the rendered total-curve point; y_chart is `pane top + series.priceToCoordinate`.
+
+| date | mode | 1440×900 errors (px) | 1920×1080 errors (px) |
+|---|---|---|---|
+| 2026-10-06 | Current | −0.04 / +0.05 / −0.01 | 0.00 / +0.01 / +0.02 |
+| 2026-10-06 | Corrected | −0.02 / −0.01 / −0.03 | +0.03 / +0.05 / −0.03 |
+| 2026-10-23 | Current | −0.03 / −0.03 / +0.04 | −0.01 / +0.01 / +0.02 |
+| 2026-10-23 | Corrected | 0.00 / +0.02 / 0.00 | −0.04 / −0.01 / +0.02 |
+
+Before the fix every cell was +35 px (Step 0 Q1). The panel's price tick labels are absent when synced (L7).
+
+L5 crosshair (2026-10-23, 1440×900):
+- **Chart → panel:** cursor at y 270 → panel line y 270.00, readout −901.2B.
+- **Panel → chart:** cursor y 395.00 → chart crosshair at 7647.54 drawn at y 395.00, panel line y 395.00, readout −1590.8B. The chart's vertical line and floating tooltip are hidden.
+- **Leaving both:** panel line gone, vertical line restored, tooltip hidden.
+
+**Test detail.** The test waits until the panel's published window equals the chart's live `coordinateToPrice(0)` on two consecutive frames. The panel follows the chart's rAF poll one frame behind; one earlier run measured mid-rescale (2026-10-06 Corrected 1920, chart coordinates off-screen). That was a measurement race, not a persistent mismatch: it passed on rerun with the wait in place.
+
+**Today Setup** (L8, worktree build, BROWSE day 2026-10-12, 1440×900): errors −0.04 / −0.02 / +0.02 px. Label "spot 7838" (unchanged). No crosshair line, no $gamma ticks, no price ticks, exactly as before.
+
+**Corrected in the UI (2026-10-23):**
+- The bars and landscape requests both carry `levels=corrected`.
+- Panel troughs are at 7685.75 / 7667.75 / 7635.75 ($bn −1434.6 / −1226.9 / −1226.6).
+- Corrected confluence lines (7924.6, 7841.7) appear on the chart and in the panel on the same rows.
+- 2024-04-02 Corrected shows "Corrected landscape unavailable. Corrected levels start on 2024-04-03."
+- No console errors.
+
+**Screenshots** (`specs/assets/cr-bv/`, 1440×900): `2026-10-06-current.png`, `2026-10-06-corrected.png`, `2026-10-23-current.png`, `2026-10-23-corrected.png`, `crosshair-panel-to-chart-2026-10-23.png`.
+
+**Correction to Step 0 Q6.** `setCrosshairPosition` *does* fire `crosshairMove`, on the next frame and without `sourceEvent`. Step 0's probe waited 200 ms in a backgrounded tab, where rAF is throttled, and saw none. In the live page the programmatic events showed the floating tooltip and moved the linked flow crosshair. `handleCrosshairMove` now ignores events without `sourceEvent` while the panel drives the crosshair, so there is no loop and no tooltip.
+
+**Also:**
+- `scripts/cr_bv_smoke_backend.py` now resolves the repo from its own path, so it serves the checkout it lives in.
+- `react_price_preview/.gitignore` ignores Playwright output.
+
+**Not verified here:** the deployed web service (no deploy), the Dash-embedded React build (`/react-preview/`), and Today Setup's analogue mode (its `/api/analogues` takes > 120 s on the local backend).
