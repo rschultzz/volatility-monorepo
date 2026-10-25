@@ -1190,3 +1190,19 @@ They wait for:
 - **(a)** a pre-registered T0 read on R-a (Amendment A16);
 - **(b)** Ryan's review of gallery rounds 1 (`cr-cb:round-1`) and 2 (`cr-cb:round-2`).
 
+## Amendment A16 (Ryan, 2026-10-25, after Step 0 v3; no trade outcomes): pre-registered T0 read on R-a
+
+**Ryan:** pause detector refinement. First ask, on data the search never touched, whether price slows down at single GEX levels at all. R-a only, price paths only, no trade outcomes.
+
+| # | Clause |
+|---|---|
+| A16.1 | **Data.**<br>• R-a sessions 2024-04-03 → 2024-12-31 (A10.2).<br>• `es_flow_1s_databento` 1-s OHLC, the session's largest-RTH-volume symbol.<br>• `ironbeam_es_1m_bars` only for P_target (the 15:45 ET bar on A).<br>• `orats_oi_gamma`; canonical `bt_daily_features` IM.<br>• **Nothing dated 2025-01-01 or later is read** (R-b, holdout).<br>Sessions: CR-BW / CR-BT exclusions (roll week; no 15:45 ET bar on A; quarterly-expiry Friday); canonical IM > 0; `orats_oi_gamma` rows; Databento RTH flow present. **Early-close sessions** (last RTH print before 12:55 PT) are excluded, so the 13:00 censoring is the same everywhere. Each exclusion is counted. |
+| A16.2 | **Levels and cells.** A1.1 single levels (d 0, e 0: no clusters, no reference levels). Cell = {put-heavy, call-heavy} × {approached from below, from above}, plus pooled. Tests: every armed L5 test (0.10·IM arming, 2-pt band), as in the train T0. |
+| A16.3 | **O_c frozen from train** (Step 0 v3, d 0, 80th percentile): put / below 9.75, put / above 8.25, call / below 6.25, call / above 5.25 pts. Not re-estimated on R-a. |
+| A16.4 | **Placebo (A15.6).** For each real level, the 4 nearest 5-pt bins on the same side of the open, within ±1·IM_d and ≥ 10 pts from every real level; deduplicated; the parent's sign sets the cell. Same tests and measures. |
+| A16.5 | **Measures (A15.9):**<br>• **primary (d), time to escape:** minutes from the test until a trade ≥ 0.25·IM_d from the level in either direction, summarised per test as min(escape, 120 min, minutes to 13:00 PT) (restricted mean, censoring-safe);<br>• **secondary (b′), zone dwell:** seconds inside [level − O_c, level + O_c] over the 60 min after the test (forward-filled 1-s closes, capped at 13:00). |
+| A16.6 | **Statistic.** Mean real − mean placebo, per cell and pooled. Session-cluster bootstrap: 10 000 multinomial resamples, seed 20260920, real and placebo resampled jointly by session; 95 % percentile CI. |
+| A16.7 | **Holm across cells (primary only).** Family = 4 cells + pooled (5 hypotheses), H0: real − placebo ≤ 0. One-sided bootstrap p = the share of resamples with difference ≤ 0 (floor 1 / 10 000). Holm step-down at one-sided α = 0.025. **Pass = at least one hypothesis Holm-rejected, with its 95 % CI lower bound > 0 (real escapes more slowly).** The secondary measure is reported without a gate. |
+| A16.8 | **Verdict.**<br>• **Pass** → levels slow price on R-a in that cell; the parked detector decisions resume with that cell as the focus.<br>• **Fail** → recorded per the three-verdict rule: **refuted** where the CI upper bound is < 0 (faster escape at real levels), **inconclusive** otherwise.<br>No detector or trade work follows A16 without Ryan's decision. |
+| A16.9 | **Run discipline.** The script (`scripts/cr_cb_t0_ra.py`) is committed before its single run. Every statistic is written to JSON before anything is printed. No trade outcome, no placebo P&L, no A/A. |
+
