@@ -198,7 +198,7 @@ Bootstrap: session-cluster, 10,000 resamples, seed 20260920, one weight matrix f
 
 ### Verdict (three-verdict rule, Stage 1 screen)
 
-**INCONCLUSIVE in all four cells and pooled. Not shortlisted.** The CR-BW fade direction, measured stop-free at +60 min, is not distinguishable from the same rule at distance-matched pseudo-levels. Per CR-CB A10.3 / A10.5, Stage 2 (R-a) does not run for this setup, and the result is logged in `research/setup-registry.md`.
+**INCONCLUSIVE in all four cells and pooled. Not shortlisted.** The CR-BW fade direction, measured stop-free at +60 min, is not distinguishable from the same rule at distance-matched pseudo-levels. Per CR-CB A10.3 / A10.5, Stage 2 (R-a) does not run for this setup, and the result is logged in the setup registry (vault `Dash/research/setup-registry.md`, the canonical copy).
 
 ### Readouts (not gated; no conclusion drawn from any one)
 
@@ -259,3 +259,19 @@ The put-heavy-from-below first touch loses on its own: −13.1 pts at +60 min, C
 
 - The fixture cards (4 of 5 in the event set) are a subset of this population. The screen says that their "right direction, failed stop" pattern is the base rate of fading any touched price after a ≥ 0.10·IM approach. It does not show a level-specific edge.
 - The holdout and R (R-a, R-b) remain unread.
+
+---
+
+## Wrap-up (Ryan, 2026-10-25)
+
+- **Verdict: inconclusive (not shortlisted)**, by the three-verdict rule. No cell is refuted: every vs-placebo CI upper bound is > 0.
+- **The fade move vs placebo is bounded.** Pooled at +60 min it is +1.39 [−0.62, +3.43] pts. A level effect larger than about 3.4 pts at +60 min is ruled out on train.
+- **"Direction right, stop failed" is about as common at placebo as at real levels.** Before reaching +10 pts:
+  - share reaching +10: real 67.1 %, placebo 69.8 %;
+  - median MAE: 5.0 vs 5.5 pts;
+  - reached with MAE ≤ 2 pts: 28.8 % vs 25.5 %.
+
+  The pattern on the CR-CC fixture cards is the base rate of fading a touched price after a ≥ 0.10·IM approach. It does not show a level-specific edge.
+- Stage 2 (R-a) does not run. R-a, R-b and the holdout remain unread.
+- The registry entry is in the vault note `Dash/research/setup-registry.md`, the canonical copy. The repo copy was removed.
+- Test-only CR: no table writes, no cron, no frontend, nothing deploys.
