@@ -33,3 +33,6 @@ react_price_preview/.vite/
 
 # Unattended-run logs and capture checkpoints (large, machine-local)
 scripts/logs/
+
+# CR-CA raw Databento DBN files (L7)
+data/databento/raw/
