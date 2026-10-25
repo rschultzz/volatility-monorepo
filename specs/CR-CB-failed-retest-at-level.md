@@ -231,6 +231,21 @@ As written, A9.5 is nearly inert. A limit fade at H − tol fills before price c
 | A13.4 | **Readouts:** clustered vs single-level setups per cell (net expectancy, stop-free move, episode P&L); and, for d > 0, the share of clusters where price reached the far level after touching the near one. That is Ryan's "good chance you will get there", measured from price paths. |
 | A13.5 | **Step 0 additions:** the cluster count and span distribution at each d; the "reached far level" share (price paths only); event counts per cell at each d. The gallery meta carries the cluster members. |
 
+## Amendment A14 (Ryan, 2026-10-25, before Step 0 outcomes): same-day reference levels form confluence zones with GEX levels
+
+**Ryan, reviewing fixture 2026-05-01** (call-heavy 7277, net +158 / gross 181 $bn; fixture long 7279.25, stop 7273.50, stopped 08:01, then +24 to about 7296 by 08:45):
+- he would look for longs in the 71–72 handle, because that is where price found support earlier in the day, right below the GEX level;
+- put skew was falling as price dropped (the skew table shows Δput about −75 % from 07:24 to 07:38), a bullish divergence per A8.
+
+The fixtures are random 2026 CR-BW touches with a fixed stop; CR-BW's full sample won about 50 % before costs at 8 ticks, so the CR-CB stop-free and episode readouts decide, not the cards.
+
+| # | Clause |
+|---|---|
+| A14.1 | **Reference levels**, known at the time with no lookahead: the prior session's high, low and close; the overnight (ETH) high and low; and today's **confirmed swing highs and lows** so far. A swing is confirmed when price retraces ≥ 4 pts (and ≥ 0.05·IM_d) from it. Each is recorded with its type and timestamp. |
+| A14.2 | **Confluence zone:** a GEX level (or A13 cluster) and any reference levels within **e** pts of it, chained, form one zone. **e** is a Stage 1 grid dimension: {0 (off), 4, 8} pts. As in A13.2, the zone's **far edge** in the approach direction arms the setup, and the test, O_c, extreme, S-z stop and range are measured from it. |
+| A14.3 | **Readouts:** zone type (GEX only / GEX + same-day swing / GEX + prior-day / GEX + overnight); per cell: net expectancy, stop-free move, episode P&L by zone type; the share of setups whose extreme held within 1 pt of a reference level. |
+| A14.4 | **Step 0 additions:** reference-level counts per session by type; confluence-zone counts and spans at each e; how often the far edge is a reference level rather than the GEX level. Gallery meta carries the zone members. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
