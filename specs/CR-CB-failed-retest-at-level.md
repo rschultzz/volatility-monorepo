@@ -197,6 +197,17 @@ As written, A9.5 is nearly inert. A limit fade at H − tol fills before price c
 | A10.4 | **Amends Stage 2:** "Stage 2 on R" means Stage 2 on R-a. R-b is not read until a setup reaches pipeline step 4. |
 | A10.5 | **Losers are recorded too:** every non-shortlisted setup is logged in the registry as refuted or inconclusive (three-verdict rule), with its key numbers, so it is not re-tested by accident. |
 
+## Amendment A11 (Ryan, 2026-10-25, before Step 0 outcomes): structure-based stops
+
+**Ryan, reviewing the CR-CC fixture on 2026-02-02.** A long at a put-heavy level, 6991.50, with its stop 1 pt below the extreme at 6988.25. It was stopped at 08:05 on a tick-level flush, then ran about 20–25 pts the right way. This is a fixture example (a CR-BW-style touch), not CR-CB evidence. But CR-CB Step 0 measured put-level overshoot O_c at about 9–10 pts, and the L8 / A1 stops (1 / 2 / 4 pts beyond the extreme) are a fraction of that.
+
+| # | Clause |
+|---|---|
+| A11.1 | **Stop family** (replaces the A1 stop-buffer dimension; searched in the Stage 1 grid, plateau rule per cell):<br>**(S-x) extreme + b:** b ∈ {1, 2, 4} pts, as before;<br>**(S-z) zone edge:** beyond the level by the cell's O_c (the overshoot allowance) + 1 tick, so "past the normal overshoot means the level failed";<br>**(S-v) volatility:** entry ∓ m·σ5_d, m ∈ {1.0, 1.5, 2.0}.<br>All filled at stop + 1 tick slippage. For break trades (A3/A4), S-z means back inside the range by the cell's O_c, capped at the range width. |
+| A11.2 | **Report per stop family:** win rate, average loss, net expectancy and max drawdown per cell, next to the A2 stop-free move, so it is visible whether a wider stop turns a real move into a profitable setup. |
+| A11.4 | **Record R-multiples for later sizing work** (Ryan: the long-term goal is position sizing; fewer contracts and wider stops in high-vol cells such as put levels, more contracts and tighter stops for smaller 5–10 pt moves in low-vol cells such as call levels; not tested now). Every trade row stores its stop distance in points, the result in points, and **R = result / stop distance**, plus σ5_d and IM_d at entry. A later sizing CR can then simulate fixed-risk sizing with no re-run. |
+| A11.3 | **Grid size:** the stop dimension grows from 3 to 7 values; the other A1 dimensions are unchanged. The plateau neighbourhood for stops runs within each family only. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
