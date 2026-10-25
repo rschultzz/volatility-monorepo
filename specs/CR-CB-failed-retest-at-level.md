@@ -210,7 +210,7 @@ As written, A9.5 is nearly inert. A limit fade at H − tol fills before price c
 
 ## Amendment A12 (Ryan, 2026-10-25, before Step 0 outcomes): P&L per episode
 
-**Ryan, reviewing fixture 2026-04-01.** A short at call level 6641 (net +60 / gross 140 $bn), entry 6638, stopped at 6643 at 08:45. Price overshot to about 6653–6655 (about 2× the call-level O_c), held about 90 min, then broke down to about 6605. "Maybe this is where you get cut up, but the mechanism seems to exist." No A11 stop saves the first entry; the A9.5′ re-arm (attempt 2 at the new extreme) is what would catch it.
+**Ryan, reviewing fixture 2026-04-01.** A short at call level 6641 (net +60 / gross 140 $bn), entry 6638, stopped at 6643 at 08:45. Price overshot to about 6650 (Ryan's reading; about 9 pts past 6641, about 1.5× the call-level O_c), held about 90 min, then broke down to about 6605. "Maybe this is where you get cut up, but the mechanism seems to exist." No A11 stop saves the first entry; the A9.5′ re-arm (attempt 2 at the new extreme) is what would catch it.
 
 | # | Clause |
 |---|---|
@@ -221,7 +221,7 @@ As written, A9.5 is nearly inert. A limit fade at H − tol fills before price c
 
 ## Amendment A13 (Ryan, 2026-10-25, before Step 0 outcomes): wait for the second level in a cluster
 
-**Ryan, on fixture 2026-04-01:** with a second large call level just above (6641 and 6646), he usually waits for the second, because price tends to get there. It did that day: the overshoot to about 6653–6655 sits only 7–9 pts past 6646.
+**Ryan, on fixture 2026-04-01:** with a second large call level just above (6641 and 6646), he usually waits for the second, because price tends to get there. It did that day. Ryan's correction: the session high was **about 6650**, only about 4 pts past 6646. That is inside the call-level O_c (about 6 pts), so a setup armed at 6646 survives the S-z zone-edge stop (6646 + O_c ≈ 6652). A retest-of-6650 short with a stop above 6652 risks about 3 pts against the drop to about 6605.
 
 | # | Clause |
 |---|---|
