@@ -171,3 +171,91 @@ The session-cluster bootstrap is calibrated on the stop-free move: the split spr
 | A1.3 | **Horizons:** at +30 and +60 min, drop events that cannot reach the horizon before 13:00 PT, as the Step 0 A/A did. The version truncated at 13:00 PT is a **readout**. |
 | A1.4 | **A/A threshold** ("median within ±3") is read in ES points. Accepted; the Step 0 A/A pass stands. |
 | A1.5 | **Run:** Stage 1 runs once, with the run script committed before it runs. Primary: +60 min stop-free move vs placebo and vs random entries, per cell and pooled. Also all L8 readouts, the first-touch-only readout and the truncated readout. All statistics are saved before printing. The result is entered in `research/setup-registry.md` (Stage 1 = screen; three-verdict wording). Do not push. |
+
+---
+
+## Stage 1 results (single run, 2026-10-25)
+
+Run of `scripts/cr_ce_stage1.py` at commit `ea3935f` (sha256 `495cdee7…906564`), one run, exit 0. Read-only connection (`default_transaction_read_only = on`, `statement_timeout = 600s`). Train data only: 86 sessions, 2026-01-09 → 2026-06-05, Databento flow; no 2025 row and no holdout row read. Every statistic was written to `scripts/logs/cr_ce/stage1.json` before anything was printed; the printout is in `scripts/logs/cr_ce/stage1.log` (both git-ignored). Universe asserted equal to Step 0 (86 sessions, 803 events, tercile cuts 1.521 / 2.929). No price lookup was missing (all 15 s checks passed).
+
+Bootstrap: session-cluster, 10,000 resamples, seed 20260920, one weight matrix for every statistic. All moves are ES points in the fade direction from the level (stop-free).
+
+### Primary — +60 min stop-free move (A1.2 events; A1.3 drop of events past 13:00)
+
+| cell | n real / placebo / random | real mean [CI] | placebo mean | random mean | **vs placebo** | **vs random** | Stage 1 screen |
+|---|---|---|---|---|---|---|---|
+| put-heavy, from below (fade short) | 124 / 154 / 138 | −4.14 [−9.63, +1.25] | −8.03 | −6.18 | +3.89 [−1.82, +9.25] | +1.54 [−1.13, +4.24] | **INCONCLUSIVE** |
+| put-heavy, from above (fade long) | 123 / 125 / 136 | +3.07 [−1.35, +7.56] | +3.18 | −2.23 | −0.11 [−5.15, +5.45] | +5.08 [+2.28, +7.96] | **INCONCLUSIVE** |
+| call-heavy, from below (fade short) | 251 / 135 / 285 | +0.58 [−2.80, +4.32] | −0.59 | −3.12 | +1.17 [−3.13, +5.79] | +2.59 [+0.69, +4.50] | **INCONCLUSIVE** |
+| call-heavy, from above (fade long) | 219 / 120 / 244 | −0.13 [−3.28, +2.79] | +1.34 | −3.97 | −1.48 [−6.15, +3.30] | +3.63 [+1.76, +5.28] | **INCONCLUSIVE** |
+| **pooled** | 717 / 534 / 803 | **−0.03 [−1.46, +1.32]** | −1.42 | −3.75 | **+1.39 [−0.62, +3.43]** | **+3.15 [+2.14, +4.17]** | **INCONCLUSIVE** |
+
+(The random column's n is events with ≥ 1 valid draw; the paired vs-random difference uses events with both.)
+
+- **No cell is shortlisted.** None beats placebo with CI lower bound > 0. None is refuted: every vs-placebo CI upper bound is > 0.
+- **Holm (L9, readout at Stage 1):** adjusted one-sided p vs placebo 0.37 / 1.00 / 0.93 / 1.00; vs random 0.12 / 0.001 / 0.007 / 0.001. No cell passes after Holm.
+- **Reading the "vs random" wins.** Three cells and the pooled set beat random entries, but the real move itself is about zero (pooled −0.03). The random baseline is negative (pooled −3.75): over ±60 min around a touch, price keeps going in the approach direction, so a random entry in the fade direction loses. The placebo touches' mean (−1.42) also sits above that baseline. This is indicative only: random entries were drawn around real touches, not placebo ones. So "beats random" here measures that **touch moments are better fade entries than random moments, at real and pseudo-levels alike**. It does not show that the level matters. Only the vs-placebo comparison isolates the level, and it is +1.39 [−0.62, +3.43] pooled.
+
+### Verdict (three-verdict rule, Stage 1 screen)
+
+**INCONCLUSIVE in all four cells and pooled. Not shortlisted.** The CR-BW fade direction, measured stop-free at +60 min, is not distinguishable from the same rule at distance-matched pseudo-levels. Per CR-CB A10.3 / A10.5, Stage 2 (R-a) does not run for this setup, and the result is logged in `research/setup-registry.md`.
+
+### Readouts (not gated; no conclusion drawn from any one)
+
+**Other horizons** (pooled; real / vs placebo / vs random):
+- +30 min (n 755): +0.47 / +0.57 [−1.15, +2.24] / +2.32 [+1.12, +3.48].
+- 13:00 PT (n 803): −1.88 / −0.54 [−3.81, +2.79] / +2.98 [+2.16, +3.82].
+- No cell beats placebo with CI lower > 0 at either horizon.
+
+**Truncated at 13:00 (A1.3 readout)** (pooled, n 803):
+- +60 min: real −0.17, vs placebo +1.29 [−0.50, +3.09], vs random +3.17 [+2.20, +4.12].
+- +30 min: real +0.30, vs placebo +0.45 [−1.14, +2.00].
+- Same picture as the primary.
+
+**First touch of the level per session only (A1.2 readout)** (+60 min):
+
+| cell | n | real | vs placebo | vs random | screen |
+|---|---|---|---|---|---|
+| put-heavy, from below | 36 | −13.12 [−20.22, −6.11] | −4.59 [−10.85, +0.72] | +1.82 [−3.39, +6.96] | inconclusive |
+| put-heavy, from above | 33 | +2.40 | +1.87 [−7.64, +11.17] | +9.44 [+2.86, +15.92] | inconclusive |
+| call-heavy, from below | 89 | −0.70 | +0.47 [−6.22, +6.39] | +3.79 [+1.24, +6.25] | inconclusive |
+| call-heavy, from above | 55 | −1.86 | +0.79 [−12.55, +13.61] | +6.35 [+1.05, +11.18] | inconclusive |
+| pooled | 213 | −2.62 [−5.78, +0.43] | +0.42 [−3.72, +4.41] | +5.00 [+2.84, +7.11] | inconclusive |
+
+The put-heavy-from-below first touch loses on its own: −13.1 pts at +60 min, CI excluding 0 vs zero. Price continues up through put-heavy levels on the first approach from below. That is one readout among many, on n 36.
+
+**L8 (a) A_rel absorption terciles** (+60 min, low − high):
+- Pooled: real −1.51 [−5.58, +3.00]; placebo −0.91; difference-in-differences −0.60 [−5.37, +4.60].
+- Per cell, real low − high: +6.87 / −5.80 / −3.30 / −2.85 (put-below / put-above / call-below / call-above); every CI covers 0.
+- **Absorption does not sort the stop-free move.** This agrees with CR-BW T1.
+
+**L8 (b) MAE before +10 pts (the stop question)**, pooled:
+
+| | n | reach +10 by 13:00 | MAE p25 / p50 / p75 / p90 (reached) | MAE ≤ 2 / 4 / 6 / 8 / 10 | median minutes to +10 |
+|---|---|---|---|---|---|
+| real | 803 | 67.1 % | 1.75 / 5.0 / 10.5 / 19.0 | 28.8 / 44.2 / 56.8 / 66.4 / 73.7 % | 19.6 |
+| placebo | 602 | 69.8 % | 2.0 / 5.5 / 13.25 / 21.8 | 25.5 / 41.7 / 54.0 / 61.7 / 68.1 % | 14.1 |
+
+- About two-thirds of touches eventually reach +10 in the fade direction, but only 29 % do so without first going more than 2 pts against (CR-BW's 8-tick stop). Half needed ≥ 5 pts of room.
+- **Placebo pseudo-levels show the same profile**: "the direction was right and the stop failed" is about as common away from levels as at them.
+- By cell, real reach shares are 69 / 72 / 64 / 68 % and median MAEs 7.0 / 4.4 / 4.5 / 5.0 pts.
+- Caveat: reaching +10 at some point before 13:00 does not by itself measure direction. It is a two-sided path property over hours.
+
+**L8 (c) share of moves > 0** (pooled, real / placebo / random):
+- +30 min: 52.6 / 49.1 / 43.6 %.
+- +60 min: 49.7 / 45.9 / 40.4 %; real − placebo +3.8 pts [−1.6, +9.2].
+- 13:00 PT: 48.2 / 47.8 / 42.9 %.
+
+**L8 (d) levels ≥ 100 $bn** (+60 min; n 534 real):
+- Pooled real +0.20; vs placebo +1.59 [−0.50, +3.81]; vs random +3.12 [+1.92, +4.34].
+- Put-heavy from below: vs placebo +6.18 [−0.60, +13.06].
+- All cells inconclusive.
+
+**L8 (e) A9.5′ re-arm: attempt 2 after a 2-pt adverse excursion, back at the level** (575 real / 465 placebo):
+- Pooled +60 min: real −0.58; vs placebo +0.74 [−1.21, +2.74]; vs random +2.83 [+1.96, +3.73].
+- No cell beats placebo with CI lower > 0.
+
+### Notes
+
+- The fixture cards (4 of 5 in the event set) are a subset of this population. The screen says that their "right direction, failed stop" pattern is the base rate of fading any touched price after a ≥ 0.10·IM approach. It does not show a level-specific edge.
+- The holdout and R (R-a, R-b) remain unread.
