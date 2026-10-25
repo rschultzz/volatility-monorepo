@@ -1347,7 +1347,7 @@ One-sided p (A17): 0.680 / 0.949 / 0.943 / 0.890 / 0.947. Holm thresholds 0.005�
 
 **The low IM is not a data error.**
 - Recomputed `atmiv` × spot × √(1/252) at 06:33 PT equals the stored IM to within 1 % (all R-a sessions: ratio p10 / p50 / p90 0.996 / 1.001 / 1.006).
-- The 06:33 PT 0DTE ATM straddle mid agrees on the flagged days, at 0.89–1.11× IM. Examples:
+- The 06:33 PT 0DTE ATM straddle mid agrees on the flagged days, at 0.87–1.11× IM. Examples:
 
   | session | straddle | IM |
   |---|---|---|
@@ -1360,7 +1360,7 @@ One-sided p (A17): 0.680 / 0.949 / 0.943 / 0.890 / 0.947. Holm thresholds 0.005�
 - `vol50` gives 1.6× IM (p10 1.3, p90 2.7): the open-time `vol50` quirk in field-conventions.
 - The realised ES RTH range on flagged days is 22–67 pts, against 0.7–1.9× IM typical (median 1.07).
 - So on these Mondays the implied move at the open is genuinely small, and the 0DTE straddle confirms it.
-- A field-conventions row is proposed: `implied_move_1d` < 25 on R-a Mondays matches the open straddle; the Monday 0DTE expiry at 06:33 explains the low value.
+- Proposed field-conventions row (not yet written): `implied_move_1d` < 25 on 14 R-a Mondays matches the 06:33 0DTE straddle. Why it concentrates on Mondays is unmeasured.
 
 ### Reading (descriptive; the verdict is the A17 table)
 
