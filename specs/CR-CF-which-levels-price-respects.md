@@ -177,3 +177,47 @@ Re-run Step 0 counts and the A/A under A1 (no outcomes); the A/A must pass for e
 | A1.4 | **Tests (amends L5).** Per level and session, the first test **from below** (first arming h ≤ L − arm after the armed-from time, then the first h ≥ L − 2) and the first test **from above** (first l ≥ L + arm, then the first l ≤ L + 2), found independently: ≤ 2 tests per level per session. Arming max(0.10·IM_d, 4 pts) within each side. Session-weighted means (A17.3) pool both sides in "pooled". **Readout "first side only"** = the earlier of the two tests, which is L5 as frozen. |
 | A1.5 | **A/A gate.** Step 0 counts and the A/A (Step 0 design: 200 pseudo-level splits, 2,000 session resamples, CI excludes 0 in ≤ 10 % of splits, median within ±3 min) are re-run under A1 on placebo tests only. Stage 1 runs only if all 24 Holm cells pass. |
 | A1.6 | **Stage 1 run.** The script is committed before its single run, and every statistic is written to JSON before printing. **Primary** (L6): restricted mean time to escape 0.25·IM_d, real − placebo, session-weighted, 10,000 session-multinomial resamples (seed 20260920), 95 % percentile CI, one-sided p = share of resamples ≤ 0 (floor 1e-4), Holm step-down over A1.3. **Shortlisted** (L9) = at least one of the family's three hypotheses Holm-rejected with CI lower bound > 0. Each hypothesis is otherwise inconclusive, or refuted when the CI upper bound is < 0. **Secondary, no gate:** zone dwell (seconds within level ± max(3, 0.05·IM_d) over 60 min, forward-filled 1-s closes, capped at 13:00) and velocity drop (log of the 10-s-sampled path length in the 5 min after the test over the 5 min before, as CR-CB v3). **Readouts, no gate:** L11 GEX overlap (real − placebo within overlap / non-overlap tests, and real overlap − real non-overlap) and time of day (before / after 10:00 PT); first side only; F6; excluding IM < 25. |
+
+## Step 0 under A1 (train, 2026-10-25; counts and A/A only, no outcomes)
+
+**Run.**
+- `scripts/cr_cf_step0_a1.py` (sha256 `d6a69354…7df7cfb1`) on the shared construction `scripts/cr_cf_lib.py` (sha256 `abff78f2…bc393563`); one run, exit 0. Logs `scripts/logs/cr_cf/step0_a1.{log,json}` (git-ignored).
+- The library is Step 0's code with the A1 changes; it is the same file the Stage 1 script imports.
+- Read-only, train only; no real-level measure (asserted).
+
+**Check.** First-side-only real tests equal the frozen Step 0 counts in every family (F1 133, F2 96, F3 116, F4 88, R100 53, R50 63, R25 121, F6 35, F7 803). So the A1.4 readout reproduces L5.
+
+### Counts under A1
+
+| family | real tests (sessions): below / above | real first-side-only | real before / after 10:00 PT | placebo tests (sessions): below / above | GEX overlap, real / placebo tests |
+|---|---|---|---|---|---|
+| F1 | 218 (79): 112 (71) / 106 (65) | 133 | 193 / 25 | 423 (72): 215 (65) / 208 (69) | 0.48 / 0.54 |
+| F2 | 152 (82): 78 (71) / 74 (67) | 96 | 141 / 11 | 486 (80): 246 (78) / 240 (77) | 0.43 / 0.47 |
+| F3 | 185 (84): 94 (77) / 91 (78) | 116 | 170 / 15 | 453 (86): 236 (76) / 217 (80) | 0.56 / 0.46 |
+| F4 | 166 (88): 84 (84) / 82 (82) | 88 | 160 / 6 | 287 (83): 146 (77) / 141 (70) | 0.48 / 0.39 |
+| F5 R100 | 87 (53): 44 / 43 | 53 | 70 / 17 | 326 (67): 169 (62) / 157 (60) | 0.41 / 0.45 |
+| F5 R50 | 102 (61): 51 / 51 | 63 | 88 / 14 | 353 (68): 180 (59) / 173 (62) | 0.34 / 0.49 |
+| F5 R25 | 194 (84): 98 (77) / 96 (74) | 121 | 160 / 34 | 719 (87): 375 (86) / 344 (85) | 0.50 / 0.50 |
+| F6 (readout) | 55 (35): 29 / 26 | 35 | 41 / 14 | 193 (48): 107 (43) / 86 (37) | 0.53 / 0.47 |
+| F7 | 1,228 (87): 613 (87) / 615 (84) | 803 | 705 / 523 | **324 (76)**: 173 (62) / 151 (62) | 0.49 / 0.46 |
+
+- **F7 placebo is usable now:** 324 tests on 76 sessions, up from 46 on 18. Placebo levels per session median 10. **282 F7 placebo tests were dropped** because a swing confirmed by the test second lay < 10 pts away (A1.1).
+- **78 F4 placebo tests were dropped** because VWAP + offset sat ≤ 3 pts from a 25-multiple (A1.2). No static placebo bin sits on a 25-multiple (share 0.0 in every family).
+- Per-side tests add 30–65 % to the real counts. Most tests are still before 10:00 PT, except F7.
+
+### A/A under A1 (placebo only; CI-excludes-0 share, median min)
+
+| family | pooled | below | above | first side only |
+|---|---|---|---|---|
+| F1 | 7.0 %, +0.72 | 3.0 %, −0.76 | 6.5 %, −0.03 | 6.5 %, +0.59 |
+| F2 | 5.0 %, −0.12 | 6.5 %, −0.15 | 5.0 %, −0.24 | 4.0 %, −0.06 |
+| F3 | 6.0 %, −0.74 | 4.0 %, −0.16 | 4.0 %, −0.02 | 6.0 %, −0.63 |
+| F4 | 3.5 %, +0.17 | 3.5 %, −0.39 | 4.5 %, +0.20 | 6.5 %, +0.48 |
+| F5 R100 | 3.0 %, −0.51 | 5.0 %, −0.37 | 6.5 %, +1.05 | 3.5 %, −0.37 |
+| F5 R50 | 5.5 %, +0.68 | 5.5 %, +0.43 | 8.0 %, +0.52 | 8.0 %, −0.07 |
+| F5 R25 | 3.5 %, +0.53 | 4.0 %, −0.30 | 5.5 %, +0.37 | 6.0 %, +0.28 |
+| F6 (readout) | 5.0 %, −0.06 | 5.5 %, +0.11 | 8.0 %, −1.23 | 7.0 %, +0.31 |
+| F7 | 8.0 %, −0.36 | 4.5 %, +0.20 | **10.0 %**, −0.03 | 6.0 %, −0.05 |
+| all families | 4.5 %, +0.13 | 8.0 %, −0.16 | 6.5 %, +0.24 | 8.0 %, −0.04 |
+
+**A1.5 gate: PASS.** All 24 Holm cells pass. F7 / above passes at the limit (10.0 %, i.e. 20 of 200 splits). F6 passes in every cell under A1 (it is a readout regardless). Stage 1 may run.
