@@ -75,7 +75,9 @@ def _indicator_state_token(state: object) -> str:
 DB_TABLE_NAME = os.environ.get("IRONBEAM_BARS_TABLE", "ironbeam_es_1m_bars")
 DB_TRADES_TABLE = os.environ.get("IRONBEAM_TRADES_TABLE", "ironbeam_es_trades")
 
-TRADES_SYMBOL = os.environ.get("IRONBEAM_TRADES_SYMBOL") or os.environ.get("IRONBEAM_SYMBOL", "XCME:ES.H26")
+# CR-BZ L2/A1.1: the ES contract is resolved per request from the data (_resolve_symbol);
+# these env values are fallbacks only, used when the window holds no rows. No contract literal.
+TRADES_SYMBOL = os.environ.get("IRONBEAM_TRADES_SYMBOL") or os.environ.get("IRONBEAM_SYMBOL") or ""
 
 LIVE_TRADES_LOOKBACK_MIN = int(os.getenv("IRONBEAM_LIVE_TRADES_LOOKBACK_MIN", "15"))
 LIVE_TRADES_MAX_BARS = int(os.getenv("IRONBEAM_LIVE_TRADES_MAX_BARS", "12"))
@@ -93,7 +95,7 @@ HIGHLIGHT_COLOR = os.getenv("IRONBEAM_HIGHLIGHT_COLOR", "#ef4444")
 
 # Flow aggregation table (1s) for aggressor-based indicators
 FLOW_TABLE_NAME = os.environ.get("IRONBEAM_FLOW_TABLE", "ironbeam_es_flow_1s")
-FLOW_SYMBOL = os.environ.get("IRONBEAM_FLOW_SYMBOL", TRADES_SYMBOL)
+FLOW_SYMBOL = os.environ.get("IRONBEAM_FLOW_SYMBOL") or TRADES_SYMBOL
 
 FLOW_EMA_LEN = int(os.getenv("IRONBEAM_FLOW_EMA_LEN", "840"))  # smoothing length
 FLOW_RESAMPLE = os.getenv("IRONBEAM_FLOW_RESAMPLE", "1s").lower()  # 1s, 5s, 15s, 1m
@@ -211,6 +213,58 @@ def _fetch_trades_utc(start_utc: dt.datetime, end_utc: dt.datetime, symbol: str)
     return df
 
 
+def _dominant_symbol(table: str, start_utc: dt.datetime, end_utc: dt.datetime) -> str | None:
+    """The symbol with the most rows in [start_utc, end_utc) of `table`, or None.
+
+    Enumerates the (few) symbols with a loose index scan on the symbol-leading index
+    ((symbol, ts_utc) on both tables), then counts each in the window: ~2 ms, where a
+    plain GROUP BY over the window seq-scans ironbeam_es_trades (~1.6 s, CR-BZ step 1).
+    """
+    q = text(
+        f"""
+        WITH RECURSIVE s AS (
+            SELECT min(symbol) AS sym FROM {table} WHERE symbol <> ''
+            UNION ALL
+            SELECT (SELECT min(symbol) FROM {table} WHERE symbol > s.sym)
+            FROM s WHERE s.sym IS NOT NULL
+        )
+        SELECT sym, (
+            SELECT count(*) FROM {table} t
+            WHERE t.symbol = s.sym AND t.ts_utc >= :start_utc AND t.ts_utc < :end_utc
+        ) AS n
+        FROM s
+        WHERE sym IS NOT NULL
+        ORDER BY n DESC, sym DESC
+        LIMIT 1
+        """
+    )
+    with engine.connect() as conn:
+        row = conn.execute(q, {"start_utc": start_utc, "end_utc": end_utc}).fetchone()
+    if not row or not row[1]:
+        return None
+    return str(row[0])
+
+
+def _resolve_symbol(
+        start_utc: dt.datetime,
+        end_utc: dt.datetime,
+        fallback: str,
+) -> tuple[str, str | None]:
+    """CR-BZ L2/A1.1: the ES contract for a window, from the data.
+
+    The symbol with the most rows in the window, first in the trades table, else in the
+    1s flow table. Env values (`fallback`) apply only when neither has rows. Returns
+    (symbol, symbol_note); the note is None when the symbol came from the data.
+    """
+    for table in (DB_TRADES_TABLE, FLOW_TABLE_NAME):
+        sym = _dominant_symbol(table, start_utc, end_utc)
+        if sym:
+            return sym, None
+    if fallback:
+        return fallback, f"no ES rows in window; env fallback {fallback}"
+    return "", "no ES rows in window and no IRONBEAM_*_SYMBOL fallback set"
+
+
 def _hex_to_rgba(color: str, alpha: float) -> str:
     """
     Convert '#RRGGBB' to 'rgba(r,g,b,a)'. If input is already rgba/other, return as-is.
@@ -228,43 +282,24 @@ def _hex_to_rgba(color: str, alpha: float) -> str:
 
 
 def _fetch_flow_utc(start_utc: dt.datetime, end_utc: dt.datetime, symbol: str) -> pd.DataFrame:
-    """
-    Fetch flow data. If 'symbol' returns no rows, discovery logic finds the 
-    dominant symbol in the time range to support historical contracts.
-    """
-    def _do_query(s: str | None) -> pd.DataFrame:
-        params = {"start_utc": start_utc, "end_utc": end_utc}
-        where_sym = ""
-        if s:
-            where_sym = "AND symbol = :sym"
-            params["sym"] = s
-            
-        q = text(
-            f"""
-            SELECT ts_utc, symbol, buy_vol, sell_vol, unknown_vol
-            FROM {FLOW_TABLE_NAME}
-            WHERE ts_utc >= :start_utc
-              AND ts_utc <  :end_utc
-              {where_sym}
-            ORDER BY ts_utc ASC
-            """
+    """Fetch 1s flow rows for `symbol` (resolved by the caller via _resolve_symbol)."""
+    q = text(
+        f"""
+        SELECT ts_utc, symbol, buy_vol, sell_vol, unknown_vol
+        FROM {FLOW_TABLE_NAME}
+        WHERE symbol = :sym
+          AND ts_utc >= :start_utc
+          AND ts_utc <  :end_utc
+        ORDER BY ts_utc ASC
+        """
+    )
+    with engine.connect() as conn:
+        return pd.read_sql(
+            q,
+            conn,
+            params={"sym": symbol, "start_utc": start_utc, "end_utc": end_utc},
+            parse_dates=["ts_utc"],
         )
-        with engine.connect() as conn:
-            return pd.read_sql(q, conn, params=params, parse_dates=["ts_utc"])
-
-    # 1. Try with provided symbol (usually current front)
-    df = _do_query(symbol)
-    if not df.empty:
-        return df
-        
-    # 2. If empty, discovery: find whatever symbol is there
-    df_all = _do_query(None)
-    if df_all.empty:
-        return df_all
-        
-    # 3. Pick the dominant symbol to avoid roll overlap issues
-    top_sym = df_all['symbol'].value_counts().idxmax()
-    return df_all[df_all['symbol'] == top_sym].copy()
 
 
 def _floor_to_sec(ts: dt.datetime) -> dt.datetime:
@@ -398,7 +433,8 @@ def _apply_live_trades_overlay_patch(patch_obj: Patch, fig_dict: dict, df_base_b
     end_utc = fetch_end_pt.astimezone(ZoneInfo("UTC"))
 
     try:
-        df_tr = _fetch_trades_utc(start_utc, end_utc, symbol=TRADES_SYMBOL)
+        symbol, _ = _resolve_symbol(start_utc, end_utc, TRADES_SYMBOL)
+        df_tr = _fetch_trades_utc(start_utc, end_utc, symbol=symbol)
     except Exception as e:
         print(f"[live trades] fetch error: {e}")
         return False
@@ -469,7 +505,7 @@ def _apply_live_trades_overlay_patch(patch_obj: Patch, fig_dict: dict, df_base_b
             high=h_new,
             low=l_new,
             close=c_new,
-            name=f"{LIVE_TRADES_TRACE_PREFIX} {TRADES_SYMBOL}",
+            name=f"{LIVE_TRADES_TRACE_PREFIX} {symbol}",
             increasing=dict(line=dict(color=LIVE_UP_COLOR, width=2.0), fillcolor="rgba(96,165,250,0.18)"),
             decreasing=dict(line=dict(color=LIVE_DOWN_COLOR, width=2.0), fillcolor="rgba(229,231,235,0.18)"),
             showlegend=False,
@@ -552,7 +588,8 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
     end_utc = fetch_end_pt.astimezone(ZoneInfo("UTC"))
 
     try:
-        df_tr = _fetch_trades_utc(start_utc, end_utc, symbol=TRADES_SYMBOL)
+        symbol, _ = _resolve_symbol(start_utc, end_utc, TRADES_SYMBOL)
+        df_tr = _fetch_trades_utc(start_utc, end_utc, symbol=symbol)
     except Exception as e:
         print(f"[live trades] fetch error: {e}")
         return False
@@ -631,7 +668,7 @@ def _apply_live_trades_overlay(fig_obj: go.Figure, df_base_bars: pd.DataFrame, i
             high=h_new,
             low=l_new,
             close=c_new,
-            name=f"{LIVE_TRADES_TRACE_PREFIX} {TRADES_SYMBOL}",
+            name=f"{LIVE_TRADES_TRACE_PREFIX} {symbol}",
             increasing=dict(line=dict(color=LIVE_UP_COLOR, width=2.0), fillcolor="rgba(96,165,250,0.18)"),
             decreasing=dict(line=dict(color=LIVE_DOWN_COLOR, width=2.0), fillcolor="rgba(229,231,235,0.18)"),
             showlegend=False,
@@ -1229,6 +1266,8 @@ def _build_react_live_trades_overlay_payload(
         interval: str | None,
 ) -> tuple[dict, int]:
     interval = str(interval or "1min").strip()
+    # Until a trades window exists the echo is the env fallback; then the resolved symbol.
+    symbol, symbol_note = TRADES_SYMBOL, None
     if interval not in ("1min", "5min"):
         interval = "1min"
 
@@ -1265,7 +1304,8 @@ def _build_react_live_trades_overlay_payload(
             "effective_trade_date": session_date.isoformat(),
             "interval": interval,
             "session_note": session_note,
-            "symbol": TRADES_SYMBOL,
+            "symbol": symbol,
+            "symbol_note": symbol_note,
             "is_live_day": False,
             "source": "live_trades_overlay",
         }, 200
@@ -1282,7 +1322,8 @@ def _build_react_live_trades_overlay_payload(
             "effective_trade_date": session_date.isoformat(),
             "interval": interval,
             "session_note": session_note,
-            "symbol": TRADES_SYMBOL,
+            "symbol": symbol,
+            "symbol_note": symbol_note,
             "is_live_day": True,
             "source": "live_trades_overlay",
         }, 500
@@ -1294,7 +1335,8 @@ def _build_react_live_trades_overlay_payload(
             "effective_trade_date": session_date.isoformat(),
             "interval": interval,
             "session_note": session_note,
-            "symbol": TRADES_SYMBOL,
+            "symbol": symbol,
+            "symbol_note": symbol_note,
             "is_live_day": True,
             "source": "live_trades_overlay",
         }, 200
@@ -1314,7 +1356,8 @@ def _build_react_live_trades_overlay_payload(
             "effective_trade_date": session_date.isoformat(),
             "interval": interval,
             "session_note": session_note,
-            "symbol": TRADES_SYMBOL,
+            "symbol": symbol,
+            "symbol_note": symbol_note,
             "is_live_day": True,
             "source": "live_trades_overlay",
         }, 200
@@ -1332,7 +1375,8 @@ def _build_react_live_trades_overlay_payload(
             "effective_trade_date": session_date.isoformat(),
             "interval": interval,
             "session_note": session_note,
-            "symbol": TRADES_SYMBOL,
+            "symbol": symbol,
+            "symbol_note": symbol_note,
             "is_live_day": True,
             "source": "live_trades_overlay",
         }, 500
@@ -1357,7 +1401,8 @@ def _build_react_live_trades_overlay_payload(
             "effective_trade_date": session_date.isoformat(),
             "interval": interval,
             "session_note": session_note,
-            "symbol": TRADES_SYMBOL,
+            "symbol": symbol,
+            "symbol_note": symbol_note,
             "is_live_day": True,
             "source": "live_trades_overlay",
         }, 200
@@ -1370,7 +1415,8 @@ def _build_react_live_trades_overlay_payload(
             "effective_trade_date": session_date.isoformat(),
             "interval": interval,
             "session_note": session_note,
-            "symbol": TRADES_SYMBOL,
+            "symbol": symbol,
+            "symbol_note": symbol_note,
             "is_live_day": True,
             "source": "live_trades_overlay",
         }, 200
@@ -1386,7 +1432,8 @@ def _build_react_live_trades_overlay_payload(
     end_utc = fetch_end_pt.astimezone(ZoneInfo("UTC"))
 
     try:
-        df_trades = _fetch_trades_utc(start_utc, end_utc, symbol=TRADES_SYMBOL)
+        symbol, symbol_note = _resolve_symbol(start_utc, end_utc, TRADES_SYMBOL)
+        df_trades = _fetch_trades_utc(start_utc, end_utc, symbol=symbol)
     except Exception as e:
         return {
             "error": f"Database error when loading live trades: {e}",
@@ -1395,7 +1442,8 @@ def _build_react_live_trades_overlay_payload(
             "effective_trade_date": session_date.isoformat(),
             "interval": interval,
             "session_note": session_note,
-            "symbol": TRADES_SYMBOL,
+            "symbol": symbol,
+            "symbol_note": symbol_note,
             "is_live_day": True,
             "source": "live_trades_overlay",
         }, 500
@@ -1408,7 +1456,8 @@ def _build_react_live_trades_overlay_payload(
             "effective_trade_date": session_date.isoformat(),
             "interval": interval,
             "session_note": session_note,
-            "symbol": TRADES_SYMBOL,
+            "symbol": symbol,
+            "symbol_note": symbol_note,
             "is_live_day": True,
             "source": "live_trades_overlay",
         }, 200
@@ -1422,7 +1471,8 @@ def _build_react_live_trades_overlay_payload(
             "effective_trade_date": session_date.isoformat(),
             "interval": interval,
             "session_note": session_note,
-            "symbol": TRADES_SYMBOL,
+            "symbol": symbol,
+            "symbol_note": symbol_note,
             "is_live_day": True,
             "source": "live_trades_overlay",
         }, 200
@@ -1440,7 +1490,8 @@ def _build_react_live_trades_overlay_payload(
             "effective_trade_date": session_date.isoformat(),
             "interval": interval,
             "session_note": session_note,
-            "symbol": TRADES_SYMBOL,
+            "symbol": symbol,
+            "symbol_note": symbol_note,
             "is_live_day": True,
             "source": "live_trades_overlay",
         }, 200
@@ -1454,7 +1505,8 @@ def _build_react_live_trades_overlay_payload(
             "effective_trade_date": session_date.isoformat(),
             "interval": interval,
             "session_note": session_note,
-            "symbol": TRADES_SYMBOL,
+            "symbol": symbol,
+            "symbol_note": symbol_note,
             "is_live_day": True,
             "source": "live_trades_overlay",
         }, 200
@@ -1476,7 +1528,8 @@ def _build_react_live_trades_overlay_payload(
         "effective_trade_date": session_date.isoformat(),
         "interval": interval,
         "session_note": session_note,
-        "symbol": TRADES_SYMBOL,
+        "symbol": symbol,
+        "symbol_note": symbol_note,
         "is_live_day": True,
         "source": "live_trades_overlay",
         "max_bars": int(LIVE_TRADES_MAX_BARS),
@@ -1532,8 +1585,10 @@ def _build_react_flow_payload(
     start_utc = view_start_pt.astimezone(ZoneInfo("UTC"))
     end_utc = view_end_pt.astimezone(ZoneInfo("UTC"))
 
+    symbol, symbol_note = FLOW_SYMBOL, None
     try:
-        df = _fetch_flow_utc(start_utc, end_utc, symbol=FLOW_SYMBOL)
+        symbol, symbol_note = _resolve_symbol(start_utc, end_utc, FLOW_SYMBOL)
+        df = _fetch_flow_utc(start_utc, end_utc, symbol=symbol)
     except Exception as e:
         return {
             "error": f"Database error when loading flow: {e}",
@@ -1554,7 +1609,8 @@ def _build_react_flow_payload(
             "session": session_mode,
             "resample": resample_mode,
             "ema_len": span,
-            "symbol": FLOW_SYMBOL,
+            "symbol": symbol,
+            "symbol_note": symbol_note,
             "point_count": 0,
         }, 200
 
@@ -1609,7 +1665,8 @@ def _build_react_flow_payload(
         "session": session_mode,
         "resample": resample_mode,
         "ema_len": span,
-        "symbol": FLOW_SYMBOL,
+        "symbol": symbol,
+        "symbol_note": symbol_note,
         "point_count": len(flow_points),
     }, 200
 
@@ -2623,7 +2680,8 @@ def build_aggressor_flow_figure(trade_date, indicator_state, shared_xrange):
         return go.Figure(layout_title_text="Aggressor Flow: empty time range.")
 
     try:
-        df = _fetch_flow_utc(start_utc, end_utc, symbol=FLOW_SYMBOL)
+        symbol, _ = _resolve_symbol(start_utc, end_utc, FLOW_SYMBOL)
+        df = _fetch_flow_utc(start_utc, end_utc, symbol=symbol)
     except Exception as e:
         return go.Figure(layout_title_text=f"Aggressor Flow DB error: {e}")
 
