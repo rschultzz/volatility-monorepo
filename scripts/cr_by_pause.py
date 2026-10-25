@@ -531,7 +531,7 @@ def extend(x, frac):
     ok = ((hi - lo) <= frac * x.I) & ok_rt[a - i0:]
     bad = np.nonzero(~ok)[0]
     last = (a + int(bad[0]) - 1) if len(bad) else end - 1
-    last = max(last, x.j)
+    last = int(max(last, int(x.j)))
     e = int(f["t"][last])
     k = last - a
     V = cum_between(d, "vol", s + 1, e)
