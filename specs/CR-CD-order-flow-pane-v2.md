@@ -385,3 +385,91 @@ These are written down here so the implementation can be checked against them.
 | A2.1 | **Ryan's ruling: the marker settings are settable in the pane.** Defaults = **F**: swing retrace 8 pts, previous push > 500, divergence ΔCVD ≥ 300 (and ≥ 10 % of the CVD range), fading only when the dominant side's trailing 30-min \|delta share\| ≥ 0.10, at most one marker of a kind per 30 min. A small markers-settings dialog in the pane edits these five values; they persist in localStorage (try/catch) and are sent to the server as query parameters. A1 as written stays reachable by setting 4 / 0 / 0 / 0 / 15. |
 | A2.2 | The test band (2 pts), the 0.6 push ratio, the 10 % divergence fraction and the fading construction are unchanged. |
 | A2.3 | The smoke reports per-session marker counts for the defaults and for A1 as written. |
+
+---
+
+## Implementation and smoke (2026-10-25)
+
+Branch `feat/CR-CD-order-flow-pane-v2`, off `origin/main` `578a8d5`.
+
+| step | commit | what |
+|---|---|---|
+| A1 | `a25dea4` | Amendment A1 (spec and vault note) |
+| A2 | `c473bc5` | Amendment A2: marker settings settable in the pane, defaults F |
+| 1 | `782298c` | `packages/shared/flow_features.py`. Part A: CR-CB building blocks, identity-tested. Part B: pane series and markers. 13 tests |
+| 2 | `d37daf6` | `/api/ironbeam/flow?mode=v2` (`apps/web/modules/Ironbeam/flow_v2.py`), route branch in `callbacks.py`. 9 tests; Ironbeam suite 63/63 |
+| 3 | `5fa18c8` | Frontend: toggle, `AggressorFlowV2Panel.jsx`, marker settings, guide |
+| 4 | (this commit) | Smoke backend, Playwright, screenshots, counts, this section |
+
+### Step 1 — shared building blocks (A1.2)
+
+- **Copied unchanged** from `cr_cb_step0_v2.py` (sha256 `954c7dee…`): `flow_sum`, `max_gap`, the impact windows and samples, the B_d / σ5 baseline, push detection, push decay (PD), and the edge features P, A_rel, Q, LE, RA, DV, SS. CR-CB's module globals became parameters.
+- **Identity test** against a verbatim excerpt of the CR-CB file (`packages/shared/tests/fixtures/cr_cb_step0_v2_excerpt.py.txt`, executed as an oracle). Outputs are equal (`==`) on:
+  - 3 recorded Databento sessions (2026-01-06, 03-02, 05-01) and 8 synthetic ones;
+  - 72 edge events;
+  - every session's baseline.
+- **CR-CB still runs its own copy.** Switching CR-CB to import `flow_features` is CR-CB's step; its Step 0 JSON should then be unchanged.
+- **Pane functions** take a `MarkerParams` per call: the web service handles concurrent requests, so the settings cannot be module globals. A causality test on 2026-05-01 checks that series and markers computed on any prefix equal the full-session result cut at that time, for both the defaults and A1 as written.
+
+### Step 2 — backend
+
+- **Current mode is unchanged.**
+  - `mode` absent, empty, `current`, `CURRENT`, `bogus` or `v1`, and the `m_*` parameters without `mode=v2`: all equal the CR-CC flow goldens byte for byte.
+  - A test pins the sha256 of `_build_react_flow_payload`'s source to its value at `578a8d5`.
+- **Reads.** Two functions, `fetch_flow_minutes` and `fetch_bar_closes`. Rows are aggregated to 1 minute in SQL on `ts_utc` ranges.
+- **Contract (A1.4).** In two-contract sessions, the displayed session uses the contract that matches the bars; 2026-03-17 resolves to H26 by this rule. The baseline's prior sessions use their highest-volume contract, because bars are not fetched for them. Measured effect on 2026-03-17: baseline median 7.20 vs 7.32 with bar matching.
+- **Holdout (A1.1).** Sessions after 2026-06-05 read no Databento rows (asserted on the recorded calls for 2026-10-23) and carry a note.
+- **`until` (L7).** Bars and markers equal the full session's, cut at `until`, and the baseline is unchanged.
+- **Cache.** Per completed session window and per baseline, in-process, cleared beyond 4,000 entries. Baseline sessions are fetched 5 per query: 22 ranges in one OR took 17 s on Ironbeam, 5 ranges took 0.75 s.
+- **Timings, L9 (≤ 1.5 s cold) — not met on a cold DB.** Warm requests take 0.2–0.7 s. A neighbouring date with the baseline already cached took 1.8 s.
+
+  | request | cold |
+  |---|---|
+  | 2026-05-01 FULL (Databento) | 5–7 s |
+  | 2024-09-17 | 11 s |
+  | 2026-10-23 (Ironbeam) | 17 s |
+  | 2026-10-21 (Ironbeam) | 27 s |
+
+  The time is Postgres reading cold pages (two older Ironbeam sessions: 7.5 s; recent ones: ~0.3 s each), not the query shape. Meeting L9 cold needs a stored per-session 1-minute aggregate (a table write, out of L1). **Proposed follow-up.**
+
+### Step 3 — frontend
+
+- **Mode toggle.** "Flow: Current | v2" in both pane headers. Default Current. Stored in `localStorage['ib-react-flow-mode']`, try/catch.
+- **v2 pane.** Same slot and height.
+  - Delta-per-bar histogram (lower part), CVD line (upper part), delta share (dotted, right axis, symmetric autoscale with ±0.15 guide lines, D8), absorption columns (slate).
+  - Source badge.
+  - Markers toggle (off by default), ⚙ marker settings (A2: Defaults / Loose (A1) / custom; `localStorage['ib-react-flow-v2-markers']`), "?" guide, hover box with values and marker text.
+- **Colours (A1.5).** The pane's and candles' own palette: buying `#60a5fa`, selling `#e5e7eb`, absorption slate `rgba(148,163,184,0.20)`. No green or red.
+- **Deviation from L8's wording: no left axis.** A visible left axis narrows the plot area and breaks the bar-for-bar alignment with the price chart, which was seen and fixed during step 3. CVD has its own unlabelled scale, and its value is in the hover box. Delta share keeps the right axis.
+- **5-min charts (D6).** Aggregated per candle client-side. Alignment with the price chart was verified on 1-min and 5-min.
+- **Live (D7).** v2 polls every 15 s. Current keeps its 3 s poll.
+
+### Step 4 — smoke
+
+**Playwright** (`react_price_preview/tests/e2e/cr-cd.spec.js`, backend `scripts/cr_cd_smoke_backend.py` on 8062, read-only DB): 3/3 pass.
+- **toggle:** default Current, with no `mode` on the requests; v2 sends `mode=v2`; Databento badge; markers off; remembered across a reload; back to Current.
+- **markers + settings:** markers on; "Loose (A1)" + Apply sends `m_swing=4&m_gap=15&m_push=0`; the guide shows the visual-aid and source caveats.
+- **screenshots + counts:** the 3 days below.
+
+**Not covered end to end:** REVIEW replay. All `cc:fixture` candidates are already revealed. `until` is covered by the backend tests: truncation, and markers equal to the full session's cut at `until`.
+
+**Marker counts per session** (`specs/assets/cr-cd/smoke-counts.json`; Databento RTH):
+
+| session | defaults (A2 F) | A1 as written | absorption bars | baseline (median / p20) |
+|---|---|---|---|---|
+| 2026-05-01 | **7** (D 4, P 3, F 0) | 42 (13 / 14 / 15) | 12 | 4.55 / 1.94 |
+| 2026-04-01 | **10** (D 5, P 5, F 0) | 44 (12 / 15 / 17) | 8 | 7.58 / 3.18 |
+| 2026-03-02 | **7** (D 4, P 3, F 0) | 48 (17 / 14 / 17) | 4 | 6.86 / 2.75 |
+
+**Fading never fires under the defaults** on these days: the dominant side's 30-min share rarely reaches 0.10. Ryan can lower it in ⚙.
+
+**Screenshots** (`specs/assets/cr-cd/`):
+- `v2-2026-05-01-rth.png`, `v2-2026-05-01-0700-0845.png`;
+- `v2-2026-04-01-rth.png`;
+- `v2-2026-03-02-rth.png` (Ironbeam's flow ends at 08:22 PT that day; Databento covers the whole session).
+
+Markers on; RTH framed.
+
+**Not verified here:**
+- the deployed service ("Dash - MonoRepo") and the Dash-embedded iframe;
+- a live session: v2 on a live day is Ironbeam with the 15 s poll, untested until the next RTH.

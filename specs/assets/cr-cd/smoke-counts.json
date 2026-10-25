@@ -1,0 +1,74 @@
+{
+  "2026-05-01": {
+    "defaults": {
+      "total": 7,
+      "push_decay": 3,
+      "divergence": 4
+    },
+    "source": "databento",
+    "symbol": "XCME:ES.M26",
+    "absorption_bars": 12,
+    "baseline": {
+      "sessions": [
+        "2026-04-02",
+        "2026-04-30"
+      ],
+      "abs_median": 4.545454545454546,
+      "abs_p20": 1.9387371114623317
+    },
+    "a1_as_written": {
+      "total": 42,
+      "divergence": 13,
+      "push_decay": 14,
+      "fading": 15
+    }
+  },
+  "2026-04-01": {
+    "defaults": {
+      "total": 10,
+      "push_decay": 5,
+      "divergence": 5
+    },
+    "source": "databento",
+    "symbol": "XCME:ES.M26",
+    "absorption_bars": 8,
+    "baseline": {
+      "sessions": [
+        "2026-03-04",
+        "2026-03-31"
+      ],
+      "abs_median": 7.575757575757576,
+      "abs_p20": 3.1766200762388817
+    },
+    "a1_as_written": {
+      "total": 44,
+      "divergence": 12,
+      "push_decay": 15,
+      "fading": 17
+    }
+  },
+  "2026-03-02": {
+    "defaults": {
+      "total": 7,
+      "divergence": 4,
+      "push_decay": 3
+    },
+    "source": "databento",
+    "symbol": "XCME:ES.H26",
+    "absorption_bars": 4,
+    "baseline": {
+      "sessions": [
+        "2026-01-30",
+        "2026-02-27"
+      ],
+      "abs_median": 6.862296611233697,
+      "abs_p20": 2.7472527472527473
+    },
+    "a1_as_written": {
+      "total": 48,
+      "divergence": 17,
+      "push_decay": 14,
+      "fading": 17
+    }
+  }
+}

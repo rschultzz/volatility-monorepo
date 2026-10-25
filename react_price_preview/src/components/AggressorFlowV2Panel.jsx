@@ -333,7 +333,7 @@ export default function AggressorFlowV2Panel({
     const absorb = chart.addSeries(HistogramSeries, { ...common, priceScaleId: 'absorb', base: 0 })
     chart.priceScale('absorb').applyOptions({ visible: false, scaleMargins: { top: 0, bottom: 0 } })
     const delta = chart.addSeries(HistogramSeries, { ...common, priceScaleId: 'delta', base: 0 })
-    chart.priceScale('delta').applyOptions({ visible: false, scaleMargins: { top: 0.66, bottom: 0.02 } })
+    chart.priceScale('delta').applyOptions({ visible: false, scaleMargins: { top: 0.72, bottom: 0.02 } })
     const cvd = chart.addSeries(BaselineSeries, {
       ...common,
       priceScaleId: 'cvd',
@@ -346,7 +346,7 @@ export default function AggressorFlowV2Panel({
     })
     // No left axis: it would narrow the plot area and break the bar-for-bar alignment with the
     // price chart. CVD has its own unlabelled scale (its value is in the hover tooltip).
-    chart.priceScale('cvd').applyOptions({ visible: false, scaleMargins: { top: 0.08, bottom: 0.38 } })
+    chart.priceScale('cvd').applyOptions({ visible: false, scaleMargins: { top: 0.04, bottom: 0.30 } })
     const share = chart.addSeries(LineSeries, {
       ...common, priceScaleId: 'right', color: SHARE_COLOR, lineWidth: 1, lineStyle: LineStyle.Dotted,
       autoscaleInfoProvider: (orig) => {
