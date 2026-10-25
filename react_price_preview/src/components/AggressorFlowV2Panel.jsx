@@ -33,7 +33,7 @@ const ABSORB_RGBA = 'rgba(148,163,184,0.20)'
 const SHARE_COLOR = 'rgba(203,213,225,0.85)'
 const SHARE_REF = 0.15
 
-export const DEFAULT_MARKER_SETTINGS = { show: false, swing: 8, push: 500, div: 300, fade: 0.1, gap: 30 }
+export const DEFAULT_MARKER_SETTINGS = { show: false, swing: 8, push: 500, div: 300, fade: 0.1, gap: 30, effortRatio: 1.5 }
 export const A1_MARKER_SETTINGS = { swing: 4, push: 0, div: 0, fade: 0, gap: 15 }
 
 const KIND_LETTER = { divergence: 'D', push_decay: 'P', fading: 'F' }
@@ -82,6 +82,40 @@ export function alignV2ToCandles(bars, candles) {
     })
   }
   return out
+}
+
+// CR-CD A5 — swing effort labels: "+12.0 · 18.4k · 1.5k/pt · ×2.1" (pts · volume · contracts per point ·
+// contracts per point vs the previous leg in the same direction; the ratio is left out when it is null).
+const kfmt = (v) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)}`)
+const sfmt = (v) => `${v >= 0 ? '+' : '-'}${kfmt(Math.abs(v))}`
+
+export function effortLabel(leg) {
+  const pts = Number(leg.pts)
+  const parts = [`${pts >= 0 ? '+' : '-'}${Math.abs(pts).toFixed(1)}`, kfmt(Number(leg.vol)),
+    leg.cpp == null ? '–/pt' : `${kfmt(Number(leg.cpp))}/pt`]
+  if (leg.ratio != null) parts.push(`×${Number(leg.ratio).toFixed(1)}`)
+  return parts.join(' · ')
+}
+
+export function effortIsHot(leg, threshold) {
+  return leg.ratio != null && Number(leg.ratio) >= Number(threshold)
+}
+
+// Price-chart markers (time = shifted PT epoch of the leg's end bar; the chart snaps it to its candles).
+// Pane palette (A1.5): blue up legs, light grey down legs; dimmed unless the ratio reaches the threshold.
+export function effortChartMarkers(legs, threshold = DEFAULT_MARKER_SETTINGS.effortRatio) {
+  return (Array.isArray(legs) ? legs : []).map((leg) => {
+    const up = leg.dir === 'up'
+    const hot = effortIsHot(leg, threshold)
+    return {
+      time: utcEpochShowingZoneTime(Number(leg.end_time)),
+      position: up ? 'aboveBar' : 'belowBar',
+      shape: 'circle',
+      color: up ? BUY_RGBA(hot ? 1 : 0.55) : SELL_RGBA(hot ? 1 : 0.5),
+      text: effortLabel(leg),
+      size: hot ? 1 : 0.5,
+    }
+  }).filter((m) => Number.isFinite(m.time))
 }
 
 function snapMarkers(markers, candles) {
@@ -187,6 +221,7 @@ function GuideBody() {
       <div><b>Absorption at a level:</b> heavy aggression with price not moving. If price then turns, the passive side won. If price breaks through after the absorption ends, it did not.</div>
       <div><b>Push decay:</b> each retest of the same swing high (low) brings in less buying (selling) than the last.</div>
       <div><b>Fading:</b> the side that has dominated the last 30 minutes has a smaller share of volume in the last 10 minutes than in the first 10.</div>
+      <div><b>Effort</b> (labels on the price chart, toggle in this header): each swing, once a retrace of the swing size (⚙) confirms its end, is labelled <i>points · volume · contracts per point · ×ratio</i>. The ratio compares contracts per point with the previous swing the same way. A swing that took much more volume per point than the last one (≥ the ⚙ threshold, default ×1.5) is highlighted: effort without result, which is the absorption read. Hover a swing's end bar here for its delta and delta per point. Compare ratios, not raw volume, across the Databento / Ironbeam change.</div>
       <div style={{ marginTop: 6, color: '#94a3b8' }}>Markers (D / P / F) are <b>visual aids</b> to help you learn the read. They are <b>not</b> the CR-CB test features and have not been tested as signals. They are off by default; ⚙ sets how strict they are.</div>
 
       <div style={h}>Data source</div>
@@ -229,6 +264,7 @@ function MarkerSettings({ value, onApply, onClose }) {
       div: n('div', 0, 100000, DEFAULT_MARKER_SETTINGS.div),
       fade: n('fade', 0, 1, DEFAULT_MARKER_SETTINGS.fade),
       gap: Math.round(n('gap', 1, 390, DEFAULT_MARKER_SETTINGS.gap)),
+      effortRatio: n('effortRatio', 1, 10, DEFAULT_MARKER_SETTINGS.effortRatio),
     })
   }
   return (
@@ -239,6 +275,7 @@ function MarkerSettings({ value, onApply, onClose }) {
         {field('div', 'Divergence: minimum CVD difference (contracts)', 50, 'Also at least 10 % of the CVD range since the swing.')}
         {field('fade', 'Fading: minimum 30-min delta share', 0.01, 'The dominant side must hold at least this share first.')}
         {field('gap', 'At most one marker of a kind per (minutes)', 1, '')}
+        {field('effortRatio', 'Effort: highlight at × previous contracts/pt', 0.1, 'A swing label is highlighted when its contracts per point is at least this multiple of the previous swing the same way.')}
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', marginTop: '14px' }}>
           <div style={{ display: 'flex', gap: '6px' }}>
             <button type="button" style={chipStyle(false)} onClick={() => setDraft((d) => ({ ...d, ...DEFAULT_MARKER_SETTINGS, show: d.show }))}>Defaults</button>
@@ -266,6 +303,9 @@ export default function AggressorFlowV2Panel({
   onFlowModeChange,
   markerSettings = DEFAULT_MARKER_SETTINGS,
   onMarkerSettingsChange,
+  effortOn = false,
+  onEffortChange,
+  effortLegs = null,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -296,6 +336,16 @@ export default function AggressorFlowV2Panel({
     }
     return m
   }, [allMarkers])
+  const legByTime = useMemo(() => {
+    const m = new Map()
+    if (!effortOn || !Array.isArray(effortLegs) || !candleTimes.length) return m
+    for (const leg of effortLegs) {
+      const st = utcEpochShowingZoneTime(Number(leg.end_time))
+      const t = candleTimes.filter((ct) => ct <= st).pop()
+      if (t != null) m.set(t, [...(m.get(t) || []), leg])
+    }
+    return m
+  }, [effortOn, effortLegs, candleTimes])
   const sources = useMemo(() => {
     const s = new Set()
     for (const p of payloads || []) {
@@ -457,6 +507,7 @@ export default function AggressorFlowV2Panel({
 
   const hoverRow = hover ? aligned.find((r) => r.time === hover.time) : null
   const hoverMarks = hover && markerSettings.show ? markerByTime.get(hover.time) || [] : []
+  const hoverLegs = hover && effortOn ? legByTime.get(hover.time) || [] : []
 
   return (
     <div className="flow-shell" style={{ height: `${height}px`, position: 'relative', width: '100%' }} data-testid="flow-v2-panel">
@@ -474,6 +525,11 @@ export default function AggressorFlowV2Panel({
           onClick={() => onMarkerSettingsChange?.({ ...markerSettings, show: !markerSettings.show })}
           title="Show divergence (D), push decay (P) and fading (F) markers — visual aids, not tested signals">
           Markers {markerSettings.show ? 'on' : 'off'}
+        </button>
+        <button type="button" style={chipStyle(effortOn)} aria-pressed={effortOn} data-testid="flow-v2-effort-toggle"
+          onClick={() => onEffortChange?.(!effortOn)}
+          title="Label each confirmed swing on the price chart: points · volume · contracts per point · × the previous swing the same way">
+          Effort {effortOn ? 'on' : 'off'}
         </button>
         <button type="button" style={iconStyle} title="How to read Flow v2" aria-label="How to read Flow v2" onClick={() => setGuideOpen(true)}>?</button>
         {notes.length > 0 && (
@@ -509,6 +565,11 @@ export default function AggressorFlowV2Panel({
           }}>
             <div>{formatShiftedHHMM(hoverRow.time)} · Δ {Math.round(hoverRow.delta).toLocaleString()} · CVD {Math.round(hoverRow.cvd).toLocaleString()} · share {Number.isFinite(hoverRow.share) ? hoverRow.share.toFixed(2) : '–'}{hoverRow.absorb ? ' · absorption' : ''}</div>
             {hoverMarks.map((m, i) => <div key={i} style={{ marginTop: 3, color: '#cbd5e1' }}>{m.text}</div>)}
+            {hoverLegs.map((leg, i) => (
+              <div key={`leg-${i}`} data-testid="flow-v2-effort-hover" style={{ marginTop: 3, color: effortIsHot(leg, markerSettings.effortRatio) ? '#f1f5f9' : '#cbd5e1' }}>
+                Swing {leg.dir === 'up' ? 'up' : 'down'} {effortLabel(leg)} · Δ {sfmt(Number(leg.delta))}{leg.dpp == null ? '' : ` · Δ ${sfmt(Number(leg.dpp))}/pt`}
+              </div>
+            ))}
           </div>
         )}
         {(loading || error || candleTimes.length < 2 || !hasValues) && (

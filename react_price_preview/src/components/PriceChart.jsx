@@ -776,6 +776,9 @@ export default function PriceChart({
   // (reviewUntil set) times after the cutoff are refused.
   reviewUntil = null,
   onReviewTimesChange = null,
+  // CR-CD A5 — swing effort labels from Flow v2 (Effort on): [{ time (shifted PT epoch of the leg's end
+  // bar), position, shape, color, text, size }]; null while Effort is off.
+  effortMarkers = null,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -2420,6 +2423,27 @@ export default function PriceChart({
     reviewMarkersRef.current.api.setMarkers(markers)
     return undefined
   }, [reviewCandidate, displayCandles])
+
+  // CR-CD A5 — swing effort labels on the candlestick series, snapped to the candle containing each
+  // leg's end bar. Their own markers primitive, attached only once there are labels to draw, so with
+  // Effort off the chart is exactly as before.
+  const effortMarkersRef = useRef(null)
+  useEffect(() => {
+    const series = seriesRef.current
+    if (!series) return
+    const list = Array.isArray(effortMarkers) ? effortMarkers : []
+    if (!list.length && (!effortMarkersRef.current || effortMarkersRef.current.series !== series)) return
+    if (!effortMarkersRef.current || effortMarkersRef.current.series !== series) {
+      effortMarkersRef.current = { series, api: createSeriesMarkers(series, []) }
+    }
+    const markers = []
+    for (const m of list) {
+      const t = snapToCandleTime(displayCandles, m.time, false)
+      if (t != null) markers.push({ ...m, time: t })
+    }
+    markers.sort((a, b) => a.time - b.time)
+    effortMarkersRef.current.api.setMarkers(markers)
+  }, [effortMarkers, displayCandles])
 
   // CR-CD A3 — when a candidate loads in replay (not yet revealed), fit the price axis to the
   // setup zone/range (range box, zone band, level, extreme, entry, stop) ± max(25 pts, 0.5·IM) instead of the full GEX-line
