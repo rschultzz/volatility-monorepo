@@ -1206,3 +1206,59 @@ They wait for:
 | A16.8 | **Verdict.**<br>• **Pass** → levels slow price on R-a in that cell; the parked detector decisions resume with that cell as the focus.<br>• **Fail** → recorded per the three-verdict rule: **refuted** where the CI upper bound is < 0 (faster escape at real levels), **inconclusive** otherwise.<br>No detector or trade work follows A16 without Ryan's decision. |
 | A16.9 | **Run discipline.** The script (`scripts/cr_cb_t0_ra.py`) is committed before its single run. Every statistic is written to JSON before anything is printed. No trade outcome, no placebo P&L, no A/A. |
 
+## A16 result — T0 on R-a (single run, 2026-10-25)
+
+**Run.** `scripts/cr_cb_t0_ra.py` at commit `ccb2d59` (sha256 `c4267b5f…5d274f8`); one run, exit 0, 78 s.
+- Output `scripts/logs/cr_cb/t0_ra.json` / `t0_ra.log` (git-ignored); all statistics were written to JSON before printing.
+- Read-only. Every read is dated < 2025-01-01 (asserted). No 2025 or holdout data; no trade outcome, placebo P&L or A/A.
+
+**Universe.** 191 NYSE sessions 2024-04-03 → 2024-12-31:
+
+| rule | removed | remaining |
+|---|---|---|
+| roll week | 29 | 160 |
+| no 15:45 ET bar on A (06-24, 07-05, 09-23, 12-02, 12-23, 12-26) | 6 | 154 |
+| quarterly-expiry Friday (already inside roll weeks) | 0 | 154 |
+| no Databento RTH flow | 0 | 154 |
+| early close (07-03, 11-29, 12-24) | 3 | 151 |
+| no canonical IM (04-26, 05-28, 09-03) | 3 | 148 |
+| no `orats_oi_gamma` rows | 0 | 148 |
+| contract check (2024-04-03: A's flow is a different contract) | 1 | **147** |
+
+- 147 sessions, 2024-04-04 → 2024-12-31 (ES M24 / U24 / Z24 / H25).
+- Levels: 868 real (put 324, call 544); 535 placebo.
+- Tests: **14,049 real, 1,398 placebo.** Escapes censored at 13:00: 492 / 233. Tests hitting the 120-min (or time-to-close) cap: 727 / 335.
+
+### Primary — time to escape 0.25·IM (restricted mean, minutes; real − placebo; Holm one-sided α 0.025)
+
+| hypothesis | n real / plc | real | placebo | diff [95 % CI] | one-sided p | Holm threshold | verdict |
+|---|---|---|---|---|---|---|---|
+| put / below | 836 / 340 | 34.80 | 36.73 | −1.93 [−13.61, +8.56] | 0.629 | 0.0050 | inconclusive |
+| put / above | 814 / 386 | 32.51 | 36.88 | −4.38 [−14.94, +5.19] | 0.805 | 0.0063 | inconclusive |
+| call / below | 5,694 / 381 | 22.40 | 48.34 | **−25.94 [−35.81, −12.43]** | 1.000 | 0.0125 | **refuted** |
+| call / above | 6,705 / 291 | 24.18 | 46.26 | **−22.07 [−33.16, −10.19]** | 1.000 | 0.0250 | **refuted** |
+| pooled | 14,049 / 1,398 | 24.57 | 41.92 | **−17.35 [−24.75, −7.91]** | 0.999 | 0.0083 | **refuted** |
+
+**A16: FAIL.** No hypothesis shows slower escape at real levels. Under the three-verdict rule, the call cells and pooled are "refuted" (CI upper < 0); the put cells are inconclusive.
+
+### Secondary — zone dwell, seconds in [L ± O_c] over 60 min (no gate)
+
+| | real | placebo | diff [95 % CI] |
+|---|---|---|---|
+| put / below | 2,357 | 2,056 | +301 [−36, +621] |
+| put / above | 2,074 | 1,892 | +181 [−120, +463] |
+| call / below | 2,542 | 1,905 | **+637 [+250, +926]** |
+| call / above | 2,582 | 1,545 | **+1,037 [+362, +1,364]** |
+| pooled | 2,523 | 1,863 | **+660 [+251, +880]** |
+
+### Caveat found after the run (post-hoc diagnostic, not part of the verdict)
+
+Real tests run at ~96 per session against 19 on train, and placebo at 9.5. A post-hoc composition check (ad-hoc, not committed, reading the same R-a data) traced this to the test definition:
+- **On 3 sessions IM_d is about 16 pts, so the arming distance 0.10·IM (≈ 1.6 pts) is inside the 2-pt test band:** 2024-05-13 (IM 16.9), 05-20 (15.8) and 07-08 (16.4).
+- On those days a level re-arms and re-tests on every small oscillation: up to 1,281 tests on one level in one session.
+- Those 3 sessions carry **8,242 of the 14,049 real tests (59 %)** and 0 placebo tests. The top 10 sessions carry 72 % of real tests.
+- The pre-registered statistic weights each test equally, so the call-cell and pooled "refuted" readings are dominated by these degenerate days. The secondary dwell measure is affected the same way.
+- R-a IM median 42.2 (p10 27.5, p90 75.9) vs train ≈ 68: arming is tighter on R-a generally.
+
+**What stands.** As pre-registered, A16 fails: no evidence on R-a that price escapes real levels more slowly. Whether the "refuted" readings survive without the degenerate sessions is **not known**. Answering it would need a new pre-registration (e.g. arming ≥ band + 2 pts, one test per level per session, or per-level weighting); R-a has now been seen for T0.
+
