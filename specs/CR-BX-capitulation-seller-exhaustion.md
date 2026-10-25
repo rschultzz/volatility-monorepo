@@ -121,3 +121,122 @@ Commit 1: spec freeze to specs/CR-BX-capitulation-seller-exhaustion.md, verbatim
 Commit 2: Step 0 findings. Answer all seven gates; fix k under L5 from counts only. Compute NO race outcomes except inside the A/A splits. Stop and report; stop immediately if any gate fails.
 Read-only DB, train only (2026-01-06 .. 2026-06-05), no holdout. Do not push.
 ```
+
+---
+
+## Step 0 findings (2026-10-25)
+
+Script `scripts/cr_bx_step0.py`; log `scripts/logs/cr_bx/step0.log` (git-ignored).
+
+**How it ran.**
+- Read-only: `get_backfill_db_conn()` (role asserted), `default_transaction_read_only = on` (asserted), `statement_timeout = 600s`, 3 h Python alarm. SELECTs only.
+- Train only: sessions ≤ 2026-06-05, flow `ts_utc` < 2026-06-05 21:00 UTC. Holdout not read.
+- CR-BW's session universe, flow loader, gap rule and fill model are copied from `scripts/cr_bw_absorption.py` (unmerged branch, `51f3e3a`). Every operational choice the spec leaves open is fixed in the script docstring.
+
+**No race outcome was computed at any real event.** Races ran only on the family A placebo entries inside the A/A splits, and only the split statistic is reported.
+
+**Run history.**
+- **Run 1** (log `step0_run1_signbug.log`) had the aggressor-flow sign inverted: down moves counted buy − sell as positive. That showed up as D(300, 0) ≤ 0 on 70 % of events. It also crashed in the S11(b) report when the 30-minute window found no boxes. No race had run.
+- **Run 2** (this report) fixes both. Box counts depend only on price range, so they are identical in both runs.
+- One print line was fixed after run 2, with no effect on any number. The log's last line says "family B PASS" for gate 6, but family B was dropped and never raced; it now prints "n/a (dropped)".
+
+**Verdict: Step 0 PASSES for family A at k = 3.0. Family B is DROPPED** (7 eligible boxes; kickoff rule: drop, do not loosen). The run is not started.
+
+### Gate 1 — universe
+
+| rule | removed | remaining |
+|---|---|---|
+| trading sessions 2025-12-26 → 2026-06-05 | | 111 |
+| L14a roll week (2026-03-09 → 03-20) | 10 | 101 |
+| L14b no ES 15:45 ET bar on A (2025-12-26, 2026-02-18, 02-19) | 3 | 98 |
+| L14c roll mismatch | 0 | 98 |
+| no flow rows / RTH open (2026-03-03) | 1 | 97 |
+| no canonical `bt_daily_features` row (01-02, 01-20, 02-17, 04-06, 05-26) | 5 | 92 |
+| IM null / no `orats_oi_gamma` rows | 0 | 92 |
+| < 5 prior scale sessions (2025-12-29, 12-30, 12-31, 2026-01-05) | 4 | **88** |
+
+**88 sessions, 2026-01-06 → 2026-06-05**: the CR-BW A2 universe exactly.
+
+| scale | median | IQR | range | day-to-day ratio p5 / p95 |
+|---|---|---|---|---|
+| σ5_d (pts) | **2.25** | 2.00–3.00 | 1.75–3.50 | 0.911 / 1.111 |
+| σ10_d | 3.25 | 2.84–4.25 | 2.00–4.75 | 0.911 / 1.100 |
+| σ30_d | 5.75 | 5.34–7.00 | 3.75–8.25 | 0.934 / 1.071 |
+
+σ5_d monthly medians: Jan 1.75, Feb 2.75, Mar 3.25, Apr 3.00, May 2.25, Jun 2.25.
+
+### Gate 2 — counts (no outcomes)
+
+**Family A:**
+
+| k | events (down / up) | per session median (IQR) | pre-window gap drops | D(300,0) ≤ 0 | eligible | per X tercile |
+|---|---|---|---|---|---|---|
+| **3.0** | 1,831 (885 / 946) | 20 (13–29) | 30 | 510 | **1,291** | **431 / 430 / 430** |
+| 2.5 | 2,169 (1,057 / 1,112) | 26 (18–33) | 31 | 671 | 1,467 | 489 / 489 / 489 |
+| 2.0 | 2,652 (1,309 / 1,343) | 32 (26–36) | 36 | 877 | 1,739 | 580 / 579 / 580 |
+
+- **k = 3.0 chosen under L5**: the largest k with ≥ 150 per tercile, from family A counts only. Family B uses the same k.
+- X tercile cut points: 1.757 / 3.767.
+- Eligible splits:
+  - S2: 3–4σ 1,017, ≥ 4σ 274. There is no 2–3σ bucket at k = 3.
+  - S3: buy-after-down 622 / sell-after-up 669.
+  - S5: before / after 10:00 PT 841 / 450.
+- The race-window part of the gap rule needs the race end, an outcome, so it is not applied to real events here. On the A/A placebo races it removed 16 of 6,121 entries (0.3 %).
+
+**Family B (k = 3.0) — DROPPED:**
+- Of 1,831 impulses, **11 find a 180 s window with range ≤ 0.5·σ5_d within 15 minutes**. 4 are dropped for gaps, leaving **7 eligible boxes**; per P tercile 3 / 2 / 2.
+- After a ≥ 3σ5 move, a 3-minute range of half a typical 5-minute move (median 1.25 pts, 5 ticks) almost never forms inside 15 minutes. Family B is dropped from the run under the kickoff rule (not loosened). Its gate 4, 6 and 7 figures below are reported only for completeness.
+- **S11(b) longer boxes:**
+
+| window | rule | found | gap drops | eligible | per tercile | median range | median wait |
+|---|---|---|---|---|---|---|---|
+| 10 min | range ≤ 0.5·σ10_d, within 60 min | 7 | 6 | **1** | 1 / 0 / 0 | 1.75 pts | 1,532 s |
+| 30 min | range ≤ 0.5·σ30_d, within 60 min | 0 | 0 | **0** | 0 / 0 / 0 | — | — |
+
+  A longer window does not rescue family B: the range rule scales with σ_w, and post-impulse ranges stay wide.
+
+### Gate 3 — X distribution (family A eligible, n 1,291)
+
+- Percentiles 5 / 10 / 25 / 50 / 75 / 90 / 95: −0.49 / 0.36 / 1.45 / **2.61** / 4.67 / 9.37 / 17.76. Mean 7.10, sd 35.7, range −89 → 925.
+- **X ≤ 0 (flow flipped): 93 (7.2 %).** X < 1 (fading): 18.1 %.
+- S7: X30 median 3.84.
+- At a 3σ extreme, last-minute flow usually runs above the 5-minute average (median X 2.6). The "exhausted" low tercile (X ≤ 1.76) is relatively fading, not mostly flipped.
+
+### Gate 4 — placebo feasibility
+
+- **Family A:** 6,121 placebo entries for 1,291 eligible events; per event median 5. **71 events have fewer than 5 eligible placebo seconds.**
+- Family B (dropped): 6 placebo boxes for 7 boxes; 5 boxes have none.
+
+### Gate 5 — worked event (seed 20261025; outcome hidden)
+
+- Session 2026-01-26, `XCME:ES.H26`. σ5_d 2.00, k 3.0. Event 09:04:34 PT, **up move → fade short**.
+- 300 s window low 6984.00, high 6990.50: a move of 6.50 pts = 3.25 σ5.
+- The 30 s path: buy outweighs sell in 9 of 11 slots, and price climbs 6984.25 → 6990.00. The last slot is the event second itself (359 buy / 284 sell).
+- **D(300, 0) 1,335; D(60, 0) 469; D(30, 0) 398. X = 469 / (1,335 / 5) = 1.757 → low (exhausted) tercile**, just at the cut. X30 2.981.
+- Entry: next second 09:04:35 PT, open 6990.00, sell at **6989.75** (1 tick slippage); target and stop ±8 ticks.
+
+### Gate 6 — A/A calibration — family A PASS
+
+- 200 splits of the placebo entries by parent event, using each parent's X tercile. Statistic: [low − high win rate](half 1) − (half 2). Session-cluster bootstrap, 2,000 per split.
+- Race-window gap drops −16; unresolved 0. Resolved placebo 6,105 in 1,227 parent events.
+
+| | value |
+|---|---|
+| statistic median | **+0.03 pts** (gate ±3) |
+| mean / sd | +0.04 / 3.97 |
+| p5 / p95 | −6.41 / +6.42 |
+| **CI excludes 0** | **5.0 % (10 / 200)** (gate ≤ 10 %) |
+
+Family B: not run (dropped).
+
+### Gate 7 — box geometry (family B, for the record)
+
+- Median box range 1.25 pts (5 ticks), IQR 1.12–1.38. 0.5·σ5_d median 1.25.
+- Time from impulse to box end: median 621 s (IQR 477–660). The box window is fixed at 180 s.
+- Boxes narrower than 4 ticks: 0.
+
+### Consequences for the run (no redefinition proposed)
+
+- **Family A runs:** T1, T2 and S1–S7, S14.
+- **Family B does not:** T3, T4 and S8–S13 are not computed.
+- Under the verdict table, "neither family passes" then rests on family A alone.
