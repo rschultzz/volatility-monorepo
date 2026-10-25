@@ -70,5 +70,31 @@ class TestSplitRanges(unittest.TestCase):
         self.assertIn("FROM ironbeam_es_flow_1s", sqls[1])
 
 
+class TestWatermarkFallback(unittest.TestCase):
+    def test_permission_error_falls_back_to_on_the_fly(self):
+        bf.callbacks_module()
+        import modules.Ironbeam.flow_v2 as v2
+
+        class Boom:
+            rolled_back = False
+
+            def connect(self):
+                raise PermissionError("permission denied for table ironbeam_es_flow_1m")
+
+            def rollback_shared(self):
+                Boom.rolled_back = True
+
+        v2._TABLE_STATE.clear()
+        v2._WATERMARK.clear()
+        try:
+            self.assertIsNone(v2._watermark_1m(Boom(), "ironbeam_es_flow_1m"))
+            self.assertIsNone(v2._cutoff_1m(Boom(), "es_flow_1m_databento", t(20, 0)))
+            self.assertTrue(Boom.rolled_back)
+            self.assertEqual(v2.split_ranges([(t(13, 30), t(20, 0))], None), ([], [(t(13, 30), t(20, 0))]))
+        finally:
+            v2._TABLE_STATE.clear()
+            v2._WATERMARK.clear()
+
+
 if __name__ == "__main__":
     unittest.main()

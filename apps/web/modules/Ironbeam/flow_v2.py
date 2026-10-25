@@ -110,25 +110,34 @@ def _watermark_1m(engine, table_1m: str) -> dt.datetime | None:
     mono = time.monotonic()
     tables = sorted(flow_1m.TABLE_1M.values())
     state = _TABLE_STATE.get(table_1m)
-    if state is None or (not state[1] and mono - state[0] > TABLE_RECHECK_S):
-        with engine.connect() as conn:
-            row = conn.execute(text("SELECT " + ", ".join(
-                f"to_regclass('{t}') IS NOT NULL" for t in tables))).fetchone()
-        for t, ok in zip(tables, row):
-            _TABLE_STATE[t] = (mono, bool(ok))
-        state = _TABLE_STATE[table_1m]
-    if not state[1]:
+    try:
+        if state is None or (not state[1] and mono - state[0] > TABLE_RECHECK_S):
+            with engine.connect() as conn:
+                row = conn.execute(text("SELECT " + ", ".join(
+                    f"to_regclass('{t}') IS NOT NULL" for t in tables))).fetchone()
+            for t, ok in zip(tables, row):
+                _TABLE_STATE[t] = (mono, bool(ok))
+            state = _TABLE_STATE[table_1m]
+        if not state[1]:
+            return None
+        wm = _WATERMARK.get(table_1m)
+        if wm is None or mono - wm[0] > WATERMARK_TTL_S:
+            present = [t for t in tables if _TABLE_STATE.get(t, (0, False))[1]]
+            with engine.connect() as conn:
+                row = conn.execute(text("SELECT " + ", ".join(
+                    f"(SELECT max(minute_utc) FROM {t})" for t in present))).fetchone()
+            for t, last in zip(present, row):
+                _WATERMARK[t] = (mono, last)
+            wm = _WATERMARK[table_1m]
+        return wm[1]
+    except Exception as e:  # e.g. the web role lacks SELECT on a 1-minute table: serve on the fly
+        print(f"CR-CD A4: 1-minute flow tables unavailable ({type(e).__name__}); on-the-fly aggregation")
+        for t in tables:
+            _TABLE_STATE[t] = (mono, False)
+        rollback = getattr(engine, "rollback_shared", None)
+        if rollback:
+            rollback()
         return None
-    wm = _WATERMARK.get(table_1m)
-    if wm is None or mono - wm[0] > WATERMARK_TTL_S:
-        present = [t for t in tables if _TABLE_STATE.get(t, (0, False))[1]]
-        with engine.connect() as conn:
-            row = conn.execute(text("SELECT " + ", ".join(
-                f"(SELECT max(minute_utc) FROM {t})" for t in present))).fetchone()
-        for t, last in zip(present, row):
-            _WATERMARK[t] = (mono, last)
-        wm = _WATERMARK[table_1m]
-    return wm[1]
 
 
 def _cutoff_1m(engine, table_1m: str, now_utc: dt.datetime) -> dt.datetime | None:
@@ -151,6 +160,11 @@ class _SharedConnection:
         if self._conn is None:
             self._conn = self._engine.connect()
         yield self._conn
+
+    def rollback_shared(self):
+        """After a failed statement the shared transaction is aborted; roll it back so the build can go on."""
+        if self._conn is not None:
+            self._conn.rollback()
 
     def close(self):
         if self._conn is not None:
