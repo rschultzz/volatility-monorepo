@@ -330,3 +330,39 @@ From top: candles with level / entry / stop lines and the Databento markers; v2 
 8. **D8 — Delta-share axis.** L4(c)'s fixed −1…+1 flattens a series whose p90 is 0.15. Proposed: symmetric autoscale, or fixed ±0.3 with gridlines at ±0.15 (the absorption gate).
 9. **D9 — Performance design (L9).** Per-session `ts_utc` range reads only; baseline samples aggregated in SQL and cached in-process per completed session; no new tables (L1). To be measured cold in implementation step 2.
 10. **D10 — No ETH flow before 2025-12-26.** v2 shows the RTH segment only on 2024-04-03 → 2025-12-25, with a note in the pane, rather than mixing a different source into ETH.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-25, after Step 0)
+
+The Step 0 recommendations for D1–D10 are accepted, with these specifics. L1–L9 stand except where a clause below says otherwise.
+
+| # | Clause |
+|---|---|
+| A1.1 (D1) | **Holdout protection.** Databento (`es_flow_1s_databento`) is served only for sessions ≤ 2026-06-05; Ironbeam for every later session. The pane's badge shows the source. |
+| A1.2 (D2) | `packages/shared/flow_features.py` holds the **shared building blocks only**: net volume, delta share, push detection and the impact baseline, copied unchanged from CR-CB, with an identity test. The pane's markers are labelled **visual aids**, not the CR-CB test features. |
+| A1.3 (D3) | **Markers are OFF by default**, with a toggle in the pane.<br>• **Divergence** is measured against the **last confirmed swing low/high** (a swing is confirmed by a ≥ 4-pt retrace), not the previous bar.<br>• **Push decay** fires only at repeated tests (within 2 pts) of the same swing.<br>• **Fading** is unchanged.<br>Target: a handful per session. The smoke reports the per-session marker count on 3 days. |
+| A1.4 (D5) | In two-contract sessions, use the contract that **matches the chart's bars**. |
+| A1.5 (colours) | Use the Dash's existing palette constants: the current flow pane's positive/negative colours and the candle up/down colours (**blue for buying, light grey for selling**). Absorption shading in a neutral, translucent tone. **No green/red.** |
+| A1.6 | Height unchanged. The 20-session baseline is SQL-aggregated and cached. D4 and D6–D10 as recommended. |
+| A1.7 | **Source caveat**, in the spec and the "?" guide: on live (Ironbeam) data, CVD divergence can disagree in sign with Databento (2026-05-01: at the 08:02 low, Databento CVD +187 vs the 07:37 low, Ironbeam −379). Ratio measures are more robust. |
+| A1.8 (sequence) | Implement steps 1–4, one commit each; Current mode byte-identical. Push, open a PR (deploy = "Dash - MonoRepo"), do not merge. Screenshots on 2026-05-01, 2026-04-01 and one other train day. |
+
+### A1 operational readings (Claude Code, fixed before implementation)
+
+These are written down here so the implementation can be checked against them.
+- **Swing (A1.3).** In the RTH segment, a swing low at bar k is **confirmed** at the first later bar whose high is ≥ low_k + 4 pts, where low_k is the running low since the previous confirmed swing low. Mirror for highs. A swing is usable only from its confirmation bar onward (causal).
+- **Divergence.**
+  - Bullish at bar t: low_t < the last confirmed swing low, and CVD_t ≥ CVD at the swing bar + 10 % of the CVD range over [swing bar, t]. Mirror for bearish.
+  - At most one divergence per swing.
+- **Push decay.**
+  - A test of the last confirmed swing high is the first bar of an approach with high ≥ swing − 2 pts, after price has retreated more than 4 pts (2 + CR-CB's 2-pt retreat) below the swing since the previous test.
+  - The swing is dropped once a bar trades more than 2 pts beyond it.
+  - Push delta = net aggressor volume in the 2 bars before the test bar, signed toward the swing (CR-CB's 120 s push window at 1-minute resolution).
+  - The marker fires when push delta ≤ 0.6 × the previous test's push delta, and that previous delta is > 0. Mirror for lows.
+- **Fading.** As in L5 and Step 0: over the trailing 30 bars, the dominant side's delta share in the last 10 bars minus the first 10 crosses below 0. The D3 cap applies: at most one marker of a kind per 15 min.
+- **Absorption (D4 as recommended).**
+  - Ratio: rolling 5-min |Δclose| ÷ (|net| / 1000).
+  - Flagged when the ratio is ≤ the p20 of the prior-20 sessions' rolling ratios (pooled, same source), and |delta share (EMA 3)| ≥ 0.15.
+- **ETH (D10).** The ETH segment shows delta, CVD and delta share only. Absorption and markers are RTH-only, because the baseline is RTH. Marker windows never reach into ETH.
+- **Delta-share axis (D8).** Symmetric autoscale, with reference lines at ±0.15.
