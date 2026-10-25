@@ -246,6 +246,29 @@ The fixtures are random 2026 CR-BW touches with a fixed stop; CR-BW's full sampl
 | A14.3 | **Readouts:** zone type (GEX only / GEX + same-day swing / GEX + prior-day / GEX + overnight); per cell: net expectancy, stop-free move, episode P&L by zone type; the share of setups whose extreme held within 1 pt of a reference level. |
 | A14.4 | **Step 0 additions:** reference-level counts per session by type; confluence-zone counts and spans at each e; how often the far edge is a reference level rather than the GEX level. Gallery meta carries the zone members. |
 
+## Amendment A15 (Ryan, 2026-10-25, after Step 0 v2; no trade outcomes seen): ranges that look like the ones Ryan trades
+
+**Step 0 v2 findings** (Databento, 89 sessions):
+- **T0:** pooled no; **put-heavy from below yes** (range formation +11.0 [+1.7, +21.0]); call-heavy from below, price **speeds up**.
+- **Ranges** last a median of 60 s; only 1 % reach 30 min.
+- **A14** saturates: about 90 swings per session, zone spans up to 52 pts.
+- The **break branch** never fires first, by construction.
+- **Big-move leg (a)** is near-universal.
+- **Placebo** is thin.
+
+| # | Clause |
+|---|---|
+| A15.1 | **Reference levels (amends A14):** a swing counts only if it retraces ≥ max(8 pts, 0.15·IM_d) **and** is not violated for ≥ 10 min after it forms. Prior-day H/L/C and overnight H/L are unchanged. **Zone = the GEX level (or A13 cluster) + at most one reference level**, the nearest one beyond it in the approach direction within e. No chaining through reference levels. Zone span ≤ 10 pts (if longer, the reference level is not added). |
+| A15.2 | **Orders are exclusive per rule (fixes A3/A4):** each direction rule places only the order for its chosen action. Always-fade places only the fade limit; always-break places only the break stop order; flow and skew rules place whichever their decision says. **The A3.3 resolution share is now measured from price paths:** "fail" = price retreats ≥ the confirmation pullback from H before trading H + 1 pt; "break" = it trades H + 1 pt first. |
+| A15.3 | **Range minimum duration:** edge events count only after the range [PL, H] has held (no break per A15.4) for **≥ R_min**, a Stage 1 grid dimension: **{10, 20, 30} min** (Ryan: a 2–3 minute stall is not a range). The range bottom PL is fixed only after a rebound ≥ max(4 pts, 0.10·IM_d), not 2 pts. Range-wide flow features (A5) are computed from range formation; PD needs ≥ 2 pushes as before. |
+| A15.4 | **Range invalidation:** a range breaks only when price trades beyond a boundary by ≥ max(3 pts, 0.5 × range height). The break branch's trigger (A4.5) stays at 1 pt beyond the edge, so a break *trade* can start before the range counts as broken. |
+| A15.5 | **Big move (amends A6.1(a) and A8.6(a)):** a decline (rally) into the level of ≥ 0.5·IM_d from the session high (low) within 60 min, **or** ≥ 5·σ5_d within 15 min. |
+| A15.6 | **Placebo density (amends L10):** 4 pseudo-levels per real level, ≥ 10 pts from any real level (was 2 at ≥ 15). |
+| A15.7 | **Round structure:** gallery `cr-cb-stage1.json` (A1–A14 definitions) is loaded as review set `cr-cb:round-1`. Ryan's labels and comments on it feed a possible A16 before the round-2 gallery (A15 definitions) is built. Stage 1 trade outcomes are computed only after round 2's definitions are frozen. |
+| A15.8 | **Step 0 re-run (v3) under A15:** T0 again with the A15.9 zone measures (time to escape first); range-duration distribution; reference-level and zone counts; break/fail shares from price paths; counts per cell at each R_min; placebo counts; A/A. Gallery round 2: `research/gallery/cr-cb-stage1-r2.json`, same composition as round 1. |
+| A15.9 | **T0 measured on the zone, both sides of the level (amends A7.1).** Ryan: the slowdown may happen before or after the level, so the range must be seen developing and traded from there. For each first test, the **zone** = [level − O_c, level + O_c] (the cell's overshoot allowance on **both** sides; A13/A14 cluster or confluence span added).<br>**(a′) Range formation:** a range per A15.3/A15.4 (≥ R_min) whose boundaries both lie inside the zone, forming within 60 min of the test.<br>**(b′) Zone dwell:** seconds inside the zone in the 60 min after the test (replaces the ±2-pt dwell).<br>**(d) Time to escape (new, primary T0 measure):** minutes from the test until price is ≥ 0.25·IM_d from the level in either direction, censored at the 13:00 PT close.<br>**(c) Velocity drop:** unchanged.<br>All vs the A15.6 placebo prices, per cell; Stage 2 pass = (d) or (a′) real > placebo, CI lower bound > 0. |
+| A15.10 | **Edge events come from the developed range:** a range's edges (A4.2) count only once the range meets A15.3 (≥ R_min, both boundaries inside the zone). Touching the level itself is not an entry trigger. Entries come from the range edges wherever the range sits relative to the level (above, below or straddling), and **SS (stall side)** records which. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
