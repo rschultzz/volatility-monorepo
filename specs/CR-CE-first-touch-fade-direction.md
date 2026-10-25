@@ -159,3 +159,15 @@ The session-cluster bootstrap is calibrated on the stop-free move: the split spr
 2. **What "first touch" means (L2).** As run: every armed touch (CR-BW L5 re-arm), 803 real events. The alternative is the first armed touch of each level per session only: 218 events. Fixtures 2, 3 and 5 are re-armed touches, so the cards Ryan reviewed are mostly *not* first touches. L8(e) (the A9.5′ re-arm after a stop-sized excursion) reads as a separate readout either way.
 3. **Events whose horizon passes 13:00 PT** (real: +30 min 48, +60 min 86 of 803). Drop for that horizon, as the A/A did, or truncate at 13:00?
 4. **A/A gate units.** A1.3's "median within ±3" was written for win-rate points. Here it is read as ES points. It passes either way (pooled median +0.09), but per-cell half-widths of 6–11 pts make ±3 a loose test there.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-25, after Step 0; no outcome computed at real levels)
+
+| # | Clause |
+|---|---|
+| A1.1 | **Baseline:** accept the 86 usable sessions (2026-01-09 → 2026-06-05). No 2025 data is read for the B_d baseline. |
+| A1.2 | **L2 "first touch"** = every re-armed touch (CR-BW L5) with D > 0: the **803-event primary set**. This is what screened the reviewed cards. First touch of a level per session (218 events) is a **readout**. |
+| A1.3 | **Horizons:** at +30 and +60 min, drop events that cannot reach the horizon before 13:00 PT, as the Step 0 A/A did. The version truncated at 13:00 PT is a **readout**. |
+| A1.4 | **A/A threshold** ("median within ±3") is read in ES points. Accepted; the Step 0 A/A pass stands. |
+| A1.5 | **Run:** Stage 1 runs once, with the run script committed before it runs. Primary: +60 min stop-free move vs placebo and vs random entries, per cell and pooled. Also all L8 readouts, the first-touch-only readout and the truncated readout. All statistics are saved before printing. The result is entered in `research/setup-registry.md` (Stage 1 = screen; three-verdict wording). Do not push. |
