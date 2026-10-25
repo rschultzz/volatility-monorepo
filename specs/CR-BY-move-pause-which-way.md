@@ -142,3 +142,13 @@ They were stopped by the gate 2 failure. No geometry, placebo, worked event or A
 ### What the gate leaves for Ryan (no redefinition proposed)
 
 Under the locked L4, CR-BY cannot reach its pre-registered n on the 88-session train window. Any change to f, the location band, the 5-minute minimum or k is a redefinition and needs a new amendment.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-25, after Step 0 gate 2; no outcome computed)
+
+| # | Clause |
+|---|---|
+| A1.1 | Replaces L4's location rule (b): the impulse may extend before the pause. E = the most extreme price reached from the impulse until the start of the box window (running extreme); I = the distance from the impulse's 300 s opposite extreme to that E. A window qualifies only if, at no point from the impulse extreme to the window's end, price has retraced more than 0.5·I from the running E. Inside the window, (a) high − low ≤ f·I with the updated I. |
+
+Everything else in L4 (≥ 5-minute window, 30-minute search from the original impulse extreme, f = the smaller of {1/3, 1/2} reaching 150 per tercile, from counts only), and L1–L3, L5–L9, T1/T2 and S1–S9 are unchanged. Targets in L5 use the updated I.
