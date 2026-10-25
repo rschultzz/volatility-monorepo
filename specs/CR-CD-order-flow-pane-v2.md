@@ -496,3 +496,49 @@ Markers on; RTH framed.
 - The gallery now carries `meta.range` {top, bottom} and `meta.zone` {lo, hi} (or `zone_e4`), which CR-CC draws as a range box and a zone band.
 - The fit's "zone/range" now takes the union of those with level, extreme, entry and stop. It reuses CR-CC's `reviewZoneBounds`.
 - On the merged tree: CR-CD Playwright 4/4; CR-CC Playwright 5 passed and 2 skipped (they write, and no candidate is unreviewed); Ironbeam, SetupReview and flow_features unit suites OK.
+
+---
+
+## Amendment A4 (Ryan, 2026-10-25, after merge `0bb6003`) — stored 1-minute flow aggregate for cold-load speed
+
+Branch `feat/CR-CD-flow-1m-aggregate`, off `origin/main` `0bb6003`.
+
+| # | Clause |
+|---|---|
+| A4.1 | **New tables** `es_flow_1m_databento` and `ironbeam_es_flow_1m`. One row per (minute start UTC, symbol): volume, buy_vol, sell_vol, unknown_vol, trade_count, OHLC, first/last trade ms, source. Aggregated exactly as Flow v2 consumes them. **Identity test** against the on-the-fly aggregation on 3 sessions per source. |
+| A4.2 | **Backfill** both from the 1-second tables under the backfill protocol: DDL once with `DATABASE_URL`; INSERT-only, `ON CONFLICT DO NOTHING`; a smoke per month. Databento and Ironbeam: full range each. |
+| A4.3 | **Keep Ironbeam current:** extend the existing 1-second aggregate worker (or add a small cron) to upsert the last 3 completed minutes each minute. Show the change, and which Render service it touches, before deploying. |
+| A4.4 | The Flow v2 route reads the 1-minute tables when available, and falls back to on-the-fly aggregation. **Current mode untouched, byte-identical.** |
+| A4.5 | **L9 check:** a cold v2 load (fresh connection, cache cleared) for 5 random train sessions, each ≤ 1.5 s. Report the times. |
+| A4.6 | Push, open a PR listing every Render service to deploy; do not merge. |
+
+### A4 operational readings (Claude Code, fixed before implementation)
+
+**Columns.**
+- `minute_utc` (timestamptz, minute start), `symbol`, `volume`, `buy_vol`, `sell_vol`, `unknown_vol`, `trade_count`, `open`, `high`, `low`, `close`, `first_trade_ms`, `last_trade_ms`, `source`.
+- Plus **`n_seconds`**: the number of 1-second rows in the minute. Flow v2 uses it for gap detection, so "exactly as Flow v2 consumes them" needs it.
+- `es_flow_1m_databento` also keeps `raw_symbol`.
+- PK `(minute_utc, symbol)`.
+
+**One SQL definition** (`packages/shared/flow_1m.py`), used by the backfill, the worker and the identity check:
+- minute = `floor(epoch / 60) · 60`;
+- open = the first 1-second open by `ts_utc`; close = the last 1-second close; high = max; low = min;
+- sums for volumes and counts; `first_trade_ms` = min; `last_trade_ms` = max.
+
+This is the same arithmetic as Flow v2's on-the-fly query.
+
+**Worker.** Render background worker **`ireanbeam_1s_aggregates`** (`srv-d57jncbuibrs73a787q0`, `python -u apps/cron/ironbeam_flow_1s_aggregate.py`, **auto-deploy on commits to `main`**). Its loop gains a 1-minute rollup:
+- **When:** at most once per 20 s.
+- **What:** per symbol, `INSERT … SELECT <rollup> … ON CONFLICT DO UPDATE` over the last 3 completed minutes.
+- **Catch-up:** from that symbol's last stored minute when it lags (6 h per pass), so a pause or the gap before deploy fills itself.
+- **Isolation:** rollup errors are logged and never stop the 1-second loop.
+- **Switch:** `IRONBEAM_FLOW_1M_ENABLED` (default on).
+
+**Route.** `fetch_flow_minutes` keeps its signature and output. For each range:
+- whole minutes before the table's cutoff come from the 1-minute table;
+- ragged partial-minute edges (e.g. a CR-CC `until` mid-minute) and anything at or after the cutoff come from the 1-second table;
+- cutoff = min(last stored minute + 1 min, now floored to the minute − 5 min).
+
+The 1-minute table is used only if it exists (`to_regclass`, cached).
+
+**Ironbeam backfill end.** The run's start time floored to the minute, minus 10 min. The worker covers from there.
