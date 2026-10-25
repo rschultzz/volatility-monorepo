@@ -285,3 +285,31 @@ Sessions real / placebo per cell: 43–88 / 59–87. Real / placebo means: F7 po
   - A swing confirming near a placebo price is evidence that price stalled there. So the drop rule may remove the placebo tests that escape slowly, making the placebo faster and inflating F7's real − placebo.
   - Whether it does is unmeasured. Measuring it needs the dropped placebo tests' escape times: a post-hoc diagnostic, to be disclosed as such, not run in this pass.
 - The 2026-05-01 support (overnight high, Step 0 Q3) belongs to F2, which shows no slowdown on train (−3.3 pooled; from above, the side Ryan would buy, +3.65 [−6.08, +13.68]).
+
+## Amendment A2 (Ryan, 2026-10-25, after Stage 1): A1.1 approved; post-hoc F7 diagnostic and its decision rule (recorded before D1–D4 run)
+
+**Ruling 1.** The A1.1 implementation is **approved as written**: the 4 nearest 5-pt bins on the parent's side of the open; bins within 10 pts of a swing confirmed by then are skipped; a placebo test is dropped when a swing confirmed by the test second is within 10 pts.
+
+**Ruling 2: post-hoc F7 diagnostic.** Every number is labelled **"post-hoc, not a test"**.
+- Train only. No Holm, and no p-values reported as evidence. No parameter changes to Stage 1. Holdout, R-a and R-b untouched.
+- Session-cluster bootstrap (seed 20260920), 95 % CIs.
+
+| # | Readout |
+|---|---|
+| D1 | Escape-time distribution of the 282 dropped placebo tests vs the 324 kept (median, IQR, mean; session-weighted dropped − kept with CI). Are the dropped tests slow escapers? |
+| D2 | F7 real − placebo with the dropped tests restored to the placebo pool. Conservative: some restored tests sit near real swings. Read it as a lower bound. |
+| D3 | Range-position confound. Every real and placebo test is tagged **EDGE** (the level is at or beyond the session's running RTH high or low at the test second, within 2 pts) or **INTERIOR**. Report F7 real − placebo within EDGE only and within INTERIOR only, plus the EDGE / INTERIOR share in real vs placebo. |
+| D4 | D2 and D3 on first-side-only tests (consistency check). |
+
+- One table, with counts per cell. A cell with < 30 tests or < 15 sessions in either arm is printed but flagged **underpowered**, not read.
+
+**Ruling 3: decision rule.**
+- **F7 is a CANDIDATE** for a new single-hypothesis CR on R-a if **the D2 pooled CI lower bound > 0** AND **the D3 EDGE-only pooled effect is ≥ 50 % of +8.22 (≥ 4.11 min) with CI lower bound > 0**.
+- **Otherwise** F7 is logged as **"placebo artifact likely"**, and CR-CF closes **INCONCLUSIVE** for all families.
+- The follow-up CR is not drafted here.
+
+**Operational choices, fixed before the run:**
+- **Running high / low:** the RTH (from 06:30 PT) maximum high and minimum low of the 1-s flow **through the test second inclusive**. EDGE if L ≥ running high − 2 or L ≤ running low + 2. "Beyond" is included, because L ≥ running high − 2 covers L above the high.
+- **D3 for the rule** uses the Stage 1 placebo pool (kept tests, A1.1 as approved), because D3 is listed separately from D2. D3 on the restored pool is printed too, as a readout.
+- **"Pooled"** (both approach sides) is the cell the rule reads. Below / above are printed.
+- **Dropped tests are recovered** by running the unchanged `cr_cf_lib.run` under a family label that bypasses the A1.1 drop; dropped = recovered tests not in the Stage 1 kept set. `scripts/cr_cf_lib.py` is not modified.
