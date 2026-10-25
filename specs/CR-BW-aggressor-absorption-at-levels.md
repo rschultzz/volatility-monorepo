@@ -356,3 +356,103 @@ Produced by `scripts/cr_bw_absorption.py --counts-only` (sha256 `e426a959…b7bd
 | high (continuation) | 267 | **238** | 213 | 199 |
 
 **Gate: every real tercile ≥ 150 filled → PASS (min 238).** The A2.3 race-window drops depend on where each race ends, so they are counted per tercile in the run.
+
+---
+
+## Results (single run, 2026-10-25)
+
+Run of `scripts/cr_bw_absorption.py` at commit `51f3e3a` (sha256 `e426a959…b7bd84`), one run, exit 0. It used a read-only connection (`default_transaction_read_only = on`, `statement_timeout = 600s`, 3 h alarm), train data only, and did not read the holdout. Every statistic was written to `scripts/logs/cr_bw/results.json` before anything was printed; the printout is in `scripts/logs/cr_bw/run.log` (both git-ignored).
+
+Universe: 88 sessions (2026-01-06 → 2026-06-05), 522 real levels, 427 placebo pseudo-levels. Bootstrap: session-cluster, 10,000 resamples, seed 20260920, with real and placebo resampled jointly by session.
+
+### A2.3 drops and unresolved trades (R = 8 ticks; eligible and filled)
+
+| | low | mid | high |
+|---|---|---|---|
+| real eligible filled | 251 | 244 | 238 |
+| real race-window gap drop (A2.3) | 1 | 0 | 0 |
+| real unresolved by 13:00 PT | 3 | 0 | 0 |
+| **real resolved** | **247** | **244** | **238** |
+| placebo eligible filled | 163 | 138 | 199 |
+| placebo drop / unresolved | 0 / 0 | 0 / 0 | 0 / 0 |
+
+### T1 — absorption → reversal (real levels, R = 8 ticks) — **FAIL**
+
+| tercile | resolved | win rate |
+|---|---|---|
+| low A_rel (absorption) | 247 | 50.20 % |
+| mid | 244 | 42.21 % |
+| high A_rel (continuation) | 238 | 49.58 % |
+
+**Low − high = +0.62 pts, 95 % CI [−8.43, +9.92].**
+- ≥ +8: no.
+- CI lower bound > 0: no.
+- ≥ 150 resolved per tercile: yes.
+
+### T2 — levels matter — **FAIL**
+
+Placebo win rates by tercile: 43.56 % (163) / 42.03 % (138) / 46.73 % (199). Placebo low − high: −3.18 [−12.66, +6.21].
+
+**T2 = (+0.62) − (−3.18) = +3.80 pts, 95 % CI [−9.65, +17.61].**
+- ≥ +5: no.
+- CI lower bound > 0: no.
+
+### Verdict (locked rules)
+
+**T1 fails → this absorption measure does not predict reversals at this scale.** Under the verdict table, T2 has no separate reading once T1 fails. No holdout confirmation and no strategy CR follow.
+
+### Secondary readouts (not gated; no conclusion drawn from any of them)
+
+**S1 cost reality.** Expectancy is per resolved trade, in ticks: win +R, loss −(R + 1), minus 0.36 tick.
+
+| R | break-even WR | real low / mid / high WR | real exp. low / mid / high | real all (n, WR, exp.) | placebo all (n, WR, exp.) |
+|---|---|---|---|---|---|
+| 4 | 59.56 % | 39.60 / 32.79 / 35.71 | −1.80 / −2.41 / −2.15 | 732, 36.07 %, −2.11 | 500, 34.60 %, −2.25 |
+| 6 | 56.62 % | 46.99 / 37.70 / 41.18 | −1.25 / −2.46 / −2.01 | 731, 42.00 %, −1.90 | 500, 41.00 %, −2.03 |
+| 8 | 55.06 % | 50.20 / 42.21 / 49.58 | −0.83 / −2.18 / −0.93 | 729, 47.33 %, −1.32 | 500, 44.40 %, −1.81 |
+
+Every cell is negative after costs. All win rates sit 5–27 pts below break-even. Part of that is the fill rules themselves: entry needs a trade 1 tick through L, and the target needs a trade 1 tick through L ± R.
+
+**S2 target ladder** (T1 real / T1 placebo / T2):
+
+| R | T1 real | T1 placebo | T2 |
+|---|---|---|---|
+| 4 ticks | +3.89 [−4.60, +11.83] | −4.00 | +7.88 [−5.68, +20.58] |
+| 6 ticks | +5.81 [−2.79, +15.22] | −3.45 | +9.26 [−3.76, +22.89] |
+| 0.20·IM | −10.14 [−20.00, −0.46] | −5.61 | −4.53 [−19.82, +10.57] |
+
+At 0.20·IM (≈ 14 pts), resolved n is 217 / 222 / 217 and the high tercile reverts more often (57.1 %). That is the opposite sign to the hypothesis. It is one readout among many, and its CI just excludes 0.
+
+**S3 level sign:**
+- Negative-net levels (n 66 / 81 / 100): T1 +7.06 [−9.60, +25.25]; T2 +20.05 [−1.87, +43.56].
+- Positive-net levels (n 181 / 163 / 138): T1 −1.93 [−11.73, +8.08]; T2 −8.62 [−24.50, +7.26].
+
+**S4 time of day:**
+- Before 10:00 PT (n 174 / 168 / 158): T1 +4.02 [−8.16, +16.04]; T2 +6.11 [−13.22, +24.66].
+- After 10:00 PT (n 73 / 76 / 80): T1 −7.65 [−23.48, +7.93]; T2 −2.40.
+
+**S5 no-fill rate** (eligible), low / mid / high:
+- real 5.99 / 8.61 / 10.86 %;
+- placebo 8.43 / 9.21 / 6.57 %.
+
+The absorption tercile fills slightly more often at real levels (no adverse-selection signature in the low tercile).
+
+**S6 flow against the approach** (D ≤ 0, R = 8): real 41.53 % (n 236) vs placebo 36.11 % (n 180); diff +5.41 [−3.80, +14.44].
+
+**S7 window length:**
+- 60 s (n 266 / 270 / 277): T1 −2.18 [−10.16, +5.86]; T2 +2.74 [−10.72, +16.15].
+- 900 s (n 203 / 199 / 199): T1 −1.95 [−11.43, +7.54]; T2 +4.89 [−7.85, +17.73].
+
+**S8 strong levels (≥ 100 $bn).**
+- Real n 185 / 190 / 180 (above the 50 floor).
+- T1 +4.68 [−5.30, +14.72]; placebo T1 −5.50; T2 +10.18 [−4.52, +25.45].
+- S1 at R = 8: real all 45.41 % (exp. −1.64 ticks), placebo 46.32 % (−1.49). All negative.
+
+**S9 with the A1.6 drop applied** (A2.2). The drop removes 96 real and 90 placebo eligible events.
+- Real n 223 / 217 / 200.
+- T1 −1.67 [−11.55, +8.45]; T2 +0.82 [−13.97, +15.57]. Same verdict.
+
+### Notes
+
+- Win rates at R = 8 average 47 % (real) and 44 % (placebo), below the symmetric 50 %. As in CR-BU, the touch-and-fade has a continuation base rate. Here the 1-tick-through entry and target rules add a further handicap.
+- Nothing here bears on the holdout, which remains unread.
