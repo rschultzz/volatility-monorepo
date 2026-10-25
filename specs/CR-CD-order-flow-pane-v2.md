@@ -622,3 +622,55 @@ Profile of a cold build before these changes: 2.8 s of 3.06 s was psycopg networ
   - the worker log shows `[flow_1m] XCME:ES.Z26 […] minutes=3` lines;
   - `max(minute_utc)` in `ironbeam_es_flow_1m` tracks now − 1 min;
   - a v2 load on the deployed service.
+
+---
+
+## Amendment A5 (Ryan, 2026-10-25, after A4 merge `2b908c6`) — swing effort labels
+
+Branch `feat/CR-CD-swing-effort`, off `origin/main` `2b908c6`.
+
+**Why.** Ryan wants to see how much effort (volume, aggression) each swing took, and whether a swing took much more effort per point than the last swing the same way. That is the read behind "absorption" and "push decay", shown one swing at a time.
+
+| # | Clause |
+|---|---|
+| A5.1 | **Swing legs.** Segment each session into legs with the pane's existing marker swing rule: a leg ends when a retrace of the ⚙ swing size (default 8 pts) confirms its extreme. **Causal:** a leg's label appears only once its end is confirmed. |
+| A5.2 | **Per leg:** points moved; total volume; net aggressor delta (buy − sell); contracts per point = volume ÷ \|pts\|; delta per point; and the ratio of contracts-per-point to the previous leg in the same direction. |
+| A5.3 | **Shared code.** The computation lives in `packages/shared/flow_features.py` as shared building blocks, unit-tested on synthetic data: a causality test (a leg's stats neither change nor appear before its end is confirmed) and edge cases (the first leg in a direction has no ratio; zero-point legs). |
+| A5.4 | **Display.** A small label at each leg's end on the price chart, e.g. `+12.0 · 18.4k · 1.5k/pt · ×2.1`. Highlighted when the ratio is ≥ 1.5; that threshold is in ⚙. An **"Effort"** toggle in the flow pane header, **off by default**, remembered in `localStorage`. Dash palette colours. Respects the review-mode `until` (no bars after `until`). |
+| A5.5 | **Unchanged when Effort is off.** Current mode and the default views are byte-identical. The CR-CD and CR-BV byte-identity tests and goldens are extended to cover it. |
+| A5.6 | Spec commit first, one commit per implementation step, then smoke. Full Python and frontend suites; push, PR, merge with a merge commit after the tests pass; no deploy. |
+
+### A5 operational readings (Claude Code, fixed before implementation)
+
+**Leg rule (A5.1).** The marker swing rule (A1 readings, "Swing"), applied as one alternating zig-zag on the flow-built 1-minute highs and lows, RTH bars only (06:30 PT on; markers are RTH-only too, A1 D10):
+- During an up leg, track the running high since the leg's start. The high at bar k is **confirmed** at the first later bar i whose low ≤ high_k − swing (k < i; the running extreme is updated with bar i first, exactly as the marker code does). The up leg ends at k; a down leg starts there. Mirror for down legs.
+- Before the first confirmation the direction is unknown: the running high and low since 06:30 are both tracked, and whichever is confirmed first ends the first leg. If both are confirmed on the same bar, the earlier extreme is taken first (so two legs can be confirmed on one bar).
+- The **first leg** starts at the first RTH bar's open, not at a confirmed extreme, and is flagged `first`.
+- The swing size is the ⚙ marker swing (`m_swing`, default 8, clamped 1–50); no new parameter.
+- The last, unconfirmed leg is never shown.
+
+**Per-leg stats (A5.2).**
+- The leg's bars are (start bar, end bar]. The first leg includes its first bar.
+- **pts** = end price − start price (positive for up legs).
+- **vol** and **delta** (buy − sell) are sums over the leg's bars.
+- **cpp** = vol ÷ \|pts\| and **dpp** = delta ÷ \|pts\|. Both are null when pts = 0, which only the first leg can produce.
+- **ratio** = cpp ÷ the cpp of the previous leg in the same direction, within the session. Null for the first leg in each direction, and when either cpp is null or the previous cpp is 0.
+
+**Source.** The legs come from the same flow minutes as the pane: Databento ≤ 2026-06-05 (A1.1), otherwise Ironbeam. On Ironbeam the volume is about 0.94× and the delta about 0.7× of Databento, so **contracts per point is not comparable across the source change**. The ratio compares two legs from the same session and source, so it is the robust number.
+
+**Route.** `/api/ironbeam/flow?mode=v2&effort=1` adds `legs` to the v2 payload. Without `effort=1` (or with any other value) the v2 payload is unchanged (v2 golden), and Current mode is untouched (Current goldens). Each leg carries `start_time`, `end_time` and `confirm_time` (bar starts, UTC epoch s), `dir` (`up` / `down`), `start_px`, `end_px`, `pts`, `vol`, `delta`, `cpp`, `dpp`, `ratio` and `first`. Under `until` (L7), legs are computed only from bars before `until`, so a leg confirmed after it is absent.
+
+**Display (A5.4).**
+- **Where the toggle lives.** "Effort off/on" sits in the **Flow v2** header, next to Markers. The legs come from the v2 route and its source, so Effort needs v2 mode. The Current header gets no new control: Current stays byte-identical.
+- **State.** `localStorage['ib-react-flow-v2-effort']` (`'1'` / `'0'`), in a try/catch. While Effort is off, requests carry no `effort` parameter.
+- **Threshold.** The highlight threshold (`effort_ratio`, default 1.5) is a ⚙ field stored with the marker settings. It is applied client-side.
+- **Labels.** Series markers on the candle series, at the leg's end bar (snapped to the containing candle on 5-min charts). Up legs: above the bar. Down legs: below the bar.
+- **Text.** `±pts · vol · cpp/pt · ×ratio`:
+  - volume and cpp are shown as `18.4k` from 1,000 up, otherwise as integers;
+  - `×ratio` is left out when the ratio is null;
+  - cpp shows `–` when pts = 0.
+- **Colours** (A1.5 palette; no green or red; no new colour):
+  - up legs blue `#60a5fa`, down legs light grey `#e5e7eb`, at reduced opacity (0.55);
+  - highlighted legs (ratio ≥ threshold) at full opacity with a larger dot.
+- **Delta and delta per point** are not on the chart label, which follows A5.4's example. With Effort on, hovering a leg's end bar in the Flow v2 pane adds a line to the hover box with every stat: pts, volume, delta, cpp, delta/pt and the ratio. The "?" guide gets a short Effort paragraph.
+- **Mounting.** The price chart attaches no extra series-markers primitive until Effort first has legs to draw. With Effort off, the chart is the same as before.
