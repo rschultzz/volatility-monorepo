@@ -675,3 +675,90 @@ Branch `feat/CR-CD-swing-effort`, off `origin/main` `2b908c6`.
   - highlighted legs (ratio ≥ threshold) at full opacity with a larger dot.
 - **Delta and delta per point** are not on the chart label, which follows A5.4's example. With Effort on, hovering a leg's end bar in the Flow v2 pane adds a line to the hover box with every stat: pts, volume, delta, cpp, delta/pt and the ratio. The "?" guide gets a short Effort paragraph.
 - **Mounting.** The price chart attaches no extra series-markers primitive until Effort first has legs to draw. With Effort off, the chart is the same as before.
+
+### A5 implementation and smoke (2026-10-25)
+
+| step | commit | what |
+|---|---|---|
+| A5 | `05077b9` | Amendment A5 and operational readings |
+| A5 readings | `3eb25d7` | Legs run from one confirmed extreme to the next; no leg is anchored at the open |
+| 1 | `0a3c9b4` | `flow_features.py` Part C: `swing_legs`, `leg_effort`, `pane_effort_legs`; 13 tests |
+| 2 | `ca7cbb1` | `mode=v2&effort=1` adds `legs`; goldens extended; 6 tests |
+| 3 | `8a90696` | Frontend: Effort toggle, chart labels, ⚙ threshold, hover line, guide |
+| 4 | (this commit) | Playwright `cr-cd-a5.spec.js`, screenshots, counts, this section |
+
+**Readings change, made before any implementation commit.** The first draft started the first leg at the 06:30 open. The step-1 tests showed this gives a junk first "leg" on any session that opens and trends: a few ticks from the open to the first bar's low. Legs now run from one confirmed extreme to the next, so every leg moves at least the swing size. Zero-point legs cannot occur, but `leg_effort` still guards against them, and that guard is tested.
+
+**Step 1 — shared code** (`packages/shared/tests/test_flow_effort.py`, 13 tests):
+- hand-checked zig-zags;
+- a sub-swing retrace that does not end a leg;
+- a first leg down;
+- a wide first bar that is both the high and the low;
+- stats and ratios checked by hand: the first leg in each direction has no ratio;
+- the legs' (start, end] spans tile the bars;
+- every leg moves ≥ swing, and directions alternate;
+- zero-point and zero-volume previous legs give no ratio;
+- the swing parameter, and bars before the start are ignored;
+- **causality:** on every prefix of 6 random sessions × swing 4/8 and of 2026-05-01 (Databento), the legs equal the full session's legs whose confirm bar is in the prefix. So a leg's stats never change after it appears.
+
+**Step 2 — backend** (`test_flow_v2.py`, 15 tests; Ironbeam suite 75/75).
+- **Current unchanged:** the CR-CC goldens still match byte for byte. The tested suffixes now include `&effort=1` and `&mode=current&effort=1`.
+- **v2 without `effort=1` unchanged:** the CR-CD v2 golden matches for `effort` absent, empty, `0`, `true`, `on` and `bogus`.
+- **`effort=1` adds only `legs`:** removing the key gives the golden payload.
+- **The legs agree with the payload's own bars.** Volume and delta are sums over (start, end], cpp and dpp follow from them, and each ratio is computed against the previous same-direction leg.
+- **Swing setting:** `m_swing=4` gives more legs, each ≥ 4 pts.
+- **`until`:** the legs equal the full session's legs with `confirm_time` < `until`. The rest of the payload equals the no-effort replay payload.
+- **Ironbeam (2026-10-23) and RTH-only (2026-03-17) sessions** also return legs.
+
+**2026-05-01, defaults (Databento, 13 legs):**
+
+| leg | pts | volume | delta | contracts/pt | ×prev same dir |
+|---|---|---|---|---|---|
+| 06:30 → 07:03 up | +39.75 | 168.2k | +9.7k | 4.2k | – |
+| 07:03 → 07:05 down | −9.00 | 9.7k | −0.9k | 1.1k | – |
+| 07:05 → 07:22 up | +11.25 | 53.0k | +4.0k | 4.7k | 1.11 |
+| **07:22 → 07:37 down** | −26.25 | 60.9k | −5.7k | 2.3k | **2.15** |
+| 07:37 → 07:47 up | +11.00 | 40.5k | +0.7k | 3.7k | 0.78 |
+| 07:47 → 08:02 down | −13.50 | 41.0k | −0.5k | 3.0k | 1.31 |
+
+- The leg into the 07:37 test low took 2.15× the contracts per point of the previous down leg: the one highlighted label before the CR-CC entry at 07:39.
+- The 08:02 low leg came on 1.31× and nearly flat delta (−467).
+
+**Step 4 — Playwright** (`react_price_preview/tests/e2e/cr-cd-a5.spec.js`, 4/4; read-only; backends on 8062 and 8061; this branch's frontend on 5177; a detached worktree of `origin/main` `2b908c6` on 5178 as the pre-A5 baseline).
+- **Unchanged when off.** These are pixel-identical to the baseline (`Buffer.compare` of PNG screenshots):
+  - the price chart and the Current flow pane in the default view;
+  - the price chart in v2 with Effort off;
+  - the whole page in a CR-BV view (2026-10-23, landscape panel docked).
+  
+  No flow request carries `effort`. The Current header has no Effort control. Turning Effort on and then off returns the chart to the same pixels.
+- **Effort on.**
+  - The request carries `effort=1`.
+  - There is one label per leg (13), each in the A5 format, at the legs' end bars. Up legs are above the bar, down legs below.
+  - The highlighted count equals the legs with ratio ≥ 1.5 (3). With the ⚙ threshold at 1.8 it equals the legs with ratio ≥ 1.8, and no new request is sent.
+  - The setting is remembered across a reload. The guide explains it.
+- **Replay.**
+  - With candidate 5 presented as unreviewed (intercepted, as in the A3 test), the v2 request carries `until=2026-05-01T07:39:00&effort=1`.
+  - Every leg's `confirm_time` is before `until`, and every label sits on a bar before `until`.
+  - The first replay request still carries the previous `trade_date` (2026-10-23) and is superseded once the 2026-05-01 bars load. This is pre-existing replay behaviour, not caused by A5.
+- **Existing suites on this branch:**
+  - CR-CD `cr-cd.spec.js` 4/4. `smoke-counts.json` and the A3 screenshot were regenerated byte-identical. The v2 screenshots differ only by the new Effort chip in the v2 header and were left as committed.
+  - CR-BV `cr-bv.spec.js` 9/9. Its 5 screenshots are byte-identical between this branch and the baseline frontend. They differ from the committed copies through data drift (same diff on the baseline), and were left as committed.
+- **Python:** `packages/shared` 297 + 13 tests OK; Ironbeam 75/75; SetupReview 11 (2 skipped); cron 16. Seven `packages/shared` modules do not load because `apps/web/.venv` has no `pytest`. That happens on `origin/main` too and is not caused by A5.
+- **Build:** `vite build` OK.
+
+**Leg counts** (`specs/assets/cr-cd/a5-effort-counts.json`, defaults):
+
+| session | legs | highlighted (≥ 1.5) | ratio range | median contracts/pt |
+|---|---|---|---|---|
+| 2026-05-01 | 13 | 3 | 0.60 – 2.15 | 3.6k |
+| 2026-04-01 | 34 | 10 | 0.21 – 5.14 | 1.1k |
+
+**Screenshots** (`specs/assets/cr-cd/`, Effort on, markers off):
+- `a5-effort-2026-05-01-rth.png` and `a5-effort-2026-05-01-0700-0845.png`;
+- `a5-effort-2026-04-01-rth.png` and `a5-effort-2026-04-01-0700-0845.png`.
+
+**Readability.** At the default 8-pt swing, labels overlap in choppy stretches (2026-04-01 07:00–07:30, 34 legs that session). Raising the ⚙ swing size thins them, but it is the same setting as the markers' swing. A separate Effort swing would need a spec change. Not done.
+
+**Not verified here:**
+- the deployed service ("Dash - MonoRepo") and the Dash-embedded iframe;
+- a live session: legs on a live day come with the 15 s v2 poll, untested until the next RTH.

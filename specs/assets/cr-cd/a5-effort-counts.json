@@ -1,0 +1,20 @@
+{
+  "2026-05-01": {
+    "source": "databento",
+    "legs": 13,
+    "up": 7,
+    "highlighted_1_5": 3,
+    "ratio_min": 0.5961709708728846,
+    "ratio_max": 2.1536410952036915,
+    "cpp_median": 3644.5656565656564
+  },
+  "2026-04-01": {
+    "source": "databento",
+    "legs": 34,
+    "up": 17,
+    "highlighted_1_5": 10,
+    "ratio_min": 0.20761492159395936,
+    "ratio_max": 5.136007116910075,
+    "cpp_median": 1142.3272727272727
+  }
+}
