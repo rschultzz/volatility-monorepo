@@ -152,3 +152,87 @@ Under the locked L4, CR-BY cannot reach its pre-registered n on the 88-session t
 | A1.1 | Replaces L4's location rule (b): the impulse may extend before the pause. E = the most extreme price reached from the impulse until the start of the box window (running extreme); I = the distance from the impulse's 300 s opposite extreme to that E. A window qualifies only if, at no point from the impulse extreme to the window's end, price has retraced more than 0.5·I from the running E. Inside the window, (a) high − low ≤ f·I with the updated I. |
 
 Everything else in L4 (≥ 5-minute window, 30-minute search from the original impulse extreme, f = the smaller of {1/3, 1/2} reaching 150 per tercile, from counts only), and L1–L3, L5–L9, T1/T2 and S1–S9 are unchanged. Targets in L5 use the updated I.
+
+---
+
+## Step 0 under A1 (2026-10-25)
+
+Script `scripts/cr_by_step0_a1.py`: a copy of `cr_by_step0.py` (`1883cc0`) with L4 (b) replaced by A1.1. Log `scripts/logs/cr_by/step0_a1.log` (git-ignored). Read-only (`default_transaction_read_only = on`, `statement_timeout = 600s`), train only, holdout not read. One run.
+
+**No race outcome was computed at any event box.** The L5 race ran only on placebo boxes inside the A/A splits, and only the split statistic is reported.
+
+**Verdict: Step 0 under A1 PASSES.** f = 1/2 (203 / 202 / 203 eligible per P tercile); A/A calibration passes. The run is not started.
+
+### Operational choices fixed before the run (not stated in A1)
+
+- **Running extreme.** From the impulse row t: runE(u) = min low (down) or max high (up) over rows [t, u]. I(u) = |opposite extreme − runE(u)|, where the opposite extreme is the impulse's 300 s opposite extreme.
+- **Retrace rule.** Each row u from t to the window end is judged against the move size reached so far: a window fails if any row has retrace(u) > 0.5·I(u). Once the rule is violated, no later window qualifies.
+- **Updated I.** For a window ending at e: E_w = runE at the last row at or before e − 300, and I_w = |opposite extreme − E_w|. Rule (a) uses I_w, and so do the L5 targets.
+  - Inside the window price may make new extremes, bounded by range ≤ f·I_w.
+- **Placebo (L7).** A1 replaced the location rule with a retrace rule anchored on an impulse, which a placebo window does not have. Within any window, retrace from the running extreme cannot exceed the window range, and range ≤ f·I ≤ 0.5·I. So the placebo rule reduces to (a) with the event's I_w.
+- **Failure reasons:**
+  - "retrace": windows meeting the range rule exist, but all after the first retrace violation;
+  - "range": retrace-ok windows exist, but none meets (a);
+  - "both": neither kind of window exists.
+
+### Gate 1 — PASS
+
+88 sessions; 1,831 impulses at k = 3.0 (885 down, 946 up).
+
+### Gate 2 — box counts — PASS at f = 1/2
+
+| f | impulses with a box | no box: retrace | no box: range | no box: both | gap drops | eligible | per P tercile |
+|---|---|---|---|---|---|---|---|
+| 1/3 | 413 (22.6 %) | 840 | 82 | 496 | 7 | 406 | 136 / 135 / 135 |
+| **1/2** | **615 (33.6 %)** | 1,087 | 3 | 126 | 7 | **608** | **203 / 202 / 203** |
+
+- **f chosen: 1/2** (L4: the smaller f reaching 150 per tercile; 1/3 reaches 136).
+- P cut points −0.0061 / +0.0244. P percentiles 5 / 25 / 50 / 75 / 95: −0.054 / −0.015 / +0.009 / +0.035 / +0.074.
+- Eligible down / up: 248 / 360.
+- At f = 1/2, the remaining failures are almost all retrace (1,087): price gives back more than half the move before any 5-minute window settles.
+
+### Gate 3 — geometry (608 eligible boxes, f = 1/2)
+
+| | median | p5 / p25 / p75 / p95 |
+|---|---|---|
+| updated I | **11.50 pts** (46 ticks) | 6.34 / 8.69 / 15.75 / 25.00 |
+| box range | 5.50 pts (22 ticks) | 3.00 / 4.00 / 7.50 / 12.41 |
+| target distance 0.5·I | **5.75 pts** (23 ticks) | 3.17 / 4.34 / 7.88 / 12.50 |
+
+- Box duration is fixed at 5.0 min (the first qualifying window). Impulse → box end: median 6.5 min (IQR 5.2–8.1).
+- **A1 extension.** I_w / I_0 median 1.29 (p75 1.65, p95 2.50); I_0 median 8.50. The typical impulse extends about 30 % further before it pauses.
+- Box range / I median 0.49: most boxes sit near the f = 1/2 cap.
+- S5 split: I < 10 pts 216, 10–20 pts 311, ≥ 20 pts 81. Boxes ending after 12:30 PT: 26.
+
+### Gate 4 — placebo feasibility
+
+- **475 placebo boxes for 608 event boxes; per event median 0 (mean 0.78).**
+- **Events with none: 452.** Events with fewer than 5: 557.
+- Placebo per P tercile (event cut points): 187 / 101 / 187. **High-P placebo boxes: 187** (the T2 comparison set).
+- Why so few: placebo windows must fall within ±60 min of t_B, have no impulse condition in the 35 minutes before their end, and keep their range ≤ 0.5·I of a large move inside a quiet stretch. Such windows cluster on the few quiet sessions.
+- Spread across 150 parent events (A/A), the placebo is concentrated rather than matched event by event.
+
+### Gate 5 — worked event (seed 20261025; outcome hidden)
+
+- **Impulse.** Session 2026-01-26 (`XCME:ES.H26`), σ5_d 2.00. **Up** impulse at 07:48:20 PT. Opposite extreme 6976.00, impulse extreme E0 6983.75, I0 7.75 (3.88 σ5).
+- **A1 update.** Running extreme at box start E = 6985.00, updated I = 9.00. Retrace limit 0.5·I(u) (4.50 at box start); range cap f·I = 4.50.
+- **Box.** 07:49:44–07:54:44 PT, found 6.4 min after the extreme: low 6982.75, high 6987.25, range 4.50 (at the cap). Price made a new high (6987.25) inside the window, as A1 allows.
+- **Predictor.** D_box +686 (buying, signed in the impulse direction), V_box 9,274 → **P = 0.0740, high tercile** (absorption).
+- **Targets:**
+  - reversal 6978.25 (box low − 4.50);
+  - continuation 6991.75 (box high + 4.50).
+- The path is in the log, in 1-minute slots from 5 min before the impulse to the box end.
+
+### Gate 6 — A/A calibration — PASS
+
+- Race-window gap drops −6; ties or unresolved by 13:00 −11. **Resolved placebo 458** (per tercile 179 / 98 / 181) in 150 parent events.
+- 200 splits by parent event; each placebo box sits in its own P tercile (event cut points). Statistic: [high − low reversal rate](half 1) − (half 2).
+
+| | value |
+|---|---|
+| median | **−0.85 pts** (gate ±3) |
+| mean / sd | −0.71 / 12.04 |
+| p5 / p95 | −19.73 / +19.26 |
+| **CI excludes 0** | **4.5 % (9 / 200)** (gate ≤ 10 %) |
+
+**Note for the run (not a redefinition).** The split sd is about 12 pts, with roughly 90 high-P placebo per half. With 187 high-P placebo boxes against 203 high-P event boxes, T2's CI will be roughly ±12 pts, so T2 (≥ +8, CI lower > 0) is powered only for large effects.
