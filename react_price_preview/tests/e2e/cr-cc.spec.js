@@ -34,7 +34,7 @@ async function api(request, p) {
   return r.json()
 }
 
-async function openReview(page) {
+async function openReview(page, setName = SET) {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.addInitScript(() => {
     try {
@@ -46,7 +46,7 @@ async function openReview(page) {
   await page.locator('.tv-lightweight-charts').first().waitFor()
   await page.getByRole('button', { name: 'Show setup review panel' }).click()
   await page.getByTestId('review-panel').waitFor()
-  await page.getByTestId('review-panel').getByLabel('Set', { exact: true }).selectOption(SET)
+  await page.getByTestId('review-panel').getByLabel('Set', { exact: true }).selectOption(setName)
 }
 
 // Candle series data, and framing (test-only, via React's fiber tree): `frame` is the number of
@@ -387,3 +387,123 @@ test('A2: smile capped at entry in replay, later snapshots after reveal', async 
   await assertLaterSnapshotsSelectable(page, c, smileUrls)
 })
 
+
+
+// CR-CC A3 (read-only): display fixes on CR-CB cards. The time axis is drawn on canvas, so
+// "last label <= entry" is read from the time scale: the last time of every series in the
+// chart, and the visible range's end, must not pass the entry.
+async function axisState(page) {
+  return page.evaluate(() => {
+    const chartEl = document.querySelector('.tv-lightweight-charts')
+    const key = Object.keys(chartEl.parentElement).find((k) => k.startsWith('__reactFiber'))
+    const find = (pred) => {
+      let f = chartEl.parentElement[key]
+      for (let d = 0; f && d < 30; d += 1, f = f.return) {
+        for (let h = f.memoizedState; h; h = h.next) {
+          const v = h.memoizedState
+          const c = v && typeof v === 'object' && 'current' in v ? v.current : null
+          if (c && pred(c)) return c
+        }
+      }
+      return null
+    }
+    const chart = find((c) => typeof c.timeScale === 'function')
+    let maxTime = -Infinity
+    for (const pane of chart.panes()) {
+      for (const s of pane.getSeries()) {
+        const d = s.data()
+        if (d.length) maxTime = Math.max(maxTime, Number(d[d.length - 1].time))
+      }
+    }
+    return { maxTime, visibleTo: Number(chart.timeScale().getVisibleRange()?.to) }
+  })
+}
+
+async function noRawJson(page) {
+  const text = await page.getByTestId('review-active').innerText()
+  expect(text).not.toMatch(/[{\[]\s*"/)
+  expect(text).not.toMatch(/"\s*:/)
+  await expect(page.getByTestId('review-meta-raw')).toHaveCount(0)
+  return text
+}
+
+test('A3 (read-only): round-2 card — readable meta, axis ends at entry, range box', async ({ page, request }) => {
+  const list = await api(request, `/candidates?set=${encodeURIComponent('cr-cb:round-2')}`)
+  // a card whose range has a formation time and whose zone has width, not yet revealed
+  const c = list.candidates.find((x) => !x.revealed && x.meta?.range?.formed_ts_pt && x.meta?.edge_touch_ts_pt
+    && x.meta?.zone && Number(x.meta.zone.hi) > Number(x.meta.zone.lo))
+  test.skip(!c, 'no suitable round-2 card')
+  await openReview(page, 'cr-cb:round-2')
+  await activate(page, c.id, c.session_date)
+
+  const text = await noRawJson(page)
+  for (const label of ['flow', 'rules', 'skew', 'named', 'range', 'zone', 'cluster']) expect(text).toContain(label)
+  expect(text).toMatch(/formed \d{2}:\d{2}/)
+  expect(text).toMatch(/span [\d.]+ pts/)
+  await expect(page.getByTestId('review-rules')).toContainText('FR1')
+  // "cell" appears once (top row), not again from meta
+  expect((text.match(/\bcell\b/g) || []).length).toBe(1)
+  // raw only on request
+  await page.getByTestId('review-active').getByRole('button', { name: 'show raw' }).first().click()
+  await expect(page.getByTestId('review-meta-raw')).toHaveCount(1)
+  await page.getByTestId('review-active').getByRole('button', { name: 'hide raw' }).first().click()
+  await expect(page.getByTestId('review-meta-raw')).toHaveCount(0)
+
+  const ax = await axisState(page)
+  expect(ax.maxTime).toBeLessThan(shifted(c.entry_ts_pt))
+  expect(ax.visibleTo).toBeLessThan(shifted(c.entry_ts_pt))
+
+  await expect(page.getByTestId('review-range-box')).toHaveCount(1)
+  await expect(page.getByTestId('review-zone-band')).toHaveCount(1)
+  // frame formation → entry so the box is wide enough to see
+  await chartState(page, { from: shifted(c.meta.range.formed_ts_pt.slice(0, 19)) - 20 * 60, to: shifted(c.entry_ts_pt) - 60, margin: 4 })
+  // test-only: zoom the price axis to the zone +/- 10 pts (the GEX lines otherwise stretch
+  // it over ~500 pts and an 11-pt range is ~15 px tall)
+  await page.evaluate(({ lo, hi }) => {
+    const chartEl = document.querySelector('.tv-lightweight-charts')
+    const key = Object.keys(chartEl.parentElement).find((k) => k.startsWith('__reactFiber'))
+    let f = chartEl.parentElement[key]
+    let series = null
+    for (let d = 0; f && d < 30 && !series; d += 1, f = f.return) {
+      for (let h = f.memoizedState; h; h = h.next) {
+        const v = h.memoizedState
+        const cur = v && typeof v === 'object' && 'current' in v ? v.current : null
+        if (cur && typeof cur.priceToCoordinate === 'function' && cur.seriesType() === 'Candlestick') { series = cur; break }
+      }
+    }
+    series.priceScale().setVisibleRange({ from: lo - 10, to: hi + 10 })
+  }, { lo: Number(c.meta.zone.lo), hi: Number(c.meta.zone.hi) })
+  await page.mouse.move(5, 5)
+  await page.waitForTimeout(800)
+  const box = await page.getByTestId('review-range-box').boundingBox()
+  expect(box.width).toBeGreaterThan(4)
+  expect(box.height).toBeGreaterThan(20)
+  // visible above the opaque chart canvas: the overlay (pointer-events none, so
+  // elementFromPoint can't see it) stacks above .chart-host, its sibling in the stage
+  const z = await page.evaluate(() => ({
+    shapes: Number(getComputedStyle(document.querySelector('[data-testid=review-shapes]')).zIndex),
+    host: Number(getComputedStyle(document.querySelector('.chart-host')).zIndex),
+    sameParent: document.querySelector('[data-testid=review-shapes]').parentElement === document.querySelector('.chart-host').parentElement,
+  }))
+  expect(z.sameParent).toBeTruthy()
+  expect(z.shapes).toBeGreaterThan(z.host)
+  await page.screenshot({ path: path.join(ASSETS, `a3-round2-${c.session_date}.png`) })
+})
+
+test('A3 (read-only): round-1 2026-01-13 09:15 card — axis ends at entry, not 13:00', async ({ page, request }) => {
+  const list = await api(request, `/candidates?set=${encodeURIComponent('cr-cb:round-1')}`)
+  const c = list.candidates.find((x) => x.session_date === '2026-01-13' && x.entry_ts_pt.startsWith('2026-01-13T09:15'))
+  test.skip(!c || c.revealed, 'card missing or revealed')
+  await openReview(page, 'cr-cb:round-1')
+  await activate(page, c.id, c.session_date)
+  await noRawJson(page)
+  const ax = await axisState(page)
+  expect(ax.maxTime).toBeLessThan(shifted(c.entry_ts_pt))
+  expect(ax.visibleTo).toBeLessThan(shifted(c.entry_ts_pt))
+  expect(ax.visibleTo).toBeLessThan(shifted('2026-01-13T13:00:00'))
+  // round-1 ranges carry no formation time: no box
+  await expect(page.getByTestId('review-range-box')).toHaveCount(0)
+  await page.mouse.move(5, 5)
+  await page.waitForTimeout(400)
+  await page.screenshot({ path: path.join(ASSETS, 'a3-round1-2026-01-13.png') })
+})
