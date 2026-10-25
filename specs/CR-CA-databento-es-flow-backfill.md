@@ -270,3 +270,39 @@ Roll calendar extension (L3): ESH6 front 2025-12-08 .. 2026-03-06, ESM6 from 202
 
 - **Outside roll weeks** (6 sessions) the Databento-built front minutes equal the 2025 `ironbeam_es_1m_bars` (`source = 'databento'`, `ES.c.0`). Close equal on 99.5–100 % of minutes, max |diff| 0.25, volume ratio 1.000. Same source, same trades.
 - **Inside roll weeks** (4 sessions) the bars are the dying contract: +51 to +56 pts against the new front, the dying-contract problem in open question `databento-2025-backfill-calendar-roll-dying-contract`. On 2025-06-10 the bar contract (ESM5) carried 84× the L3 front's (ESU5) volume, and on 2025-09-12 10.6×. On those days the L3 "front" was the thin contract. Both contracts are stored on roll-week sessions, so readers choose. No fix here.
+
+## Load (2026-10-25) — complete, all 31 months PASS
+
+- **DDL** applied once with `DATABASE_URL` (`scripts/cr_ca_ddl.sql`): `es_flow_1s_databento`, PK (ts_utc, symbol), index on trade_date; `dash_backfill_writer` has SELECT, INSERT (no DELETE).
+- **Backfill:** `scripts/cr_ca_databento_flow.py`, one `backfill_run(conn, "CR-CA")` per month as `dash_backfill_writer`. 31 runs in `bt_backfill_runs`, all `completed`, 2026-10-25 19:04 → 20:07 UTC. Per-month smoke results are in `smoke_test_results`; log in `scripts/logs/cr_ca/backfill_*.txt`.
+- **Raw files (L7):** 739 DBN files, 4.3 GB, in the main checkout's `data/databento/raw/` (git-ignored by this branch's `.gitignore`; untracked in the main checkout until merge). The Q2 and Q4 files were reused.
+- **Spend:** priced $305.95 for trades (cap $330, A3.4). The Databento invoice was not checked from here.
+
+**Table:**
+- 15,285,418 rows; 643 sessions (every NYSE session 2024-04-03 → 2026-10-23); 11 contracts ESM4 → ESZ6; 757,614,587 contracts of volume.
+- `unknown_vol` 3,276 contracts in total (side N, 0.0004 %).
+- Size: 3.43 GB total (2.66 GB heap), 224 B/row. DB 26.58 GB after the load (stop 32 GB, A3.5).
+
+| contract | `symbol` | rows | trade_date span |
+|---|---|---|---|
+| ESM4 | XCME:ES.M24 | 1,166,601 | 2024-04-03 .. 06-21 |
+| ESU4 | XCME:ES.U24 | 1,492,432 | 2024-06-10 .. 09-20 |
+| ESZ4 | XCME:ES.Z24 | 1,473,088 | 2024-09-09 .. 12-20 |
+| ESH5 | XCME:ES.H25 | 1,471,248 | 2024-12-09 .. 2025-03-21 |
+| ESM5 | XCME:ES.M25 | 1,583,325 | 2025-03-10 .. 06-20 |
+| ESU5 | XCME:ES.U25 | 1,388,577 | 2025-06-09 .. 09-19 |
+| ESZ5 | XCME:ES.Z25 | 1,505,359 | 2025-09-08 .. 12-19 |
+| ESH6 | XCME:ES.H26 | 1,468,480 | 2025-12-08 .. 2026-03-20 |
+| ESM6 | XCME:ES.M26 | 1,548,749 | 2026-03-09 .. 06-18 |
+| ESU6 | XCME:ES.U26 | 1,504,477 | 2026-06-08 .. 09-18 |
+| ESZ6 | XCME:ES.Z26 | 683,082 | 2026-09-08 .. 10-23 |
+
+**Per-month smoke (all PASS):**
+- DB rows = built rows = inserted rows every month.
+- Every session has exactly the L3 contract set.
+- 0 rows outside [06:15, 13:00) PT; 0 rows with trade_date ≠ UTC date of ts_utc.
+- Sign test (front, minute delta vs close − open) +0.47 to +0.70. The lowest values fall in roll months (2026-06 +0.468, 2025-12 +0.485, 2024-09 +0.486), where the L3 front is the thin contract in the roll Monday's first days.
+- Front rows per session: median 19.5–23.9 k. Minima are roll Mondays (new front thin: 1.7–6.7 k) and early closes (12–13 k).
+- Holdout months (2026-06 → 10) were loaded; only these mechanical checks touched them (A3.3).
+
+**Edge note:** `get_range` bounds requests on the record timestamp (`ts_recv`); rows are bucketed and window-filtered on `ts_event` (A1.3). A trade with `ts_event` < 13:00:00 and `ts_recv` ≥ 13:00:00 PT (microseconds) can be missing from the last second.
