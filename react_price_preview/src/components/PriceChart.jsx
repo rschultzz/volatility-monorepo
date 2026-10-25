@@ -6,6 +6,7 @@ import {
   CandlestickSeries,
   LineSeries,
   LineStyle,
+  createSeriesMarkers,
 } from 'lightweight-charts'
 import SmileChart from './SmileChart'
 import SignalPanel from './SignalPanel'
@@ -22,6 +23,7 @@ import {
   QUALITY_SHORT,
 } from 'web-shared'
 import LandscapeChartOverlay from './LandscapeChartOverlay'
+import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
@@ -126,6 +128,36 @@ function utcEpochShowingZoneTime(originalEpochSec, timeZone = 'America/Los_Angel
 
 function shiftedEpochToDate(epochSec) {
   return new Date(epochSec * 1000)
+}
+
+// CR-CC — a naive PT wall-clock ISO string ("2026-03-10T07:37:00") as a shifted
+// epoch: the chart's time axis shows PT wall-clock as UTC, so the PT fields go
+// straight into Date.UTC.
+function ptIsoToShiftedEpoch(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/.exec(String(iso || ''))
+  if (!m) return null
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)) / 1000
+}
+
+// Time of the last candle at or before (or strictly before) `t`, or null.
+function snapToCandleTime(candles, t, strict = false) {
+  if (t == null || !Array.isArray(candles) || candles.length === 0) return null
+  let found = null
+  for (let i = 0; i < candles.length; i += 1) {
+    const ct = Number(candles[i]?.time)
+    if (!Number.isFinite(ct)) continue
+    if (strict ? ct < t : ct <= t) found = ct
+    else break
+  }
+  return found
+}
+
+const REVIEW_LINE_COLORS = {
+  level: '#e879f9',
+  extreme: '#94a3b8',
+  entry: '#38bdf8',
+  stop: '#f87171',
+  exit: '#a78bfa',
 }
 
 function pad2(value) {
@@ -711,6 +743,13 @@ export default function PriceChart({
   analoguesError = null,
   analoguesK = 5,
   onAnaloguesKChange = null,
+  // Setup review (CR-CC). State, fetches and the panel live in App.jsx; PriceChart
+  // owns the REVIEW pill, hides SIGNALS / smile / condor while the replay cutoff is
+  // active (reviewHide), and draws the active candidate's lines and markers.
+  reviewOpen = false,
+  onToggleReview = null,
+  reviewCandidate = null,
+  reviewHide = false,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -1147,6 +1186,15 @@ export default function PriceChart({
   useEffect(() => {
     landscapeOpenRef.current = landscapeOpen
   }, [landscapeOpen])
+
+  // CR-CC — the REVIEW panel (rendered by App.jsx, docked left of the landscape
+  // panel) also shortens the chart, so the replay's last bars stay visible.
+  const reviewOpenRef = useRef(reviewOpen)
+  useEffect(() => {
+    reviewOpenRef.current = reviewOpen
+  }, [reviewOpen])
+  const chartRightInset = () =>
+    (landscapeOpenRef.current ? LANDSCAPE_PANEL_WIDTH : 0) + (reviewOpenRef.current ? REVIEW_PANEL_WIDTH : 0)
 
   const shiftedCandles = useMemo(() => {
     return (Array.isArray(candles) ? candles : []).map((bar) => ({
@@ -1818,7 +1866,7 @@ export default function PriceChart({
         shiftedCandlesRef.current,
         intervalRef.current
       )
-      const rightInset = landscapeOpenRef.current ? LANDSCAPE_PANEL_WIDTH : 0
+      const rightInset = chartRightInset()
       const info = pointerInfo(evt, stage, getLeftAxisWidth(), rightInset)
       if (!info || info.overTimeAxis || info.overLandscapePanel) {
         setInteractionActive(false, 180)
@@ -1856,7 +1904,7 @@ export default function PriceChart({
         evt,
         stage,
         getLeftAxisWidth(),
-        landscapeOpenRef.current ? LANDSCAPE_PANEL_WIDTH : 0,
+        chartRightInset(),
       )
       if (!info || info.overTimeAxis || info.overPriceAxis || info.overLandscapePanel) return
       // Drag on the IV axis → pan IV scale only (mirrors the right-axis
@@ -2235,6 +2283,83 @@ export default function PriceChart({
       })
     }
   }, [displayCandles, shiftedCandles, sessionTimeRange, centerLogicalRange, onVisibleLogicalRangeChange])
+
+  // CR-CC L6 / L8 — the review candidate on the candlestick series: price lines for
+  // the level (net / gross $bn), extreme, entry and stop; markers at the test /
+  // confirm / retest times (snapped to the bar containing them) and at the entry
+  // (on the signal bar: the last bar starting before entry_ts_pt). After reveal,
+  // an exit line and marker from the outcome.
+  const reviewLinesRef = useRef([])
+  const reviewMarkersRef = useRef(null)
+  useEffect(() => {
+    const series = seriesRef.current
+    if (!series) return undefined
+    for (const line of reviewLinesRef.current) {
+      try {
+        series.removePriceLine(line)
+      } catch {
+        /* series replaced */
+      }
+    }
+    reviewLinesRef.current = []
+    if (!reviewMarkersRef.current || reviewMarkersRef.current.series !== series) {
+      reviewMarkersRef.current = { series, api: createSeriesMarkers(series, []) }
+    }
+
+    const cand = reviewCandidate
+    if (!cand) {
+      reviewMarkersRef.current.api.setMarkers([])
+      return undefined
+    }
+    const outcome = cand.revealed ? cand.outcome : null
+    const long = cand.direction === 'long'
+    const fmtBn = (v) => (v == null || !Number.isFinite(Number(v)) ? '—' : `${Number(v).toFixed(1)}`)
+
+    const addLine = (price, color, title, lineStyle = LineStyle.Solid, lineWidth = 1) => {
+      const p = Number(price)
+      if (price == null || !Number.isFinite(p)) return
+      reviewLinesRef.current.push(series.createPriceLine({
+        price: p,
+        color,
+        lineWidth,
+        lineStyle,
+        axisLabelVisible: true,
+        title,
+      }))
+    }
+    addLine(cand.level_price, REVIEW_LINE_COLORS.level,
+      `level ${fmtBn(cand.level_net_bn)} / ${fmtBn(cand.level_gross_bn)} $bn`, LineStyle.Solid, 2)
+    addLine(cand.extreme_price, REVIEW_LINE_COLORS.extreme, long ? 'extreme L' : 'extreme H', LineStyle.Dashed)
+    addLine(cand.entry_price, REVIEW_LINE_COLORS.entry, 'entry', LineStyle.Dotted)
+    addLine(cand.stop_price, REVIEW_LINE_COLORS.stop, 'stop', LineStyle.Dashed)
+    if (outcome?.exit_price != null) addLine(outcome.exit_price, REVIEW_LINE_COLORS.exit, 'exit', LineStyle.Dotted)
+
+    const markers = []
+    const pushMarker = (iso, strict, m) => {
+      const t = snapToCandleTime(displayCandles, ptIsoToShiftedEpoch(iso), strict)
+      if (t != null) markers.push({ time: t, ...m })
+    }
+    pushMarker(cand.test_ts_pt, false, { position: long ? 'belowBar' : 'aboveBar', shape: 'circle', color: '#fbbf24', text: 'test' })
+    pushMarker(cand.confirm_ts_pt, false, { position: long ? 'belowBar' : 'aboveBar', shape: 'square', color: '#fb923c', text: 'confirm' })
+    pushMarker(cand.retest_ts_pt, false, { position: long ? 'belowBar' : 'aboveBar', shape: 'circle', color: '#f472b6', text: 'retest' })
+    pushMarker(cand.entry_ts_pt, true, {
+      position: long ? 'belowBar' : 'aboveBar',
+      shape: long ? 'arrowUp' : 'arrowDown',
+      color: REVIEW_LINE_COLORS.entry,
+      text: 'entry',
+    })
+    if (outcome?.exit_ts_pt) {
+      pushMarker(outcome.exit_ts_pt, false, {
+        position: long ? 'aboveBar' : 'belowBar',
+        shape: long ? 'arrowDown' : 'arrowUp',
+        color: REVIEW_LINE_COLORS.exit,
+        text: outcome.pnl_pts != null ? `exit ${Number(outcome.pnl_pts) > 0 ? '+' : ''}${Number(outcome.pnl_pts).toFixed(2)}` : 'exit',
+      })
+    }
+    markers.sort((a, b) => a.time - b.time)
+    reviewMarkersRef.current.api.setMarkers(markers)
+    return undefined
+  }, [reviewCandidate, displayCandles])
 
   useEffect(() => {
     if (!settingsOpen) return undefined
@@ -2924,7 +3049,7 @@ export default function PriceChart({
           style={{ position: 'relative' }}
         >
           <CondorPricingPanel
-            condorPricing={condorPricing}
+            condorPricing={reviewHide ? null : condorPricing}
             positionStyle={condorPanelStyle}
             onHandleMouseDown={handleCondorDragStart}
             onResetPosition={() => setCondorPanelPos(null)}
@@ -2967,13 +3092,19 @@ export default function PriceChart({
 
           <ChartToggleBar
             pills={[
-              { key: 'smile', label: 'SMILE', isOpen: !smileCollapsed, onToggle: toggleSmileCollapsed },
-              { key: 'signals', label: 'SIGNALS', isOpen: !signalsCollapsed, onToggle: toggleSignalsCollapsed },
+              // CR-CC A1.3: SMILE and SIGNALS are hidden while a review replay is active.
+              ...(reviewHide
+                ? []
+                : [
+                    { key: 'smile', label: 'SMILE', isOpen: !smileCollapsed, onToggle: toggleSmileCollapsed },
+                    { key: 'signals', label: 'SIGNALS', isOpen: !signalsCollapsed, onToggle: toggleSignalsCollapsed },
+                  ]),
               ...(Array.isArray(normalizedGexSegments) && normalizedGexSegments.length > 0 && gexEnabled
                 ? [{ key: 'gex', label: 'GEX', isOpen: gexPanelOpen, onToggle: () => setGexPanelOpen(o => !o), title: 'Show GEX legend' }]
                 : []),
               { key: 'landscape', label: 'LANDSCAPE', isOpen: landscapeOpen, onToggle: onToggleLandscape || (() => {}), title: 'Show GEX landscape panel' },
               { key: 'analogues', label: 'ANALOGUES', isOpen: analoguesOpen, onToggle: onToggleAnalogues || (() => {}), title: 'Show day analogue comparison panel' },
+              { key: 'review', label: 'REVIEW', isOpen: reviewOpen, onToggle: onToggleReview || (() => {}), title: 'Show setup review panel' },
             ]}
           />
 
@@ -3013,7 +3144,7 @@ export default function PriceChart({
             />
           )}
 
-          {!smileCollapsed && (
+          {!smileCollapsed && !reviewHide && (
           <div
             onMouseDown={handleFloatingMouseDown}
             onWheel={(e) => e.stopPropagation()}
@@ -3185,13 +3316,17 @@ export default function PriceChart({
             />
           )}
 
-          {/* Signal Panel — separate floating window, self-managed fetch */}
-          <SignalPanel
-            tradeDate={tradeDate}
-            isToday={tradeDate === new Date().toISOString().slice(0, 10)}
-            collapsed={signalsCollapsed}
-            onToggleCollapsed={toggleSignalsCollapsed}
-          />
+          {/* Signal Panel — separate floating window, self-managed fetch.
+              Unmounted during a review replay (CR-CC A1.3) so it neither shows
+              nor scans the day's signals. */}
+          {!reviewHide && (
+            <SignalPanel
+              tradeDate={tradeDate}
+              isToday={tradeDate === new Date().toISOString().slice(0, 10)}
+              collapsed={signalsCollapsed}
+              onToggleCollapsed={toggleSignalsCollapsed}
+            />
+          )}
 
           {settingsOpen && (
             <div
@@ -4328,7 +4463,9 @@ export default function PriceChart({
             ref={hostRef}
             className="chart-host"
             style={{
-              width: landscapeOpen ? `calc(100% - ${LANDSCAPE_PANEL_WIDTH}px)` : '100%',
+              width: landscapeOpen || reviewOpen
+                ? `calc(100% - ${(landscapeOpen ? LANDSCAPE_PANEL_WIDTH : 0) + (reviewOpen ? REVIEW_PANEL_WIDTH : 0)}px)`
+                : '100%',
               height: '100%',
             }}
           />
