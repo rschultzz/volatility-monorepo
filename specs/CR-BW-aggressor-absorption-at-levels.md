@@ -215,3 +215,115 @@ No further outcome was computed. What the A/A says, without diagnosing further:
 | A1.5 | **Baseline warm-up** (amends L7): B_d needs ≥ **5** prior usable sessions (trailing up to 20). Q4 showed B_d stable (ratio p5–p95 0.96–1.06). |
 | A1.6 | **Q1 outliers:** before the run, trace the 1-second-vs-1-minute differences > 1 pt (count, sessions, times, symbol). If any falls inside a kept event window, drop that event and count it. |
 | A1.7 | **S8 strong levels** (readout only, not gated): T1 and S1 restricted to levels with magnitude ≥ 100 $bn (Ryan: "100 BN is a strong level", untested). Report n per tercile; no conclusion below 50 per tercile. |
+
+---
+
+## Step 0 under A1 (2026-10-25)
+
+Script `scripts/cr_bw_step0_a1.py` (log `scripts/logs/cr_bw/step0_a1.log`, git-ignored). It used the same read-only connection and holdout guard as the first Step 0 (`default_transaction_read_only = on`, `statement_timeout = 600s`, sessions ≤ 2026-06-05). `place_levels` / `bucket_levels` are imported unchanged. The docstring fixes every operational choice the amendment leaves open (listed below) before the run. One run.
+
+**No race outcome was computed at real levels or at the run's placebo levels as a set.** The race ran only on placebo events inside the A1.3 splits, and only the split statistic's distribution is reported.
+
+**Verdict: Step 0 under A1 PASSES.** The tercile gate passes (min 210 filled), and so does the A/A calibration (3.5 % of splits exclude 0; median −0.14 pts). The run is not started; that awaits Ryan.
+
+### Operational choices fixed before the run (not stated in A1)
+
+- **A1.1 chart band.** The chart applies its price band (the session's own bars) before the 5-pt spacing. That band is lookahead, so spacing runs over every bucket of the [D, D+30] universe; then the ±1·IM window; then the top 6. `_select_levels` is re-implemented in the script (same loop: mag ≥ threshold, descending mag, keep if ≥ 5 pts from every kept level). Importing `callbacks.py` would open the app's own DB engine, which is not the read-only role.
+- **RTH open.** The open of the first flow row in [06:30:00, 06:31:00) PT. If there is none, the open of the `ironbeam_es_1m_bars` bar starting 06:30 PT; this applied only to 2026-03-04.
+- **A1.4 gap measure.** The largest of: (first row − window start), consecutive row gaps, and (window end − last row). The window start is clipped to 06:30 PT.
+  - Real events: Step 0 applies the rule to the pre-touch window only. The race window ends where the race resolves, and that is an outcome. So for real events the race-window part is reported only as an upper bound (gap or outlier anywhere in [touch, 13:00)).
+  - Placebo events in the A/A: the rule is applied in full.
+- **A1.5 baseline sessions.** Sessions passing L14 (a)–(c) with flow. A window is dropped if it has an RTH gap > 15 s or net = 0.
+- **A1.2 placebo.** Ties go to the lower bin. Pseudo-levels are deduplicated per session, and each keeps its parent's mag/net for S3/S8.
+- **A1.3 split.** Over the pseudo-levels that carry ≥ 1 eligible filled event: 169 of the 427. They are shuffled with `default_rng(20261025)` and cut into halves 200 times. The bootstrap is one `default_rng(20260920)` stream across splits.
+
+### A1.6 — Q1 outlier trace
+
+- Over the 88 usable sessions (RTH), **756 (minute, field) pairs differ by > 1 pt**. That is 465 distinct minutes on 84 sessions: O 226, H 187, L 174, C 169; H26 262, M26 494. |diff| median 2.5, p90 7.5, max 33.25.
+- **Timing.** 108 pairs fall in the 12:59 PT minute and 50 in 06:30. The rest cluster on fast days: 2026-04-01 89, 04-02 71, 03-31 49, 02-26 34.
+- **Which series is wrong: the 1-minute bars, not the flow.** In every traced minute the flow is continuous: each minute's open equals the prior close, with 60 one-second rows per minute. The bar is not. Example, 2026-04-02 07:36 PT:
+  - bar O/H/L/C 6601.0 / 6601.0 / 6599.25 / 6599.75, volume **584**;
+  - flow 6601.0 / 6634.25 / 6597.0 / 6626.25, volume **27,329**;
+  - the next bar opens at 6626.5, the flow's close.
+
+  In the 12:59 PT minute, bar volume is about half the flow's (2026-05-18: 24,298 vs 44,971). The other four traced minutes show the same pattern (bar opens at the minute's later price; the flow holds the first-second prints).
+- **Raw trades.** `ironbeam_es_trades` has no rows retained for these minutes.
+- **Cause.** Most consistent with the 1-minute bar feed missing trades in fast or boundary minutes. Not measured further.
+- **Rule applied as written (A1.6):** an event is dropped when an outlier minute overlaps its pre-touch window. This removes 138 real and 144 placebo events, although the flow series those events use is not the defective one.
+
+### Sessions after each rule
+
+| rule | removed | remaining |
+|---|---|---|
+| trading sessions 2025-12-26 → 2026-06-05 | | 111 |
+| L14a roll week | 10 | 101 |
+| L14b no ES 15:45 ET bar on A (2025-12-26, 2026-02-18, 02-19) | 3 | 98 |
+| L14c roll mismatch | 0 | 98 |
+| no flow rows (2026-03-03) | 1 | 97 |
+| no RTH open | 0 | 97 |
+| no canonical `bt_daily_features` row (01-02, 01-20, 02-17, 04-06, 05-26) | 5 | 92 |
+| IM null / ≤ 0, no `orats_oi_gamma` rows | 0 | 92 |
+| < 5 prior baseline sessions (12-29, 12-30, 12-31, 01-05) | 4 | **88** |
+
+**Usable: 88 sessions, 2026-01-06 → 2026-06-05** (53 before A1). Baseline windows dropped per session: median 0 of 78, max 57.
+
+### Levels (A1.1)
+
+- Chart lines (mag ≥ 40 $bn, 5-pt spacing) within ±1·IM before the top-6 cut: median 15 per session (IQR 11–19, max 31).
+- After the top-6 cut: median 6 (IQR 6–6, min 1), 6 on 86 of 88 sessions, **522 levels** in total.
+- Magnitude median 139.2 $bn (IQR 102–200). Net sign −/+ 169 / 353. |L − open| median 26.5 pts.
+- **≥ 100 $bn: 399 levels on 86 sessions.**
+- Placebo (A1.2): **427 pseudo-levels** (target 2 × 522 = 1,044 before dedup and the ≥ 10-pt rule), median 4 per session (IQR 3–6).
+
+### Events (no outcomes)
+
+| | armed touches | − A1.6 outlier in pre-window | − A1.4 gap > 15 s in pre-window | kept | eligible (D > 0) | D ≤ 0 (S6) |
+|---|---|---|---|---|---|---|
+| real | 1,071 | 138 | 4 | 929 | 711 | 218 |
+| placebo | 757 | 144 | 8 | 605 | 455 | 150 |
+
+Real kept events per session: median 10 (IQR 5–14, max 38). A_rel tercile cut points (real eligible): 1.632 / 3.144.
+
+| real (eligible) | eligible | filled | fill rate | filled at ≥ 100 $bn (S8) | race-window upper-bound drop | filled left at that bound |
+|---|---|---|---|---|---|---|
+| low (absorption) | 237 | **224** | 0.945 | 169 | 192 | 32 |
+| mid | 237 | 213 | 0.899 | 168 | 175 | 38 |
+| high (continuation) | 237 | **210** | 0.886 | 163 | 172 | 38 |
+
+| placebo (eligible, real cut points) | eligible | filled | fill rate | filled at ≥ 100 $bn |
+|---|---|---|---|---|
+| low | 143 | 129 | 0.902 | 103 |
+| mid | 133 | 119 | 0.895 | 104 |
+| high | 179 | 166 | 0.927 | 133 |
+
+- Entry-fill rate: real 0.912 (all kept) / 0.910 (eligible); placebo 0.902 / 0.910.
+- Real eligible filled, S3 neg/pos net 212 / 435; S4 before/after 10:00 PT 442 / 205.
+- **Gate: every real tercile ≥ 150 eligible filled → PASS (min 210).**
+- **The race-window upper bound is not informative.** It counts any > 15 s gap or outlier minute between the touch and 13:00, and the 12:59 PT bar defect sits on most sessions. So the bound drops almost every event. Measured on the A/A placebo races (actual race windows), the race-window rule removed **2 of 414** (0.5 %). The 8-tick races resolve long before the close. At that rate the real terciles stay near 209–223.
+- **S8 (≥ 100 $bn):** 163–169 filled real events per tercile, above A1.7's 50 floor.
+- The placebo terciles lean high (179 vs 143 eligible): with the real cut points, pseudo-level touches show easier continuation more often. This is a predictor distribution, not an outcome.
+
+### Q4 — baseline B_d (A1.5)
+
+Median 4.138 pts / 1,000 contracts (IQR 3.704–4.792, range 3.01–5.71). Day-to-day ratio p5 / median / p95 0.956 / 1.000 / 1.050. 14 sessions rest on fewer than 20 prior baseline sessions (min 5).
+
+### A1.3 — A/A calibration — PASS
+
+- Placebo eligible filled: 414. Race-window drops (gap or outlier): −2. Unresolved: 0. Resolved: 412.
+- 200 splits of 169 pseudo-levels; 2,000 bootstrap resamples per split.
+
+| | value |
+|---|---|
+| statistic, median | **−0.14 pts** (gate ±3) |
+| mean / sd | +0.88 / 11.42 |
+| p5 / p25 / p75 / p95 | −17.74 / −7.24 / +8.62 / +18.44 |
+| min / max | −28.07 / +37.15 |
+| CI half-width, median | 23.37 pts |
+| split sd ÷ (median half-width / 1.96) | 0.96 (≈ 1 if calibrated) |
+| **share of splits with CI excluding 0** | **3.5 % (7 / 200)** (gate ≤ 10 %) |
+
+Histogram (5-pt bins, −30 → +40): 1, 3, 10, 18, 33, 36, 28, 26, 20, 16, 4, 3, 1, 1.
+
+The session-cluster bootstrap is calibrated on this harness: the spread of the split statistic matches the bootstrap CI width (ratio 0.96), and it excludes 0 at about the nominal rate. The first Step 0's single-pair failure (+16.22) sits inside the A1 split distribution (p95 +18.4).
+
+**Power, for the record (not a redefinition):** each A/A half holds about 200 placebo events, and the split CI half-width is about 23 pts. T2 compares about 640 real events with about 410 placebo events, so its CI will be narrower than the A/A's, but likely still above ±10 pts. T2 (≥ +5 with lower bound > 0) is under-powered for effects smaller than about 15 pts.
