@@ -349,3 +349,19 @@ D1 distribution (post-hoc): dropped median 34.2 min (IQR 14.6–93.3), mean 50.4
 - **Restoring them roughly halves the F7 effect** to +3.5, and its CI covers 0.
 - **The kept placebo is dominated by EDGE tests** (63 %, against 24 % of real tests). Within EDGE the real − kept gap stays about +9, while INTERIOR is about +2.
 - Both readings point to construction (which placebo tests survive, and where they sit in the range), not to swings holding price.
+
+## Commit map after rebase onto `origin/main` (2026-10-25)
+
+The branch was rebased twice before the PR. The SHAs quoted above (and in script docstrings) are pre-rebase. The content is identical: script files and their sha256 are unchanged.
+
+| quoted | on origin |
+|---|---|
+| `1309278` / `7b25f53` spec freeze | `18399c2` |
+| `c4421d4` / `ced6671` Step 0 | `d8e633b` |
+| `9103e51` A1 | `0ad51ec` |
+| `b9414a0` Step 0 under A1 (lib at gate run) | `04c0830` |
+| `8ada987` Stage 1 script (before run) | `1ccbca7` |
+| `0b71e3d` Stage 1 result | `b800b99` |
+| `8faf556` A2 | `ddc0957` |
+| `293efb3` F7 diagnostic script (before run) | `ca7245f` |
+| A2 result | `b2276b9` |
