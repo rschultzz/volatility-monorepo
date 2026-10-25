@@ -199,3 +199,19 @@ No further outcome was computed. What the A/A says, without diagnosing further:
 2. **Placebo thinness.** At 25 $bn, real levels fill most of the ±1·IM grid. Options: (a) average over K placebo donors per session (e.g. K = 10), which raises n and lowers donor variance; (b) relax the 5-pt separation rule; (c) raise the level threshold (e.g. 50 $bn), which leaves more room for pseudo-levels but cuts real n.
 3. **Sample size.** 53 usable sessions. Over half the losses are the B_d warm-up (19) and flow gaps (22). Options: relax the flow-gap rule (13 of 22 have a maximum gap ≤ 120 s), or shorten the baseline warm-up (e.g. 10 sessions).
 4. **Field-conventions row** for `ironbeam_es_flow_1s` OHLC (Q1 measured: equals `ironbeam_es_1m_bars` per minute to the tick on ~98 %; median 0; p99 0.25–0.5; rare outliers to 11.75 pts). Also: one symbol per session, `trade_date` = UTC date, RTH feed gaps on 22 of 111 train sessions. To be written at session end.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-25, after Step 0; no outcome computed at real or run-placebo levels)
+
+**Step 0 found:** at 25 $bn, real levels occupy about two-thirds of the 5-pt bins within ±1·IM. The cross-session placebo kept only 261 pseudo-levels against 906 real. One A/A pair gave +16.22 [+2.91, +31.08]. This amendment makes levels sparse, moves the placebo into the same session, and calibrates the bootstrap. T1/T2 pass criteria, L6 (trade, R = 8 ticks primary, fills, costs), L7 (absorption), L8 (real-event terciles, applied to placebo too), L10–L11 and S1–S7 are unchanged.
+
+| # | Clause |
+|---|---|
+| A1.1 | **Levels = the chart's Corrected lines, as Ryan filters them** (replaces L4's selection). Rows: `orats_oi_gamma` for session D with `expir_date` in [D, D + 30 calendar days]. Placement: CR-BT `place_levels`, ES frame. Aggregation and selection exactly as the chart: 1-pt buckets (`bucket_levels`, half away from zero); magnitude = \|call gex\| + \|put gex\| (the chart's Min \|GEX\| filter is on magnitude, not net); **magnitude ≥ 40 $bn** (Ryan's chart filter, 2026-10-25); the chart's 5-pt minimum spacing by descending magnitude. Then keep those within ±1.0·IM_d of the open, and of those the **6** largest by magnitude. Net (call − \|put\|) is kept per level for S3. |
+| A1.2 | **Placebo** (replaces L9): same session, distance-matched. For each real level, the **2 nearest** 5-pt bins on the same side of the open that are not real levels and are ≥ 10 pts from every real level, and within ±1.0·IM_d. Same touch (L5), trade (L6) and predictor (L7) rules. |
+| A1.3 | **A/A calibration** (replaces gate 6): 200 random splits (seed 20261025) of the placebo events into two halves, split by pseudo-level, not by event. Each split: the T2-style statistic (half-1 tercile difference − half-2 tercile difference) with its session-cluster bootstrap CI (L10, 2,000 resamples per split). **Pass** if the CI excludes 0 in ≤ 10 % of splits (nominal 5 %) **and** the median statistic is within ±3 pts. Otherwise stop: the bootstrap is miscalibrated. |
+| A1.4 | **Flow gaps** (replaces the session-level 60 s rule): keep sessions; drop an **event** if its 300 s pre-touch window or its race window contains an RTH gap > 15 s in `ironbeam_es_flow_1s`. Count drops. |
+| A1.5 | **Baseline warm-up** (amends L7): B_d needs ≥ **5** prior usable sessions (trailing up to 20). Q4 showed B_d stable (ratio p5–p95 0.96–1.06). |
+| A1.6 | **Q1 outliers:** before the run, trace the 1-second-vs-1-minute differences > 1 pt (count, sessions, times, symbol). If any falls inside a kept event window, drop that event and count it. |
+| A1.7 | **S8 strong levels** (readout only, not gated): T1 and S1 restricted to levels with magnitude ≥ 100 $bn (Ryan: "100 BN is a strong level", untested). Report n per tercile; no conclusion below 50 per tercile. |
