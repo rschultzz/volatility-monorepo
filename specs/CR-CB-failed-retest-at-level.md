@@ -488,3 +488,388 @@ The session-cluster bootstrap is calibrated for this statistic. At this n, thoug
 4. **Shared fills on adjacent levels** (5 of 162 at the centre). Options: keep them (per level, as written), or de-duplicate to one trade per fill.
 5. **Placebo thinness.** 81 placebo setups at the centre (15–26 per cell). T2-style comparisons per cell will be wide. The ≥ 15-pt separation is the main cost (283 pseudo-levels vs CR-BW's 427 at 10 pts).
 6. **2026-10-23 flow hole** (07:52:46 → 09:56 PT). This is a holdout-period feed gap in `ironbeam_es_flow_1s`. It matters for any future holdout read of this pattern and is not checked further here.
+
+---
+
+## Step 0 under A1–A14 (Stage 1, Databento flow, 2026-10-25)
+
+**Script and logs.** `scripts/cr_cb_step0_v2.py` (sha256 `954c7dee…62bb522`). Logs (git-ignored) in `scripts/logs/cr_cb/`: `step0_v2.log` and `step0_v2.json`; run 1 is kept as `step0_v2_run1.*`. Gallery: `research/gallery/cr-cb-stage1.json`.
+
+**Read-only setup.** `get_backfill_db_conn()` (role asserted) with `default_transaction_read_only = on` (asserted); `statement_timeout = 600s`; SELECTs only.
+- Flow is `es_flow_1s_databento` (A9.1); the Ironbeam fallback was used on 0 sessions.
+- Train reads stop at `ts_utc` < 2026-06-05 21:00 UTC. No 2025 data is read: R-b, A10.
+- 2026-10-23 is read in one block for the A9.7 illustration: flow, `orats_oi_gamma`, IM, P_target, 0DTE skew, and its own overnight bars. Its prior session (10-22) is not read.
+
+**Every open choice is fixed in the docstring before the run.** That covers the range bottom PL, edge events, re-arm mechanics, feature windows, skew reads, cluster and zone construction, T0 metrics, A/A and gallery sampling. The main ones are below.
+
+**No trade outcome is reported.** A stop is used internally in two places, both required by the spec:
+- the A9.5′ re-arm needs to know whether a fade was stopped, so train counts are for **attempt 1 only**; attempts 2–3 appear only in the gallery (attempt number in meta, per A9.9) and on 10-23;
+- the Q5 A/A computes placebo hold-to-close P&L inside the splits, and only the split statistic is reported.
+
+**Runs.**
+- **Run 1:** all of T0, Q1–Q5 and the additions, plus the gallery.
+- **A14** arrived during run 1. It was committed to the spec after T0 had been computed, and the A14 block was added for run 2.
+- **Run 2:** T0, Q1, Q2, Q3, the additions and Q5 are **byte-identical** to run 1. Q4 and the 10-23 tables gain a shared-fill column and the reference-level list. The detector itself does not use A14 zones in Step 0 (counts only, A14.4).
+
+### Fixed choices that matter for reading the numbers
+
+- **Centre:** O_c 80th, P 6, W 90 min, tol 1, attempts 2, **d 5**, e 4 (A14 counts only), stop S-x 2.
+  - Counts depend on (O, P, W, tol, d) for attempt 1: 243 configurations.
+- **Range (A4.1).** Top = H.
+  - The bottom PL is the running low after H, fixed at the first bar that rebounds ≥ 2 pts off it (A5.1's push separation).
+  - The range is invalid beyond H + 2 or PL − 2 (S-x 2), or at window end.
+  - Top / bottom edge event = first touch within tol while the range is valid.
+- **The L7 fade fill does not need a valid range.** A retest can fill after the range was invalidated at PL − 2, so filled entries exceed top-edge events.
+- **A9.5′ re-arm:** only a stopped top fade inside the zone re-arms. A level's later tests are used only until a top fade on it fills.
+- **Shared fills (A9.6 / A9.8):** de-duplicated by (session, direction, fill second), credited to the higher-magnitude arming level.
+- **Scales (σ5_d, B_d, skew β_d).** Taken from the prior 5–20 usable **train** sessions.
+  - The first 5 sessions (01-06 → 01-12) have none, so their A_rel, RA, residual skew and the 3·σ5 leg are NA.
+- **Skew.** 0DTE PM, the latest snapshot ≤ t (within 5 min).
+  - Edge touches before 07:00 PT have NA skew.
+  - The move in = from the opposite extreme within 60 min to the test.
+- **A14 references:**
+  - prior-session RTH H/L/C from Databento;
+  - overnight H/L from `ironbeam_es_1m_bars`, 15:00 PT prior → 06:30 PT (Databento holds RTH only);
+  - swings by zigzag, threshold max(4, 0.05·IM), known from their confirmation time.
+
+  Zones chain refs known at time t to the d = 5 cluster within e.
+
+### T0 — do levels slow price down? (A7.1; price paths only; real − placebo, session-cluster 95 % CI)
+
+d = 0 (single levels): real 1,687 tests, placebo 627.
+
+| cell | n real / plc | (a) range formed: real / plc, diff | (b) dwell s within ±2 pts, 30 min: real / plc, diff | (c) log speed ratio after/before: diff |
+|---|---|---|---|---|
+| put, from below | 231 / 170 | 64.5 % / 53.5 %, **+11.0 [+1.7, +21.0]** | 326 / 312, +13 [−60, +91] | **−0.066 [−0.136, −0.004]** |
+| put, from above | 252 / 193 | 57.9 % / 53.9 %, +4.1 [−6.6, +14.9] | 299 / 302, −3 [−68, +71] | +0.040 [−0.049, +0.119] |
+| call, from below | 630 / 148 | 45.9 % / 46.0 %, −0.1 [−8.1, +8.0] | 451 / 433, +18 [−111, +126] | +0.084 [+0.024, +0.153] |
+| call, from above | 574 / 116 | 44.4 % / 48.3 %, −3.9 [−14.2, +6.5] | 425 / 408, +17 [−110, +119] | +0.065 [−0.005, +0.121] |
+| all | 1,687 / 627 | 49.7 % / 50.9 %, −1.1 [−5.9, +4.2] | 402 / 355, +47 [−16, +103] | +0.037 [+0.000, +0.071] |
+
+At d = 5 (real 1,455 / placebo 389), the same pattern with wider CIs:
+- put from below: formed +9.3 [−1.3, +20.3], speed −0.036 [−0.121, +0.041];
+- call from above: formed −10.4 [−22.7, +2.6];
+- all: formed −2.4 [−8.1, +3.6], dwell +46 [−27, +109].
+
+**Reading (descriptive, not the Stage 2 gate):**
+- Pooled, real levels do not form ranges more often than placebo prices, and dwell is not reliably longer.
+- **Put-heavy levels approached from below** are the one cell where both (a) and (c) favour "slows down" with a CI clear of 0 at d = 0.
+- At call-heavy levels approached from below, price speeds up *more* after the test than at placebo (+0.084).
+
+### Q1 — universe
+
+| rule | removed | remaining |
+|---|---|---|
+| trading sessions 2026-01-06 → 2026-06-05 | | 105 |
+| L14a roll week (03-09 → 03-20) | 10 | 95 |
+| L14b no ES 15:45 ET bar on A (02-18, 02-19) | 2 | 93 |
+| L14c roll mismatch | 0 | 93 |
+| no flow rows | 0 | 93 |
+| no canonical `bt_daily_features` row (01-20, 02-17, 04-06, 05-26) | 4 | **89** |
+
+- **89 sessions.** 2026-03-03, which had no Ironbeam flow, is now in. All 89 are on Databento (`XCME:ES.H26` / `ES.M26`, the session's largest-volume symbol).
+- **Levels:** 528 (put 172, call 356), median 6 per session. Placebo pseudo-levels: 292.
+- **Scales (Databento):**
+  - σ5_d median 2.50 pts (p10 2.0, p90 3.5);
+  - B_d median 3.60 pts / 1k contracts (CR-BW's Ironbeam B_d was 4.14: the 1.4× delta scale);
+  - skew β_d (ΔPS on Δlog spot) median −2.25;
+  - 5 sessions without scales (01-06 → 01-12).
+- 0DTE skew present on 89 / 89 sessions.
+
+### Q2 — O_c per cell (A9.3 reading; real armed tests at arming levels; frozen for Stage 1)
+
+| d | cell | n | share 0 | p50 | **p60** | **p80** | **p95** |
+|---|---|---|---|---|---|---|---|
+| 0 | put / below | 231 | 23.8 % | 2.75 | 5.00 | 9.75 | 22.00 |
+| 0 | put / above | 252 | 27.8 % | 2.25 | 3.50 | 8.25 | 18.75 |
+| 0 | call / below | 630 | 35.6 % | 1.25 | 2.75 | 6.25 | 13.75 |
+| 0 | call / above | 574 | 39.4 % | 1.25 | 2.00 | 5.25 | 11.50 |
+| 5 | put / below | 205 | 22.9 % | 3.25 | 5.00 | 9.75 | 21.75 |
+| 5 | put / above | 225 | 26.2 % | 2.25 | 3.50 | 8.25 | 19.50 |
+| 5 | call / below | 559 | 36.9 % | 1.00 | 2.00 | 6.00 | 14.00 |
+| 5 | call / above | 466 | 41.6 % | 1.25 | 2.25 | 5.50 | 11.75 |
+| 10 | put / below | 156 | 20.5 % | 3.25 | 6.00 | 11.75 | 24.00 |
+| 10 | put / above | 170 | 25.3 % | 2.50 | 3.50 | 9.25 | 19.75 |
+| 10 | call / below | 371 | 35.6 % | 1.00 | 2.00 | 6.00 | 14.50 |
+| 10 | call / above | 338 | 38.2 % | 1.25 | 2.25 | 6.75 | 15.50 |
+
+- Versus the Ironbeam Step 0 at d = 0: p80 within 0.5 pt (put / above 8.25 vs 8.75, call / below 6.25 vs 6.00); p95 up to 1.25 pts higher (call / below 13.75 vs 12.50).
+- **Put-heavy levels still overshoot more** (d = 0). From below: p80 +3.50 [+1.55, +7.25], median +1.50 [+0.75, +2.75]. From above: p80 +3.00 [+0.25, +5.75], median +1.00 [+0.50, +2.12].
+
+### Q3 — counts (attempt 1, no outcomes)
+
+Centre (80, 6, 90, 1), filled L7 entries after the gap rule and shared-fill de-dup. Each cell shows real / placebo.
+
+| d | put / short | put / long | call / short | call / long |
+|---|---|---|---|---|
+| 0 | 51 / 42 | 41 / 41 | 95 / 29 | 68 / 26 |
+| **5** | **46 / 27** | **36 / 27** | **81 / 15** | **56 / 16** |
+| 10 | 36 / 27 | 31 / 22 | 57 / 14 | 46 / 14 |
+
+Breakdown at d = 5, real, by cell (put/short, put/long, call/short, call/long):
+
+| | put / short | put / long | call / short | call / long |
+|---|---|---|---|---|
+| episodes | 86 | 96 | 224 | 202 |
+| confirmed extremes in the zone | 55 | 49 | 105 | 80 |
+| top-edge events (valid range) | 31 | 21 | 47 | 29 |
+| bottom-edge events | 46 | 43 | 96 | 77 |
+
+- **≥ 40 kept, of 81 configurations per d** (put/short, put/long, call/short, call/long):
+  - d 0: 66, 38, 72, 67;
+  - d 5: 61, 26, 70, 52;
+  - d 10: 27, 9, 57, 46.
+- Max per cell: d 0 62 / 56 / 129 / 109; d 5 56 / 51 / 111 / 92; d 10 45 / 41 / 77 / 65.
+- **Pooled within level type (A9.2), ≥ 40:** put 81 / 80 / 75 and call 81 / 79 / 73 of 81 (d 0 / 5 / 10). With pooling, every cell type is choosable almost everywhere.
+- **Corners:** fewest = d 10, (60, 10, 30, 0.5): 20 / 10 / 20 / 10. Most = d 0, (95, 4, 180, 2): 62 / 56 / 129 / 109.
+- **Shared fills:** 2 + 2 duplicates at d 0 (put/short, call/short), 0 at d 5 and 10.
+- Compared with the Ironbeam Step 0, counts rose, mainly because the 0.10·IM floor was dropped (A9.4).
+- **The placebo arm is thin at d = 5:** 15–27 per cell.
+
+### A3.3 — resolution of confirmed ranges (attempt 1, centre)
+
+| cell | confirmed | F first | K first | neither |
+|---|---|---|---|---|
+| put / below | 55 | 46 | **0** | 9 |
+| put / above | 49 | 36 | **0** | 13 |
+| call / below | 105 | 81 | **0** | 24 |
+| call / above | 80 | 56 | **0** | 24 |
+
+**The break never comes first.** The fade limit (H − tol) sits inside the break trigger (H + 1), so on continuous 1-s data price always fills the fade first. "Which resolution" can only be read after the fade's outcome, so the resolution share is degenerate as defined.
+
+### A4.8 / A5.5 — edge events, flow features and rule decisions (centre, d 5, attempt 1, kept)
+
+**Edge events (real / placebo).** "top" is the level-side extreme (the L7 retest edge); "bot" is PL.
+
+| | from below, top | from below, bot | from above, top | from above, bot |
+|---|---|---|---|---|
+| put | 31 / 16 | 46 / 27 | 21 / 10 | 43 / 30 |
+| call | 47 / 7 | 96 / 20 | 29 / 9 | 77 / 14 |
+
+Real total 390.
+
+**Feature distributions, pooled real** (p10 / p25 / p50 / p75 / p90):
+
+| feature | p10 | p25 | p50 | p75 | p90 | n |
+|---|---|---|---|---|---|---|
+| P (contracts, 120 s) | −764 | −216 | +115 | +428 | +809 | 390 |
+| A_rel | 0.14 | 1.03 | 1.96 | 3.49 | 7.76 | 228 |
+| Q | −0.41 | 0.02 | 0.56 | 1.06 | 1.79 | 279 |
+| PD | −3.06 | −1.78 | −0.65 | +0.12 | +1.23 | 152 |
+| LE | −0.29 | −0.12 | +0.02 | +0.11 | +0.20 | 378 |
+| RA | −3.70 | −0.69 | +0.89 | +3.09 | +6.63 | 247 |
+| DV | −0.054 | −0.014 | +0.032 | +0.081 | +0.148 | 390 |
+| SS share | 0.00 | 0.00 | 0.00 | 0.11 | 0.64 | 390 |
+| SS VWAP − level (pts) | −5.57 | −4.41 | −2.90 | −1.09 | +0.42 | 390 |
+
+- **NA counts.** A_rel 162 (P ≤ 0 or no B_d), Q 111 (P_set ≤ 0), PD 238, RA 143.
+  - PD needs ≥ 2 pushes. Push counts: 1 push 205, 2 pushes 162, 3 pushes 19, 4 pushes 4.
+  - Q is unstable when P_set is small (single values beyond ±60 occur).
+- **Ranges are short:** range time (confirmation → edge touch) median **60.5 s** (p25 22, p75 147, p90 343); **1 % last ≥ 30 min**. The first touch of each boundary comes quickly. The 30-minute ranges Ryan described (A5) are rare under A4.2's first-touch rule.
+- **Rule decisions, pooled real** (fade / break / none):
+
+  | rule | fade | break | none |
+  |---|---|---|---|
+  | FR1 | 78 | 76 | 236 |
+  | FR2 | 163 | 53 | 174 |
+  | FR3 | 149 | 130 | 111 |
+  | FR4 | 27 | 13 | 350 |
+  | FR5 | 32 | 0 | 358 |
+  | FR6 | 62 | 39 | 289 |
+  | FR7 | 107 | 29 | 254 |
+  | FR8 | 128 | 17 | 245 |
+  | FR10 | 31 | — | 359 |
+  | FR11 | 16 | — | 374 |
+  | FR12 | 26 | 28 | 336 |
+  | stall side (A7.2) | 325 | 45 | 20 |
+
+  The per-cell tables are in the JSON. FR9 inputs are reported but not fitted (A9.8).
+  - The stall-side rule says "fade" on 83 %: price usually stalls on the near side, and the SS share median is 0.
+
+### A6.6 / A8.8 — skew, divergence, named confluences (centre, d 5)
+
+- **Skew coverage:** 288 / 390 edge events have raw PS and CS (all 102 NA are touches before 07:00 PT); 273 have the residual.
+  - **Range trend: only 86 / 390** (≥ 3 snapshots needs a range ≥ 3 min). FR12 and A8.3 are thin.
+- **Raw put-skew divergence on the move in, by level type and real edge** (bull / bear / none / NA):
+  - put, top edge: 12 / 10 / 30 / 22;
+  - put, bottom edge: 6 / 16 / 22 / 23;
+  - call, top edge: 24 / 10 / 62 / 28;
+  - call, bottom edge: 5 / 23 / 68 / 29.
+
+  Bullish divergence needs a decline into the level, so it occurs only in from-above cells; bearish only in from-below cells.
+- **H-PNB** (put, from above, level-side edge; 21 cell events):
+
+  | condition | events |
+  |---|---|
+  | (a) big move | 21 |
+  | (b) FR5 or FR6 fade | 5 |
+  | (c) bullish divergence | 6 |
+  | (a)+(b) | 5 |
+  | (a)+(c) | 6 |
+  | (b)+(c) | 3 |
+  | **all three** | **3** |
+
+  Skew NA on 10. Placebo: 1 of 10 cell events.
+- **H-PSD** (call, from below, level-side edge; 47 cell events):
+
+  | condition | events |
+  |---|---|
+  | (a) big move | 35 |
+  | (b) FR5 or FR6 fade | 17 |
+  | (c) bearish divergence | 10 |
+  | (a)+(b) | 13 |
+  | (a)+(c) | 10 |
+  | (b)+(c) | 5 |
+  | **all three** | **5** |
+
+  Skew NA 12, σ5 NA 4. Placebo: 1 of 7.
+- **H-CNB readout:** 4 events.
+- **Leg (a) barely discriminates.** 3·σ5_d (median 7.5 pts) within 15 min is met by almost every test (|move| / σ5 median 5.3). The named rules are carried by (b) and (c).
+- At ~3–5 events in 2026, T5 / T5b (≥ 40 in R-a) is likely **inconclusive (underpowered)** unless R-a is much denser.
+
+### A13.5 — clusters
+
+| d | clusters | multi-member | members 1 / 2 / 3 / 4+ | span median / p90 / max | types put / call / mixed | reached far after near |
+|---|---|---|---|---|---|---|
+| 0 | 528 | 0 | 528 / 0 / 0 / 0 | 0 / 0 / 0 | 172 / 356 / 0 | — |
+| 5 | 461 | 58 | 403 / 49 / 9 / 0 | 5 / 10 / 10 | 158 / 303 / 8 | **86 / 207 = 41.5 %** (below 44/88 = 50.0 %, above 42/119 = 35.3 %) |
+| 10 | 348 | 120 | 228 / 82 / 26 / 12 | 10 / 20 / 33 | 134 / 214 / 21 | **117 / 408 = 28.7 %** (below 65/207 = 31.4 %, above 52/201 = 25.9 %) |
+
+- "Reached" = a trade within 2 pts of the far member after a test of the near member, before price is 0.10·IM back. No placebo comparison is defined in A13.
+- With 5-pt chart spacing, d = 5 joins only levels exactly 5 pts apart.
+
+### A14.4 — reference levels and confluence zones (counts only)
+
+- **Refs per session:** prior high, low and close 1 each (89 / 89); overnight high and low 1 each (89 / 89).
+- **Confirmed swings: median 45 highs and 45 lows per session** (p10 21, p90 ≈ 99). The A14.1 threshold max(4, 0.05·IM) ≈ 4 pts on almost every day, which is about 1.6·σ5_d. That is intraday noise, not structure.
+
+| e | zones at 13:00 | GEX clusters merged into another zone | span median / p75 / p90 (pts) | GEX-only zones | tests whose zone has a ref | **far edge is a ref** |
+|---|---|---|---|---|---|---|
+| 0 | 461 | 0 | 0 / 0 / 5 | 388 | 397 / 1,455 | **173 (11.9 %)** |
+| 4 | 342 | 119 | 1.75 / 30.75 / 52.5 | 162 | 1,365 / 1,455 | **1,025 (70.4 %)** |
+| 8 | 254 | 207 | 5.0 / 58.2 / 82.8 | 113 | 1,424 / 1,455 | **839 (57.7 %)** |
+
+- Far-edge ref types at e = 4: swing high 407, swing low 379, overnight low 58, overnight high 51, prior close 49, prior low 42, prior high 39.
+- Zone types at e = 4: GEX only 162; GEX + swing + prior + overnight 80; GEX + swing 31; GEX + prior 25; GEX + overnight 14; GEX + swing + overnight 11; GEX + swing + prior 11; GEX + prior + overnight 8.
+- **A14 as written saturates at e ≥ 4.** With ~90 swings a day, chaining within 4 pts links most of the session's traded range into one zone (p90 span 52 pts), so the "far edge" is usually a swing far from the GEX level. This is counted, not fixed. See the decisions below.
+
+### Q4 — detector table (5 random train sessions, seed 20261025; centre, d 5, attempt 1; no outcomes)
+
+Sessions: 2026-01-26, 01-27, 01-29, 04-17, 06-05. Times PT; ES prices. For long setups the extreme is the low and PL is the range's upper boundary. Rule codes: F = fade, B = break; only rules that fire are shown. Full flow features per event are in the JSON and the gallery.
+
+| session | arm_level | members | type | approach | O_c | test_t | status | extreme | extreme_t | confirm_t | PL | top_t | top_rules | bot_t | bot_rules | fade_fill_t | entry | stop_Sx2 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-01-26 | 6956.0 | 6946/6951/6956 | put | below | 9.75 | 06:30:50 | broken |  |  |  |  |  |  |  |  |  |  |  |
+| 2026-01-26 | 6976.0 | 6971/6976 | call | below | 6.0 | 06:41:03 | filled | 6976.0 | 06:41:09 | 06:42:09 | 6968.75 | 06:43:12 | FR2:F FR3:F FR7:F FR8:F STALL:F |  |  | 06:44:05 | 6975.0 | 6978.0 |
+| 2026-01-26 | 6971.0 | 6971/6976 | call | above | 5.5 | 06:42:09 | nofill | 6968.75 | 06:42:10 | 06:43:12 | 6977.25 |  |  | 06:45:22 | FR2:B FR3:B FR6:B STALL:F |  |  |  |
+| 2026-01-26 | 6986.0 | 6986 | call | below | 6.0 | 07:19:42 | filled | 6988.0 | 07:23:48 | 07:27:23 | 6980.75 |  |  | 07:28:22 | FR2:F FR3:B STALL:F | 07:53:29 | 6987.0 | 6990.0 |
+| 2026-01-26 | 6986.0 | 6986 | call | above | 5.5 | 09:10:03 | nofill | 6982.75 | 10:09:41 | 10:20:29 | 6991.0 |  |  | 10:27:41 | FR2:F FR3:F STALL:F |  |  |  |
+| 2026-01-26 | 6986.0 | 6986 | call | above | 5.5 | 12:00:30 | broken |  |  |  |  |  |  |  |  |  |  |  |
+| 2026-01-27 | 7001.0 | 7001 | call | below | 6.0 | 06:50:15 | broken |  |  |  |  |  |  |  |  |  |  |  |
+| 2026-01-27 | 7001.0 | 7001 | call | above | 5.5 | 07:05:04 | nofill | 6998.0 | 07:05:51 | 07:09:17 | 7006.75 |  |  | 07:13:35 | FR1:B FR2:F FR12:F STALL:F |  |  |  |
+| 2026-01-27 | 7015.0 | 7010/7015 | call | below | 6.0 | 07:45:17 | nofill | 7018.5 | 08:40:50 | 09:00:27 | 7012.5 |  |  | 09:02:18 | FR2:F FR3:F FR7:F FR8:F STALL:F |  |  |  |
+| 2026-01-27 | 7010.0 | 7010/7015 | call | above | 5.5 | 07:50:20 | short | 7010.5 | 07:57:34 | 08:18:59 |  |  |  |  |  |  |  |  |
+| 2026-01-27 | 7010.0 | 7010/7015 | call | above | 5.5 | 09:08:50 | filled | 7006.5 | 09:19:12 | 09:25:49 | 7014.25 | 09:56:37 | FR2:F FR3:F FR6:B FR10:F | 09:28:21 | FR2:F FR3:F FR12:F STALL:F | 09:56:58 | 7007.5 | 7004.5 |
+| 2026-01-27 | 7001.0 | 7001 | call | above | 5.5 | 10:02:11 | short | 7001.5 | 10:02:11 | 10:13:20 |  |  |  |  |  |  |  |  |
+| 2026-01-27 | 7015.0 | 7010/7015 | call | below | 6.0 | 10:32:13 | nofill | 7017.25 | 12:13:55 | 12:30:05 | 7011.25 |  |  | 12:33:47 | FR2:F FR3:F FR7:F FR8:F FR12:B STALL:F |  |  |  |
+| 2026-01-29 | 7001.0 | 7001 | call | above | 5.5 | 06:36:41 | filled | 6999.25 | 06:37:36 | 06:37:45 | 7007.0 | 06:41:24 | FR2:B FR8:B STALL:F | 06:39:07 | FR3:F FR7:F FR8:F STALL:F | 06:41:24 | 7000.25 | 6997.25 |
+| 2026-01-29 | 6976.0 | 6976 | call | above | 5.5 | 06:45:16 | filled | 6973.0 | 06:47:06 | 06:47:41 | 6986.25 |  |  | 06:48:24 | FR1:B FR2:F STALL:F | 06:53:08 | 6974.0 | 6971.0 |
+| 2026-01-29 | 6956.0 | 6956 | put | above | 8.25 | 07:00:34 | broken |  |  |  |  |  |  |  |  |  |  |  |
+| 2026-01-29 | 6956.0 | 6956 | put | below | 9.75 | 07:04:57 | filled | 6959.25 | 07:05:33 | 07:05:49 | 6952.5 |  |  | 07:06:14 | FR3:F FR7:F FR8:F STALL:F | 07:11:14 | 6958.25 | 6961.25 |
+| 2026-01-29 | 6956.0 | 6956 | put | above | 8.25 | 09:26:28 | short | 6957.5 | 09:26:51 | 09:28:05 |  |  |  |  |  |  |  |  |
+| 2026-01-29 | 6956.0 | 6956 | put | above | 8.25 | 09:41:39 | filled | 6952.25 | 09:43:31 | 09:44:03 | 6959.0 | 09:45:50 | FR1:B FR2:F FR5:F FR6:B FR10:F FR11:F STALL:F | 09:44:55 | FR3:F FR7:F FR8:F STALL:F | 09:45:51 | 6953.25 | 6950.25 |
+| 2026-01-29 | 6976.0 | 6976 | call | below | 6.0 | 12:38:17 | broken |  |  |  |  |  |  |  |  |  |  |  |
+| 2026-01-29 | 7001.0 | 7001 | call | below | 6.0 | 12:58:41 | short | 6999.0 | 12:58:41 | 12:59:33 |  |  |  |  |  |  |  |  |
+| 2026-04-17 | 7136.0 | 7136 | call | below | 6.0 | 06:36:18 | short | 7135.5 | 06:37:15 | 06:39:42 |  |  |  |  |  |  |  |  |
+| 2026-04-17 | 7136.0 | 7136 | call | below | 6.0 | 06:46:02 | short | 7134.5 | 06:46:04 | 06:46:47 |  |  |  |  |  |  |  |  |
+| 2026-04-17 | 7136.0 | 7136 | call | below | 6.0 | 06:50:34 | broken |  |  |  |  |  |  |  |  |  |  |  |
+| 2026-04-17 | 7136.0 | 7136 | call | above | 5.5 | 06:58:23 | short | 7137.0 | 06:58:23 | 06:59:11 |  |  |  |  |  |  |  |  |
+| 2026-06-05 | 7510.0 | 7510 | put | above | 8.25 | 06:59:06 | filled | 7505.75 | 07:01:28 | 07:02:09 | 7514.75 |  |  | 07:02:13 | FR3:F FR6:B STALL:F | 08:15:09 | 7506.75 | 7503.75 |
+| 2026-06-05 | 7510.0 | 7510 | put | below | 9.75 | 08:23:29 | short | 7508.0 | 08:23:29 | 08:24:27 |  |  |  |  |  |  |  |  |
+
+### 2026-10-23 illustration (Databento; detector only; all attempts; no outcome)
+
+Inputs: `XCME:ES.Z26`, IM 83.89, P_target 7686.00, open 7661.25, top 6 levels 7681 / 7687 / 7636 / 7737 / 7731 / 7630. **The Databento flow has no RTH gap > 15 s** (21,966 rows); the Ironbeam 07:52 → 09:56 hole is absent. Overnight high / low 7714.25 / 7660.00; prior-session refs not read.
+
+Attempt ≥ 2 rows exist only because the previous attempt's fade was stopped (A9.5′). This is the one place in Step 0 where that is visible, as Ryan asked.
+
+**d = 5** (7681 and 7687 are 6 pts apart, so they stay separate):
+
+| arm_level | members | approach | O_c | att | test_t | status | extreme | extreme_t | confirm_t | PL | top_t | top_rules | fade_fill_t | entry | stop_Sx2 | shared_fill_dup |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 7681.0 | 7681 | below | 9.75 | 1 | 07:44:49 | filled | 7687.25 | 07:46:06 | 07:46:09 | 7679.75 | 07:50:05 | FR2:F FR3:B FR7:B FR12:B STALL:B | 07:50:05 | 7686.25 | 7689.25 | False |
+| 7681.0 | 7681 | below | 9.75 | 2 | 07:44:49 | broken |  |  |  |  |  |  |  |  |  |  |
+| 7687.0 | 7687 | below | 9.75 | 1 | 07:46:06 | filled | 7687.25 | 07:46:06 | 07:46:09 | 7679.75 | 07:50:05 | FR2:F FR3:B FR12:B STALL:F | 07:50:05 | 7686.25 | 7689.25 | True |
+| 7687.0 | 7687 | below | 9.75 | 2 | 07:46:06 | filled | 7693.5 | 07:56:02 | 07:57:47 | 7686.75 | 07:59:57 | FR2:B FR3:B FR7:B FR8:B STALL:B | 08:25:38 | 7692.5 | 7695.5 | False |
+| 7687.0 | 7687 | below | 9.75 | 3 | 07:46:06 | broken |  |  |  |  |  |  |  |  |  |  |
+| 7681.0 | 7681 | above | 8.25 | 1 | 08:03:21 | short | 7682.5 | 08:04:01 | 08:06:28 |  |  |  |  |  |  |  |
+| 7681.0 | 7681 | above | 8.25 | 1 | 08:09:48 | filled | 7679.75 | 08:10:06 | 08:11:39 | 7688.0 |  |  | 09:23:45 | 7680.75 | 7677.75 | False |
+| 7681.0 | 7681 | above | 8.25 | 2 | 08:09:48 | filled | 7676.25 | 09:26:05 | 09:30:45 | 7683.0 |  |  | 09:53:00 | 7677.25 | 7674.25 | False |
+| 7681.0 | 7681 | above | 8.25 | 3 | 08:09:48 | broken |  |  |  |  |  |  |  |  |  |  |
+| 7687.0 | 7687 | above | 8.25 | 1 | 08:37:03 | filled | 7681.25 | 08:46:12 | 08:47:13 | 7689.0 |  |  | 09:21:07 | 7682.25 | 7679.25 | False |
+| 7687.0 | 7687 | above | 8.25 | 2 | 08:37:03 | broken |  |  |  |  |  |  |  |  |  |  |
+
+**d = 10** (7681 and 7687 form one cluster; from below it arms at 7687, from above at 7681):
+
+| arm_level | members | approach | O_c | att | test_t | status | extreme | extreme_t | confirm_t | PL | top_t | top_rules | fade_fill_t | entry | stop_Sx2 | shared_fill_dup |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 7687.0 | 7681/7687 | below | 11.75 | 1 | 07:46:06 | filled | 7687.25 | 07:46:06 | 07:46:09 | 7679.75 | 07:50:05 | FR2:F FR3:B FR12:B STALL:F | 07:50:05 | 7686.25 | 7689.25 | False |
+| 7687.0 | 7681/7687 | below | 11.75 | 2 | 07:46:06 | filled | 7693.5 | 07:56:02 | 07:57:47 | 7686.75 | 07:59:57 | FR2:B FR3:B FR7:B FR8:B STALL:B | 08:25:38 | 7692.5 | 7695.5 | False |
+| 7687.0 | 7681/7687 | below | 11.75 | 3 | 07:46:06 | filled | 7697.0 | 08:27:00 | 08:29:08 | 7690.5 | 08:34:33 | FR2:F FR3:B FR8:F FR12:B STALL:B | 08:34:37 | 7696.0 | 7699.0 | False |
+| 7681.0 | 7681/7687 | above | 9.25 | 1 | 08:03:21 | short | 7682.5 | 08:04:01 | 08:06:28 |  |  |  |  |  |  |  |
+| 7681.0 | 7681/7687 | above | 9.25 | 1 | 08:09:48 | filled | 7679.75 | 08:10:06 | 08:11:39 | 7688.0 |  |  | 09:23:45 | 7680.75 | 7677.75 | False |
+| 7681.0 | 7681/7687 | above | 9.25 | 2 | 08:09:48 | filled | 7676.25 | 09:26:05 | 09:30:45 | 7683.0 |  |  | 09:53:00 | 7677.25 | 7674.25 | False |
+| 7681.0 | 7681/7687 | above | 9.25 | 3 | 08:09:48 | broken |  |  |  |  |  |  |  |  |  |  |
+
+- **At d = 10, attempt 3 at 7687 is Ryan's trade:**
+  - H 7697.00 at 08:27:00, confirmed by the 6-pt pullback at 08:29:08;
+  - the retest fills at 7696.00 at 08:34:37, with the S-x 2 stop at 7699.00.
+
+  It is reached through the two earlier attempts (fills 07:50:05 at 7686.25 and 08:25:38 at 7692.50).
+- **At d = 5 the same attempt is "broken":** 7697.00 > 7687 + O_c 9.75 = 7696.75, by one tick.
+- At d = 5, 7681 and 7687 share the 07:50:05 fill. It is credited to 7681 (400 vs 315 $bn); the 7687 row shows `shared_fill_dup`.
+
+### Q5 — A/A calibration (placebo top-fade trades, pooled hold-to-close, centre d 5, attempts ≤ 2) — PASS
+
+| | value |
+|---|---|
+| placebo trades / pseudo-level clusters | 109 / 56 |
+| statistic (mean net pts, half 1 − half 2), median | **+0.26** (gate ±3) |
+| mean / sd | −0.01 / 2.26 |
+| p5 / p25 / p75 / p95 | −3.89 / −1.81 / +1.89 / +3.11 |
+| CI half-width, median | 4.64 pts |
+| split sd ÷ (median half-width / 1.96) | 0.96 |
+| **share of splits with CI excluding 0** | **8.5 % (17 / 200)** (gate ≤ 10 %) |
+
+The bootstrap is calibrated. At ~55 placebo trades per half, the resolution of a per-cell real − placebo comparison is ±4–5 pts.
+
+### Gallery (A9.9) — `research/gallery/cr-cb-stage1.json`
+
+- **64 events,** CR-CC L10 format, `outcome` null on all; all L10 fields present; 215 KB.
+  - 40 random edge events, 5 per edge cell (seed 20261024);
+  - 7 tagged named events (H-PSD 5, one of them an attempt-2 event; H-PNB 2). Two more named events (attempt 1) were already drawn into the random 40, so all 3 attempt-1 H-PNB and all 5 attempt-1 H-PSD events are in the gallery;
+  - 17 from 2026-10-23: d 5: 9, d 10: 8.
+- **Attempts:** 1: 47, 2: 15, 3: 2.
+- `meta` carries:
+  - cell, attempt, O_c, arming level, cluster members;
+  - the range (top / bottom), the edge and its touch time;
+  - flow P, A_rel, Q, PD, LE, RA, DV, SS share / VWAP;
+  - put / call skew divergence (raw and residual), PS trend (raw, residual, change);
+  - big move, every FR decision and the named-rule flags;
+  - the A14 e = 4 zone members known at the test time.
+- `direction` = the fade direction at that edge; `entry_price` / `stop_price` = the fade limit and the S-x 2 stop.
+- One random event has no `entry_ts_pt` (an unfilled bottom edge).
+
+### Decisions needed before Stage 1
+
+1. **A14 saturation.** About 90 swings a day at the 4-pt threshold chain into zones with p90 span 52 pts, and the far edge is a swing on 70 % of tests at e = 4. Options:
+   - (a) a much larger swing threshold, e.g. ≥ 0.25·IM or ≥ 3·σ5_d sustained for N minutes;
+   - (b) only the session's running high / low and swings that held ≥ 15 min;
+   - (c) no chaining through swings, and only refs within e of the GEX level itself;
+   - (d) cap the zone span (e.g. ≤ O_c).
+2. **A3 break branch (K).** The break-first share is 0 by construction, because the fade limit fills before the break trigger. If K is to be an alternative action at the same event, it needs its own trigger. Options: K only if price reaches H + 1 without first trading the fade limit, which never happens; or K as a separate setup (a break of H after the range forms), independent of F. A4's flow rules choose fade vs break *before* entry, so the A4 baselines still work; only the A3.3 readout is degenerate.
+3. **Ranges are short** (median 60 s; 1 % ≥ 30 min). The A5 range-wide features (PD needs ≥ 2 pushes; A8.3 skew trend needs ≥ 3 min) are NA on 40–80 % of events. Options: define the edge event as a later touch (e.g. the first touch after ≥ N minutes or ≥ 2 pushes); or accept the thin coverage.
+4. **PL fixed after a 2-pt rebound** makes the range fragile: range invalidations at PL − 2 cut valid top-edge events to 31 vs 46 L7 fills (put / short). Options: keep (A4 as written); or fix PL only after a rebound ≥ P (the confirmation size).
+5. **Leg (a) of H-PNB / H-PSD** (3·σ5 in 15 min) is met by almost every test. Options: raise it (e.g. ≥ 5·σ5_d) or rely on the 0.5·IM leg.
+6. **O_c at d = 5 breaks the 10-23 trade by one tick** (7697.00 vs 7696.75). The d = 10 cluster has O_c 11.75 and catches it. No change proposed: this is what the grid's d and O dimensions are for. Noted so the review doesn't read it as a detector fault.
+7. **Placebo thinness at d = 5** (15–27 per cell; A/A ±4.6 pts). Per-cell T2-style comparisons in Stage 1 will be wide; pooled-within-type comparisons (A9.2) are about twice the n.
