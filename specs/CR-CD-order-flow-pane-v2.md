@@ -496,3 +496,129 @@ Markers on; RTH framed.
 - The gallery now carries `meta.range` {top, bottom} and `meta.zone` {lo, hi} (or `zone_e4`), which CR-CC draws as a range box and a zone band.
 - The fit's "zone/range" now takes the union of those with level, extreme, entry and stop. It reuses CR-CC's `reviewZoneBounds`.
 - On the merged tree: CR-CD Playwright 4/4; CR-CC Playwright 5 passed and 2 skipped (they write, and no candidate is unreviewed); Ironbeam, SetupReview and flow_features unit suites OK.
+
+---
+
+## Amendment A4 (Ryan, 2026-10-25, after merge `0bb6003`) — stored 1-minute flow aggregate for cold-load speed
+
+Branch `feat/CR-CD-flow-1m-aggregate`, off `origin/main` `0bb6003`.
+
+| # | Clause |
+|---|---|
+| A4.1 | **New tables** `es_flow_1m_databento` and `ironbeam_es_flow_1m`. One row per (minute start UTC, symbol): volume, buy_vol, sell_vol, unknown_vol, trade_count, OHLC, first/last trade ms, source. Aggregated exactly as Flow v2 consumes them. **Identity test** against the on-the-fly aggregation on 3 sessions per source. |
+| A4.2 | **Backfill** both from the 1-second tables under the backfill protocol: DDL once with `DATABASE_URL`; INSERT-only, `ON CONFLICT DO NOTHING`; a smoke per month. Databento and Ironbeam: full range each. |
+| A4.3 | **Keep Ironbeam current:** extend the existing 1-second aggregate worker (or add a small cron) to upsert the last 3 completed minutes each minute. Show the change, and which Render service it touches, before deploying. |
+| A4.4 | The Flow v2 route reads the 1-minute tables when available, and falls back to on-the-fly aggregation. **Current mode untouched, byte-identical.** |
+| A4.5 | **L9 check:** a cold v2 load (fresh connection, cache cleared) for 5 random train sessions, each ≤ 1.5 s. Report the times. |
+| A4.6 | Push, open a PR listing every Render service to deploy; do not merge. |
+
+### A4 operational readings (Claude Code, fixed before implementation)
+
+**Columns.**
+- `minute_utc` (timestamptz, minute start), `symbol`, `volume`, `buy_vol`, `sell_vol`, `unknown_vol`, `trade_count`, `open`, `high`, `low`, `close`, `first_trade_ms`, `last_trade_ms`, `source`.
+- Plus **`n_seconds`**: the number of 1-second rows in the minute. Flow v2 uses it for gap detection, so "exactly as Flow v2 consumes them" needs it.
+- `es_flow_1m_databento` also keeps `raw_symbol`.
+- PK `(minute_utc, symbol)`.
+
+**One SQL definition** (`packages/shared/flow_1m.py`), used by the backfill, the worker and the identity check:
+- minute = `floor(epoch / 60) · 60`;
+- open = the first 1-second open by `ts_utc`; close = the last 1-second close; high = max; low = min;
+- sums for volumes and counts; `first_trade_ms` = min; `last_trade_ms` = max.
+
+This is the same arithmetic as Flow v2's on-the-fly query.
+
+**Worker.** Render background worker **`ireanbeam_1s_aggregates`** (`srv-d57jncbuibrs73a787q0`, `python -u apps/cron/ironbeam_flow_1s_aggregate.py`, **auto-deploy on commits to `main`**). Its loop gains a 1-minute rollup:
+- **When:** at most once per 20 s.
+- **What:** per symbol, `INSERT … SELECT <rollup> … ON CONFLICT DO UPDATE` over the last 3 completed minutes.
+- **Catch-up:** from that symbol's last stored minute when it lags (6 h per pass), so a pause or the gap before deploy fills itself.
+- **Isolation:** rollup errors are logged and never stop the 1-second loop.
+- **Switch:** `IRONBEAM_FLOW_1M_ENABLED` (default on).
+
+**Route.** `fetch_flow_minutes` keeps its signature and output. For each range:
+- whole minutes before the table's cutoff come from the 1-minute table;
+- ragged partial-minute edges (e.g. a CR-CC `until` mid-minute) and anything at or after the cutoff come from the 1-second table;
+- cutoff = min(last stored minute + 1 min, now floored to the minute − 5 min).
+
+The 1-minute table is used only if it exists (`to_regclass`, cached).
+
+**Ironbeam backfill end.** The run's start time floored to the minute, minus 10 min. The worker covers from there.
+
+### A4 implementation and results (2026-10-25)
+
+| step | commit | what |
+|---|---|---|
+| A4 | `3b2404a` | Amendment A4 and operational readings |
+| 1 | `f9a006e` | DDL (`scripts/cr_cd_a4_ddl.sql`), shared rollup SQL (`packages/shared/flow_1m.py`), backfill script |
+| run | `51e5f4a` | Backfill run; script resumes per month |
+| 2 | `5bf1d5c` | Worker rollup (`apps/cron/ironbeam_flow_1s_aggregate.py`); 8 tests |
+| 3 | `17beb7b` | Flow v2 reads the 1-minute tables; identity script; re-recorded v2 fixture |
+| 3b | (prior commit) | Fallback to on-the-fly aggregation if the 1-minute tables can't be read |
+| wrap | (this commit) | This section |
+
+**DDL.**
+- Applied once as `rschultz` (`DATABASE_URL`). Both tables are owned by `rschultz`.
+- `dash_backfill_writer` has SELECT and INSERT; PUBLIC is revoked.
+- No other role holds grants on the 1-second tables, so none were copied. The worker writes `ironbeam_es_flow_1s` as the owner, and it upserts `ironbeam_es_flow_1m` the same way.
+
+**Backfill** (backfill protocol, `CR-CD-A4`, one run per source-month).
+
+| table | rows | span (UTC) | size | months |
+|---|---|---|---|---|
+| `es_flow_1m_databento` | 294,246 (11 contracts) | 2024-04-03 13:15 → 2026-10-23 19:59 | 66 MB | 31/31 smoke PASS |
+| `ironbeam_es_flow_1m` | 287,280 from the backfill (4 contracts) | 2025-12-26 18:20 → 2026-10-25 22:50 | 65 MB | 11/11 smoke PASS |
+
+- **Smoke per month:** rows = distinct (symbol, minute) in the 1-second table; volume, buy, sell, unknown and trade-count sums equal; Σ `n_seconds` = 1-second rows.
+- **Runs:** 43 `completed`, 1 `aborted`. An SSL connection drop interrupted the Databento 2025-12 month. Its row was left `running` and was marked `aborted` with a note. Its INSERT had already committed, so the re-run inserted 0 and the smoke matched (12,336 = 12,336).
+- The script now opens a fresh connection per month and takes `--from-month`.
+- DB 25 GB after the load.
+
+**Identity (A4.1)** (`scripts/cr_cd_a4_identity.py identity`): **33/33 equal.**
+- **Sessions:** Databento 2024-06-12, 2025-03-18 (roll week), 2026-05-01; Ironbeam 2026-01-14, 2026-03-17 (two contracts), 2026-10-23.
+- **Frames:** `fetch_flow_minutes` through the 1-minute tables vs forced on the fly, on RTH with warm-up, a ragged `until` (07:39:17 PT), ETH and a 5-session baseline chunk. Equal with `check_exact`.
+- **Payloads:** the whole v2 payload JSON, FULL and RTH, both ways — equal.
+- **Golden:** the committed pre-A4 golden `cr_cd_flow_v2_golden_0501.json` is byte-identical to the live response served from the 1-minute tables.
+- **Worker run:** the worker's rollup, run once live as `rschultz`, caught Z26 up from 22:51 to 23:14. Every rolled minute equals the 1-second rollup on all 12 columns.
+
+**Route performance, on top of reading the 1-minute tables.**
+- One DB connection per payload build. Each query used to pay a pool checkout, a pre-ping and a rollback.
+- One fetch of the chart's bar closes for the whole window.
+- The baseline in one query when the 1-minute table covers it; 5-session chunks remain for the 1-second fallback.
+- Both 1-minute tables' existence and last-minute checks in one query each, cached 30 s.
+- A permission or other read error disables the 1-minute path and serves on the fly (test).
+
+Profile of a cold build before these changes: 2.8 s of 3.06 s was psycopg network wait (63 ms round trip laptop → Oregon); Python work was ~0.25 s.
+
+**L9 (A4.5)** (`scripts/cr_cd_a4_identity.py l9`).
+- **Method:** 5 random train sessions, seed 20261025. For each: engine disposed, every in-process cache cleared, the fresh connection timed separately, then one route request (FULL, mode=v2, Flask test client). One warm-up request on 2026-01-05 (not in the sample) absorbs Python first-call costs.
+
+| session | connect | request | total |
+|---|---|---|---|
+| 2026-02-09 | 0.28 s | 0.81 s | 1.10 s |
+| 2026-02-12 | 0.31 s | 0.82 s | 1.14 s |
+| 2026-03-13 | 0.29 s | 0.80 s | 1.09 s |
+| 2026-03-23 | 0.33 s | 0.87 s | 1.20 s |
+| 2026-05-27 | 0.30 s | 0.82 s | 1.11 s |
+
+- **L9 PASS, from Ryan's laptop:** max 1.20 s cold. Before A4: 5–27 s.
+- **Network:** measured over a 63 ms laptop → Oregon round trip. Inside Render (web service and DB in the same region) the round-trip share should be far smaller. Not measured there; it can be checked after deploy.
+- **Not cleared:** Postgres' own buffer cache cannot be cleared from here.
+
+**Render services**
+
+| service | type / id | change | deploys how |
+|---|---|---|---|
+| `ireanbeam_1s_aggregates` | background worker `srv-d57jncbuibrs73a787q0` | 1-minute rollup in its loop | **auto-deploy on commits to `main`: deploys when the PR merges** |
+| `Dash - MonoRepo` | web `srv-d4370d6uk2gs738ps5t0` | Flow v2 reads the 1-minute tables | manual (auto-deploy off); one deploy covers CR-CC #78/#80/#82, CR-CD #84 and this PR |
+
+**Every merge to `main` also redeploys these auto-deploy services, though this PR doesn't change their code:**
+- `ironbeam-trades-ws-worker` (its restart briefly interrupts trade ingest);
+- the crons: `Ironbeam Cron`, `prune-ironbeam-trades`, `pulse-today-ingest-spx`, `ORATS-Gap_Fill_Today`, `orats-eod-gamma`, `open-implied-move`, `sweep_pending_outcomes`, `backfill_outcomes`;
+- the static site `volatility-monorepo`.
+
+**Before or at deploy.**
+- The DDL and backfill are already in the DB; no env vars are required. `IRONBEAM_FLOW_1M_ENABLED=0` disables the rollup.
+- Between now and the worker deploy, `ironbeam_es_flow_1m` lags (last stored minute 23:13 UTC 2026-10-25). Flow v2 then serves minutes after the watermark on the fly, and the worker catches up on its first passes (6 h per pass).
+- **After deploy, check:**
+  - the worker log shows `[flow_1m] XCME:ES.Z26 […] minutes=3` lines;
+  - `max(minute_utc)` in `ironbeam_es_flow_1m` tracks now − 1 min;
+  - a v2 load on the deployed service.

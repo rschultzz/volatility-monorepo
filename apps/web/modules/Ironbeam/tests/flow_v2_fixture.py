@@ -1,6 +1,7 @@
 """Record/replay harness for /api/ironbeam/flow?mode=v2 (CR-CD step 2).
 
-`modules.Ironbeam.flow_v2` reads the DB only through `fetch_flow_minutes` and `fetch_bar_closes`.
+`modules.Ironbeam.flow_v2` reads the DB only through `fetch_flow_minutes`, `fetch_bar_closes` and
+`_watermark_1m` (CR-CD A4).
 `record()` wraps them against the live DB (SELECTs only); `replay()` serves the stored results.
 Keys leave out the engine argument (its repr carries the DB user and host). The in-process
 minute cache is cleared on entry to both, so every read is recorded / replayed.
@@ -14,7 +15,7 @@ from apps.web.modules.Ironbeam.tests import bars_fixture as bf
 
 FIXTURE_DIR = bf.FIXTURE_DIR
 FIXTURE = FIXTURE_DIR / "cr_cd_flow_v2.pkl.gz"
-RECORDED_FUNCS = ("fetch_flow_minutes", "fetch_bar_closes")
+RECORDED_FUNCS = ("fetch_flow_minutes", "fetch_bar_closes", "_watermark_1m")
 
 QS_0501 = "trade_date=2026-05-01&session=FULL&resample=1m&ema_len=14&mode=v2"
 QS_0501_UNTIL = QS_0501 + "&until=2026-05-01T07:39:00"
@@ -41,6 +42,8 @@ def _key(name, args, kwargs):
 def record(store: dict):
     v2 = v2_module()
     v2._CACHE.clear()
+    v2._WATERMARK.clear()
+    v2._TABLE_STATE.clear()
     store.setdefault("calls", {})
     with ExitStack() as stack:
         for name in RECORDED_FUNCS:

@@ -37,6 +37,8 @@ Environment variables:
   IRONBEAM_FLOW_OVERLAP_SEC           default: 10   (reprocess last N seconds each loop)
   IRONBEAM_FLOW_MAX_CATCHUP_SEC       default: 600  (process at most N seconds per loop)
   IRONBEAM_FLOW_LOOP_SLEEP_SEC        default: 1.0  (sleep between loops)
+  IRONBEAM_FLOW_1M_ENABLED            default: 1    (CR-CD A4.3: roll 1s flow up into ironbeam_es_flow_1m)
+  IRONBEAM_FLOW_1M_EVERY_SEC          default: 20   (at most one 1-minute rollup pass per N seconds)
 
 Run (local):
   python apps/cron/ironbeam_flow_1s_aggregate.py
@@ -48,9 +50,11 @@ Run (Render background worker):
 from __future__ import annotations
 
 import os
+import sys
 import time
 import datetime as dt
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -323,6 +327,77 @@ def upsert_flow(engine, flow_table: str, df_flow: pd.DataFrame) -> int:
     return len(records)
 
 
+# --- CR-CD A4.3: 1-minute rollup -------------------------------------------------------------
+# Each pass upserts, per symbol, the last 3 completed minutes of the 1-second flow into the
+# 1-minute table (packages/shared/flow_1m.py holds the one rollup definition), or catches up from
+# the symbol's last stored minute when it lags (at most ROLLUP_CHUNK per pass). A minute is rolled
+# only once the 1-second state for its symbol is past it (minus the 1-second overlap), so a minute
+# is never stored before its 1-second rows exist. Errors are logged and never stop the 1-second loop.
+ROLLUP_RECENT = dt.timedelta(minutes=3)
+ROLLUP_CHUNK = dt.timedelta(hours=6)
+ROLLUP_FIRST_LOOKBACK = dt.timedelta(days=7)
+
+
+def _floor_to_minute(ts: dt.datetime) -> dt.datetime:
+    return _floor_to_second(ts).replace(second=0)
+
+
+def rollup_window(
+        next_1s: Optional[dt.datetime],
+        state_ts: dt.datetime,
+        now: dt.datetime,
+        overlap_sec: int,
+) -> Optional[Tuple[dt.datetime, dt.datetime]]:
+    """[start, end) of whole minutes to (re)roll for one symbol, or None.
+
+    end     = the minute boundary at or before min(now, 1s state - overlap): finished 1s data only.
+    next_1s = the symbol's first 1-second row at or after (last stored minute - 2 min), or in the
+              last 7 days when nothing is stored yet; None when there is no such row.
+    start   = min(end - 3 min, that row's minute): the last 3 completed minutes, or a catch-up that
+              jumps quiet stretches (weekends, the daily break) instead of rolling empty windows.
+    A pass covers at most 6 hours.
+    """
+    if next_1s is None:
+        return None
+    end = _floor_to_minute(min(now, state_ts - dt.timedelta(seconds=overlap_sec)))
+    start = min(end - ROLLUP_RECENT, _floor_to_minute(next_1s))
+    end = min(end, start + ROLLUP_CHUNK)
+    return (start, end) if end > start else None
+
+
+def _flow_1m():
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from packages.shared import flow_1m  # noqa: WPS433
+    return flow_1m
+
+
+def rollup_1m(engine, flow_table: str, symbols: List[str], state: Dict[str, dt.datetime],
+              now: dt.datetime, overlap_sec: int) -> List[str]:
+    flow_1m = _flow_1m()
+    table_1m = flow_1m.TABLE_1M.get(flow_table)
+    if table_1m is None:
+        return [f"no 1-minute table for {flow_table}; rollup skipped"]
+    ins = text(flow_1m.insert_sql(flow_table, "symbol = :sym AND ts_utc >= :a AND ts_utc < :b", "update"))
+    out = []
+    for sym in symbols:
+        if sym not in state:
+            continue
+        with engine.begin() as conn:
+            wm = conn.execute(text(f"SELECT max(minute_utc) FROM {table_1m} WHERE symbol = :sym"),
+                              {"sym": sym}).scalar()
+            since = (wm - dt.timedelta(minutes=2)) if wm is not None else (now - ROLLUP_FIRST_LOOKBACK)
+            next_1s = conn.execute(text(f"SELECT min(ts_utc) FROM {flow_table} WHERE symbol = :sym AND ts_utc >= :t"),
+                                   {"sym": sym, "t": since}).scalar()
+            win = rollup_window(next_1s, state[sym], now, overlap_sec)
+            if win is None:
+                continue
+            n = conn.execute(ins, {"sym": sym, "a": win[0], "b": win[1]}).rowcount
+        out.append(f"{sym} [{win[0].isoformat()} -> {win[1].isoformat()}] minutes={n}")
+    return out
+
+
 def main() -> None:
     db_url = os.getenv("DATABASE_URL", "").strip()
     if not db_url:
@@ -341,6 +416,10 @@ def main() -> None:
     overlap_sec = _parse_int("IRONBEAM_FLOW_OVERLAP_SEC", 10)
     max_catchup_sec = _parse_int("IRONBEAM_FLOW_MAX_CATCHUP_SEC", 600)
     loop_sleep = _parse_float("IRONBEAM_FLOW_LOOP_SLEEP_SEC", 1.0)
+    rollup_enabled = os.getenv("IRONBEAM_FLOW_1M_ENABLED", "1").strip().lower() not in ("0", "false", "no", "")
+    rollup_every = _parse_float("IRONBEAM_FLOW_1M_EVERY_SEC", 20.0)
+    last_rollup = 0.0
+    last_rollup_error = 0.0
 
     engine = create_engine(db_url, pool_pre_ping=True)
 
@@ -380,6 +459,17 @@ def main() -> None:
                     f"[flow_1s] {sym} [{q_start.isoformat()} -> {chunk_end.isoformat()}] "
                     f"trades={len(df_tr)} buckets={buckets} state={chunk_end.isoformat()}"
                 )
+
+            if rollup_enabled and time.monotonic() - last_rollup >= rollup_every:
+                last_rollup = time.monotonic()
+                try:
+                    state = read_state(engine, state_table, symbols)
+                    for line in rollup_1m(engine, flow_table, symbols, state, _utcnow(), overlap_sec):
+                        print(f"[flow_1m] {line}")
+                except Exception as e:  # never let the rollup stop the 1-second loop
+                    if time.monotonic() - last_rollup_error >= 600:
+                        last_rollup_error = time.monotonic()
+                        print(f"[flow_1m] rollup exception (logged at most every 10 min): {e!r}")
 
             backoff = 1.0
             time.sleep(loop_sleep if did_work else max(loop_sleep, 0.5))
