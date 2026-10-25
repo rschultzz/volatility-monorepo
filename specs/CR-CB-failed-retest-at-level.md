@@ -1239,7 +1239,9 @@ They wait for:
 | call / above | 6,705 / 291 | 24.18 | 46.26 | **−22.07 [−33.16, −10.19]** | 1.000 | 0.0250 | **refuted** |
 | pooled | 14,049 / 1,398 | 24.57 | 41.92 | **−17.35 [−24.75, −7.91]** | 0.999 | 0.0083 | **refuted** |
 
-**A16: FAIL.** No hypothesis shows slower escape at real levels. Under the three-verdict rule, the call cells and pooled are "refuted" (CI upper < 0); the put cells are inconclusive.
+**A16 as computed: no hypothesis Holm-rejected; no hypothesis shows slower escape at real levels.** The mechanical three-verdict reading would have been "refuted" for the call cells and pooled (CI upper < 0) and "inconclusive" for the put cells.
+
+**Classification (Ryan, 2026-10-25): A16 is inconclusive — design flaw (test re-arming degeneracy).** It is not "refuted": 3 low-IM sessions carry 59 % of the real tests (see the caveat below). The run stands as recorded. The question is re-asked under Amendment A17.
 
 ### Secondary — zone dwell, seconds in [L ± O_c] over 60 min (no gate)
 
@@ -1260,5 +1262,5 @@ Real tests run at ~96 per session against 19 on train, and placebo at 9.5. A pos
 - The pre-registered statistic weights each test equally, so the call-cell and pooled "refuted" readings are dominated by these degenerate days. The secondary dwell measure is affected the same way.
 - R-a IM median 42.2 (p10 27.5, p90 75.9) vs train ≈ 68: arming is tighter on R-a generally.
 
-**What stands.** As pre-registered, A16 fails: no evidence on R-a that price escapes real levels more slowly. Whether the "refuted" readings survive without the degenerate sessions is **not known**. Answering it would need a new pre-registration (e.g. arming ≥ band + 2 pts, one test per level per session, or per-level weighting); R-a has now been seen for T0.
+**What stands.** A16 shows no evidence on R-a that price escapes real levels more slowly. Its negative readings are not usable as a refutation, because of the re-arming degeneracy. A17 fixes the test mechanics before a second, disclosed T0 read on R-a.
 
