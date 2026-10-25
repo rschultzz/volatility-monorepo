@@ -750,6 +750,11 @@ export default function PriceChart({
   onToggleReview = null,
   reviewCandidate = null,
   reviewHide = false,
+  // CR-CC A2 — while a candidate is active, time-slice clicks and removals edit the
+  // review's own selection (onReviewTimesChange) instead of Dash's; during the replay
+  // (reviewUntil set) times after the cutoff are refused.
+  reviewUntil = null,
+  onReviewTimesChange = null,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -1153,6 +1158,27 @@ export default function PriceChart({
   useEffect(() => {
     setLocalSelectedTimes(selectedTimes)
   }, [selectedTimes])
+
+  // CR-CC A2 — route time-slice edits: to the review selection while a candidate is
+  // active (cutoff-capped during replay), else to Dash via postMessage as before.
+  const reviewTimesRef = useRef({ onChange: onReviewTimesChange, until: reviewUntil })
+  reviewTimesRef.current = { onChange: onReviewTimesChange, until: reviewUntil }
+  const publishTimes = useCallback((next) => {
+    const review = reviewTimesRef.current
+    if (review.onChange) {
+      review.onChange(next)
+      return
+    }
+    try {
+      window.parent.postMessage({ type: 'ib-react-timeslices', times: next }, '*')
+    } catch (err) {
+      console.error('postMessage failed', err)
+    }
+  }, [])
+  const timeAllowed = (hhmm) => {
+    const until = reviewTimesRef.current.until
+    return !until || hhmm <= String(until).slice(11, 16)
+  }
 
   useEffect(() => {
     try {
@@ -1779,12 +1805,9 @@ export default function PriceChart({
 
       setLocalSelectedTimes((prev) => {
         const exists = prev.includes(hhmm)
+        if (!exists && !timeAllowed(hhmm)) return prev // CR-CC A2: after the replay cutoff
         const next = normalizeTimes(exists ? prev.filter((x) => x !== hhmm) : [...prev, hhmm])
-        try {
-          window.parent.postMessage({ type: 'ib-react-timeslices', times: next }, '*')
-        } catch (err) {
-          console.error('postMessage failed', err)
-        }
+        publishTimes(next)
         return next
       })
     }
@@ -2138,6 +2161,7 @@ export default function PriceChart({
     function handleParentMessage(event) {
       const data = event && event.data
       if (!data || data.type !== 'ib-parent-timeslices') return
+      if (reviewTimesRef.current.onChange) return // CR-CC A2: Dash's list is for the URL date
       setLocalSelectedTimes(normalizeTimes(data.times || []))
     }
 
@@ -2976,11 +3000,7 @@ export default function PriceChart({
   const handleRemoveTimeslice = (timeToRemove) => {
     setLocalSelectedTimes((prev) => {
       const next = normalizeTimes(prev.filter((x) => x !== timeToRemove))
-      try {
-        window.parent.postMessage({ type: 'ib-react-timeslices', times: next }, '*')
-      } catch (err) {
-        console.error('postMessage failed', err)
-      }
+      publishTimes(next)
       return next
     })
   }
@@ -3092,13 +3112,12 @@ export default function PriceChart({
 
           <ChartToggleBar
             pills={[
-              // CR-CC A1.3: SMILE and SIGNALS are hidden while a review replay is active.
+              // CR-CC A2: SMILE stays during a review replay (capped at the cutoff);
+              // SIGNALS is hidden until reveal (A1.3).
+              { key: 'smile', label: 'SMILE', isOpen: !smileCollapsed, onToggle: toggleSmileCollapsed },
               ...(reviewHide
                 ? []
-                : [
-                    { key: 'smile', label: 'SMILE', isOpen: !smileCollapsed, onToggle: toggleSmileCollapsed },
-                    { key: 'signals', label: 'SIGNALS', isOpen: !signalsCollapsed, onToggle: toggleSignalsCollapsed },
-                  ]),
+                : [{ key: 'signals', label: 'SIGNALS', isOpen: !signalsCollapsed, onToggle: toggleSignalsCollapsed }]),
               ...(Array.isArray(normalizedGexSegments) && normalizedGexSegments.length > 0 && gexEnabled
                 ? [{ key: 'gex', label: 'GEX', isOpen: gexPanelOpen, onToggle: () => setGexPanelOpen(o => !o), title: 'Show GEX legend' }]
                 : []),
@@ -3144,8 +3163,9 @@ export default function PriceChart({
             />
           )}
 
-          {!smileCollapsed && !reviewHide && (
+          {!smileCollapsed && (
           <div
+            data-testid="smile-window"
             onMouseDown={handleFloatingMouseDown}
             onWheel={(e) => e.stopPropagation()}
             onClick={smileCollapsed ? toggleSmileCollapsed : (e) => e.stopPropagation()}

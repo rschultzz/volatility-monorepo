@@ -451,6 +451,14 @@ export default function App() {
   // are truncated; reveal clears it and the full session is re-fetched (L8).
   const reviewUntil = reviewCandidate && !reviewCandidate.revealed ? reviewCandidate.entry_ts_pt : null
   const reviewHide = Boolean(reviewUntil)
+  // CR-CC A2 — the review's own smile/skew time selection (HH:MM on the candidate's
+  // session). It is not posted to Dash, whose time list belongs to the URL date. Empty
+  // means "server default": the latest ORATS snapshot <= until while the cutoff is active.
+  const [reviewTimes, setReviewTimes] = useState([])
+  const reviewCandidateId = reviewCandidate?.id || null
+  useEffect(() => {
+    setReviewTimes([])
+  }, [reviewCandidateId])
   const expectedOn = params.get('expected') !== 'off'
 
   const initialInterval = useMemo(() => {
@@ -1615,13 +1623,15 @@ export default function App() {
     }
   }, [apiBase, tradeDate, selectedSessionTradeDateKey, flowEnabled, flowSession, flowResample, flowEmaLen, loadingCenter, error, isLiveTradeDate])
 
+  // CR-CC A2 — the times the smile/skew panel shows: the review selection while a
+  // candidate is active, else Dash's time list.
+  const smileTimes = reviewCandidate ? reviewTimes : selectedTimes
+
   // --- Skew Data Fetching ---
+  // CR-CC A2: during a review replay the request carries `until` (snapshots capped at
+  // entry), skips the live mirror and is fetched once — no polling while the cutoff holds.
   useEffect(() => {
     if (loadingCenter || error) return undefined
-    if (reviewHide) {
-      setSkewData([]) // CR-CC A1.3: hidden until reveal; no fetch
-      return undefined
-    }
 
     let disposed = false
     let inFlight = false
@@ -1638,13 +1648,14 @@ export default function App() {
         url.searchParams.set('trade_date', tradeDate)
         url.searchParams.set('expiration_date', expirationDate)
         url.searchParams.set('expected', expectedOn ? 'on' : 'off')
-        if (selectedTimes && selectedTimes.length > 0) {
-          url.searchParams.set('times', selectedTimes.join(','))
+        if (smileTimes && smileTimes.length > 0) {
+          url.searchParams.set('times', smileTimes.join(','))
         }
+        if (reviewUntil) url.searchParams.set('until', reviewUntil)
 
         // Live data from parent mirror if available
         try {
-          const parentData = window.parent?.document?.getElementById('live-data-mirror')?.textContent
+          const parentData = reviewUntil ? null : window.parent?.document?.getElementById('live-data-mirror')?.textContent
           if (parentData) {
             url.searchParams.set('live_data', parentData)
           }
@@ -1675,22 +1686,20 @@ export default function App() {
     }
 
     tick()
-    const timer = window.setInterval(tick, SKEW_DATA_POLL_MS)
+    const timer = reviewUntil ? null : window.setInterval(tick, SKEW_DATA_POLL_MS)
 
     return () => {
       disposed = true
-      window.clearInterval(timer)
+      if (timer != null) window.clearInterval(timer)
       if (activeController) activeController.abort()
     }
-  }, [apiBase, tradeDate, expirationDate, selectedTimes, expectedOn, loadingCenter, error, reviewHide])
+  }, [apiBase, tradeDate, expirationDate, smileTimes, expectedOn, loadingCenter, error, reviewUntil])
 
   // --- Smile Data Fetching ---
+  // CR-CC A2: same cutoff rules as the skew fetch. With no review selection yet, the
+  // server's default (latest snapshot <= until) is adopted as the review selection.
   useEffect(() => {
     if (loadingCenter || error) return undefined
-    if (reviewHide) {
-      setSmileData(null) // CR-CC A1.3: hidden until reveal; no fetch
-      return undefined
-    }
 
     let disposed = false
     let inFlight = false
@@ -1707,12 +1716,13 @@ export default function App() {
         url.searchParams.set('trade_date', tradeDate)
         url.searchParams.set('expiration_date', expirationDate)
         url.searchParams.set('expected', expectedOn ? 'on' : 'off')
-        if (selectedTimes && selectedTimes.length > 0) {
-          url.searchParams.set('times', selectedTimes.join(','))
+        if (smileTimes && smileTimes.length > 0) {
+          url.searchParams.set('times', smileTimes.join(','))
         }
+        if (reviewUntil) url.searchParams.set('until', reviewUntil)
 
         try {
-          const parentData = window.parent?.document?.getElementById('live-data-mirror')?.textContent
+          const parentData = reviewUntil ? null : window.parent?.document?.getElementById('live-data-mirror')?.textContent
           if (parentData) {
             url.searchParams.set('live_data', parentData)
           }
@@ -1730,6 +1740,9 @@ export default function App() {
         const payload = await response.json()
         if (disposed) return
         setSmileData(payload)
+        if (reviewUntil && smileTimes.length === 0 && Array.isArray(payload.times) && payload.times.length > 0) {
+          setReviewTimes(payload.times)
+        }
       } catch (err) {
         if (err?.name !== 'AbortError') {
           console.error('Smile data refresh failed', err)
@@ -1741,14 +1754,14 @@ export default function App() {
     }
 
     tick()
-    const timer = window.setInterval(tick, SKEW_DATA_POLL_MS)
+    const timer = reviewUntil ? null : window.setInterval(tick, SKEW_DATA_POLL_MS)
 
     return () => {
       disposed = true
-      window.clearInterval(timer)
+      if (timer != null) window.clearInterval(timer)
       if (activeController) activeController.abort()
     }
-  }, [apiBase, tradeDate, expirationDate, selectedTimes, expectedOn, loadingCenter, error, reviewHide])
+  }, [apiBase, tradeDate, expirationDate, smileTimes, expectedOn, loadingCenter, error, reviewUntil])
 
   // --- ATM IV minute-series fetch (0DTE: per-session trade_date == expir) ---
   // Pulls the 0DTE ATM IV series for every session visible on the chart so
@@ -2017,7 +2030,7 @@ export default function App() {
                 tradeDate={tradeDate}
                 interval={interval}
                 liveTradeCandles={liveTradeBars}
-                selectedTimes={selectedTimes}
+                selectedTimes={smileTimes}
                 gexSegments={mergedGexSegments}
                 gexEnabled={Boolean(meta?.gex_enabled ?? gexEnabled)}
                 gexMinAbsB={gexMinAbsB}
@@ -2034,7 +2047,7 @@ export default function App() {
                 smileSnapshots={smileSnapshots}
                 atmIvSeries={visibleAtmIvSeries}
                 activeBandsAnchorTime={bandsAnchor?.time ?? null}
-                onBandsAnchorChange={setBandsAnchor}
+                onBandsAnchorChange={reviewHide ? null : setBandsAnchor}
                 bandsLevels={bandsLevels}
                 condorPricing={condorPricing}
                 landscapeOpen={landscapeOpen}
@@ -2053,6 +2066,8 @@ export default function App() {
                 onToggleReview={() => (reviewOpen ? closeReview() : setReviewOpen(true))}
                 reviewCandidate={reviewCandidate}
                 reviewHide={reviewHide}
+                reviewUntil={reviewUntil}
+                onReviewTimesChange={reviewCandidate ? setReviewTimes : null}
               />
             </div>
 
