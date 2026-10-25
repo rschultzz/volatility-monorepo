@@ -1264,3 +1264,17 @@ Real tests run at ~96 per session against 19 on train, and placebo at 9.5. A pos
 
 **What stands.** A16 shows no evidence on R-a that price escapes real levels more slowly. Its negative readings are not usable as a refutation, because of the re-arming degeneracy. A17 fixes the test mechanics before a second, disclosed T0 read on R-a.
 
+## Amendment A17 (Ryan, 2026-10-25, after A16; fixed before any rerun; no trade outcomes): T0 test mechanics
+
+**Why.** A16's verdict is "inconclusive — design flaw". On low-IM sessions the arming distance 0.10·IM fell inside the 2-pt test band, so levels re-armed on every oscillation, and test-weighted estimates were dominated by a few sessions. A17 fixes the mechanics. Everything not listed is as A16.
+
+| # | Clause |
+|---|---|
+| A17.1 | **One T0 test per level per session:** the first armed test only (either approach side; its side sets the cell). |
+| A17.2 | **Arming distance = max(0.10·IM_d, 4 pts)**, always > the 2-pt test band. |
+| A17.3 | **Session-weighted estimates.**<br>• Per session and cell, the mean of the measure over that session's tests (real and placebo separately).<br>• The cell estimate is the mean of those session means over the sessions with ≥ 1 test in the arm.<br>• Bootstrap across sessions: 10 000 multinomial session resamples, seed 20260920, real and placebo resampled jointly; 95 % percentile CI.<br>• Holm (one-sided α 0.025, 4 cells + pooled) on the session-weighted primary. |
+| A17.4 | **Low-IM flag.** Sessions with `implied_move_1d` < 25 pts are flagged; their count and IM values are reported. **The primary run includes them;** a readout repeats every statistic **excluding** them (no gate). |
+| A17.5 | **IM cross-check** (field-conventions: `implied_move_1d` = `table_spot` × `atmiv` × √(1/252), at the first monies row ≥ 06:33 PT, smallest dte > 0; not a straddle price). For each flagged session, next to the stored IM:<br>• **recomputed `atmiv` × spot × √(1/252)** (`orats_monies_minute`, same row rule);<br>• **the `vol50` version**;<br>• **the 0DTE ATM straddle mid** at the first `orats_options_minute` snapshot ≥ 06:33 PT (PM expiry = the session; strike nearest `stock_price`; call mid + put mid), where cached;<br>• **the realised ES RTH range** (high − low from the flow).<br>The same four, as ratios to IM, are summarised over all R-a sessions for comparison. This is a measurement of whether the low IM is a data error, not a verdict on the field. |
+| A17.6 | **Unchanged from A16:** R-a 2024-04-03 → 2024-12-31 only; nothing dated 2025 or later; single levels (d 0, e 0); O_c frozen from train; A15.6 placebo; primary = restricted mean time to escape 0.25·IM (≤ 120 min or 13:00); secondary = zone dwell over 60 min; early closes excluded; pass = Holm-rejected with CI lower bound > 0 (real escapes more slowly), in a cell or pooled. |
+| A17.7 | **Disclosure.** This is the **second T0 read on R-a**, after a mechanical fix to a design flaw found in the first (A16). The script (`scripts/cr_cb_t0_ra_a17.py`) is committed before its single run; statistics are written to JSON before printing; no trade outcome. |
+
