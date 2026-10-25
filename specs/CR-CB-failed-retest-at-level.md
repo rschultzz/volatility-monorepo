@@ -6,6 +6,12 @@ Source: vault `Dash/CRs/CR-CB — Failed Retest at a Level.md` (last_reviewed 20
 
 ---
 
+> [!summary] Framework (Ryan, 2026-10-25) — read this first; the amendments below are the detailed record
+> **Layer 1 — where:** major GEX levels (Corrected, ≥ 40 $bn gross) are where price should **slow down**. Levels give **no direction** by themselves, at call or put levels alike. Treating call levels as automatic shorts was a mistake; Ryan recalls about 50/50 at call levels without flow, and CR-BU/CR-BI agree.
+> **Layer 2 — the setup:** price stalls and a range forms at the level (L5–L6, A4.1). Which side of the level the stall sits on may matter (SS, A5.1).
+> **Layer 3 — direction:** **order flow** across the range (A5: push decay, late vs early, absorption, divergence, stall side) plus **put-skew divergence** from the move (A8.2: down move with falling put skew, or up move with rising put skew) and the **skew trend during the range** (A8.3) decides fade vs break at the range edge (A4). Put skew is read at put and call levels alike; call skew is a secondary check everywhere.
+> **Tests in order:** **T0** do levels slow price down (A7.1) → **stall side alone** (A7.2) → flow / skew direction rules vs always-fade / always-break baselines (**T-flow**, A4.7) → the named confluences **H-PNB** (long at put levels, gate T5) and **H-PSD** (short at call levels, gate T5b) (A6, A8) → profitability after costs (T1), real vs placebo (T2), stop-free move (T3). Stage 1 (2026, Ironbeam flow) searches and shapes the rules with Ryan in the review tool (CR-CC); **Stage 2 (2024-04 → 2025-12, Databento, CR-CA) decides.**
+
 ## Why
 
 **Ryan (2026-10-25)** describes a discretionary pattern he sees often. Worked on 2026-10-23, a holdout day used only to illustrate the detector:
