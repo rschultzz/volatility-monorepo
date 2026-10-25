@@ -156,3 +156,24 @@ Nothing from F1 (7157.25 / 7238.25 / 7251.75), F3 (OR 7258.75–7293.25), F4 or 
 2. **Placebo on round numbers.** About 20 % of non-F5 placebo bins are 25-multiples. Keep as written, or apply F5's "> 3 pts from a 25-multiple" rule to every family's placebo.
 3. **Thin cells.** F6 / above fails the A/A (12 %, n 53). Keep F6 in the Holm family (it is unlikely to pass anyway) or screen F6 pooled only.
 4. **First test only vs retests from the other side.** On 2026-05-01 the overnight high was tested at the open from below. The later retest from above (the one Ryan would trade) is not counted. L5 is CR-CB A17's fix for re-arming degeneracy. A variant "first test from each side" (≤ 2 per level per session) would keep that fix and count role-reversal retests. Keep L5 as frozen, or amend before Stage 1.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-25, after Step 0; no outcomes seen): rulings on the four Step 0 decisions
+
+**Rulings (verbatim):**
+1. F7 swings placebo: exclude only swings confirmed at or before the placebo's test time (causal), and distance-match each placebo to its parent swing (same signed distance from the open as the parent, ≥ 10 pts from any swing confirmed so far).
+2. All non-round families' placebos must avoid multiples of 25 ± 3 pts (as F5's already do).
+3. F6 prior week: readout only, removed from the Holm family.
+4. One test per level per side (from below, from above), with the A17 arming rule within each side; first-side-only is a readout.
+
+Re-run Step 0 counts and the A/A under A1 (no outcomes); the A/A must pass for every family cell in the Holm set before Stage 1 runs.
+
+| # | Clause (implementation, fixed before the A1 runs) |
+|---|---|
+| A1.1 | **F7 placebo.** Per in-window real swing (the parent), candidates are the 5-pt bins on the parent's side of the open, within ±1·IM_d, ordered by distance to the parent. This is the distance match: the literal "same signed distance from the open" is the parent's own price, so the nearest bins on the same side are used. At the parent's known time, bins < 10 pts from any swing confirmed at or before that time (the parent included) are excluded, and so are bins ≤ 3 pts from a 25-multiple; the 4 nearest remaining bins are the parent's placebos. A placebo is armed from its parent's known time; a bin claimed by several parents takes the earliest. **At each placebo test, the test is kept only if the bin is ≥ 10 pts from every swing confirmed at or before the test second**; otherwise that test is dropped (counted), and the bin stays a placebo level. |
+| A1.2 | **Placebo off round numbers.** F1, F2, F3, F6 and F7 placebo bins must be > 3 pts from every multiple of 25 (F5 unchanged). F4 (a moving level): a placebo test is dropped when VWAP + offset at the test second is ≤ 3 pts from a 25-multiple (counted). |
+| A1.3 | **Holm family.** F1, F2, F3, F4, F5 R100, F5 R50, F5 R25, F7 × {pooled, below, above} = **24 hypotheses**, one-sided α 0.025. F6 is a readout with the same statistics and no gate. |
+| A1.4 | **Tests (amends L5).** Per level and session, the first test **from below** (first arming h ≤ L − arm after the armed-from time, then the first h ≥ L − 2) and the first test **from above** (first l ≥ L + arm, then the first l ≤ L + 2), found independently: ≤ 2 tests per level per session. Arming max(0.10·IM_d, 4 pts) within each side. Session-weighted means (A17.3) pool both sides in "pooled". **Readout "first side only"** = the earlier of the two tests, which is L5 as frozen. |
+| A1.5 | **A/A gate.** Step 0 counts and the A/A (Step 0 design: 200 pseudo-level splits, 2,000 session resamples, CI excludes 0 in ≤ 10 % of splits, median within ±3 min) are re-run under A1 on placebo tests only. Stage 1 runs only if all 24 Holm cells pass. |
+| A1.6 | **Stage 1 run.** The script is committed before its single run, and every statistic is written to JSON before printing. **Primary** (L6): restricted mean time to escape 0.25·IM_d, real − placebo, session-weighted, 10,000 session-multinomial resamples (seed 20260920), 95 % percentile CI, one-sided p = share of resamples ≤ 0 (floor 1e-4), Holm step-down over A1.3. **Shortlisted** (L9) = at least one of the family's three hypotheses Holm-rejected with CI lower bound > 0. Each hypothesis is otherwise inconclusive, or refuted when the CI upper bound is < 0. **Secondary, no gate:** zone dwell (seconds within level ± max(3, 0.05·IM_d) over 60 min, forward-filled 1-s closes, capped at 13:00) and velocity drop (log of the 10-s-sampled path length in the 5 min after the test over the 5 min before, as CR-CB v3). **Readouts, no gate:** L11 GEX overlap (real − placebo within overlap / non-overlap tests, and real overlap − real non-overlap) and time of day (before / after 10:00 PT); first side only; F6; excluding IM < 25. |
