@@ -125,6 +125,16 @@ Ryan: test all the parameters; the concern is discarding real patterns because t
 | A6.5 | **Stage 2 gate T5 (per rule):** H-PNB and H-CNB each: net expectancy > 0 after costs, CI lower bound > 0, **and** above the same-cell always-fade baseline, CI lower bound > 0. Minimum 40 events per rule in R; below that, the verdict is **inconclusive (underpowered)**, not a fail. |
 | A6.6 | **Step 0:** event counts for H-PNB and H-CNB, and for each two-condition subset; skew-field coverage on those events. No outcomes. |
 
+## Amendment A7 (Ryan, 2026-10-25, before Step 0 outcomes): T0 "do levels slow price down", stall side alone, skew at both level types
+
+| # | Clause |
+|---|---|
+| A7.1 | **T0, levels slow price down** (price paths only; Stage 1 and Stage 2). For real levels vs the A1.2-style placebo prices (same session, distance-matched, ≥ 15 pts from real levels), at each first test (L5):<br>(a) **range-formation rate:** the share of tests followed by a confirmed L6 extreme and a range (A4.1) at the grid-centre parameters;<br>(b) **dwell:** seconds spent within ±2 pts of the price in the 30 min after the test;<br>(c) **velocity drop:** absolute price speed (pts/min) in the 5 min after the test ÷ the 5 min before.<br>Per cell (put/call × approach side). **Pass (Stage 2):** (a) or (b) real > placebo, CI lower bound > 0, in a cell. If T0 fails in a cell, that cell's results are read as structure + flow alone; levels add nothing there. |
+| A7.2 | **Stall side alone** (readout in Stage 1; Stage 2 gate T6): the direction rule "stall on the far side of the level → break, stall on the near side → fade" (SS share ≥ 0.6 / ≤ 0.4), with no flow or skew. Its net expectancy vs the always-fade / always-break baselines per cell, so it is visible whether stall side carries direction before flow is added. |
+| A7.3 | **Skew at both level types:** compute **both** residual 25Δ put skew (vol75 − vol50) and residual 25Δ call skew (vol25 − vol50) (A5.4 method) for every edge event, at put and call levels. Add both to FR9 (A5.3). Report each skew's tercile vs the flow-directed outcome per cell, so "put skew is more telling at put levels" is measured. |
+| A7.4 | **H-CNB is a readout, not a gate** (amends A6.5): T5 applies to H-PNB only. H-CNB assumed call skew behaves like put skew, which is now an open question (A7.3). |
+| A7.5 | **Step 0 additions:** the T0 descriptive counts: tests, range-formation shares and dwell, real vs placebo, per cell. These come from price paths and are allowed in Step 0, because T0 is not a trade outcome. Report them before any trade outcome is computed. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
