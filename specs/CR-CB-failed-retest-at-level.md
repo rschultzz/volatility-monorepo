@@ -208,6 +208,17 @@ As written, A9.5 is nearly inert. A limit fade at H − tol fills before price c
 | A11.4 | **Record R-multiples for later sizing work** (Ryan: the long-term goal is position sizing; fewer contracts and wider stops in high-vol cells such as put levels, more contracts and tighter stops for smaller 5–10 pt moves in low-vol cells such as call levels; not tested now). Every trade row stores its stop distance in points, the result in points, and **R = result / stop distance**, plus σ5_d and IM_d at entry. A later sizing CR can then simulate fixed-risk sizing with no re-run. |
 | A11.3 | **Grid size:** the stop dimension grows from 3 to 7 values; the other A1 dimensions are unchanged. The plateau neighbourhood for stops runs within each family only. |
 
+## Amendment A12 (Ryan, 2026-10-25, before Step 0 outcomes): P&L per episode
+
+**Ryan, reviewing fixture 2026-04-01.** A short at call level 6641 (net +60 / gross 140 $bn), entry 6638, stopped at 6643 at 08:45. Price overshot to about 6653–6655 (about 2× the call-level O_c), held about 90 min, then broke down to about 6605. "Maybe this is where you get cut up, but the mechanism seems to exist." No A11 stop saves the first entry; the A9.5′ re-arm (attempt 2 at the new extreme) is what would catch it.
+
+| # | Clause |
+|---|---|
+| A12.1 | **Episode** = all attempts (A9.5′, up to 3) at one level in one session, plus any range-edge trades (A4) at that level. **Episode P&L** = the sum of its trades' net points (and R, per A11.4). |
+| A12.2 | **Report per setup (Stage 1, and Stage 2 per cell):** episode count; episode P&L mean with CI; the share of episodes that are net positive; the distribution of attempts per episode; and the mean P&L by attempt number (1st, 2nd, 3rd). This shows whether the cut-ups outweigh the eventual winner. |
+| A12.3 | **Max attempts as a grid dimension:** {1, 2, 3} attempts per level per session, searched with the plateau rule. "1" reproduces the no-re-arm behaviour. |
+| A12.4 | **The gate stays per trade** (T1–T5 unchanged). Episode P&L is a readout, but it is required in the setup registry entry for any shortlisted setup. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
