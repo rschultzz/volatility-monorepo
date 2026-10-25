@@ -219,6 +219,18 @@ As written, A9.5 is nearly inert. A limit fade at H − tol fills before price c
 | A12.3 | **Max attempts as a grid dimension:** {1, 2, 3} attempts per level per session, searched with the plateau rule. "1" reproduces the no-re-arm behaviour. |
 | A12.4 | **The gate stays per trade** (T1–T5 unchanged). Episode P&L is a readout, but it is required in the setup registry entry for any shortlisted setup. |
 
+## Amendment A13 (Ryan, 2026-10-25, before Step 0 outcomes): wait for the second level in a cluster
+
+**Ryan, on fixture 2026-04-01:** with a second large call level just above (6641 and 6646), he usually waits for the second, because price tends to get there. It did that day: the overshoot to about 6653–6655 sits only 7–9 pts past 6646.
+
+| # | Clause |
+|---|---|
+| A13.1 | **Cluster:** levels from the A1.1 selection (≥ 40 $bn gross, Corrected) whose prices lie within **d** pts of each other, chained transitively, form one zone. **d** is a Stage 1 grid dimension: {0 (off), 5, 10} pts. |
+| A13.2 | **The far level arms the setup:** the cluster's level farthest in the approach direction (the highest when price approaches from below, the lowest from above). The L5 test, the O_c overshoot (A1/L5), the L6 extreme, the S-z zone-edge stop (A11) and the range (A4) are all measured from it. Touches of nearer cluster levels do not create setups. |
+| A13.3 | **Cluster attributes for cells and readouts:** the cluster's type is the sign of the summed net (put-heavy / call-heavy), with a "mixed" flag when members disagree in sign. Recorded: member count, span (pts), summed gross and net $bn. |
+| A13.4 | **Readouts:** clustered vs single-level setups per cell (net expectancy, stop-free move, episode P&L); and, for d > 0, the share of clusters where price reached the far level after touching the near one. That is Ryan's "good chance you will get there", measured from price paths. |
+| A13.5 | **Step 0 additions:** the cluster count and span distribution at each d; the "reached far level" share (price paths only); event counts per cell at each d. The gallery meta carries the cluster members. |
+
 ## Stage 1 — train (search)
 
 **S1-a, exit choice.**
