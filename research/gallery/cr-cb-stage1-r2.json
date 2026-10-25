@@ -1,0 +1,3591 @@
+{
+ "cr_id": "CR-CB",
+ "set_name": "cr-cb:round-2",
+ "generated_at": "2026-10-25T21:08:19.700936+00:00",
+ "events": [
+  {
+   "id": "CR-CB:stage1-r2:1",
+   "session_date": "2026-04-10",
+   "cell": "call/above/bot",
+   "direction": "short",
+   "level_price": 6847.0,
+   "level_net_bn": 189.01,
+   "level_gross_bn": 217.5,
+   "entry_ts_pt": "2026-04-10T10:43:15-07:00",
+   "entry_price": 6853.5,
+   "stop_price": 6856.5,
+   "extreme_price": 6854.5,
+   "test_ts_pt": "2026-04-10T10:06:30-07:00",
+   "confirm_ts_pt": "2026-04-10T10:15:03-07:00",
+   "retest_ts_pt": "2026-04-10T10:43:11-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/above/bot",
+    "attempt": 1,
+    "O_c": 5.5,
+    "arming_level": 6847.0,
+    "arming_kind": "swing_low",
+    "cluster_members": [
+     6849.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6847.0,
+     "core_hi": 6849.0,
+     "lo": 6841.5,
+     "hi": 6854.5
+    },
+    "range": {
+     "top": 6854.5,
+     "bottom": 6848.0,
+     "height": 6.5,
+     "formed_ts_pt": "2026-04-10T10:22:22-07:00",
+     "held_before_edge_min": 20.8
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-04-10T10:43:11-07:00",
+    "flow": {
+     "P": 283.0,
+     "A_rel": 2.6669,
+     "Q": 0.3069,
+     "PD": -0.636,
+     "LE": 0.0513,
+     "RA": null,
+     "DV": -0.0055,
+     "SS_share": 0.0108,
+     "SS_vwap": -3.0827
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "bull",
+     "div_cs": "bull",
+     "dps": 0.0027,
+     "trend_ps": 0.00032,
+     "trend_ps_res": 0.00062,
+     "trend_chg_ps": -0.00018
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "break",
+     "FR2": "fade",
+     "FR3": "none",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "fade",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "none",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:2",
+   "session_date": "2026-05-29",
+   "cell": "call/above/bot",
+   "direction": "short",
+   "level_price": 7585.0,
+   "level_net_bn": 631.78,
+   "level_gross_bn": 700.75,
+   "entry_ts_pt": "2026-05-29T08:13:54-07:00",
+   "entry_price": 7597.25,
+   "stop_price": 7600.25,
+   "extreme_price": 7598.25,
+   "test_ts_pt": "2026-05-29T07:51:30-07:00",
+   "confirm_ts_pt": "2026-05-29T07:51:50-07:00",
+   "retest_ts_pt": "2026-05-29T08:13:54-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/above/bot",
+    "attempt": 1,
+    "O_c": 5.5,
+    "arming_level": 7585.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     7585.0,
+     7590.0,
+     7595.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7585.0,
+     "core_hi": 7595.0,
+     "lo": 7579.5,
+     "hi": 7600.5
+    },
+    "range": {
+     "top": 7598.25,
+     "bottom": 7584.75,
+     "height": 13.5,
+     "formed_ts_pt": "2026-05-29T07:53:54-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-05-29T08:13:54-07:00",
+    "flow": {
+     "P": 267.0,
+     "A_rel": 2.2441,
+     "Q": 0.1734,
+     "PD": -1.1493,
+     "LE": 0.0747,
+     "RA": 3.8331,
+     "DV": 0.0106,
+     "SS_share": 0.0,
+     "SS_vwap": -9.8506
+    },
+    "skew": {
+     "div_ps": "bull",
+     "div_ps_res": "bull",
+     "div_cs": "bull",
+     "dps": -0.014,
+     "trend_ps": 0.00175,
+     "trend_ps_res": 0.00289,
+     "trend_chg_ps": 0.00451
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "fade",
+     "FR2": "fade",
+     "FR3": "none",
+     "FR4": "fade",
+     "FR5": "none",
+     "FR6": "break",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "fade",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:3",
+   "session_date": "2026-01-15",
+   "cell": "call/above/bot",
+   "direction": "short",
+   "level_price": 7008.5,
+   "level_net_bn": 2.21,
+   "level_gross_bn": 115.8,
+   "entry_ts_pt": "2026-01-15T10:30:05-08:00",
+   "entry_price": 7011.75,
+   "stop_price": 7014.75,
+   "extreme_price": 7012.75,
+   "test_ts_pt": "2026-01-15T09:15:59-08:00",
+   "confirm_ts_pt": "2026-01-15T09:45:14-08:00",
+   "retest_ts_pt": "2026-01-15T10:29:58-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/above/bot",
+    "attempt": 1,
+    "O_c": 5.5,
+    "arming_level": 7008.5,
+    "arming_kind": "swing_high",
+    "cluster_members": [
+     7009.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7008.5,
+     "core_hi": 7009.0,
+     "lo": 7003.0,
+     "hi": 7014.5
+    },
+    "range": {
+     "top": 7012.75,
+     "bottom": 7004.5,
+     "height": 8.25,
+     "formed_ts_pt": "2026-01-15T09:53:24-08:00",
+     "held_before_edge_min": 36.6
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-01-15T10:29:58-08:00",
+    "flow": {
+     "P": 339.0,
+     "A_rel": 1.9195,
+     "Q": 0.8539,
+     "PD": -0.1576,
+     "LE": 0.064,
+     "RA": null,
+     "DV": -0.0189,
+     "SS_share": 0.5748,
+     "SS_vwap": 1.5704
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "none",
+     "div_cs": "none",
+     "dps": 0.00163,
+     "trend_ps": -0.00066,
+     "trend_ps_res": -0.00061,
+     "trend_chg_ps": -0.00222
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "fade",
+     "FR2": "none",
+     "FR3": "break",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "break",
+     "STALL": "none"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:4",
+   "session_date": "2026-04-20",
+   "cell": "call/above/bot",
+   "direction": "short",
+   "level_price": 7132.0,
+   "level_net_bn": 208.01,
+   "level_gross_bn": 213.08,
+   "entry_ts_pt": "2026-04-20T09:33:40-07:00",
+   "entry_price": 7139.75,
+   "stop_price": 7142.75,
+   "extreme_price": 7140.75,
+   "test_ts_pt": "2026-04-20T08:34:08-07:00",
+   "confirm_ts_pt": "2026-04-20T08:40:52-07:00",
+   "retest_ts_pt": "2026-04-20T09:33:36-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/above/bot",
+    "attempt": 1,
+    "O_c": 5.5,
+    "arming_level": 7132.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     7132.0,
+     7137.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7132.0,
+     "core_hi": 7137.0,
+     "lo": 7126.5,
+     "hi": 7142.5
+    },
+    "range": {
+     "top": 7140.75,
+     "bottom": 7132.75,
+     "height": 8.0,
+     "formed_ts_pt": "2026-04-20T08:43:11-07:00",
+     "held_before_edge_min": 50.4
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-04-20T09:33:36-07:00",
+    "flow": {
+     "P": -46.0,
+     "A_rel": null,
+     "Q": -0.1667,
+     "PD": -2.8,
+     "LE": 0.0693,
+     "RA": null,
+     "DV": -0.0116,
+     "SS_share": 0.0468,
+     "SS_vwap": -3.3219
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "none",
+     "div_cs": "bull",
+     "dps": 0.0067,
+     "trend_ps": -0.00049,
+     "trend_ps_res": -0.00034,
+     "trend_chg_ps": -0.00201
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "fade",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "none",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:5",
+   "session_date": "2026-04-23",
+   "cell": "call/above/bot",
+   "direction": "short",
+   "level_price": 7157.0,
+   "level_net_bn": 116.36,
+   "level_gross_bn": 215.55,
+   "entry_ts_pt": "2026-04-23T07:48:08-07:00",
+   "entry_price": 7166.25,
+   "stop_price": 7169.25,
+   "extreme_price": 7167.25,
+   "test_ts_pt": "2026-04-23T07:19:01-07:00",
+   "confirm_ts_pt": "2026-04-23T07:23:58-07:00",
+   "retest_ts_pt": "2026-04-23T07:48:08-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/above/bot",
+    "attempt": 1,
+    "O_c": 5.5,
+    "arming_level": 7157.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     7157.0,
+     7162.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7157.0,
+     "core_hi": 7162.0,
+     "lo": 7151.5,
+     "hi": 7167.5
+    },
+    "range": {
+     "top": 7167.25,
+     "bottom": 7158.0,
+     "height": 9.25,
+     "formed_ts_pt": "2026-04-23T07:28:08-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-04-23T07:48:08-07:00",
+    "flow": {
+     "P": -365.0,
+     "A_rel": null,
+     "Q": -0.5112,
+     "PD": -1.1925,
+     "LE": -0.0556,
+     "RA": 2.9603,
+     "DV": 0.0144,
+     "SS_share": 0.0,
+     "SS_vwap": -8.6946
+    },
+    "skew": {
+     "div_ps": "bull",
+     "div_ps_res": "bull",
+     "div_cs": "none",
+     "dps": -0.0052,
+     "trend_ps": -0.00219,
+     "trend_ps_res": -0.00135,
+     "trend_chg_ps": -0.0005
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "fade",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "break",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:6",
+   "session_date": "2026-05-12",
+   "cell": "call/above/top",
+   "direction": "long",
+   "level_price": 7371.0,
+   "level_net_bn": 72.99,
+   "level_gross_bn": 148.1,
+   "entry_ts_pt": "2026-05-12T10:01:37-07:00",
+   "entry_price": 7368.0,
+   "stop_price": 7365.0,
+   "extreme_price": 7367.0,
+   "test_ts_pt": "2026-05-12T09:21:58-07:00",
+   "confirm_ts_pt": "2026-05-12T09:35:10-07:00",
+   "retest_ts_pt": "2026-05-12T10:01:37-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/above/top",
+    "attempt": 1,
+    "O_c": 5.5,
+    "arming_level": 7371.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     7371.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7371.0,
+     "core_hi": 7371.0,
+     "lo": 7365.5,
+     "hi": 7376.5
+    },
+    "range": {
+     "top": 7375.5,
+     "bottom": 7367.0,
+     "height": 8.5,
+     "formed_ts_pt": "2026-05-12T09:41:37-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-05-12T10:01:37-07:00",
+    "flow": {
+     "P": -358.0,
+     "A_rel": null,
+     "Q": -0.3228,
+     "PD": -0.7404,
+     "LE": -0.1456,
+     "RA": 31.3114,
+     "DV": 0.0005,
+     "SS_share": 0.9983,
+     "SS_vwap": 4.5327
+    },
+    "skew": {
+     "div_ps": "bull",
+     "div_ps_res": "bull",
+     "div_cs": "none",
+     "dps": -0.0027,
+     "trend_ps": -0.00137,
+     "trend_ps_res": -0.00012,
+     "trend_chg_ps": -0.00212
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "fade",
+     "FR6": "none",
+     "FR7": "break",
+     "FR8": "none",
+     "FR10": "fade",
+     "FR11": "fade",
+     "FR12": "break",
+     "STALL": "break"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:7",
+   "session_date": "2026-01-28",
+   "cell": "call/above/top",
+   "direction": "long",
+   "level_price": 7009.25,
+   "level_net_bn": 50.44,
+   "level_gross_bn": 148.21,
+   "entry_ts_pt": "2026-01-28T08:34:02-08:00",
+   "entry_price": 7008.25,
+   "stop_price": 7005.25,
+   "extreme_price": 7007.25,
+   "test_ts_pt": "2026-01-28T07:42:55-08:00",
+   "confirm_ts_pt": "2026-01-28T08:04:43-08:00",
+   "retest_ts_pt": "2026-01-28T08:34:02-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/above/top",
+    "attempt": 1,
+    "O_c": 5.5,
+    "arming_level": 7009.25,
+    "arming_kind": "overnight_low",
+    "cluster_members": [
+     7011.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7009.25,
+     "core_hi": 7011.0,
+     "lo": 7003.75,
+     "hi": 7016.5
+    },
+    "range": {
+     "top": 7015.5,
+     "bottom": 7007.25,
+     "height": 8.25,
+     "formed_ts_pt": "2026-01-28T08:14:02-08:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-01-28T08:34:02-08:00",
+    "flow": {
+     "P": -267.0,
+     "A_rel": null,
+     "Q": -1.0637,
+     "PD": -0.2405,
+     "LE": -0.0537,
+     "RA": 4.2735,
+     "DV": 0.0073,
+     "SS_share": 0.3471,
+     "SS_vwap": -0.5139
+    },
+    "skew": {
+     "div_ps": "bull",
+     "div_ps_res": "bull",
+     "div_cs": "none",
+     "dps": -0.0017,
+     "trend_ps": -0.00038,
+     "trend_ps_res": 0.00011,
+     "trend_chg_ps": -0.00068
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "fade",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "fade",
+     "FR11": "fade",
+     "FR12": "break",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:8",
+   "session_date": "2026-01-27",
+   "cell": "call/above/top",
+   "direction": "long",
+   "level_price": 7007.75,
+   "level_net_bn": 289.08,
+   "level_gross_bn": 313.14,
+   "entry_ts_pt": "2026-01-27T09:56:58-08:00",
+   "entry_price": 7007.5,
+   "stop_price": 7004.5,
+   "extreme_price": 7006.5,
+   "test_ts_pt": "2026-01-27T09:16:07-08:00",
+   "confirm_ts_pt": "2026-01-27T09:25:49-08:00",
+   "retest_ts_pt": "2026-01-27T09:56:37-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/above/top",
+    "attempt": 1,
+    "O_c": 5.5,
+    "arming_level": 7007.75,
+    "arming_kind": "swing_high",
+    "cluster_members": [
+     7010.0,
+     7015.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7007.75,
+     "core_hi": 7015.0,
+     "lo": 7002.25,
+     "hi": 7020.5
+    },
+    "range": {
+     "top": 7014.25,
+     "bottom": 7006.5,
+     "height": 7.75,
+     "formed_ts_pt": "2026-01-27T09:34:43-08:00",
+     "held_before_edge_min": 21.9
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-01-27T09:56:37-08:00",
+    "flow": {
+     "P": -84.0,
+     "A_rel": null,
+     "Q": -84.0,
+     "PD": null,
+     "LE": 0.1081,
+     "RA": 1.6681,
+     "DV": 0.0199,
+     "SS_share": 0.0,
+     "SS_vwap": -1.8688
+    },
+    "skew": {
+     "div_ps": "bull",
+     "div_ps_res": "bull",
+     "div_cs": "bull",
+     "dps": -0.00455,
+     "trend_ps": 0.00025,
+     "trend_ps_res": 0.0004,
+     "trend_chg_ps": -0.00104
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "break",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "fade",
+     "FR11": "none",
+     "FR12": "none",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:9",
+   "session_date": "2026-04-20",
+   "cell": "call/above/top",
+   "direction": "long",
+   "level_price": 7132.0,
+   "level_net_bn": 208.01,
+   "level_gross_bn": 213.08,
+   "entry_ts_pt": "2026-04-20T09:03:11-07:00",
+   "entry_price": 7133.75,
+   "stop_price": 7130.75,
+   "extreme_price": 7132.75,
+   "test_ts_pt": "2026-04-20T08:34:08-07:00",
+   "confirm_ts_pt": "2026-04-20T08:40:52-07:00",
+   "retest_ts_pt": "2026-04-20T09:03:11-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/above/top",
+    "attempt": 1,
+    "O_c": 5.5,
+    "arming_level": 7132.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     7132.0,
+     7137.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7132.0,
+     "core_hi": 7137.0,
+     "lo": 7126.5,
+     "hi": 7142.5
+    },
+    "range": {
+     "top": 7140.75,
+     "bottom": 7132.75,
+     "height": 8.0,
+     "formed_ts_pt": "2026-04-20T08:43:11-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-04-20T09:03:11-07:00",
+    "flow": {
+     "P": -65.0,
+     "A_rel": null,
+     "Q": -0.1451,
+     "PD": -0.4785,
+     "LE": 0.0131,
+     "RA": 0.7608,
+     "DV": 0.0332,
+     "SS_share": 0.0054,
+     "SS_vwap": -3.1936
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "none",
+     "div_cs": "bull",
+     "dps": 0.0067,
+     "trend_ps": 0.00219,
+     "trend_ps_res": 0.00254,
+     "trend_chg_ps": 0.00371
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "fade",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:10",
+   "session_date": "2026-05-07",
+   "cell": "call/above/top",
+   "direction": "long",
+   "level_price": 7397.5,
+   "level_net_bn": 234.42,
+   "level_gross_bn": 238.64,
+   "entry_ts_pt": "2026-05-07T08:25:58-07:00",
+   "entry_price": 7399.25,
+   "stop_price": 7396.25,
+   "extreme_price": 7398.25,
+   "test_ts_pt": "2026-05-07T07:48:29-07:00",
+   "confirm_ts_pt": "2026-05-07T07:53:30-07:00",
+   "retest_ts_pt": "2026-05-07T08:25:51-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/above/top",
+    "attempt": 1,
+    "O_c": 5.5,
+    "arming_level": 7397.5,
+    "arming_kind": "swing_high",
+    "cluster_members": [
+     7400.0,
+     7405.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7397.5,
+     "core_hi": 7405.0,
+     "lo": 7392.0,
+     "hi": 7410.5
+    },
+    "range": {
+     "top": 7410.0,
+     "bottom": 7398.25,
+     "height": 11.75,
+     "formed_ts_pt": "2026-05-07T08:05:51-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-05-07T08:25:51-07:00",
+    "flow": {
+     "P": 646.0,
+     "A_rel": 2.0041,
+     "Q": 1.4649,
+     "PD": -0.2895,
+     "LE": -0.0454,
+     "RA": 0.4027,
+     "DV": 0.0769,
+     "SS_share": 0.0,
+     "SS_vwap": -4.5799
+    },
+    "skew": {
+     "div_ps": "bull",
+     "div_ps_res": "none",
+     "div_cs": "bull",
+     "dps": -0.0002,
+     "trend_ps": 0.00141,
+     "trend_ps_res": 0.00255,
+     "trend_chg_ps": 0.00012
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "break",
+     "FR3": "break",
+     "FR4": "none",
+     "FR5": "fade",
+     "FR6": "fade",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "fade",
+     "FR11": "fade",
+     "FR12": "fade",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:11",
+   "session_date": "2026-01-15",
+   "cell": "call/above/top",
+   "direction": "long",
+   "level_price": 7008.5,
+   "level_net_bn": 2.21,
+   "level_gross_bn": 115.8,
+   "entry_ts_pt": "2026-01-15T11:03:45-08:00",
+   "entry_price": 7005.5,
+   "stop_price": 7002.5,
+   "extreme_price": 7004.5,
+   "test_ts_pt": "2026-01-15T09:15:59-08:00",
+   "confirm_ts_pt": "2026-01-15T09:45:14-08:00",
+   "retest_ts_pt": "2026-01-15T11:03:43-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/above/top",
+    "attempt": 1,
+    "O_c": 5.5,
+    "arming_level": 7008.5,
+    "arming_kind": "swing_high",
+    "cluster_members": [
+     7009.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7008.5,
+     "core_hi": 7009.0,
+     "lo": 7003.0,
+     "hi": 7014.5
+    },
+    "range": {
+     "top": 7012.75,
+     "bottom": 7004.5,
+     "height": 8.25,
+     "formed_ts_pt": "2026-01-15T09:53:24-08:00",
+     "held_before_edge_min": 70.3
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-01-15T11:03:43-08:00",
+    "flow": {
+     "P": 630.0,
+     "A_rel": 1.6231,
+     "Q": 30.0,
+     "PD": 1.2412,
+     "LE": 0.0595,
+     "RA": 0.135,
+     "DV": 0.0393,
+     "SS_share": 0.3597,
+     "SS_vwap": -0.3171
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "none",
+     "div_cs": "none",
+     "dps": 0.00163,
+     "trend_ps": 0.00164,
+     "trend_ps_res": 0.00161,
+     "trend_chg_ps": 0.0032
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "fade",
+     "FR2": "break",
+     "FR3": "break",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "fade",
+     "FR7": "none",
+     "FR8": "break",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "fade",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:12",
+   "session_date": "2026-01-08",
+   "cell": "call/below/bot",
+   "direction": "long",
+   "level_price": 6965.5,
+   "level_net_bn": 40.39,
+   "level_gross_bn": 180.37,
+   "entry_ts_pt": "2026-01-08T09:26:11-08:00",
+   "entry_price": 6958.75,
+   "stop_price": 6955.75,
+   "extreme_price": 6957.75,
+   "test_ts_pt": "2026-01-08T08:45:19-08:00",
+   "confirm_ts_pt": "2026-01-08T08:52:00-08:00",
+   "retest_ts_pt": "2026-01-08T09:26:06-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/below/bot",
+    "attempt": 1,
+    "O_c": 6.0,
+    "arming_level": 6965.5,
+    "arming_kind": "swing_high",
+    "cluster_members": [
+     6963.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6963.0,
+     "core_hi": 6965.5,
+     "lo": 6957.0,
+     "hi": 6971.5
+    },
+    "range": {
+     "top": 6967.25,
+     "bottom": 6957.75,
+     "height": 9.5,
+     "formed_ts_pt": "2026-01-08T08:56:02-08:00",
+     "held_before_edge_min": 30.1
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-01-08T09:26:06-08:00",
+    "flow": {
+     "P": 226.0,
+     "A_rel": null,
+     "Q": 0.405,
+     "PD": -0.2916,
+     "LE": 0.0148,
+     "RA": null,
+     "DV": -0.0116,
+     "SS_share": 0.0503,
+     "SS_vwap": -3.0762
+    },
+    "skew": {
+     "div_ps": "bear",
+     "div_ps_res": "na",
+     "div_cs": "bear",
+     "dps": 0.0017,
+     "trend_ps": 0.0012,
+     "trend_ps_res": null,
+     "trend_chg_ps": 0.0031
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "none",
+     "FR4": "none",
+     "FR5": "fade",
+     "FR6": "none",
+     "FR7": "fade",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "fade",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:13",
+   "session_date": "2026-06-02",
+   "cell": "call/below/bot",
+   "direction": "long",
+   "level_price": 7626.0,
+   "level_net_bn": 125.59,
+   "level_gross_bn": 135.06,
+   "entry_ts_pt": "2026-06-02T09:31:53-07:00",
+   "entry_price": 7622.75,
+   "stop_price": 7619.75,
+   "extreme_price": 7621.75,
+   "test_ts_pt": "2026-06-02T07:53:41-07:00",
+   "confirm_ts_pt": "2026-06-02T08:30:06-07:00",
+   "retest_ts_pt": "2026-06-02T09:31:53-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/below/bot",
+    "attempt": 1,
+    "O_c": 6.0,
+    "arming_level": 7626.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     7626.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7626.0,
+     "core_hi": 7626.0,
+     "lo": 7620.0,
+     "hi": 7632.0
+    },
+    "range": {
+     "top": 7632.0,
+     "bottom": 7621.75,
+     "height": 10.25,
+     "formed_ts_pt": "2026-06-02T09:11:53-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-06-02T09:31:53-07:00",
+    "flow": {
+     "P": -322.0,
+     "A_rel": null,
+     "Q": -0.4193,
+     "PD": 0.047,
+     "LE": -0.1726,
+     "RA": 0.7616,
+     "DV": 0.0547,
+     "SS_share": 0.1734,
+     "SS_vwap": -2.8003
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "none",
+     "div_cs": "none",
+     "dps": -0.016,
+     "trend_ps": -0.0032,
+     "trend_ps_res": -0.0022,
+     "trend_chg_ps": -0.00621
+    },
+    "big_move": true,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "break",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "break",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:14",
+   "session_date": "2026-05-04",
+   "cell": "call/below/bot",
+   "direction": "long",
+   "level_price": 7228.25,
+   "level_net_bn": 39.47,
+   "level_gross_bn": 150.27,
+   "entry_ts_pt": "2026-05-04T12:28:00-07:00",
+   "entry_price": 7225.75,
+   "stop_price": 7222.75,
+   "extreme_price": 7224.75,
+   "test_ts_pt": "2026-05-04T12:05:56-07:00",
+   "confirm_ts_pt": "2026-05-04T12:06:31-07:00",
+   "retest_ts_pt": "2026-05-04T12:27:59-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/below/bot",
+    "attempt": 1,
+    "O_c": 6.0,
+    "arming_level": 7228.25,
+    "arming_kind": "swing_high",
+    "cluster_members": [
+     7227.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7227.0,
+     "core_hi": 7228.25,
+     "lo": 7221.0,
+     "hi": 7234.25
+    },
+    "range": {
+     "top": 7231.5,
+     "bottom": 7224.75,
+     "height": 6.75,
+     "formed_ts_pt": "2026-05-04T12:07:03-07:00",
+     "held_before_edge_min": 20.9
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-05-04T12:27:59-07:00",
+    "flow": {
+     "P": -111.0,
+     "A_rel": null,
+     "Q": null,
+     "PD": null,
+     "LE": 0.0597,
+     "RA": 1.5743,
+     "DV": 0.0111,
+     "SS_share": 0.4707,
+     "SS_vwap": -0.4054
+    },
+    "skew": {
+     "div_ps": "bear",
+     "div_ps_res": "bear",
+     "div_cs": "bear",
+     "dps": 0.0078,
+     "trend_ps": 0.00087,
+     "trend_ps_res": 0.00137,
+     "trend_chg_ps": 0.00472
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "none",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "break",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "fade",
+     "STALL": "none"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:15",
+   "session_date": "2026-04-07",
+   "cell": "call/below/bot",
+   "direction": "long",
+   "level_price": 6626.0,
+   "level_net_bn": 53.99,
+   "level_gross_bn": 79.26,
+   "entry_ts_pt": "2026-04-07T10:20:35-07:00",
+   "entry_price": 6621.5,
+   "stop_price": 6618.5,
+   "extreme_price": 6620.5,
+   "test_ts_pt": "2026-04-07T09:41:11-07:00",
+   "confirm_ts_pt": "2026-04-07T09:50:04-07:00",
+   "retest_ts_pt": "2026-04-07T10:20:34-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/below/bot",
+    "attempt": 1,
+    "O_c": 6.0,
+    "arming_level": 6626.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     6626.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6626.0,
+     "core_hi": 6626.0,
+     "lo": 6620.0,
+     "hi": 6632.0
+    },
+    "range": {
+     "top": 6631.75,
+     "bottom": 6620.5,
+     "height": 11.25,
+     "formed_ts_pt": "2026-04-07T10:00:31-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-04-07T10:20:34-07:00",
+    "flow": {
+     "P": -62.0,
+     "A_rel": null,
+     "Q": -0.148,
+     "PD": -4.0288,
+     "LE": 0.0674,
+     "RA": 0.8449,
+     "DV": 0.0358,
+     "SS_share": 0.5607,
+     "SS_vwap": 0.3045
+    },
+    "skew": {
+     "div_ps": "bear",
+     "div_ps_res": "bear",
+     "div_cs": "bear",
+     "dps": 0.0085,
+     "trend_ps": -0.00128,
+     "trend_ps_res": -0.00052,
+     "trend_chg_ps": 0.00016
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "break",
+     "STALL": "none"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:16",
+   "session_date": "2026-05-01",
+   "cell": "call/below/bot",
+   "direction": "long",
+   "level_price": 7278.5,
+   "level_net_bn": 278.09,
+   "level_gross_bn": 305.07,
+   "entry_ts_pt": "2026-05-01T11:49:58-07:00",
+   "entry_price": 7267.25,
+   "stop_price": 7264.25,
+   "extreme_price": 7266.25,
+   "test_ts_pt": "2026-05-01T09:28:59-07:00",
+   "confirm_ts_pt": "2026-05-01T11:02:30-07:00",
+   "retest_ts_pt": "2026-05-01T11:49:58-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/below/bot",
+    "attempt": 2,
+    "O_c": 6.0,
+    "arming_level": 7278.5,
+    "arming_kind": "swing_low",
+    "cluster_members": [
+     7272.0,
+     7277.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7272.0,
+     "core_hi": 7278.5,
+     "lo": 7266.0,
+     "hi": 7284.5
+    },
+    "range": {
+     "top": 7283.75,
+     "bottom": 7266.25,
+     "height": 17.5,
+     "formed_ts_pt": "2026-05-01T11:29:58-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-05-01T11:49:58-07:00",
+    "flow": {
+     "P": -77.0,
+     "A_rel": null,
+     "Q": -0.1689,
+     "PD": 0.21,
+     "LE": -0.0351,
+     "RA": 0.6666,
+     "DV": 0.1103,
+     "SS_share": 0.0,
+     "SS_vwap": -12.5478
+    },
+    "skew": {
+     "div_ps": "bear",
+     "div_ps_res": "none",
+     "div_cs": "bear",
+     "dps": 0.0012,
+     "trend_ps": -0.00341,
+     "trend_ps_res": 0.00077,
+     "trend_chg_ps": 5e-05
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "break",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "break",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:17",
+   "session_date": "2026-06-01",
+   "cell": "call/below/top",
+   "direction": "short",
+   "level_price": 7603.0,
+   "level_net_bn": 306.24,
+   "level_gross_bn": 338.31,
+   "entry_ts_pt": null,
+   "entry_price": 7600.75,
+   "stop_price": 7603.75,
+   "extreme_price": 7601.75,
+   "test_ts_pt": "2026-06-01T08:30:33-07:00",
+   "confirm_ts_pt": "2026-06-01T08:31:21-07:00",
+   "retest_ts_pt": "2026-06-01T09:00:24-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/below/top",
+    "attempt": 1,
+    "O_c": 6.0,
+    "arming_level": 7603.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     7598.0,
+     7603.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7598.0,
+     "core_hi": 7603.0,
+     "lo": 7592.0,
+     "hi": 7609.0
+    },
+    "range": {
+     "top": 7601.75,
+     "bottom": 7594.25,
+     "height": 7.5,
+     "formed_ts_pt": "2026-06-01T08:32:38-07:00",
+     "held_before_edge_min": 27.8
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-06-01T09:00:24-07:00",
+    "flow": {
+     "P": -1004.0,
+     "A_rel": null,
+     "Q": -0.3702,
+     "PD": -3.0932,
+     "LE": -0.1352,
+     "RA": null,
+     "DV": -0.0604,
+     "SS_share": 0.0,
+     "SS_vwap": -3.6671
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "bear",
+     "div_cs": "bear",
+     "dps": -0.0013,
+     "trend_ps": 0.00431,
+     "trend_ps_res": 0.00379,
+     "trend_chg_ps": 0.00457
+    },
+    "big_move": true,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "fade",
+     "FR6": "none",
+     "FR7": "fade",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "fade",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:18",
+   "session_date": "2026-06-03",
+   "cell": "call/below/top",
+   "direction": "short",
+   "level_price": 7591.0,
+   "level_net_bn": 1.27,
+   "level_gross_bn": 212.16,
+   "entry_ts_pt": null,
+   "entry_price": 7596.0,
+   "stop_price": 7599.0,
+   "extreme_price": 7597.0,
+   "test_ts_pt": "2026-06-03T06:53:41-07:00",
+   "confirm_ts_pt": "2026-06-03T07:19:12-07:00",
+   "retest_ts_pt": "2026-06-03T07:43:31-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/below/top",
+    "attempt": 1,
+    "O_c": 6.0,
+    "arming_level": 7591.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     7591.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7591.0,
+     "core_hi": 7591.0,
+     "lo": 7585.0,
+     "hi": 7597.0
+    },
+    "range": {
+     "top": 7597.0,
+     "bottom": 7586.5,
+     "height": 10.5,
+     "formed_ts_pt": "2026-06-03T07:20:34-07:00",
+     "held_before_edge_min": 23.0
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-06-03T07:43:31-07:00",
+    "flow": {
+     "P": -97.0,
+     "A_rel": null,
+     "Q": -1.8654,
+     "PD": -0.6331,
+     "LE": 0.0015,
+     "RA": null,
+     "DV": -0.0073,
+     "SS_share": 0.7554,
+     "SS_vwap": 2.195
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "none",
+     "div_cs": "none",
+     "dps": 0.0,
+     "trend_ps": -0.0025,
+     "trend_ps_res": -0.00181,
+     "trend_chg_ps": -0.0025
+    },
+    "big_move": true,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "break",
+     "STALL": "break"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:19",
+   "session_date": "2026-05-04",
+   "cell": "call/below/top",
+   "direction": "short",
+   "level_price": 7222.25,
+   "level_net_bn": 45.9,
+   "level_gross_bn": 61.83,
+   "entry_ts_pt": "2026-05-04T10:10:36-07:00",
+   "entry_price": 7221.75,
+   "stop_price": 7224.75,
+   "extreme_price": 7222.75,
+   "test_ts_pt": "2026-05-04T09:38:06-07:00",
+   "confirm_ts_pt": "2026-05-04T09:46:27-07:00",
+   "retest_ts_pt": "2026-05-04T10:10:36-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/below/top",
+    "attempt": 1,
+    "O_c": 6.0,
+    "arming_level": 7222.25,
+    "arming_kind": "swing_low",
+    "cluster_members": [
+     7220.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7220.0,
+     "core_hi": 7222.25,
+     "lo": 7214.0,
+     "hi": 7228.25
+    },
+    "range": {
+     "top": 7222.75,
+     "bottom": 7215.5,
+     "height": 7.25,
+     "formed_ts_pt": "2026-05-04T09:50:36-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-05-04T10:10:36-07:00",
+    "flow": {
+     "P": -252.0,
+     "A_rel": null,
+     "Q": -2.1176,
+     "PD": 0.4599,
+     "LE": 0.0422,
+     "RA": 3.4824,
+     "DV": 0.0089,
+     "SS_share": 0.1931,
+     "SS_vwap": -3.8407
+    },
+    "skew": {
+     "div_ps": "bear",
+     "div_ps_res": "bear",
+     "div_cs": "none",
+     "dps": 0.0084,
+     "trend_ps": 0.00038,
+     "trend_ps_res": 0.00458,
+     "trend_chg_ps": -0.00241
+    },
+    "big_move": true,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "break",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "fade",
+     "FR11": "none",
+     "FR12": "none",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:20",
+   "session_date": "2026-05-12",
+   "cell": "call/below/top",
+   "direction": "short",
+   "level_price": 7391.5,
+   "level_net_bn": 26.29,
+   "level_gross_bn": 126.01,
+   "entry_ts_pt": "2026-05-12T10:53:25-07:00",
+   "entry_price": 7394.75,
+   "stop_price": 7397.75,
+   "extreme_price": 7395.75,
+   "test_ts_pt": "2026-05-12T10:20:14-07:00",
+   "confirm_ts_pt": "2026-05-12T10:25:04-07:00",
+   "retest_ts_pt": "2026-05-12T10:53:25-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/below/top",
+    "attempt": 1,
+    "O_c": 6.0,
+    "arming_level": 7391.5,
+    "arming_kind": "swing_low",
+    "cluster_members": [
+     7391.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7391.0,
+     "core_hi": 7391.5,
+     "lo": 7385.0,
+     "hi": 7397.5
+    },
+    "range": {
+     "top": 7395.75,
+     "bottom": 7386.25,
+     "height": 9.5,
+     "formed_ts_pt": "2026-05-12T10:32:11-07:00",
+     "held_before_edge_min": 21.2
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-05-12T10:53:25-07:00",
+    "flow": {
+     "P": 89.0,
+     "A_rel": 8.3116,
+     "Q": 0.0506,
+     "PD": -0.8839,
+     "LE": -0.0063,
+     "RA": null,
+     "DV": -0.0034,
+     "SS_share": 0.707,
+     "SS_vwap": 0.4854
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "none",
+     "div_cs": "none",
+     "dps": -0.0143,
+     "trend_ps": 0.01229,
+     "trend_ps_res": 0.01251,
+     "trend_chg_ps": 0.01777
+    },
+    "big_move": true,
+    "rules": {
+     "FR1": "break",
+     "FR2": "fade",
+     "FR3": "none",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "fade",
+     "STALL": "break"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:21",
+   "session_date": "2026-05-28",
+   "cell": "call/below/top",
+   "direction": "short",
+   "level_price": 7574.0,
+   "level_net_bn": 192.33,
+   "level_gross_bn": 198.12,
+   "entry_ts_pt": "2026-05-28T08:42:12-07:00",
+   "entry_price": 7572.5,
+   "stop_price": 7575.5,
+   "extreme_price": 7573.5,
+   "test_ts_pt": "2026-05-28T08:05:00-07:00",
+   "confirm_ts_pt": "2026-05-28T08:11:15-07:00",
+   "retest_ts_pt": "2026-05-28T08:42:12-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/below/top",
+    "attempt": 1,
+    "O_c": 6.0,
+    "arming_level": 7574.0,
+    "arming_kind": "swing_high",
+    "cluster_members": [
+     7570.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7570.0,
+     "core_hi": 7574.0,
+     "lo": 7564.0,
+     "hi": 7580.0
+    },
+    "range": {
+     "top": 7573.5,
+     "bottom": 7565.0,
+     "height": 8.5,
+     "formed_ts_pt": "2026-05-28T08:22:12-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-05-28T08:42:12-07:00",
+    "flow": {
+     "P": -642.0,
+     "A_rel": null,
+     "Q": -1.3631,
+     "PD": -0.2617,
+     "LE": -0.1516,
+     "RA": 0.9185,
+     "DV": 0.0195,
+     "SS_share": 0.4617,
+     "SS_vwap": -0.3649
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "bear",
+     "div_cs": "none",
+     "dps": -0.0054,
+     "trend_ps": -0.00794,
+     "trend_ps_res": -0.00736,
+     "trend_chg_ps": -0.00703
+    },
+    "big_move": true,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "fade",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "break",
+     "STALL": "none"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": true
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:22",
+   "session_date": "2026-05-14",
+   "cell": "call/below/top",
+   "direction": "short",
+   "level_price": 7522.0,
+   "level_net_bn": 142.48,
+   "level_gross_bn": 242.65,
+   "entry_ts_pt": "2026-05-14T11:56:11-07:00",
+   "entry_price": 7526.5,
+   "stop_price": 7529.5,
+   "extreme_price": 7527.5,
+   "test_ts_pt": "2026-05-14T11:11:03-07:00",
+   "confirm_ts_pt": "2026-05-14T11:26:16-07:00",
+   "retest_ts_pt": "2026-05-14T11:56:10-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "call/below/top",
+    "attempt": 1,
+    "O_c": 6.0,
+    "arming_level": 7522.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     7522.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7522.0,
+     "core_hi": 7522.0,
+     "lo": 7516.0,
+     "hi": 7528.0
+    },
+    "range": {
+     "top": 7527.5,
+     "bottom": 7518.0,
+     "height": 9.5,
+     "formed_ts_pt": "2026-05-14T11:31:25-07:00",
+     "held_before_edge_min": 24.8
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-05-14T11:56:10-07:00",
+    "flow": {
+     "P": -221.0,
+     "A_rel": null,
+     "Q": -0.5609,
+     "PD": -7.1098,
+     "LE": 0.0365,
+     "RA": 3.2119,
+     "DV": 0.0061,
+     "SS_share": 0.7188,
+     "SS_vwap": 0.8585
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "none",
+     "div_cs": "bear",
+     "dps": -0.0063,
+     "trend_ps": -0.00241,
+     "trend_ps_res": -0.00194,
+     "trend_chg_ps": -0.00116
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "break",
+     "FR7": "break",
+     "FR8": "none",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "break",
+     "STALL": "break"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:23",
+   "session_date": "2026-06-04",
+   "cell": "put/above/bot",
+   "direction": "short",
+   "level_price": 7554.0,
+   "level_net_bn": -97.34,
+   "level_gross_bn": 530.23,
+   "entry_ts_pt": "2026-06-04T07:22:14-07:00",
+   "entry_price": 7563.5,
+   "stop_price": 7566.5,
+   "extreme_price": 7564.5,
+   "test_ts_pt": "2026-06-04T06:52:47-07:00",
+   "confirm_ts_pt": "2026-06-04T06:57:05-07:00",
+   "retest_ts_pt": "2026-06-04T07:22:14-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/above/bot",
+    "attempt": 1,
+    "O_c": 8.25,
+    "arming_level": 7554.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     7554.0,
+     7559.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7554.0,
+     "core_hi": 7559.0,
+     "lo": 7545.75,
+     "hi": 7567.25
+    },
+    "range": {
+     "top": 7564.5,
+     "bottom": 7552.5,
+     "height": 12.0,
+     "formed_ts_pt": "2026-06-04T07:02:14-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-06-04T07:22:14-07:00",
+    "flow": {
+     "P": 101.0,
+     "A_rel": 12.5828,
+     "Q": 0.1132,
+     "PD": -0.6756,
+     "LE": 0.0493,
+     "RA": null,
+     "DV": -0.0268,
+     "SS_share": 0.1792,
+     "SS_vwap": -3.8092
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "none",
+     "div_cs": "none",
+     "dps": 0.0,
+     "trend_ps": -0.0027,
+     "trend_ps_res": -0.00135,
+     "trend_chg_ps": -0.0027
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "none",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "fade",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "break",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:24",
+   "session_date": "2026-01-14",
+   "cell": "put/above/bot",
+   "direction": "short",
+   "level_price": 6936.75,
+   "level_net_bn": -54.33,
+   "level_gross_bn": 150.72,
+   "entry_ts_pt": "2026-01-14T11:57:33-08:00",
+   "entry_price": 6945.0,
+   "stop_price": 6948.0,
+   "extreme_price": 6946.0,
+   "test_ts_pt": "2026-01-14T11:05:27-08:00",
+   "confirm_ts_pt": "2026-01-14T11:20:02-08:00",
+   "retest_ts_pt": "2026-01-14T11:57:33-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/above/bot",
+    "attempt": 1,
+    "O_c": 8.25,
+    "arming_level": 6936.75,
+    "arming_kind": "swing_high",
+    "cluster_members": [
+     6938.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6936.75,
+     "core_hi": 6938.0,
+     "lo": 6928.5,
+     "hi": 6946.25
+    },
+    "range": {
+     "top": 6946.0,
+     "bottom": 6938.25,
+     "height": 7.75,
+     "formed_ts_pt": "2026-01-14T11:37:33-08:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "above",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-01-14T11:57:33-08:00",
+    "flow": {
+     "P": -315.0,
+     "A_rel": null,
+     "Q": -1.5672,
+     "PD": -1.3955,
+     "LE": -0.1476,
+     "RA": 6.8024,
+     "DV": 0.0086,
+     "SS_share": 0.0,
+     "SS_vwap": -7.9526
+    },
+    "skew": {
+     "div_ps": "bull",
+     "div_ps_res": "bull",
+     "div_cs": "none",
+     "dps": -0.00231,
+     "trend_ps": 0.00128,
+     "trend_ps_res": 0.00123,
+     "trend_chg_ps": 0.00502
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "fade",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "fade",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:25",
+   "session_date": "2026-01-22",
+   "cell": "put/above/bot",
+   "direction": "short",
+   "level_price": 6950.0,
+   "level_net_bn": -32.12,
+   "level_gross_bn": 592.85,
+   "entry_ts_pt": "2026-01-22T09:15:17-08:00",
+   "entry_price": 6961.0,
+   "stop_price": 6964.0,
+   "extreme_price": 6962.0,
+   "test_ts_pt": "2026-01-22T08:17:19-08:00",
+   "confirm_ts_pt": "2026-01-22T08:20:26-08:00",
+   "retest_ts_pt": "2026-01-22T09:15:17-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/above/bot",
+    "attempt": 1,
+    "O_c": 8.25,
+    "arming_level": 6950.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     6950.0,
+     6955.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6950.0,
+     "core_hi": 6955.0,
+     "lo": 6941.75,
+     "hi": 6963.25
+    },
+    "range": {
+     "top": 6962.0,
+     "bottom": 6949.0,
+     "height": 13.0,
+     "formed_ts_pt": "2026-01-22T08:55:17-08:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-01-22T09:15:17-08:00",
+    "flow": {
+     "P": -40.0,
+     "A_rel": null,
+     "Q": -0.0858,
+     "PD": -1.0097,
+     "LE": 0.0724,
+     "RA": null,
+     "DV": -0.0097,
+     "SS_share": 0.0,
+     "SS_vwap": -7.3101
+    },
+    "skew": {
+     "div_ps": "bull",
+     "div_ps_res": "bull",
+     "div_cs": "bull",
+     "dps": -0.00277,
+     "trend_ps": -0.00227,
+     "trend_ps_res": -0.0008,
+     "trend_chg_ps": 0.01273
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "fade",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "break",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:26",
+   "session_date": "2026-01-08",
+   "cell": "put/above/bot",
+   "direction": "short",
+   "level_price": 6952.75,
+   "level_net_bn": -11.95,
+   "level_gross_bn": 228.06,
+   "entry_ts_pt": "2026-01-08T08:33:35-08:00",
+   "entry_price": 6959.5,
+   "stop_price": 6962.5,
+   "extreme_price": 6960.5,
+   "test_ts_pt": "2026-01-08T08:10:32-08:00",
+   "confirm_ts_pt": "2026-01-08T08:13:00-08:00",
+   "retest_ts_pt": "2026-01-08T08:33:35-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/above/bot",
+    "attempt": 1,
+    "O_c": 8.25,
+    "arming_level": 6952.75,
+    "arming_kind": "swing_low",
+    "cluster_members": [
+     6955.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6952.75,
+     "core_hi": 6955.0,
+     "lo": 6944.5,
+     "hi": 6963.25
+    },
+    "range": {
+     "top": 6960.5,
+     "bottom": 6954.5,
+     "height": 6.0,
+     "formed_ts_pt": "2026-01-08T08:13:35-08:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-01-08T08:33:35-08:00",
+    "flow": {
+     "P": -192.0,
+     "A_rel": null,
+     "Q": -0.1579,
+     "PD": -0.6057,
+     "LE": -0.0333,
+     "RA": null,
+     "DV": 0.0331,
+     "SS_share": 0.0017,
+     "SS_vwap": -4.8011
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "na",
+     "div_cs": "none",
+     "dps": 0.00446,
+     "trend_ps": 0.00171,
+     "trend_ps_res": null,
+     "trend_chg_ps": 0.00084
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "fade",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "fade",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:27",
+   "session_date": "2026-02-05",
+   "cell": "put/above/bot",
+   "direction": "short",
+   "level_price": 6833.5,
+   "level_net_bn": -61.13,
+   "level_gross_bn": 68.45,
+   "entry_ts_pt": "2026-02-05T12:06:28-08:00",
+   "entry_price": 6839.75,
+   "stop_price": 6842.75,
+   "extreme_price": 6840.75,
+   "test_ts_pt": "2026-02-05T11:32:23-08:00",
+   "confirm_ts_pt": "2026-02-05T11:33:21-08:00",
+   "retest_ts_pt": "2026-02-05T12:02:32-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/above/bot",
+    "attempt": 1,
+    "O_c": 8.25,
+    "arming_level": 6833.5,
+    "arming_kind": "swing_low",
+    "cluster_members": [
+     6834.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6833.5,
+     "core_hi": 6834.0,
+     "lo": 6825.25,
+     "hi": 6842.25
+    },
+    "range": {
+     "top": 6840.75,
+     "bottom": 6829.25,
+     "height": 11.5,
+     "formed_ts_pt": "2026-02-05T11:41:05-08:00",
+     "held_before_edge_min": 21.4
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-02-05T12:02:32-08:00",
+    "flow": {
+     "P": 529.0,
+     "A_rel": 4.6925,
+     "Q": 1.3225,
+     "PD": 0.2777,
+     "LE": 0.031,
+     "RA": 1.3474,
+     "DV": 0.0536,
+     "SS_share": 0.7013,
+     "SS_vwap": 0.8373
+    },
+    "skew": {
+     "div_ps": "bull",
+     "div_ps_res": "bull",
+     "div_cs": "none",
+     "dps": -0.00387,
+     "trend_ps": 0.0011,
+     "trend_ps_res": 0.00102,
+     "trend_chg_ps": 0.00543
+    },
+    "big_move": true,
+    "rules": {
+     "FR1": "none",
+     "FR2": "break",
+     "FR3": "break",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "break",
+     "FR8": "break",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "none",
+     "STALL": "break"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:28",
+   "session_date": "2026-05-19",
+   "cell": "put/above/top",
+   "direction": "long",
+   "level_price": 7402.0,
+   "level_net_bn": -62.47,
+   "level_gross_bn": 69.63,
+   "entry_ts_pt": "2026-05-19T11:48:03-07:00",
+   "entry_price": 7398.5,
+   "stop_price": 7395.5,
+   "extreme_price": 7397.5,
+   "test_ts_pt": "2026-05-19T11:20:30-07:00",
+   "confirm_ts_pt": "2026-05-19T11:22:55-07:00",
+   "retest_ts_pt": "2026-05-19T11:48:03-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/above/top",
+    "attempt": 1,
+    "O_c": 8.25,
+    "arming_level": 7402.0,
+    "arming_kind": "swing_high",
+    "cluster_members": [
+     7403.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7402.0,
+     "core_hi": 7403.0,
+     "lo": 7393.75,
+     "hi": 7411.25
+    },
+    "range": {
+     "top": 7406.25,
+     "bottom": 7397.5,
+     "height": 8.75,
+     "formed_ts_pt": "2026-05-19T11:28:03-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-05-19T11:48:03-07:00",
+    "flow": {
+     "P": 189.0,
+     "A_rel": 2.3482,
+     "Q": 0.3656,
+     "PD": -12.8416,
+     "LE": 0.0044,
+     "RA": null,
+     "DV": -0.0166,
+     "SS_share": 0.993,
+     "SS_vwap": 4.6836
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "none",
+     "div_cs": "none",
+     "dps": 0.0118,
+     "trend_ps": -0.0015,
+     "trend_ps_res": -0.0005,
+     "trend_chg_ps": 0.0006
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "none",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "none",
+     "STALL": "break"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:29",
+   "session_date": "2026-01-14",
+   "cell": "put/above/top",
+   "direction": "long",
+   "level_price": 6926.5,
+   "level_net_bn": -147.23,
+   "level_gross_bn": 213.78,
+   "entry_ts_pt": "2026-01-14T09:51:33-08:00",
+   "entry_price": 6924.25,
+   "stop_price": 6921.25,
+   "extreme_price": 6923.25,
+   "test_ts_pt": "2026-01-14T08:50:55-08:00",
+   "confirm_ts_pt": "2026-01-14T09:00:51-08:00",
+   "retest_ts_pt": "2026-01-14T09:51:25-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/above/top",
+    "attempt": 1,
+    "O_c": 8.25,
+    "arming_level": 6926.5,
+    "arming_kind": "swing_low",
+    "cluster_members": [
+     6927.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6926.5,
+     "core_hi": 6927.0,
+     "lo": 6918.25,
+     "hi": 6935.25
+    },
+    "range": {
+     "top": 6933.25,
+     "bottom": 6923.25,
+     "height": 10.0,
+     "formed_ts_pt": "2026-01-14T09:05:09-08:00",
+     "held_before_edge_min": 46.3
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-01-14T09:51:25-08:00",
+    "flow": {
+     "P": 1270.0,
+     "A_rel": 2.9767,
+     "Q": 5.2049,
+     "PD": 0.3045,
+     "LE": -0.01,
+     "RA": null,
+     "DV": -0.0091,
+     "SS_share": 0.1358,
+     "SS_vwap": -3.4182
+    },
+    "skew": {
+     "div_ps": "bull",
+     "div_ps_res": "bull",
+     "div_cs": "none",
+     "dps": -0.00515,
+     "trend_ps": 0.00057,
+     "trend_ps_res": 0.00056,
+     "trend_chg_ps": -0.00196
+    },
+    "big_move": true,
+    "rules": {
+     "FR1": "none",
+     "FR2": "break",
+     "FR3": "none",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "fade",
+     "FR8": "fade",
+     "FR10": "fade",
+     "FR11": "none",
+     "FR12": "none",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:30",
+   "session_date": "2026-01-14",
+   "cell": "put/above/top",
+   "direction": "long",
+   "level_price": 6936.75,
+   "level_net_bn": -54.33,
+   "level_gross_bn": 150.72,
+   "entry_ts_pt": "2026-01-14T12:00:56-08:00",
+   "entry_price": 6939.25,
+   "stop_price": 6936.25,
+   "extreme_price": 6938.25,
+   "test_ts_pt": "2026-01-14T11:05:27-08:00",
+   "confirm_ts_pt": "2026-01-14T11:20:02-08:00",
+   "retest_ts_pt": "2026-01-14T12:00:56-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/above/top",
+    "attempt": 1,
+    "O_c": 8.25,
+    "arming_level": 6936.75,
+    "arming_kind": "swing_high",
+    "cluster_members": [
+     6938.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6936.75,
+     "core_hi": 6938.0,
+     "lo": 6928.5,
+     "hi": 6946.25
+    },
+    "range": {
+     "top": 6946.0,
+     "bottom": 6938.25,
+     "height": 7.75,
+     "formed_ts_pt": "2026-01-14T11:37:33-08:00",
+     "held_before_edge_min": 23.4
+    },
+    "ss_side": "above",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-01-14T12:00:56-08:00",
+    "flow": {
+     "P": 419.0,
+     "A_rel": 4.1642,
+     "Q": 6.6508,
+     "PD": 1.4772,
+     "LE": 0.1769,
+     "RA": 0.3474,
+     "DV": 0.0131,
+     "SS_share": 0.0,
+     "SS_vwap": -7.5097
+    },
+    "skew": {
+     "div_ps": "bull",
+     "div_ps_res": "bull",
+     "div_cs": "none",
+     "dps": -0.00231,
+     "trend_ps": -0.00191,
+     "trend_ps_res": -0.00189,
+     "trend_chg_ps": -0.00565
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "break",
+     "FR3": "none",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "fade",
+     "FR11": "none",
+     "FR12": "none",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:31",
+   "session_date": "2026-01-08",
+   "cell": "put/below/bot",
+   "direction": "long",
+   "level_price": 6957.25,
+   "level_net_bn": -11.95,
+   "level_gross_bn": 228.06,
+   "entry_ts_pt": "2026-01-08T08:35:18-08:00",
+   "entry_price": 6955.5,
+   "stop_price": 6952.5,
+   "extreme_price": 6954.5,
+   "test_ts_pt": "2026-01-08T07:57:12-08:00",
+   "confirm_ts_pt": "2026-01-08T08:07:46-08:00",
+   "retest_ts_pt": "2026-01-08T08:35:18-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/below/bot",
+    "attempt": 1,
+    "O_c": 9.75,
+    "arming_level": 6957.25,
+    "arming_kind": "swing_high",
+    "cluster_members": [
+     6955.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6955.0,
+     "core_hi": 6957.25,
+     "lo": 6945.25,
+     "hi": 6967.0
+    },
+    "range": {
+     "top": 6965.75,
+     "bottom": 6954.5,
+     "height": 11.25,
+     "formed_ts_pt": "2026-01-08T08:12:10-08:00",
+     "held_before_edge_min": 23.1
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-01-08T08:35:18-08:00",
+    "flow": {
+     "P": 352.0,
+     "A_rel": null,
+     "Q": 4.0,
+     "PD": null,
+     "LE": 0.0576,
+     "RA": null,
+     "DV": -0.0338,
+     "SS_share": 0.5945,
+     "SS_vwap": 0.5092
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "na",
+     "div_cs": "bear",
+     "dps": -0.00383,
+     "trend_ps": -0.00106,
+     "trend_ps_res": null,
+     "trend_chg_ps": -0.00175
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "break",
+     "FR3": "none",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "none",
+     "STALL": "none"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:32",
+   "session_date": "2026-03-24",
+   "cell": "put/below/bot",
+   "direction": "long",
+   "level_price": 6631.5,
+   "level_net_bn": -46.88,
+   "level_gross_bn": 52.33,
+   "entry_ts_pt": "2026-03-24T11:58:58-07:00",
+   "entry_price": 6625.25,
+   "stop_price": 6622.25,
+   "extreme_price": 6624.25,
+   "test_ts_pt": "2026-03-24T11:32:11-07:00",
+   "confirm_ts_pt": "2026-03-24T11:33:10-07:00",
+   "retest_ts_pt": "2026-03-24T11:58:58-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/below/bot",
+    "attempt": 1,
+    "O_c": 9.75,
+    "arming_level": 6631.5,
+    "arming_kind": "prior_close",
+    "cluster_members": [
+     6630.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6630.0,
+     "core_hi": 6631.5,
+     "lo": 6620.25,
+     "hi": 6641.25
+    },
+    "range": {
+     "top": 6637.25,
+     "bottom": 6624.25,
+     "height": 13.0,
+     "formed_ts_pt": "2026-03-24T11:38:58-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-03-24T11:58:58-07:00",
+    "flow": {
+     "P": -124.0,
+     "A_rel": null,
+     "Q": null,
+     "PD": -0.1432,
+     "LE": -0.0345,
+     "RA": 2.0959,
+     "DV": 0.0217,
+     "SS_share": 0.1464,
+     "SS_vwap": -1.8596
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "none",
+     "div_cs": "bear",
+     "dps": -0.0204,
+     "trend_ps": -0.00701,
+     "trend_ps_res": -0.00699,
+     "trend_chg_ps": -0.0114
+    },
+    "big_move": true,
+    "rules": {
+     "FR1": "none",
+     "FR2": "none",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "fade",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "break",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:33",
+   "session_date": "2026-03-30",
+   "cell": "put/below/bot",
+   "direction": "long",
+   "level_price": 6431.0,
+   "level_net_bn": -97.98,
+   "level_gross_bn": 100.92,
+   "entry_ts_pt": "2026-03-30T07:34:10-07:00",
+   "entry_price": 6425.75,
+   "stop_price": 6422.75,
+   "extreme_price": 6424.75,
+   "test_ts_pt": "2026-03-30T07:09:57-07:00",
+   "confirm_ts_pt": "2026-03-30T07:10:49-07:00",
+   "retest_ts_pt": "2026-03-30T07:34:10-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/below/bot",
+    "attempt": 1,
+    "O_c": 9.75,
+    "arming_level": 6431.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     6431.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6431.0,
+     "core_hi": 6431.0,
+     "lo": 6421.25,
+     "hi": 6440.75
+    },
+    "range": {
+     "top": 6433.25,
+     "bottom": 6424.75,
+     "height": 8.5,
+     "formed_ts_pt": "2026-03-30T07:12:36-07:00",
+     "held_before_edge_min": 21.6
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-03-30T07:34:10-07:00",
+    "flow": {
+     "P": 168.0,
+     "A_rel": 3.4855,
+     "Q": null,
+     "PD": null,
+     "LE": -0.0139,
+     "RA": null,
+     "DV": -0.0012,
+     "SS_share": 0.1671,
+     "SS_vwap": -2.5236
+    },
+    "skew": {
+     "div_ps": "bear",
+     "div_ps_res": "bear",
+     "div_cs": "bear",
+     "dps": 0.0005,
+     "trend_ps": 0.00263,
+     "trend_ps_res": 0.00261,
+     "trend_chg_ps": 0.00308
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "none",
+     "FR3": "none",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "fade",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "fade",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:34",
+   "session_date": "2026-04-21",
+   "cell": "put/below/bot",
+   "direction": "long",
+   "level_price": 7133.25,
+   "level_net_bn": -26.65,
+   "level_gross_bn": 136.81,
+   "entry_ts_pt": "2026-04-21T09:20:47-07:00",
+   "entry_price": 7124.5,
+   "stop_price": 7121.5,
+   "extreme_price": 7123.5,
+   "test_ts_pt": "2026-04-21T08:47:46-07:00",
+   "confirm_ts_pt": "2026-04-21T08:50:01-07:00",
+   "retest_ts_pt": "2026-04-21T09:20:41-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/below/bot",
+    "attempt": 1,
+    "O_c": 9.75,
+    "arming_level": 7133.25,
+    "arming_kind": "swing_high",
+    "cluster_members": [
+     7132.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7132.0,
+     "core_hi": 7133.25,
+     "lo": 7122.25,
+     "hi": 7143.0
+    },
+    "range": {
+     "top": 7134.25,
+     "bottom": 7123.5,
+     "height": 10.75,
+     "formed_ts_pt": "2026-04-21T09:00:08-07:00",
+     "held_before_edge_min": 20.6
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-04-21T09:20:41-07:00",
+    "flow": {
+     "P": 424.0,
+     "A_rel": 2.8649,
+     "Q": 0.145,
+     "PD": -1.0196,
+     "LE": 0.0672,
+     "RA": null,
+     "DV": -0.0042,
+     "SS_share": 0.0566,
+     "SS_vwap": -2.3281
+    },
+    "skew": {
+     "div_ps": "bear",
+     "div_ps_res": "bear",
+     "div_cs": "none",
+     "dps": 0.0015,
+     "trend_ps": -0.00353,
+     "trend_ps_res": -0.00242,
+     "trend_chg_ps": -0.00219
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "break",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "fade",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "break",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:35",
+   "session_date": "2026-05-19",
+   "cell": "put/below/bot",
+   "direction": "long",
+   "level_price": 7370.0,
+   "level_net_bn": -24.88,
+   "level_gross_bn": 116.42,
+   "entry_ts_pt": "2026-05-19T07:50:58-07:00",
+   "entry_price": 7360.25,
+   "stop_price": 7357.25,
+   "extreme_price": 7359.25,
+   "test_ts_pt": "2026-05-19T07:27:34-07:00",
+   "confirm_ts_pt": "2026-05-19T07:28:39-07:00",
+   "retest_ts_pt": "2026-05-19T07:50:58-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/below/bot",
+    "attempt": 1,
+    "O_c": 9.75,
+    "arming_level": 7370.0,
+    "arming_kind": "swing_low",
+    "cluster_members": [
+     7367.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7367.0,
+     "core_hi": 7370.0,
+     "lo": 7357.25,
+     "hi": 7379.75
+    },
+    "range": {
+     "top": 7370.0,
+     "bottom": 7359.25,
+     "height": 10.75,
+     "formed_ts_pt": "2026-05-19T07:30:58-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-05-19T07:50:58-07:00",
+    "flow": {
+     "P": -174.0,
+     "A_rel": null,
+     "Q": -0.2151,
+     "PD": -1.9512,
+     "LE": 0.052,
+     "RA": null,
+     "DV": -0.0178,
+     "SS_share": 0.1383,
+     "SS_vwap": -4.6236
+    },
+    "skew": {
+     "div_ps": "bear",
+     "div_ps_res": "bear",
+     "div_cs": "bear",
+     "dps": 0.0125,
+     "trend_ps": 0.00235,
+     "trend_ps_res": 0.00368,
+     "trend_chg_ps": 0.02434
+    },
+    "big_move": true,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "fade",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "fade",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:36",
+   "session_date": "2026-01-08",
+   "cell": "put/below/top",
+   "direction": "short",
+   "level_price": 6957.25,
+   "level_net_bn": -11.95,
+   "level_gross_bn": 228.06,
+   "entry_ts_pt": "2026-01-08T08:46:03-08:00",
+   "entry_price": 6964.75,
+   "stop_price": 6967.75,
+   "extreme_price": 6965.75,
+   "test_ts_pt": "2026-01-08T07:57:12-08:00",
+   "confirm_ts_pt": "2026-01-08T08:07:46-08:00",
+   "retest_ts_pt": "2026-01-08T08:46:03-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/below/top",
+    "attempt": 1,
+    "O_c": 9.75,
+    "arming_level": 6957.25,
+    "arming_kind": "swing_high",
+    "cluster_members": [
+     6955.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6955.0,
+     "core_hi": 6957.25,
+     "lo": 6945.25,
+     "hi": 6967.0
+    },
+    "range": {
+     "top": 6965.75,
+     "bottom": 6954.5,
+     "height": 11.25,
+     "formed_ts_pt": "2026-01-08T08:12:10-08:00",
+     "held_before_edge_min": 33.9
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-01-08T08:46:03-08:00",
+    "flow": {
+     "P": 559.0,
+     "A_rel": null,
+     "Q": 0.7658,
+     "PD": -0.2653,
+     "LE": 0.0223,
+     "RA": null,
+     "DV": 0.0535,
+     "SS_share": 0.6123,
+     "SS_vwap": 0.6157
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "na",
+     "div_cs": "bear",
+     "dps": -0.00383,
+     "trend_ps": 0.00039,
+     "trend_ps_res": null,
+     "trend_chg_ps": 0.00108
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "none",
+     "FR3": "break",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "break",
+     "FR8": "none",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "fade",
+     "STALL": "break"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:37",
+   "session_date": "2026-06-04",
+   "cell": "put/below/top",
+   "direction": "short",
+   "level_price": 7561.5,
+   "level_net_bn": -97.34,
+   "level_gross_bn": 530.23,
+   "entry_ts_pt": "2026-06-04T07:59:50-07:00",
+   "entry_price": 7569.5,
+   "stop_price": 7572.5,
+   "extreme_price": 7570.5,
+   "test_ts_pt": "2026-06-04T06:52:02-07:00",
+   "confirm_ts_pt": "2026-06-04T07:31:03-07:00",
+   "retest_ts_pt": "2026-06-04T07:57:38-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/below/top",
+    "attempt": 2,
+    "O_c": 9.75,
+    "arming_level": 7561.5,
+    "arming_kind": "swing_high",
+    "cluster_members": [
+     7554.0,
+     7559.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7554.0,
+     "core_hi": 7561.5,
+     "lo": 7544.25,
+     "hi": 7571.25
+    },
+    "range": {
+     "top": 7570.5,
+     "bottom": 7563.5,
+     "height": 7.0,
+     "formed_ts_pt": "2026-06-04T07:34:53-07:00",
+     "held_before_edge_min": 22.8
+    },
+    "ss_side": "above",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-06-04T07:57:38-07:00",
+    "flow": {
+     "P": 73.0,
+     "A_rel": 8.7045,
+     "Q": 0.2544,
+     "PD": null,
+     "LE": 0.032,
+     "RA": null,
+     "DV": -0.0161,
+     "SS_share": 0.9993,
+     "SS_vwap": 4.6027
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "none",
+     "div_cs": "none",
+     "dps": 0.0,
+     "trend_ps": 0.0009,
+     "trend_ps_res": 0.00087,
+     "trend_chg_ps": 0.0009
+    },
+    "big_move": true,
+    "rules": {
+     "FR1": "break",
+     "FR2": "fade",
+     "FR3": "none",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "fade",
+     "STALL": "break"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:38",
+   "session_date": "2026-05-20",
+   "cell": "put/below/top",
+   "direction": "short",
+   "level_price": 7419.0,
+   "level_net_bn": -56.94,
+   "level_gross_bn": 319.96,
+   "entry_ts_pt": "2026-05-20T08:13:38-07:00",
+   "entry_price": 7427.75,
+   "stop_price": 7430.75,
+   "extreme_price": 7428.75,
+   "test_ts_pt": "2026-05-20T07:27:24-07:00",
+   "confirm_ts_pt": "2026-05-20T07:33:48-07:00",
+   "retest_ts_pt": "2026-05-20T08:13:15-07:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/below/top",
+    "attempt": 1,
+    "O_c": 9.75,
+    "arming_level": 7419.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     7419.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7419.0,
+     "core_hi": 7419.0,
+     "lo": 7409.25,
+     "hi": 7428.75
+    },
+    "range": {
+     "top": 7428.75,
+     "bottom": 7412.75,
+     "height": 16.0,
+     "formed_ts_pt": "2026-05-20T07:53:15-07:00",
+     "held_before_edge_min": 20.0
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-05-20T08:13:15-07:00",
+    "flow": {
+     "P": -216.0,
+     "A_rel": null,
+     "Q": -0.1131,
+     "PD": -1.7858,
+     "LE": -0.0956,
+     "RA": null,
+     "DV": -0.0271,
+     "SS_share": 1.0,
+     "SS_vwap": 10.008
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "bear",
+     "div_cs": "none",
+     "dps": -0.0022,
+     "trend_ps": -0.00357,
+     "trend_ps_res": -0.00434,
+     "trend_chg_ps": -0.00198
+    },
+    "big_move": true,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "fade",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "fade",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "break",
+     "STALL": "break"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:39",
+   "session_date": "2026-01-22",
+   "cell": "put/below/top",
+   "direction": "short",
+   "level_price": 6958.75,
+   "level_net_bn": -32.12,
+   "level_gross_bn": 592.85,
+   "entry_ts_pt": "2026-01-22T09:30:15-08:00",
+   "entry_price": 6961.0,
+   "stop_price": 6964.0,
+   "extreme_price": 6962.0,
+   "test_ts_pt": "2026-01-22T08:25:26-08:00",
+   "confirm_ts_pt": "2026-01-22T08:55:19-08:00",
+   "retest_ts_pt": "2026-01-22T09:30:13-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/below/top",
+    "attempt": 1,
+    "O_c": 9.75,
+    "arming_level": 6958.75,
+    "arming_kind": "overnight_high",
+    "cluster_members": [
+     6950.0,
+     6955.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6950.0,
+     "core_hi": 6958.75,
+     "lo": 6940.25,
+     "hi": 6968.5
+    },
+    "range": {
+     "top": 6962.0,
+     "bottom": 6951.0,
+     "height": 11.0,
+     "formed_ts_pt": "2026-01-22T09:01:54-08:00",
+     "held_before_edge_min": 28.3
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-01-22T09:30:13-08:00",
+    "flow": {
+     "P": 513.0,
+     "A_rel": 2.6986,
+     "Q": 1.1009,
+     "PD": -0.2001,
+     "LE": 0.0104,
+     "RA": 2.1207,
+     "DV": 0.0159,
+     "SS_share": 0.3608,
+     "SS_vwap": -0.3921
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "bear",
+     "div_cs": "bear",
+     "dps": -0.00345,
+     "trend_ps": -0.0022,
+     "trend_ps_res": -0.00215,
+     "trend_chg_ps": -0.00162
+    },
+    "big_move": true,
+    "rules": {
+     "FR1": "none",
+     "FR2": "none",
+     "FR3": "break",
+     "FR4": "none",
+     "FR5": "fade",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "none",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:40",
+   "session_date": "2026-03-04",
+   "cell": "put/below/top",
+   "direction": "short",
+   "level_price": 6881.0,
+   "level_net_bn": -16.29,
+   "level_gross_bn": 66.55,
+   "entry_ts_pt": "2026-03-04T10:30:15-08:00",
+   "entry_price": 6886.25,
+   "stop_price": 6889.25,
+   "extreme_price": 6887.25,
+   "test_ts_pt": "2026-03-04T09:35:05-08:00",
+   "confirm_ts_pt": "2026-03-04T09:43:06-08:00",
+   "retest_ts_pt": "2026-03-04T10:30:13-08:00",
+   "meta": {
+    "tag": "random",
+    "cell": "put/below/top",
+    "attempt": 1,
+    "O_c": 9.75,
+    "arming_level": 6881.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     6881.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 6881.0,
+     "core_hi": 6881.0,
+     "lo": 6871.25,
+     "hi": 6890.75
+    },
+    "range": {
+     "top": 6887.25,
+     "bottom": 6878.25,
+     "height": 9.0,
+     "formed_ts_pt": "2026-03-04T09:54:02-08:00",
+     "held_before_edge_min": 36.2
+    },
+    "ss_side": "straddle",
+    "edge": "top",
+    "edge_touch_ts_pt": "2026-03-04T10:30:13-08:00",
+    "flow": {
+     "P": 380.0,
+     "A_rel": 1.7096,
+     "Q": 0.8539,
+     "PD": -1.2702,
+     "LE": 0.0667,
+     "RA": null,
+     "DV": -0.0572,
+     "SS_share": 0.7406,
+     "SS_vwap": 1.9697
+    },
+    "skew": {
+     "div_ps": "bear",
+     "div_ps_res": "bear",
+     "div_cs": "none",
+     "dps": 0.0022,
+     "trend_ps": -0.00154,
+     "trend_ps_res": -0.00159,
+     "trend_chg_ps": -0.01083
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "fade",
+     "FR2": "none",
+     "FR3": "none",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "fade",
+     "FR10": "fade",
+     "FR11": "none",
+     "FR12": "none",
+     "STALL": "break"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:41",
+   "session_date": "2026-10-23",
+   "cell": "put/above/top",
+   "direction": "long",
+   "level_price": 7687.0,
+   "level_net_bn": -272.16,
+   "level_gross_bn": 315.01,
+   "entry_ts_pt": "2026-10-23T09:37:54-07:00",
+   "entry_price": 7682.25,
+   "stop_price": 7679.25,
+   "extreme_price": 7681.25,
+   "test_ts_pt": "2026-10-23T08:37:03-07:00",
+   "confirm_ts_pt": "2026-10-23T08:47:13-07:00",
+   "retest_ts_pt": "2026-10-23T09:37:52-07:00",
+   "meta": {
+    "tag": "2026-10-23 d5",
+    "cell": "put/above/top",
+    "attempt": 1,
+    "O_c": 8.25,
+    "arming_level": 7687.0,
+    "arming_kind": "gex",
+    "cluster_members": [
+     7687.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7687.0,
+     "core_hi": 7687.0,
+     "lo": 7678.75,
+     "hi": 7695.25
+    },
+    "range": {
+     "top": 7693.75,
+     "bottom": 7681.25,
+     "height": 12.5,
+     "formed_ts_pt": "2026-10-23T09:14:50-07:00",
+     "held_before_edge_min": 23.0
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-10-23T09:37:52-07:00",
+    "flow": {
+     "P": -332.0,
+     "A_rel": null,
+     "Q": -1.516,
+     "PD": -1.2372,
+     "LE": -0.0851,
+     "RA": null,
+     "DV": 0.0099,
+     "SS_share": 0.9071,
+     "SS_vwap": 4.456
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "na",
+     "div_cs": "bull",
+     "dps": 0.003,
+     "trend_ps": 0.00196,
+     "trend_ps_res": null,
+     "trend_chg_ps": 0.01464
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "break",
+     "FR8": "none",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "none",
+     "STALL": "break"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  },
+  {
+   "id": "CR-CB:stage1-r2:42",
+   "session_date": "2026-10-23",
+   "cell": "put/above/top",
+   "direction": "long",
+   "level_price": 7679.75,
+   "level_net_bn": -624.95,
+   "level_gross_bn": 715.19,
+   "entry_ts_pt": "2026-10-23T09:37:54-07:00",
+   "entry_price": 7682.25,
+   "stop_price": 7679.25,
+   "extreme_price": 7681.25,
+   "test_ts_pt": "2026-10-23T08:44:06-07:00",
+   "confirm_ts_pt": "2026-10-23T08:47:13-07:00",
+   "retest_ts_pt": "2026-10-23T09:37:52-07:00",
+   "meta": {
+    "tag": "2026-10-23 d10",
+    "cell": "put/above/top",
+    "attempt": 1,
+    "O_c": 9.25,
+    "arming_level": 7679.75,
+    "arming_kind": "swing_low",
+    "cluster_members": [
+     7681.0,
+     7687.0
+    ],
+    "cluster_mixed": false,
+    "zone": {
+     "core_lo": 7679.75,
+     "core_hi": 7687.0,
+     "lo": 7670.5,
+     "hi": 7696.25
+    },
+    "range": {
+     "top": 7693.75,
+     "bottom": 7681.25,
+     "height": 12.5,
+     "formed_ts_pt": "2026-10-23T09:14:50-07:00",
+     "held_before_edge_min": 23.0
+    },
+    "ss_side": "straddle",
+    "edge": "bottom",
+    "edge_touch_ts_pt": "2026-10-23T09:37:52-07:00",
+    "flow": {
+     "P": -332.0,
+     "A_rel": null,
+     "Q": -1.516,
+     "PD": -1.2372,
+     "LE": -0.0851,
+     "RA": null,
+     "DV": 0.0099,
+     "SS_share": 0.3176,
+     "SS_vwap": -2.794
+    },
+    "skew": {
+     "div_ps": "none",
+     "div_ps_res": "na",
+     "div_cs": "bull",
+     "dps": 0.0061,
+     "trend_ps": 0.00196,
+     "trend_ps_res": null,
+     "trend_chg_ps": 0.00844
+    },
+    "big_move": false,
+    "rules": {
+     "FR1": "none",
+     "FR2": "fade",
+     "FR3": "fade",
+     "FR4": "none",
+     "FR5": "none",
+     "FR6": "none",
+     "FR7": "none",
+     "FR8": "none",
+     "FR10": "none",
+     "FR11": "none",
+     "FR12": "none",
+     "STALL": "fade"
+    },
+    "named": {
+     "H_PNB": false,
+     "H_PSD": false,
+     "H_CNB": false
+    }
+   },
+   "outcome": null
+  }
+ ]
+}

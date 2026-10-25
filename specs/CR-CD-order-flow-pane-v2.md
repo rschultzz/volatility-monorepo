@@ -491,3 +491,8 @@ Markers on; RTH framed.
 - Playwright `A3: replay fits …`: the review API responses are intercepted so that the revealed fixture candidate 5 is presented as unreviewed. Read-only; nothing is posted.
 - 2026-05-01: IM 70.2 → pad 35.1 → fit 7238.4 – 7314.4 (asserted to 0.05). It is narrower than the normal view, and Exit review restores autoscale. Screenshot `specs/assets/cr-cd/a3-replay-fit-2026-05-01.png`.
 - Unit tests for the IM rule: `apps/web/modules/SetupReview/tests/test_implied_move.py`, 3 tests.
+
+**A3 after merging `origin/main` (CR-CC A3.2–A3.4, PR #82).**
+- The gallery now carries `meta.range` {top, bottom} and `meta.zone` {lo, hi} (or `zone_e4`), which CR-CC draws as a range box and a zone band.
+- The fit's "zone/range" now takes the union of those with level, extreme, entry and stop. It reuses CR-CC's `reviewZoneBounds`.
+- On the merged tree: CR-CD Playwright 4/4; CR-CC Playwright 5 passed and 2 skipped (they write, and no candidate is unreviewed); Ironbeam, SetupReview and flow_features unit suites OK.

@@ -452,3 +452,54 @@ Branch `feat/CR-CC-review-smile-capped`. It replaces the smile/skew part of A1.3
 - All 5 `cc:fixture` candidates are now revealed. A fresh writing run needs new fixture candidates.
 
 **Screenshots:** `specs/assets/cr-cc/a2-smile-capped-2026-05-01.png` and `a2-smile-revealed-2026-05-01.png`.
+
+---
+
+## Amendment A3 (Ryan, 2026-10-25, after `578a8d5`) — review panel display fixes
+
+Branch `feat/CR-CC-review-display-fixes`. These are display changes in the REVIEW panel and replay only. No backend or DB change.
+
+| # | Clause |
+|---|---|
+| A3.1 | **Details panel: `meta` as readable rows, never raw JSON.** Known nested keys get compact summaries:<br>• `flow`: one row of labelled values (P, A_rel, Q, PD, LE, RA, DV, SS) to 2 decimals;<br>• `rules`: one chip per rule (FR1…FR12, always-fade / break) showing its decision, fade / break / —;<br>• `skew`: put/call divergence (bullish / bearish / none) and trend values;<br>• `named`: the named rules that fired (H-PNB / H-PSD / H-CNB), or "none";<br>• `range`: "bottom–top (height), formed HH:MM, held N min";<br>• `zone` / `zone_e4` / `cluster_members`: a one-line summary (e.g. "GEX 7010 + swing 7005, span 5 pts"), with the full list behind a "show raw" toggle.<br>Unknown keys: scalars as rows, objects and arrays behind "show raw". Repeated keys (e.g. `cell`) are shown once. |
+| A3.2 | **Replay time axis.** The last tick label reflects the truncated data (the entry time), not the session end. Bug: 13:00 shown on a 09:15 entry (2026-01-13, round-1 card). |
+| A3.3 | **Marker labels** (test / confirm / retest / entry) are offset so they don't overlap. |
+| A3.4 | **Range box and zone band.** The candidate's range is drawn as a translucent box (range bottom → top, formation → touch time), and the zone as a faint horizontal band (zone bounds from `meta`), in the Dash palette. Each is hidden when `meta` has no range or zone. |
+| A3.5 | **Playwright** on a round-2 card: no raw JSON visible by default; the axis's last label ≤ the entry time; the range box present. |
+| A3.6 (implementation notes, Claude Code) | **Data and drawing choices:**<br>• **A3.2 cause:** the GEX segment and expected-move line series carry points to the session end (13:00 PT). In replay their end times are clamped on the client to the last loaded bar.<br>• **A3.4 box:** needs `range.top`, `range.bottom`, `range.formed_ts_pt` and `meta.edge_touch_ts_pt`. Round-1 ranges have no formation time, so no box is drawn on round-1 cards.<br>• **A3.4 band:** `zone.lo` → `zone.hi` (round 2), or the min → max of `zone_e4` prices (round 1). No band when the span is 0.<br>• **Colours:** box in Dash blue `#60a5fa`, band in amber `#fbbf24`.<br>• **A3.3 offsets:** the entry keeps the trade side (below the bar for long, above for short). Test, confirm and retest alternate sides in time order, so neighbours don't share a side. |
+
+### A3 implementation and smoke (2026-10-25)
+
+| commit | what |
+|---|---|
+| `fba20dc` | Amendment A3 |
+| `e4a0998` | A3.1 `ReviewMeta.jsx`: meta as rows and summaries; raw JSON only behind "show raw" |
+| `51d6919` | A3.2 replay line end times clamped to the last loaded bar |
+| `2981cc2` | A3.3 marker sides, and A3.4 range box and zone band |
+| (this commit) | Playwright A3 tests, screenshots, this section |
+
+**A3.2 cause, confirmed.** On the round-1 card `CR-CB:cr-cb:round-1:11` (2026-01-13, entry 09:15:43) the test was run against the pre-fix `App.jsx`. The chart's series ran to 1768309200, which is 13:00 PT, the session end of the GEX segment lines, and the test failed. With the fix, every series and the visible range end before the entry.
+
+**A3.4 placement.**
+- The overlay is a sibling of `.chart-host`, which is `position: absolute; z-index: 2` with an opaque canvas, so the overlay sits at z-index 4, like `LandscapeChartOverlay`.
+- **Bug found in the first build:** that build used z-index 2, so the shapes were in the DOM but hidden under the canvas. The test now asserts the stacking (overlay z-index > `.chart-host`, same parent), because `elementFromPoint` skips `pointer-events: none` elements.
+- **Colours:** box fill 14 % of `#60a5fa` with a 1.5 px border; band 8 % of `#fbbf24` with dashed edges.
+
+**Playwright** (`cr-cc.spec.js`; same servers as step 6; all read-only):
+- **"A3 (read-only): round-2 card"**, on `CR-CB:cr-cb:round-2:36` (2026-01-08, short, entry 08:46:03):
+  - the details text has no raw JSON (no `{"`, no `":`) and no raw block by default;
+  - flow / rules / skew / named / range / zone / cluster rows are present, with "formed HH:MM" and "span N pts";
+  - "cell" appears once;
+  - "show raw" opens one raw block and "hide raw" closes it;
+  - every series' last time and the visible range end are before the entry;
+  - the range box and zone band are present and stacked above the canvas. With the chart framed 07:52 → 08:46 and the price axis zoomed to the zone ± 10 pts (test-only), the box is > 4 px wide and > 20 px tall.
+- **"A3 (read-only): round-1 2026-01-13 09:15 card":**
+  - no raw JSON;
+  - the axis ends before the 09:15 entry, not at 13:00;
+  - no range box, because round-1 ranges have no formation time (A3.6).
+- **Full file:** replay, revealed view, A2 read-only and both A3 tests pass. The two writing tests skip, because no unreviewed `cc:fixture` candidates remain.
+- **Backend suites** are unchanged and pass (Ironbeam 54/54; SetupReview; loader).
+
+**Screenshots:** `specs/assets/cr-cc/a3-round2-2026-01-08.png` (range box, zone band, markers on alternating sides, readable details) and `a3-round1-2026-01-13.png` (axis ends at the entry).
+
+**Not changed:** backend, DB, and the review data.
