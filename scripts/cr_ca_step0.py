@@ -85,7 +85,7 @@ COST_CAP = 330.0  # A3.4 (A2.1 215, L8 150)
 DISK_GB, DB_STOP_GB = 35.0, 32.0  # A3.5 (was 30 / 27)
 Q4_SEED = 20261025
 
-RAW_DIR = ROOT / "data" / "databento" / "raw"
+RAW_DIR = Path(os.environ.get("CR_CA_RAW_DIR", ROOT / "data" / "databento" / "raw"))  # L7
 LOG_DIR = ROOT / "scripts" / "logs" / "cr_ca"
 MONTH_CODES = {3: "H", 6: "M", 9: "U", 12: "Z"}
 
