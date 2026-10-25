@@ -236,3 +236,113 @@ Script `scripts/cr_by_step0_a1.py`: a copy of `cr_by_step0.py` (`1883cc0`) with 
 | **CI excludes 0** | **4.5 % (9 / 200)** (gate ≤ 10 %) |
 
 **Note for the run (not a redefinition).** The split sd is about 12 pts, with roughly 90 high-P placebo per half. With 187 high-P placebo boxes against 203 high-P event boxes, T2's CI will be roughly ±12 pts, so T2 (≥ +8, CI lower > 0) is powered only for large effects.
+
+---
+
+## Results (single run, 2026-10-25)
+
+**The run.**
+- `scripts/cr_by_pause.py`, committed before its run (`ada1b92`). Read-only (`default_transaction_read_only = on`, `statement_timeout = 600s`, 3 h alarm), train only, holdout not read.
+- Every statistic was written to `scripts/logs/cr_by/results.json` before anything was printed; the printout is `scripts/logs/cr_by/run.log` (git-ignored).
+- The script asserted the Step 0 counts before any race: 88 sessions, 1,831 impulses, 608 boxes (203 / 202 / 203), 475 placebo boxes. All held.
+
+**Attempts.**
+- **Attempt 1** (log `run_attempt1_crash.log`) crashed in the first race call: the box row index was stored as a float. **Nothing was printed or saved**, so the fix-and-rerun rule applied.
+- **Fixes**, committed before the re-run: `35cd8ef` (int cast in `race`/`trade`) and `449ebfc` (the same in the S4 extension).
+- **Attempt 2** completed (exit 0). It is the one run reported here.
+
+### Counts (L5 race, f = 1/2)
+
+| | low P | mid | high P |
+|---|---|---|---|
+| event boxes | 203 | 202 | 203 |
+| race-window gap drops | 6 | 6 | 9 |
+| same-second ties | 0 | 0 | 0 |
+| unresolved by 13:00 PT | 7 | 4 | 4 |
+| **resolved** | **190** | **192** | **190** |
+| placebo boxes (event cut points) | 187 | 101 | 187 |
+| placebo drops / unresolved | 3 / 5 | 2 / 1 | 1 / 5 |
+| placebo resolved | 179 | 98 | 181 |
+
+### T1 — flow in the pause → reversal — **FAIL**
+
+Reversal rates by P tercile: low 50.00 %, mid 44.79 %, high 46.84 %.
+
+**High − low = −3.16 pts, 95 % CI [−12.37, +5.78].**
+- ≥ +8: no.
+- CI lower bound > 0: no.
+- ≥ 150 resolved per tercile: yes (190 / 192 / 190).
+
+### T2 — after a move vs any pause — **FAIL**
+
+High-P event boxes reverse 46.84 % (n 190); high-P placebo boxes 47.51 % (n 181).
+
+**T2 = −0.67 pts, 95 % CI [−14.53, +13.01].**
+- ≥ +8: no.
+- CI lower bound > 0: no.
+
+**T2 power.** From the Step 0 A/A, the placebo-split spread is about ±12 pts (sd 12.0), and the realised T2 CI half-width is about 14 pts. T2 could detect only effects of roughly 15 pts or more. Since T1 also fails, the T2 result is not read as "underpowered T1-only"; it adds nothing either way.
+
+### Verdict (locked rules)
+
+**Neither T1 nor T2 passes. Recorded. Under the verdict table, the order-flow line on this data stops here.** No holdout read.
+
+### Secondary readouts (not gated; no conclusion drawn)
+
+**S1 / S2 — does an outcome happen at all, and when.** Shares are of boxes kept after the gap rule.
+
+| | median min to resolution (IQR) | resolved ≤ 30 / 60 / 120 min | unresolved |
+|---|---|---|---|
+| event low / mid / high | 13.3 (6.2–25.2) / 12.4 (6.8–27.9) / 12.1 (6.0–26.9) | 78 / 89 / 95 %, 76 / 90 / 97 %, 77 / 91 / 96 % | 3.6 / 2.0 / 2.1 % |
+| placebo low / mid / high | 13.1 / 14.3 / 12.9 | 80 / 91 / 96 %, 85 / 93 / 97 %, 82 / 94 / 96 % | 2.7 / 1.0 / 2.7 % |
+
+**A half-move break almost always happens, typically within a quarter of an hour, but which way is close to a coin flip (45–50 %) in every tercile.**
+
+**S3 trade readouts** (stop entry 1 tick beyond the box, +1 tick slippage, $4.50 round trip):
+
+| | side | trades (no entry / unresolved) | win rate | avg win / loss (ticks) | net exp. (ticks) | break-even WR |
+|---|---|---|---|---|---|---|
+| (a) 0.5·I target, stop at opposite boundary | event high P → reversal | 165 (28 / 3) | 44.85 % | 22.6 / 29.0 | **−6.22** | 56.92 % |
+| | event low P → continuation | 173 (22 / 1) | 42.77 % | 26.4 / 28.5 | **−5.34** | 52.50 % |
+| | placebo high P | 150 (35 / 1) | 45.33 % | 20.2 / 16.7 | −0.32 | 46.19 % |
+| | placebo low P | 147 (32 / 3) | 45.58 % | 21.3 / 17.5 | −0.17 | 46.02 % |
+| (b) 8-tick target and stop | event high P → reversal | 169 (28 / 1) | 36.09 % | 8 / 9 | −3.22 | 55.06 % |
+| | event low P → continuation | 175 (22 / 0) | 31.43 % | 8 / 9 | −4.02 | 55.06 % |
+| | placebo high P | 152 (35 / 0) | 36.18 % | 8 / 9 | −3.21 | 55.06 % |
+| | placebo low P | 153 (32 / 0) | 49.67 % | 8 / 9 | −0.92 | 55.06 % |
+
+All negative. In (a), post-impulse boxes are wide (median 5.5 pts), so the stop at the opposite boundary costs about 29 ticks against a 23-tick target.
+
+**S4 pause length.**
+- 59 boxes still hold at 10 min, 5 at 20 min; median final length 6.3 min.
+- With P recomputed over the extended box and the race from its break:
+
+| final length | resolved (low / mid / high) | reversal (low / mid / high) | T1-style |
+|---|---|---|---|
+| < 10 min | 168 / 178 / 173 | 58.9 / 45.5 / 39.3 % | **−19.62 [−30.97, −8.35]** |
+| 10–20 min | 20 / 18 / 12 | | −11.67 [−45.45, +20.87] |
+| ≥ 20 min | 0 / 3 / 1 | — | — |
+
+The < 10 min interval excludes 0 with the opposite sign to the hypothesis: buying pressure into a pause after a down move goes with continuation, not reversal. It is a post-hoc construction (outcome from the extended break), one readout among many, and not a finding.
+
+**S5 move size** (T1 / T2):
+- I < 10 (n 67 / 55 / 80): −2.0 / +4.4.
+- 10–20 (94 / 111 / 92): −3.3 / −5.3.
+- ≥ 20 (29 / 26 / 18): −9.4 / −32.5 [−77.8, −6.3]. Only 5–7 placebo boxes per tercile, so not interpretable.
+
+**S6 direction** (T1 / T2):
+- After down moves: +4.2 [−11.4, +19.9] / +14.3 [−6.1, +33.5].
+- After up moves: −6.7 [−17.9, +4.2] / −17.5 [−35.8, +2.6].
+
+**S7 at levels** (T1 / T2):
+- Within 2 pts of a ≥ 40 $bn level (268 boxes): −3.4 / −2.9.
+- Not near: −2.7 / +0.8.
+- ≥ 100 $bn (223 boxes): +1.7 [−13.7, +17.4] / +1.5.
+
+**S8 f = 1/3.**
+- 406 boxes (136 / 135 / 135), 314 placebo; resolved 126 / 127 / 124.
+- T1 −4.92 [−18.75, +8.36]; T2 −5.83 [−22.59, +10.42].
+
+**S9 end of day** (13:00 PT close on the reversal side of the box):
+- Event 43.7 / 44.4 / 41.2 %; placebo 52.7 / 36.4 / 33.9 %.
+- High − low −2.42 [−12.92, +8.07]; high event − high placebo +7.37 [−4.71, +18.84].
