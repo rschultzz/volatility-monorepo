@@ -284,3 +284,25 @@ The hypothesis is confirmed in code and against the DB. Whether the web service 
 - **trades-ws silent stall.** No watchdog. 2026-10-23: 2 h with no trades (tick, flow panel and flow table all empty); 2026-09-22: 130 min. Needs a stale-feed reconnect (e.g. no trade for > N s during RTH → reconnect). Not in L1.
 - **Flow payload `symbol` echo.** Covered by L2's "echo the resolved symbol".
 - **Dead module.** `gamma/callbacks_replacement_autoresolve_symbols.py` registers the same routes, under the same guard flags, if ever imported. Delete it or keep it as reference.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-25, after Step 0)
+
+Verbatim:
+
+- **A1.1** L2 stands, with data-derived symbol taking precedence over every env var (IRONBEAM_TRADES_SYMBOL / IRONBEAM_SYMBOL / IRONBEAM_FLOW_SYMBOL are fallbacks only). This supersedes CR-AC's callbacks.py change.
+- **A1.2** L4 replaced: keep the forming-bar filter (harmless); drop the 3-bar upsert. Instead, log to a new table ironbeam_es_1m_bars_revision_log every case where a later snapshot's bar differs from the stored row (datetime, stored OHLCV, snapshot OHLCV, seen_at), insert-only. No change to stored bars. Purpose: measure whether Ironbeam revises bars. L7's ≤ 0.1 % target is dropped.
+- **A1.3** L5 narrowed: repair only the fragment bars (price differs > 1 tick AND bar volume < flow volume), 2026, excluding the CR-BF patch window. OHLC from flow; volume = flow volume (lower bound, noted). Log old values first. Update BOTH ironbeam_es_1m_bars and the matching es_minutes rows in the same transaction, logging both. Dry-run counts first, then stop for my go.
+- **A1.4** L6: es_minutes stays insert-trigger-only otherwise; no new trigger.
+- **A1.5** Out of scope, filed as new vault open questions: (a) trades-ws worker silent stalls (10-23 07:52–09:56 PT, 09-22 130 min) → watchdog CR; (b) CR-AC re-scope (worker loud-failure + ORATS key rename; its render.yaml is stale — do not merge). Mark CR-AC's vault note status cancelled, superseded by CR-BZ (callbacks) and the new re-scope question.
+
+### Implementation notes under A1 (Claude Code)
+
+- **"Price differs > 1 tick"** = max(|ΔH|, |ΔL|, |ΔC|) > 0.25. This is the Step 0 Q3 definition (783 minutes as of 2026-10-23).
+- **Grants.**
+  - `dash_backfill_writer` has only INSERT/SELECT on `ironbeam_es_1m_bars` and `es_minutes`, measured on `information_schema.role_table_grants` 2026-10-25.
+  - The live repair therefore needs a column-level `GRANT UPDATE (open, high, low, close, volume)` on both tables. It ships in `scripts/cr_bz_ddl.sql` together with the two new tables, and is **not applied** in this CR's implementation commits.
+  - New tables owned by `rschultz` give `dash_backfill_writer` INSERT/SELECT through the existing default ACL.
+- **The revision log table must exist before "Ironbeam Cron" is deployed with step 2.** The writer degrades to a printed warning if the table is missing, and still inserts bars.
+- **Revision log key.** The PK is `(datetime, snapshot OHLCV)`, with `ON CONFLICT DO NOTHING`. Each distinct revision is logged once; repeated identical snapshots on later runs are not logged again. `seen_at` = first sighting.
