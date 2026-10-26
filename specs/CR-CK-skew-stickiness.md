@@ -201,3 +201,29 @@ ES from `ironbeam_es_1m_bars` at quote time; bar close = flow close on 389 / 390
 - A14's "~0.6 vol pts per 5 min" could be restated as the length-dependent band. Ryan's call; Code does not edit standing rulings.
 - Whether a beyond-noise ratio < 0 on the approach precedes anything is an outcome question. It needs a pre-registered test on train (A15 stop-free direction first); this CR read no outcomes.
 - The 12:00 band row is unreliable for ≥ 45-min windows (C6 clamp artifact), and the 06:30 bucket has no band.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-26, before merge) — time drift of 0DTE put skew
+
+Kickoff, transcribed:
+- Train 2026 only, no outcomes.
+- In each 30-min bucket (06:30–13:00 PT), measure the mean and median put-skew change over 15 / 30 / 60-min windows where |ES move| < 0.05 % (price ≈ flat), with session-clustered CIs.
+- Report whether there is a systematic drift by time of day, and whether it is larger than the noise band for that window.
+- **If any bucket's drift exceeds its noise band:** add it to the expected change as a time term (expected = sticky-strike Δ + drift[bucket, window]); keep the zero-move baseline otherwise; re-run the "normal ratio" distribution and the 7731 readout with it; show "drift" as a separate item in the Stickiness line.
+- **If no bucket exceeds noise:** say so and change nothing.
+- In all cases, flag "late-day: low reliability" in the Stickiness line when the window ends after 11:00 PT.
+
+Choices fixed by Code before the run:
+
+| # | Choice | Value |
+|---|---|---|
+| A1.1 | Sample | 2026 train sessions as C1 (`y26` loaders; R-a / 2025 / holdout not loaded). Windows of L ∈ {15, 30, 60} min, starts on a 5-min grid from 06:30, ending ≤ 12:59 PT (the last snapshot). Bucket = the 30-min bucket of the start, 06:30 … 12:30. Kept when \|ES move\| < 0.05 % (endpoint closes at quote time, C2) and the trend is valid (C3). |
+| A1.2 | Change measured | The **trend Δ** (C3, OLS slope × L), the same quantity the ratio's numerator uses. The endpoint Δ is a readout. |
+| A1.3 | Statistics | Per (bucket, L): n windows, n sessions, mean and median; 95 % CIs by session-cluster bootstrap (2,000 draws, seed 20261026). |
+| A1.4 | Noise band | The C6 band for that bucket and L (`NOISE_BAND_PP`). The 06:30 bucket has no shipped band, so it is measured the same way (C6 method, 2026 train, starts on a 5-min grid in 06:30–06:59) for this comparison only. |
+| A1.5 | "Exceeds" | **\|median drift\| > band** for that (bucket, L). The median is the primary statistic because the ratio's reads are signs, which follow the median (CR-CJ A2). Cells with fewer than 30 windows are reported but cannot trigger. The mean, and whether \|mean\| > band, are reported alongside, not gating. |
+| A1.6 | If triggered | `skew_expected` gains `DRIFT_PP[bucket][L]` = the median for **every** (bucket, L) cell with ≥ 30 windows (not only the exceeding ones), linear in L between 15/30/60 and clamped. Expected = sticky-strike Δ + drift(start bucket, L). Part 1 tables and Part 2 are re-run, and the line shows "drift ±x.xx". |
+| A1.7 | Late-day flag | `late_day` = the window's end is after 11:00 PT (end minute > 11:00). Line suffix "late-day: low reliability". The route row gets the field; Part 1 is not re-cut. |
+
+No standing ruling is affected: train only, no outcomes, display off by default (C2).
