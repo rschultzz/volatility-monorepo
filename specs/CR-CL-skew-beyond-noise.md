@@ -34,8 +34,8 @@ CR-CK measured the stickiness ratio (A14) on 2026 train and left one question op
 | C3 | Skew read | `skew_expected.stickiness_read` exactly as CR-CK Part 1 (`scripts/cr_ck_stickiness.py` `read`): trend actual (OLS slope × L, ≥ 80 % coverage, ≥ 5 points), sticky-strike expected from the start smile, ratio when \|ES move\| ≥ 0.15 % and expected ≠ 0, beyond noise = \|actual\| > band(L, start bucket). Band table = the shipped `NOISE_BAND_PP` (CR-CK, measured on these same sessions — disclosed, not re-fitted). |
 | C4 | Groups | Among primary legs with a ratio and beyond noise: **G1** = ratio < 0, hypothesised direction h = −dir (against the leg); **G2** = ratio > 1, h = +dir (continuation). Beyond-noise legs with 0 ≤ ratio ≤ 1 belong to neither group (counted). Cells: G1-up, G1-down, G2-up, G2-down (leg direction). |
 | C5 | Baseline pool | Primary legs with a ratio (\|ES move\| ≥ 0.15 %) and **in noise**. Legs with "move too small" or "insufficient data" are in neither group nor baseline (counted). |
-| C6 | Match strata | (a) leg direction; (b) leg size tercile, cut points = terciles of \|end_px − start_px\| over **all primary legs with a ratio** (directions pooled, fixed in Step 0 from counts only); (c) 30-min bucket of the **confirmation bar's start time** (the outcome's clock), 07:00 … 12:30; (d) **proposed, needs Ryan's approval (B7 — see conformance):** EDGE / INTERIOR at confirmation. A group leg's baseline rate = the in-noise win rate in its stratum; the cell's baseline = the mean of those stratum rates over the cell's covered legs (exact stratification, group-leg weighted). **Coverage** = share of a cell's legs whose stratum has ≥ 1 resolved baseline leg; uncovered legs are dropped from the primary and counted. |
-| C7 | EDGE / INTERIOR (if C6d is approved) | At the confirmation bar, inclusive: up leg EDGE if end_px ≥ running RTH high (from 06:30) − 2 pts; down leg EDGE if end_px ≤ running RTH low + 2. Else INTERIOR. Adapts CR-CF D3 (level → the leg's extreme). |
+| C6 | Match strata | (a) leg direction; (b) leg size tercile, cut points = terciles of \|end_px − start_px\| over **all primary legs with a ratio** (directions pooled, fixed in Step 0 from counts only); (c) 30-min bucket of the **confirmation bar's start time** (the outcome's clock), 07:00 … 12:30; (d) EDGE / INTERIOR at confirmation (C7; approved by Ryan 2026-10-26, B7). A group leg's baseline rate = the in-noise win rate in its stratum; the cell's baseline = the mean of those stratum rates over the cell's covered legs (exact stratification, group-leg weighted). **Coverage** = share of a cell's legs whose stratum has ≥ 1 resolved baseline leg; uncovered legs are dropped from the primary and counted. |
+| C7 | EDGE / INTERIOR (approved, B7) | At the confirmation bar, inclusive: up leg EDGE if end_px ≥ running RTH high (from 06:30) − 2 pts; down leg EDGE if end_px ≤ running RTH low + 2. Else INTERIOR. Adapts CR-CF D3 (level → the leg's extreme). |
 | C8 | Outcome start | P0 = close of the Databento bar confirm_i (the bar whose low / high confirmed the leg). Known at that bar's close; the skew window ends at snapshot e = end_i + 1 ≤ confirm_i, whose quotes (median lag 10 s in 2026) precede it. **Causal.** |
 | C9 | Race (primary ±10, readout ±20) | Bars confirm_i + 1 … the 12:59 bar. Win = h × (price − P0) reaches +X (high / low) before −X. Both in the same minute → **tie**: excluded from the rate and counted. Neither by the 12:59 bar close → **unresolved**: excluded and counted. Win rate = wins / (wins + losses). Bars missing from the series are skipped; a missing run > 5 min inside the race drops the leg (counted). |
 | C10 | Readouts on the move | Signed move h × (close(confirm_i + k) − P0) at k = 30, 60 min (NaN past the 12:59 bar; counted). MFE before −10 = the largest h-signed favourable excursion from P0 before the first −10 adverse touch (or 13:00); reported as quantiles, and among legs reaching +10, the shares reaching +15 and +20. |
@@ -48,7 +48,7 @@ CR-CK measured the stickiness ratio (A14) on 2026 train and left one question op
 
 ## Steps
 
-- **Step 0** (K8, C13): counts per cell (swing 12 primary; late legs; swing 8/16), funnel (move too small / insufficient / in neither group), beyond-noise share by 30-min bucket, size terciles, baseline match coverage per cell, EDGE share per cell and baseline (if C6d), A/A. **Stop for Ryan's review.**
+- **Step 0** (K8, C13): counts per cell (swing 12 primary; late legs; swing 8/16), funnel (move too small / insufficient / in neither group), beyond-noise share by 30-min bucket, size terciles, baseline match coverage per cell, EDGE share per cell and baseline, A/A. **Stop for Ryan's review.**
 - **Step 1** (run): `scripts/cr_cl_run.py`, committed before it runs; one run; tables below.
 - **Wrap**: vault CR note, setup-registry row, session note, PR.
 
@@ -66,18 +66,18 @@ CR-CK measured the stickiness ratio (A14) on 2026 train and left one question op
 | A14 | honoured | CR-CK's definitions, functions and shipped noise band, unchanged. |
 | A15 | honoured | Stop-free direction test; no stops, no exits tuned. |
 | A16 | honoured | Trend Δ over the leg, not endpoints. |
-| **A17** | **deviates** | A17: "Skew alone is never the trigger … **Test order flow alone first**; skew is an add-on readout." This CR's primary tests skew **alone** as a direction predictor, and order flow alone has not yet been tested in this frame (the level-agnostic range / flow CR, CR-CG, has not run). Nothing here makes skew a trigger, but the sequencing differs. **Proposed:** Ryan approves running this as a measurement of skew's information content (no trigger, no setup shortlisted from it), logged in standing-rulings. |
+| **A17** | **deviates — approved by Ryan 2026-10-26** | A17: "Skew alone is never the trigger … **Test order flow alone first**; skew is an add-on readout." This CR's primary tests skew **alone** as a direction predictor, and order flow alone has not yet been tested in this frame (the level-agnostic range / flow CR, CR-CG, has not run). Nothing here makes skew a trigger, but the sequencing differs. **Proposed:** Ryan approves running this as a measurement of skew's information content (no trigger, no setup shortlisted from it), logged in standing-rulings. |
 | B1 | honoured | Three verdicts, wide CI = inconclusive, n < 40 = inconclusive (underpowered). |
 | B2 | honoured | All readouts (swing 8/16, ratio cuts, GEX, late legs, ±20, moves, MFE) disclosed and unadjusted; nothing chosen from them. |
 | B3 | n/a | Not a setup optimisation. |
 | B4 | honoured | `y26` train only; R-a, R-b and holdout not read (loader asserts). |
 | B5 | honoured, with a note | Databento bars for legs and outcomes. The GEX readout's P_target uses `ironbeam_es_1m_bars` at 15:45 ET (the CR-BT definition, as in CR-CE/CF). |
 | B6 | honoured | Labelled: a stop-free direction test, **not a test of Ryan's trade**. |
-| **B7** | **deviates** | B7: "Placebos are matched on where price sits in the session range (EDGE vs INTERIOR)." K5's baseline matches size and time only. A leg that just made a session extreme vs one inside the range plausibly differs on continuation, so the comparison could be confounded. **Proposed:** add EDGE / INTERIOR as a third match key (C6d, C7), and report the EDGE share per cell and baseline. Alternative: keep K5 as written and report EDGE / INTERIOR as a readout split only. |
+| **B7** | **deviates as kicked off — resolved by Ryan 2026-10-26 (EDGE / INTERIOR added, C6d)** | B7: "Placebos are matched on where price sits in the session range (EDGE vs INTERIOR)." K5's baseline matches size and time only. A leg that just made a session extreme vs one inside the range plausibly differs on continuation, so the comparison could be confounded. **Proposed:** add EDGE / INTERIOR as a third match key (C6d, C7), and report the EDGE share per cell and baseline. Alternative: keep K5 as written and report EDGE / INTERIOR as a readout split only. |
 | B8 | n/a | No labels. |
 | C1, C2 | n/a | No display. |
 
-**Two "deviates" (A17, B7): stop until Ryan approves in chat.** Nothing has been loaded or computed.
+Two "deviates" (A17, B7) stopped the freeze; both approved by Ryan in chat 2026-10-26 and logged in the standing-rulings change log (see Approvals below).
 
 ---
 
@@ -86,3 +86,13 @@ CR-CK measured the stickiness ratio (A14) on 2026 train and left one question op
 Kickoff, transcribed: replace the Outcome line (standing ruling A11 rewritten 2026-10-26: target size is open). Outcome (stop-free, A15, A11), from the leg's confirmation bar close (causal): **primary = race to ±10 pts** in the hypothesised direction by 13:00 PT (ties, unresolved reported); **readouts** = race to ±20, signed move at +30 and +60 min, and the distribution of the maximum favourable move before −10 (share reaching +15 and +20 after +10). Everything else unchanged.
 
 Folded into K6, C9, C10, C12, C13 above (the frozen text above is the amended version; there was no earlier committed version). Conformance re-checked: A11 honoured; no other row changed.
+
+---
+
+## Approvals (Ryan, 2026-10-26, after spec freeze `2285be3`, before any data)
+
+1. **A17:** approved as a **measurement** of what skew alone tells you about the next move. **No setup is shortlisted from CR-CL. A PASS means only "skew earns a place as an add-on readout in the flow-first setup test", nothing more.** The verdict section must say so.
+2. **B7:** EDGE / INTERIOR is a third baseline match key (C6d, C7: leg extreme within 2 pts of the session's running RTH high / low at confirmation, as CR-CF D3). Match coverage is reported; **a cell that drops below 40 because of the extra key is reported as underpowered; the match is not relaxed.**
+3. C-choices confirmed as written (ties / unresolved excluded and counted; 10,000 draws; CR-CK noise band disclosed).
+
+Both logged in `Dash/research/standing-rulings.md` change log. Next: Step 0, then stop.
