@@ -180,3 +180,38 @@ Variance ratios far below 1 (07:00–11:00: VR(5) 0.29–0.44, VR(15) 0.16–0.3
 | A2.4 | Recommendation rule | The simpler LAD-on-legs variant (single before up/down) whose **K8 primary out-of-sample** balance (fit 2026 H1, test H2) is inside 45–55 % pooled **and** per direction, on **both** random windows and legs. If neither passes, no fitted curve is recommended, and raw put-skew change is the reading until a better model exists. In-sample bucket cells and the cross-era readouts are reported, not gating. |
 | A2.5 | Published parameters | The recommended variant fitted on all 293 sessions, plus the same fitted on 2026 only (for a later R-a confirmation, B4 note). β and θ outside 07:00–12:45 are copied from the nearest domain bucket and flagged out of domain. |
 | A2.6 | ATM | The same A2.1–A2.3 for Δ ATM vol50, reported. The shared function carries the ATM curve with the same variant choice. |
+
+---
+
+## A2 result (post-hoc, disclosed) — the typical skew response to price is ≈ 0
+
+**Median (LAD) slope, swing-12 legs, joint drift.** Put skew β = **−0.32** [−0.53, −0.01] (bootstrap). Up/down: −0.63 [−1.18, −0.20] / −0.09 [−0.28, +0.33]. LAD on 15-min windows −0.25. OLS on the same model is −1.61.
+
+**Slope by subsample, legs, single β:**
+
+| Subsample | n legs | Put skew LAD | Put skew OLS | ATM LAD | ATM OLS |
+|---|---|---|---|---|---|
+| All | 2,246 | −0.32 | −1.61 | **−7.02** | −5.45 |
+| R-a | 1,019 | −0.55 | −1.13 | −5.84 | −6.71 |
+| 2026 | 1,227 | +0.12 | −2.11 | −8.32 | −4.13 |
+| 2026 H1 | 701 | **+0.58** | −1.15 | −8.95 | −4.59 |
+| 2026 H2 | 526 | **−0.65** | −3.48 | −7.25 | −3.26 |
+
+**Balance, share divergent.**
+
+| Curve | In sample: random / legs | K8 OOS (2026 H1 → H2): random / legs | R-a → 2026: random / legs | 2026 → R-a: random / legs |
+|---|---|---|---|---|
+| LAD single | 0.498 / 0.510 | 0.467 [0.429, 0.505] / **0.426** [0.364, 0.483] | 0.522 / 0.579 | 0.474 / 0.406 |
+| LAD up/down | 0.496 / 0.509 | 0.458 / **0.432** | 0.527 / 0.583 | 0.476 / 0.405 |
+| OLS single (joint drift) | 0.565 / 0.623 | — | — | — |
+| Raw (from the frozen run) | 0.479 / 0.481 | 0.479 / 0.462 | 0.499 / 0.529 | 0.468 / 0.423 |
+| Current curve | 0.760 / 0.780 | 0.790 / 0.787 | 0.787 / 0.804 | 0.745 / 0.750 |
+
+**A2.4 outcome: neither LAD variant passes** (legs 0.426 / 0.432 out of sample). **No fitted put-skew curve is recommended.**
+- The median put-skew response to a 15–30-min or swing-12 ES move is about zero and flips sign between subsamples.
+- What a fitted β buys in one sample it gives back in the next.
+- Raw put-skew change is as balanced out of sample as any fitted curve.
+- **Recommended expected put-skew change = 0** (flat), i.e. read the raw change.
+- Not flat in two places: the 12:00–13:00 drift (LAD θ ≈ −0.025 vol pts/min) and the first 30 minutes are outside the domain.
+
+**ATM is different.** The median β is stable at −5.8 to −9.0 in every subsample. The published ATM curve is LAD single: β **−7.02** vol pts per 1 % [−7.92, −6.29], with drift θ by bucket (results.json `a2.lad_single_atm_theta`): −0.034 /min at 07:00, about 0 on 09:00–11:30, −0.13 at 12:00, −0.34 at 12:30. It is reported, not gated (A2.6): A6's divergence read is about put skew.

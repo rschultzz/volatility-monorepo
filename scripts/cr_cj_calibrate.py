@@ -450,3 +450,132 @@ R["recommended"] = {
 
 (L.OUT_DIR / "results.json").write_text(json.dumps(R, indent=1, default=str))
 print(json.dumps({k: R[k] for k in ("sessions", "counts", "c10", "c8", "recommended")}, indent=1, default=str))
+
+
+# =============================================================================== Amendment A2 (post-hoc)
+from scipy import sparse  # noqa: E402
+from scipy.optimize import linprog  # noqa: E402
+
+
+def lad(X, y):
+    """Median regression: min sum |y - Xb| as an LP (HiGHS)."""
+    n, k = X.shape
+    c = np.r_[np.zeros(k), np.ones(2 * n)]
+    A = sparse.hstack([sparse.csr_matrix(X), sparse.identity(n), -sparse.identity(n)]).tocsr()
+    res = linprog(c, A_eq=A, b_eq=y, bounds=[(None, None)] * k + [(0, None)] * (2 * n), method="highs")
+    assert res.status == 0, res.message
+    return res.x[:k]
+
+
+def a2_design(df, variant):
+    M = np.vstack(df["mins"].to_numpy())[:, DOM_B]
+    r = df["r"].to_numpy()
+    if variant == "single":
+        return np.column_stack([M, r])
+    return np.column_stack([M, np.maximum(r, 0), np.minimum(r, 0)])
+
+
+def a2_fit(df, y, variant, est="lad", boot=0):
+    X, yy = a2_design(df, variant), df[y].to_numpy(float)
+    b = lad(X, yy) if est == "lad" else np.linalg.lstsq(X, yy, rcond=None)[0]
+    nb = len(DOM_B)
+    beta = np.zeros((NBK, 2))
+    if variant == "single":
+        beta[:, :] = b[nb]
+    else:
+        beta[:, 0], beta[:, 1] = b[nb], b[nb + 1]
+    theta = np.zeros(NBK)
+    theta[DOM_B] = b[:nb]
+    theta[0] = theta[1]                                          # A2.5: out of domain = nearest bucket
+    out = dict(beta=beta, theta=theta, variant=variant, y=y, est=est)
+    if boot:
+        rng_ = np.random.default_rng(SEED)
+        ds = df["d"].unique()
+        groups = {d: np.flatnonzero(df["d"].to_numpy() == d) for d in ds}
+        draws = []
+        for _ in range(boot):
+            idx = np.concatenate([groups[d] for d in rng_.choice(ds, len(ds))])
+            bb = lad(X[idx], yy[idx]) if est == "lad" else np.linalg.lstsq(X[idx], yy[idx], rcond=None)[0]
+            draws.append(bb[nb:])
+        draws = np.array(draws)
+        out["ci"] = [[round(float(np.percentile(draws[:, j], 2.5)), 3), round(float(np.percentile(draws[:, j], 97.5)), 3)]
+                     for j in range(draws.shape[1])]
+    return out
+
+
+def a2_reads(c, df):
+    e = np.array([curve_expected(c, rw) for _, rw in df.iterrows()])
+    return reads((df["dput" if c["y"] == "dput" else "datm"] - e).to_numpy(), df["r"].to_numpy())
+
+
+def a2_summary(tab):
+    return {k: tab[k] for k in ("pooled", "up", "down", "by_size")}
+
+
+def a2_pass(tabs):
+    return all(0.45 <= t[x]["share"] <= 0.55 for t in tabs for x in ("pooled", "up", "down"))
+
+
+A2 = {"fits": {}, "balance_in_sample": {}, "oos": {}}
+LEGS = W[W["kind"] == "leg"]
+W15 = W[W["kind"] == "w15"]
+for est in ("lad", "ols"):
+    for v in ("single", "updown"):
+        for y in ("dput", "datm"):
+            c = a2_fit(LEGS, y, v, est, boot=200 if est == "lad" else 0)
+            key = f"{est}_{v}_{y}"
+            A2["fits"][key] = {"beta_up_dn": c["beta"][1].round(3).tolist(), "ci": c.get("ci"),
+                               "theta": {L.bucket_label(b): round(float(c["theta"][b]), 4) for b in range(NBK)}}
+            if y == "dput":
+                tabs = {}
+                for sn, df in SAMPLES.items():
+                    df = df.copy()
+                    df["read_a2"] = a2_reads(c, df)
+                    tabs[sn] = balance_table(df, {"a2": "read_a2"})["a2"]
+                A2["balance_in_sample"][key] = tabs
+for v in ("single", "updown"):
+    c = a2_fit(W15, "dput", v, "lad")
+    A2["fits"][f"lad_w15_{v}_dput"] = {"beta_up_dn": c["beta"][1].round(3).tolist()}
+
+for v in ("single", "updown"):
+    for nm, (tr, te) in splits.items():
+        c = a2_fit(LEGS[LEGS["d"].isin(set(tr))], "dput", v, "lad")
+        out = {"beta_up_dn": c["beta"][1].round(3).tolist()}
+        for sn, df in SAMPLES.items():
+            x = df[df["d"].isin(set(te))].copy()
+            x["read_a2"] = a2_reads(c, x)
+            out[sn] = a2_summary(balance_table(x, {"a2": "read_a2"})["a2"])
+        A2["oos"][f"{v}|{nm}"] = out
+
+prim = "y26_first_half->second_half (K8 primary)"
+A2_REC = next((v for v in ("single", "updown")
+               if a2_pass([A2["oos"][f"{v}|{prim}"]["rand"], A2["oos"][f"{v}|{prim}"]["leg"]])), None)
+A2["recommended_variant"] = A2_REC
+if A2_REC:
+    full_put, full_atm = a2_fit(LEGS, "dput", A2_REC), a2_fit(LEGS, "datm", A2_REC)
+    y26_put = a2_fit(LEGS[LEGS["d"].isin(set(y26))], "dput", A2_REC)
+    y26_atm = a2_fit(LEGS[LEGS["d"].isin(set(y26))], "datm", A2_REC)
+    A2["published"] = {nm: {"beta_up": round(float(c["beta"][1, 0]), 4), "beta_down": round(float(c["beta"][1, 1]), 4),
+                            "theta": [round(float(t), 5) for t in c["theta"]]}
+                       for nm, c in (("put_all", full_put), ("atm_all", full_atm), ("put_y26", y26_put), ("atm_y26", y26_atm))}
+R["a2"] = A2
+(L.OUT_DIR / "results.json").write_text(json.dumps(R, indent=1, default=str))
+print(json.dumps({"a2_rec": A2_REC, "published": A2.get("published"),
+                  "fits": {k: (v["beta_up_dn"], v.get("ci")) for k, v in A2["fits"].items()}}, indent=1, default=str))
+
+# A2 readout: beta stability by subsample (LAD and OLS, legs, single)
+subs = {"all": SESS, "ra": ra, "y26": y26, "y26_h1": y26[:half], "y26_h2": y26[half:]}
+A2["beta_by_subsample"] = {}
+for y in ("dput", "datm"):
+    for nm, ss in subs.items():
+        x = LEGS[LEGS["d"].isin(set(ss))]
+        A2["beta_by_subsample"][f"{y}|{nm}"] = {"lad": round(float(a2_fit(x, y, "single", "lad")["beta"][1, 0]), 3),
+                                                "ols": round(float(a2_fit(x, y, "single", "ols")["beta"][1, 0]), 3),
+                                                "n": int(len(x))}
+A2["lad_single_atm_theta"] = {L.bucket_label(b): round(float(v), 5)
+                              for b, v in enumerate(a2_fit(LEGS, "datm", "single", "lad")["theta"])}
+A2["lad_single_put_theta"] = {L.bucket_label(b): round(float(v), 5)
+                              for b, v in enumerate(a2_fit(LEGS, "dput", "single", "lad")["theta"])}
+R["a2"] = A2
+(L.OUT_DIR / "results.json").write_text(json.dumps(R, indent=1, default=str))
+print(json.dumps(A2["beta_by_subsample"], indent=0))
