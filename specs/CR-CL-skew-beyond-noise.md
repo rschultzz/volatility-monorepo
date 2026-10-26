@@ -96,3 +96,88 @@ Folded into K6, C9, C10, C12, C13 above (the frozen text above is the amended ve
 3. C-choices confirmed as written (ties / unresolved excluded and counted; 10,000 draws; CR-CK noise band disclosed).
 
 Both logged in `Dash/research/standing-rulings.md` change log. Next: Step 0, then stop.
+
+---
+
+## Step 0 findings (2026-10-26, `scripts/cr_cl_step0.py` @ `5ea1663` → `scripts/logs/cr_cl/step0.json`; no group outcome computed)
+
+`y26` only: 107 sessions, 2026-01-02 → 2026-06-05 (loader assert held; R-a, 2025 and the holdout were not loaded). The skew and ES loads are the CR-CJ `y26` parquet cache, copied from the main checkout (same loader query). Run note: the first launch failed at the shell redirect, before Python started, because `scripts/logs/cr_cl/` did not exist yet; nothing was computed. The second launch is the Step 0 run.
+
+**Leg-set parity with CR-CK.** 1,233 swing-12 legs in the CR-CK domain: 1,231 reads (764 ratio-defined, 279 move too small, 188 insufficient) plus 2 with no start snapshot. This equals CR-CK Part 1 exactly.
+
+### Funnel, swing 12, primary legs (end ≤ 11:00 PT)
+
+| Step | Legs |
+|---|---|
+| Primary legs | 972 (late, 11:00–12:45: 261) |
+| Ratio defined | 597 (move too small 219; insufficient 155; no read 1) |
+| In noise → baseline pool | 448 (up 227, down 221) |
+| Beyond noise | 149: **G1 76**, **G2 45**, neither (0 ≤ ratio ≤ 1) 28 |
+
+Size tercile cuts (C6b): 20.0 / 28.5 pts.
+
+### Cells (pre-outcome; covered = the stratum has ≥ 1 baseline leg, an upper bound on the run's n)
+
+| Cell | Legs | Sessions | Covered | Coverage | EDGE share | Can reach 40? |
+|---|---|---|---|---|---|---|
+| G1-up (against: short) | 27 | 25 | 26 | 96 % | 33 % | **no — underpowered** |
+| G1-down (against: long) | 49 | 36 | 47 | 96 % | 45 % | yes, if ≤ 7 legs are ties / unresolved / gap |
+| G2-up (continue: long) | 29 | 24 | 29 | 100 % | 28 % | **no — underpowered** |
+| G2-down (continue: short) | 16 | 15 | 16 | 100 % | 38 % | **no — underpowered** |
+| Baseline up / down | 227 / 221 | | | | 33 % / 41 % | |
+
+- **Three of the four primary cells are below 40 before any outcome**, so under K7 / C12 they will read INCONCLUSIVE (underpowered) whatever the data show. Only **G1-down** can carry a verdict.
+- **What the EDGE key costs (B7):** without it, all 121 group legs are covered. With it, 3 are lost (G1-up 1, G1-down 2). No cell drops below 40 because of the key; the three short cells are short in any case.
+- Baseline strata: 104 occupied, median 3 legs, 14 with a single leg.
+
+**Readout cells (K9, C14), legs / covered:**
+
+| Readout | G1-up | G1-down | G2-up | G2-down |
+|---|---|---|---|---|
+| Ratio cut −0.5 / 1.5 | 26 / 25 | 44 / 42 | 16 / 16 | 14 / 14 |
+| Swing 8 (cuts 18.5 / 23.5) | 36 / 36 | 53 / 50 | 44 / 44 | 23 / 23 |
+| Swing 16 (cuts 22.75 / 32.25) | 21 / 17 | 32 / 30 | 21 / 20 | 15 / 15 |
+| Late legs (end 11:00–12:45) | 5 / 5 | 7 / 7 | 13 / 12 | 6 / 5 |
+
+- Swing 8: 768 of 2,190 primary legs are "move too small" (< 0.15 %) and 684 are insufficient (too short for the trend).
+- GEX (C14): levels on 99 / 107 sessions (median 6). The 8 without: 4 have no P_target (roll / first session / missing bar) and 4 have no IM. Group legs ending within 5 pts of a level:
+
+| Cell | Put level | Call level | None | No levels |
+|---|---|---|---|---|
+| G1-up | 5 | 3 | 18 | 1 |
+| G1-down | 13 | 0 | 30 | 6 |
+| G2-up | 2 | 5 | 20 | 2 |
+| G2-down | 5 | 0 | 10 | 1 |
+| Baseline | 61 | 64 | 271 | 52 |
+
+  Every GEX sub-cell is ≤ 13 legs: descriptive only.
+
+### Beyond-noise share by 30-min start bucket (ratio-defined legs, primary + late)
+
+| Start | 07:00 | 07:30 | 08:00 | 08:30 | 09:00 | 09:30 | 10:00 | 10:30 | 11:00 | 11:30 | 12:00 | 12:30 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| n | 112 | 112 | 88 | 90 | 64 | 71 | 68 | 60 | 37 | 32 | 25 | 5 |
+| Beyond | 29 % | 17 % | 28 % | 26 % | 27 % | 16 % | 22 % | 32 % | 22 % | 19 % | 24 % | 20 % |
+| G1 / G2 | 19 / 8 | 12 / 3 | 15 / 6 | 13 / 7 | 5 / 7 | 5 / 4 | 4 / 8 | 9 / 7 | 2 / 5 | 2 / 4 | 1 / 5 | 1 / 0 |
+
+G1 is concentrated before 09:00 (59 of 76 primary G1 legs start 07:00–08:59). G2 is spread across the day.
+
+### A/A (C13; ±10 race on baseline legs only, 200 session halves, 500-draw bootstrap each)
+
+| Direction scored | Up legs: median [2.5, 97.5 %] | CI excludes 0 | Down legs: median [2.5, 97.5 %] | CI excludes 0 |
+|---|---|---|---|---|
+| Continuation (h = +dir) | +0.2 pp [−14.5, +15.5] | 2.0 % | −0.3 pp [−14.5, +14.5] | 3.5 % |
+| Against (h = −dir) | −0.8 pp [−14.6, +13.0] | 2.0 % | +0.4 pp [−17.1, +12.5] | 2.5 % |
+
+- **The matched estimator is unbiased:** medians are within 1 pp of 0.
+- **It is slightly conservative:** 2–3.5 % of splits exclude 0, against a nominal 5 %.
+- **Scale:** half-pool cells of about 110 legs swing ±15 pp between random halves. A 40–50-leg cell at the Holm level (up to 98.75 %) will have a CI roughly ±20 pp wide, so only a large effect can PASS or be REFUTED.
+
+### Gate summary for Ryan
+
+- **No gate failed.** Data, parity, coverage (96–100 %) and A/A are all clean.
+- **Power is the issue.** Three of four primary cells (G1-up 27, G2-up 29, G2-down 16) are below 40 before outcomes, so they will be INCONCLUSIVE (underpowered) by rule.
+- **Only G1-down** (put skew fell during a decline → expect a bounce; 47 covered) can carry a verdict, and only an effect of about ±20 pp would show.
+- The extra B7 key is not the cause: it cost 3 legs.
+
+Stopped for Ryan's review. No run script has been written.
