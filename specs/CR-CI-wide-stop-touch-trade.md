@@ -306,3 +306,39 @@ Of 189 NYSE sessions:
 - 186 have both.
 
 **Yes, R-a has the flow and the skew.** Corrected levels exist there from CR-CB A17.
+
+---
+
+## PAUSED (Ryan, 2026-10-26) — nothing was run
+
+**Status: paused.** No run script was committed or run. No outcome at a real level was computed for A2 or for the L2 grid. The only outcomes ever computed were placebo P&L for the A1 Step 0 A/A, plus the five published fixture paths. Train only. R-a, R-b and the holdout were not read beyond the C25 counts.
+
+**Why.** Ryan redefined the setup. See [[standing-rulings]], A17–A20:
+- skew vs expected on the approach leg says *what to consider*;
+- order flow *inside the range* decides and confirms;
+- the trade is taken at the range edges (A20), after the range has formed (A3).
+
+**What that does to this CR:**
+
+| Part | Status | Ruling |
+|---|---|---|
+| A2.4 call (delta and skew both read on the approach leg, at once) | **revoked** | R7 |
+| A2.0 entry at the touch-bar close | **revoked** | R1 / A3 |
+| A2 as a whole | **superseded** by a new CR, **CR-CJ**, to be specced after the skew expected curve is calibrated (A14; [[skew-expected-curve-calibration]]) | — |
+| The L2 stop/target grid with A1 | not run. Its confirm-bar entry (1–10 min after the touch) is not "after the range has formed", so under B6 it would test a mechanical cousin of Ryan's trade, not the trade itself. Its machinery (`cr_ci_lib.py`) stays committed for reuse | B6 |
+
+**What carries over to CR-CJ (all committed on `feat/CR-CI-wide-stop-touch-trade`):**
+- **The calibration target.** The Step 0 finding that the BETA 4.5 residual reads "divergent" on 74 % of approach legs vs 43 % raw, roughly constant across leg sizes and both directions. This is the bias to remove.
+- **Reusable code:**
+  - `scripts/cr_ci_lib.py`: the CR-CE universe, Databento minute bars, approach legs via `flow_features.swing_legs`/`leg_effort`, the Skew-module residual (`residual_put_skew`), and the any-price swing-level touches.
+  - `scripts/cr_ci_step0.py` and `scripts/cr_ci_step0_a2.py`.
+- **Measured fields:** `snap_shot_date` is UTC (row added to [[field-conventions]]). R-a has flow and 0DTE skew on 186 of 189 sessions.
+
+**Standing-rulings conformance** (at pause; any CR-CJ spec must re-check):
+
+| Ruling | Status |
+|---|---|
+| A3, A20 | L2 grid and A2 **deviate** (entry at or near the touch, not at a formed range edge). This is why nothing runs. |
+| A17 | A2.4 **deviates** (R7). |
+| A14 | The residual is uncalibrated. |
+| B4, B5, B7, B8 | Honoured. |
