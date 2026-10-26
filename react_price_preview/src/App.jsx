@@ -1501,6 +1501,11 @@ export default function App() {
       flowMarkerSettings.fade, flowMarkerSettings.gap, reviewUntil, flowEffort]
   )
 
+  // CR-CH: one payloads array per flowV2Payloads change. A new array on every App render made the
+  // pane re-align every session to the candles several times a second during drag/zoom, which
+  // crashed Chrome 155's renderer (SIGTRAP, "Error code: 5").
+  const flowV2PanePayloads = useMemo(() => flowV2Payloads.map((p) => p.payload), [flowV2Payloads])
+
   // CR-CD A5: swing effort labels for the price chart — only while Flow v2 is shown with Effort on
   // (null otherwise, so the chart draws nothing extra).
   const flowEffortLegs = useMemo(() => {
@@ -2385,7 +2390,7 @@ export default function App() {
                 >
                   {flowMode === 'v2' ? (
                     <AggressorFlowV2Panel
-                      payloads={flowV2Payloads.map((p) => p.payload)}
+                      payloads={flowV2PanePayloads}
                       candles={mergedBarsWithLiveTimeline}
                       visibleLogicalRange={sharedLogicalRange}
                       height={flowPanelHeight}
