@@ -144,3 +144,20 @@ On the 2,134 random 15-min windows: CR-CK's sticky-strike expected Δ has implie
 - About **half of all readings are negative** and **1 in 6 is above 1**. So a negative ratio by itself is not unusual, and neither is > 1.
 - Only about **1 in 4** ratio-defined windows has a skew change bigger than the noise band. A ratio is worth reading only when its "beyond noise" flag is set.
 - Declines skew negative: on a sell-off, put skew *falling* is the more common outcome (≈ 60 %).
+
+---
+
+## Part 2 result — 2026-10-26 around ES 7731 (live readout, not a test) — `scripts/cr_ck_live_7731.py` → `scripts/logs/cr_ck/live_2026_10_26.json`
+
+ES from `ironbeam_es_1m_bars` at quote time; bar close = flow close on 389 / 390 RTH minutes, none > 1 tick apart, so the bar is used throughout. Swing-12 legs on the Ironbeam bars around the approach: down 07:20 → 07:33 (7719.5 → 7703.25), **up 07:33 → 08:02 (7703.25 → 7739.5, confirmed 08:30)**, down 08:02 → 09:48. First bar to trade 7731: 07:52. Snapshot endpoints sit at the close of the extreme bar (Part 1 alignment), so the leg reads 07:34 → 08:03.
+
+| Window (PT) | ES move | Put skew start → end | Endpoint Δ | **Actual (trend)** | **Sticky-strike expected** | **Ratio** | Band | Beyond noise |
+|---|---|---|---|---|---|---|---|---|
+| a. Approach, as named, 07:30 → 07:50 | +16.75 pts (+0.22 %) | 1.89 → 1.19 | −0.70 | **−0.47** | **−1.23** | **+0.38** | 1.17 | no |
+| b1. Swing-12 leg → first 7731 trade, 07:34 → 07:53 | +23.00 (+0.30 %) | 2.25 → 1.29 | −0.96 | **−0.42** | **−2.29** | **+0.18** | 1.19 | no |
+| b2. Swing-12 leg, full, 07:34 → 08:03 | +29.50 (+0.38 %) | 2.25 → 0.97 | −1.28 | **−0.69** | **−2.82** | **+0.24** | 1.18 | no |
+| c. Range, as named, 07:50 → 08:48 | +1.25 (+0.02 %) | 1.19 → 1.72 | +0.53 | **+0.25** | −0.05 | **move too small** | 1.21 | no |
+
+- **Approach:** put skew fell as price rallied into 7731, by about a fifth to two-fifths of what sticky strike implies. Ratio +0.18 to +0.38 sits at the 53rd–64th percentile of up legs in train: an ordinary reading. Put skew did not pick up into the level (no bearish divergence), and the change is inside the noise band.
+- **Range:** ES moved 1.25 pts net, far below 0.15 %, so there is no ratio. Put skew drifted up about +0.25 vol pts on the trend (+0.53 endpoint), inside the band.
+- So on this day the skew read was "normal re-forming" on the way in, and the range said nothing. A17 says the range's order flow decides, and skew alone is never the trigger; this example agrees with that.
