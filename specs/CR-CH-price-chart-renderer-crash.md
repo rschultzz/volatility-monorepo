@@ -33,3 +33,57 @@ Since 2026-10-25 16:50 PT, Ryan's Chrome (155, macOS) crashes the Dash Price Cha
 - Full Dash page locally (read-only DB), Flow v2, live session.
 - Seeded hard interaction on the price chart: wheel zoom, pans, price-axis and time-axis drags, price-axis resets.
 - Headed Google Chrome 155 crashes in 27–226 s. Tooling: `scripts/cr_ch_repro/` (local, untracked).
+
+## Step 0 — diagnosis findings (2026-10-26)
+
+All runs: headed Google Chrome 155.0.8059.85 on Ryan's Mac, the full Dash page locally, read-only DB, the same seeded hard sequence, Flow v2 with Effort off, 600 s budget. "Clean" means 10 min without a crash, twice.
+
+**Same crash as Ryan's.** His three dumps (2026-10-25 16:50:39 / 16:51:23 / 17:26:43 PT) and every reproduction share one site: `EXC_BREAKPOINT`, `Google Chrome Framework` + `0x8628b7c`.
+
+**What does not matter** (each still crashes):
+- Effort on or off; swing 8 or 12; the build before A5 (`0bb6003`).
+- The v2 request schedule: poll off, 60 s poll, no abort/overlap, visible session only. All v2 requests finish within ~10 s of load.
+- v2 data at all: `nofetch` crashed 2/2.
+- The v2 pane's chart, series, price lines, markers, session bands, time sync, decorations and absorption band.
+- Pane DOM: a bare empty container (`p-container`) still crashes; so do header-only and stage-only.
+- GPU raster, accelerated 2D canvas, GPU compositing; Maglev or Turbofan off alone.
+- Geometry stays sane: nothing > 32,767 px, NaN, Infinity or negative.
+
+**What does matter:**
+- `nopane` (App renders no v2 pane): clean 2/2.
+- `m-noalign` (the pane's `aligned` and `snapped` memos return `[]`): clean 2/2.
+- Disabling just one of the two memos still crashes (align on: 328 s; snap on: 49.8 s).
+- Chromium 130 (non-official): clean 2/2. The CHECK is reachable in Chrome 155, not 130.
+
+**Root cause in our code.** `App.jsx` passes `payloads={flowV2Payloads.map((p) => p.payload)}`, a new array on every App render. In `AggressorFlowV2Panel`:
+- `allBars` / `allMarkers` are memoized on `payloads`, so they change on every App render;
+- `aligned = alignV2ToCandles(allBars, candles)` and `snapped = snapMarkers(allMarkers, candles)` then recompute on every App render as well.
+
+Measured in the baseline crash run, during drag/zoom:
+- `alignV2ToCandles` ran 3–6×/s (~100 ms each, 2652 candles) and `snapMarkers` 3–6×/s (~50 ms each), while `candles` itself changed 4 times in the whole run;
+- that is **500–950 ms of main-thread work per second**;
+- each call builds thousands of fresh `Intl.DateTimeFormat`s (`partsForZone` constructs one per timestamp).
+
+The Current pane gets state arrays whose identity is stable, so its memos don't re-run.
+
+A minimal page building 13 M `Intl.DateTimeFormat`s in 300 s did not crash. The CHECK needs the combination with live interaction and rendering; the exact Chrome-side assertion stays unidentified (no public macOS symbols).
+
+**Fix candidates, gated in a debug build of `f302498`:**
+
+| candidate | change | result |
+|---|---|---|
+| `fix-memo` | App memoizes the payloads array: `useMemo(() => flowV2Payloads.map((p) => p.payload), [flowV2Payloads])` | **clean 2/2** (2626 / 2689 interactions) |
+| `fix-fmt` | one cached `Intl.DateTimeFormat` inside the v2 file | clean 1/1 (2017 interactions) |
+
+**Chosen fix: `fix-memo`.**
+- It removes the redundant recomputation at its source with one memo in `App.jsx`.
+- It doesn't touch Current or any shared helper (L2).
+- v2's output is identical: same data, computed once per real change.
+
+`fix-fmt` stays a possible follow-up for performance, not needed for the crash.
+
+## Implementation order
+
+1. `App.jsx`: memoize the Flow v2 payloads passed to the pane.
+2. Regression spec `tests/e2e/cr-ch.spec.js`: with Flow v2 shown, interaction that re-renders App leaves the pane's `payloads` prop and its `aligned` / `snapped` memos referentially unchanged.
+3. Smoke: the new spec fails on `origin/main` and passes on the branch. Existing suites cr-bv, cr-cd and cr-cd-a5 pass with byte-identical screenshots. Headed repro on the branch build: clean 10 min ×2 (and the unfixed `origin/main` build still crashes).
