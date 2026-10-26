@@ -83,3 +83,64 @@ No "deviates".
 | Swing-12 legs | 1,226 legs inside the domain. Length (start → end bar) p10 **2 min**, median 13, p90 52, max 278. Legs shorter than 4 min cannot meet C3 (≥ 5 snapshot points), so they drop out of the ratio sample; the count is reported in Step 2. The band table (C6) reaches 120 min; longer legs use the 120-min band (clamped, as frozen). |
 | 2026-10-26 (Part 2) | 390 0DTE PM snapshots 06:30 → 12:59 PT (91 in 07:20–08:50), quote lag median 10 s; `ironbeam_es_1m_bars` 390 RTH bars (`source` ironbeam), `ironbeam_es_flow_1s` on 390 RTH minutes. Part 2 can run. |
 | Sticky-strike parity | Moved to Step 2: it needs the C9 function, which lands in Step 1. No ruling or choice is affected. |
+
+---
+
+## Part 1 result (run as frozen, C1–C9) — `scripts/cr_ck_stickiness.py` → `scripts/logs/cr_ck/results.json`
+
+107 sessions, 2026-01-02 → 06-05 (y26 only; R-a, 2025 and the holdout were not loaded). Domain 07:00–12:45 PT. Vol pts. 95 % CIs from a session bootstrap (2,000 draws). Descriptive: no outcomes, no verdicts.
+
+### Noise band (C6) — SD of the endpoint Δ put skew, vol pts (shipped as `skew_expected.NOISE_BAND_PP`)
+
+| Start bucket | 5 min | 15 min | 30 min | 60 min | 120 min |
+|---|---|---|---|---|---|
+| 07:00 | 0.73 | 1.13 | 1.26 | 1.07 | 1.02 |
+| 07:30 | 0.89 | 1.26 | 1.19 | 1.21 | 1.39 |
+| 08:00 | 0.65 | 0.85 | 0.88 | 0.88 | 1.29 |
+| 08:30 | 0.57 | 0.82 | 0.82 | 1.18 | 1.06 |
+| 09:00 | 0.58 | 0.79 | 1.11 | 1.17 | 1.27 |
+| 09:30 | 0.91 | 1.44 | 1.36 | 1.33 | 2.59 |
+| 10:00 | 0.91 | 1.06 | 1.19 | 1.41 | 3.02 |
+| 10:30 | 0.79 | 0.94 | 1.31 | 2.53 | 4.48 |
+| 11:00 | 1.43 | 2.56 | 2.50 | 3.02 | 4.60 |
+| 11:30 | 2.97 | 3.05 | 3.69 | 5.23 | 5.23* |
+| 12:00 | 3.14 | 5.13 | 5.03 | 1.47* | 1.47* |
+| 12:30 | 5.34 | 8.83 | 8.83* | 8.83* | 8.83* |
+
+\* carried from the bucket's longest measurable length (C6 clamp). **The 12:00 row drops to 1.47 at 45 min** (the only 45-min window from 12:00 is 12:00 → 12:45, which skips the noisier 12:30–12:45 intermediate endpoints); it is measured, not tuned, but makes the 12:00 band for ≥ 45-min windows unreliable. After 11:00 the band is 2–9 vol pts, so almost nothing reads "beyond noise" there.
+
+- A14's "~0.6 vol pts per 5 min" holds at 5 min on 08:00–09:30. **For the 15–30 min windows and legs it is 0.8–1.4 vol pts on 07:00–10:30**, and the band does not grow like √L (CR-CJ's VR < 1).
+- The trend Δ (C3) has about the same SD as the endpoint Δ at these lengths (`noise_band_cells.sd_trend`): the OLS trend does not shrink the band, because most of the spread is genuine wandering over 15–60 min, not 1-min fit noise.
+
+### Sticky-strike parity (C4, moved from Step 0)
+
+On the 2,134 random 15-min windows: CR-CK's sticky-strike expected Δ has implied β **−5.54** vol pts per 1 % ES; the Skew module's version (end-snapshot ATM and T) **−6.93** with intercept −0.14 (the clock), correlation 0.67. CR-CJ's pooled figure for the module was −5.7. Same mechanics, same order of magnitude; CR-CK's has no clock term by construction.
+
+### The ratio
+
+| Sample | n | ratio defined | move too small | insufficient | median [95 % CI] | p10 | p25 | p75 | p90 | < 0 | 0–1 | > 1 | beyond noise (ratio defined) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Swing-12 legs | 1,231 | 764 | 22.7 % | 15.3 % | **−0.12** [−0.19, −0.02] | −2.04 | −0.78 | 0.49 | 1.53 | 55.2 % [50.5, 59.6] | 28.8 % | 16.0 % [13.2, 19.0] | 23.8 % [20.5, 27.1] |
+| Random 15 min | 2,134 | 379 | 82.1 % | 0.1 % | **−0.03** [−0.27, +0.11] | −2.64 | −0.96 | 0.80 | 2.56 | 50.4 % [44.1, 57.1] | 27.4 % | 22.2 % [17.0, 27.4] | 30.1 % [23.8, 36.3] |
+| Random 30 min | 2,135 | 569 | 73.2 % | 0.1 % | **+0.02** [−0.09, +0.15] | −1.79 | −0.70 | 0.58 | 1.71 | 49.0 % [44.0, 54.0] | 33.4 % | 17.6 % [14.0, 21.2] | 25.1 % [20.3, 30.4] |
+
+"Insufficient" on legs = legs shorter than ~4 min (C3 needs ≥ 5 snapshots). Median |actual| 0.63–0.80 vol pts; median |expected| 0.87–1.13.
+
+**By direction (ES move over the window):**
+
+| Sample | Up: median | Up: < 0 / > 1 | Down: median | Down: < 0 / > 1 |
+|---|---|---|---|---|
+| Legs | +0.09 | 46.9 % / 19.5 % | −0.21 | 63.7 % / 12.4 % |
+| Random 15 | +0.30 | 39.1 % / 26.6 % | −0.35 | 62.0 % / 17.6 % |
+| Random 30 | +0.26 | 39.1 % / 21.5 % | −0.15 | 59.3 % / 13.6 % |
+
+**By hour of start (legs, median ratio / share < 0):** 07:00 −0.19 / 58 % · 08:00 −0.22 / 62 % · 09:00 −0.08 / 54 % · 10:00 +0.06 / 46 % · 11:00 −0.13 / 57 % · 12:00 +0.91 / 33 % (n 30). Random windows by hour are in `results.json`; no hour stands apart except 12:00 (n 30, band 3–9 vol pts).
+
+**Readout (post-hoc, descriptive):** median actual Δ put skew by ES-move bin. On moves ≥ 0.15 % *either way*, put skew's median change is slightly **negative** (down moves −0.24 to −0.38 vol pts, up moves −0.13 to −0.15 on random windows; legs +0.09 up). Sticky strike says + on declines and − on rallies. So on declines the typical window already has ratio < 0 (put skew fell while price fell, A6's "bullish" pattern) — about 60 % of the time. That asymmetry is the normal state in 2026 train, not a signal.
+
+### What a normal ratio looks like (plain English)
+
+- The middle half of ordinary windows runs from about **−0.8 to +0.6**, centred on **≈ 0**. A reading in that range is the market's normal "smile re-forms around the new price".
+- About **half of all readings are negative** and **1 in 6 is above 1**. So a negative ratio by itself is not unusual, and neither is > 1.
+- Only about **1 in 4** ratio-defined windows has a skew change bigger than the noise band. A ratio is worth reading only when its "beyond noise" flag is set.
+- Declines skew negative: on a sell-off, put skew *falling* is the more common outcome (≈ 60 %).

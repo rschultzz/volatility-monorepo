@@ -157,10 +157,25 @@ EPS_T = 1e-4                          # T floor, years (as the Skew module)
 TREND_MIN_COVERAGE = 0.8              # CR-CK C3: >= 80 % of the window's minutes carry a snapshot
 TREND_MIN_POINTS = 5
 
-# CR-CK C6: SD of the endpoint change in put skew (vol pts) by window length (min) and 30-min start bucket, 2026 train.
-# Filled from the Part 1 run; None means the band is not available and the noise flag is None.
+# CR-CK C6: SD of the endpoint change in put skew (vol pts) by window length (min) and 30-min start bucket (index from
+# 06:30; 1 = 07:00 .. 12 = 12:30), 2026 train (01-02 .. 06-05), windows inside 07:00-12:45 PT on a 5-min start grid.
+# Lengths a bucket cannot reach before 12:45 (or with < 30 windows) carry its longest measured value. The 06:30 bucket
+# is not measured (no flag). Source: scripts/cr_ck_stickiness.py -> scripts/logs/cr_ck/results.json.
 NOISE_BAND_LENGTHS: tuple = (5, 10, 15, 20, 30, 45, 60, 90, 120)
-NOISE_BAND_PP: Optional[Mapping[int, tuple]] = None
+NOISE_BAND_PP: Optional[Mapping[int, tuple]] = {
+     1: (0.727, 0.904, 1.127, 1.255, 1.259, 1.051, 1.072, 1.047, 1.015),   # 07:00
+     2: (0.889, 1.220, 1.255, 1.174, 1.186, 1.206, 1.213, 1.198, 1.394),   # 07:30
+     3: (0.654, 0.804, 0.853, 0.925, 0.876, 0.903, 0.882, 1.207, 1.289),   # 08:00
+     4: (0.572, 0.742, 0.823, 0.822, 0.816, 0.888, 1.180, 1.226, 1.060),   # 08:30
+     5: (0.583, 0.699, 0.793, 0.985, 1.109, 1.197, 1.170, 1.051, 1.270),   # 09:00
+     6: (0.908, 1.105, 1.436, 1.414, 1.361, 1.343, 1.334, 1.528, 2.590),   # 09:30
+     7: (0.911, 1.199, 1.059, 1.110, 1.194, 1.253, 1.408, 2.579, 3.022),   # 10:00
+     8: (0.787, 0.915, 0.940, 1.177, 1.312, 2.627, 2.534, 2.919, 4.484),   # 10:30
+     9: (1.433, 1.549, 2.559, 2.480, 2.502, 2.253, 3.016, 4.598, 4.598),   # 11:00
+    10: (2.973, 2.576, 3.045, 3.065, 3.691, 4.707, 5.229, 5.229, 5.229),   # 11:30
+    11: (3.140, 4.764, 5.131, 5.057, 5.029, 1.467, 1.467, 1.467, 1.467),   # 12:00
+    12: (5.342, 6.545, 8.831, 8.831, 8.831, 8.831, 8.831, 8.831, 8.831),   # 12:30
+}
 
 
 def years_to_close_0dte(t: TimeLike) -> float:
