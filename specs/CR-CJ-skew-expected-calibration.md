@@ -165,3 +165,18 @@ Variance ratios far below 1 (07:00–11:00: VR(5) 0.29–0.44, VR(15) 0.16–0.3
 | **2026 H1 (01-02 → 03-19, 53) → H2 (03-20 → 06-05, 54)** | 0.530 [0.487, 0.575] / 0.790 / 0.479 | 0.561 [0.495, 0.621] / 0.787 / 0.462 |
 | R-a → 2026 (readout) | 0.546 / 0.787 / 0.499 | 0.620 / 0.804 / 0.529 |
 | 2026 → R-a (readout) | 0.594 / 0.745 / 0.468 | 0.608 / 0.750 / 0.423 |
+
+---
+
+## Amendment A2 (Code, after the frozen run, before any A2 fit) — median fit, joint drift
+
+**Post-hoc: chosen after seeing the C8 failure. Disclosed as such (B2); needs Ryan's OK before the curve decides a test.** K5's OLS results above stand as the answer to K5. A2 only adds an estimator aimed at K7's target, a sign-balanced residual.
+
+| # | Choice | Value |
+|---|---|---|
+| A2.1 | Model | Δ put skew = Σ_b θ_b · minutes in bucket b + β · r (**single**), or + β_up · r⁺ + β_dn · r⁻ (**up/down**). Drift fitted **jointly** with β on the same windows (replaces C9's 1-min θ, which cannot carry an asymmetric slope). |
+| A2.2 | Estimator | **LAD** (median regression, scipy `linprog` HiGHS). OLS with the same joint model is a readout. β CIs: session-cluster bootstrap, 200 draws, seed 20261026. |
+| A2.3 | Fit sample | Swing-12 legs (C10's outcome). Readout: LAD on the 15-min grid windows. |
+| A2.4 | Recommendation rule | The simpler LAD-on-legs variant (single before up/down) whose **K8 primary out-of-sample** balance (fit 2026 H1, test H2) is inside 45–55 % pooled **and** per direction, on **both** random windows and legs. If neither passes, no fitted curve is recommended, and raw put-skew change is the reading until a better model exists. In-sample bucket cells and the cross-era readouts are reported, not gating. |
+| A2.5 | Published parameters | The recommended variant fitted on all 293 sessions, plus the same fitted on 2026 only (for a later R-a confirmation, B4 note). β and θ outside 07:00–12:45 are copied from the nearest domain bucket and flagged out of domain. |
+| A2.6 | ATM | The same A2.1–A2.3 for Δ ATM vol50, reported. The shared function carries the ATM curve with the same variant choice. |
