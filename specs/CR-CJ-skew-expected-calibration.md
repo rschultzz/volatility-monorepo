@@ -79,3 +79,21 @@ For a previous snapshot `prev` and the current one `now`, on the selected expiry
 | B5 | honoured | Databento outright minute bars (C3). |
 | B6, B7, B8 | n/a | No exits, no placebos, no labels. |
 | C1, C2 | honoured | Not wired into any view (K9). |
+
+---
+
+## Step 0 findings (2026-10-26, `scripts/cr_cj_step0.py` → `scripts/logs/cr_cj/step0.json`, no fits)
+
+| Q | Finding |
+|---|---|
+| Coverage (K2) | **R-a: 186 / 186** sessions (2024-04-03 → 12-31, early closes 07-03, 11-29, 12-24 excluded) and **2026: 107 / 107** sessions (01-02 → 06-05) have 0DTE PM skew and Databento ES on ≥ 90 % of minutes. Median 387 / 390 skew minutes and 390 ES minutes per session. **2025 is not needed** and was not queried. |
+| Third Fridays | The PM 0DTE row exists on all 14 third Fridays in the sample (379–390 minutes), so no session is lost to the AM/PM key collision. |
+| ES symbol | Most-volume outright per session: M24, U24, Z24, H25 (from 2024-12-16), H26, M26 (from 2026-03-16). 35 sessions have two symbols; the kept one carries ≥ 59.3 % of the volume. |
+| ES cross-check | Databento minute close vs `ironbeam_es_1m_bars`, 10 random 2026 sessions: 9 sessions equal to the tick on 97.7–100 % of minutes; **2026-03-16 is 50.5 pts off on every minute**, the roll Monday where the most-volume contract (M26) differs from Ironbeam's (H26). Databento (B5) is kept. |
+| **Alignment (C4)** | **C4 is wrong for R-a.** `quote_date` lags the snapshot label by median **129 s** in R-a (p5 79, p95 179; 220 / 72,709 rows > 5 min) vs **10 s** in 2026 (p5 0, p95 20; field-conventions measured 2026 only). 1-min Δ `stock_price` vs Δ ES correlation by lag, label pairing: R-a peaks at **−2 min (0.556)**, 0.004 at lag 0; 2026 peaks at 0 (0.844). With quote-time pairing (A1): R-a **0.736 at lag 0** (next 0.160 at +1), 2026 unchanged 0.844. |
+| Samples (fit domain, A1) | R-a: 12,731 / 4,238 / 2,027 windows of 5 / 15 / 30 min; 1,027 swing-12 legs (of 1,399). 2026: 7,364 / 2,457 / 1,174 windows; 1,231 legs (of 1,606). |
+| Implementation note | statsmodels is not installed in the run interpreter; the session-clustered OLS is the same CR1 sandwich written in numpy (`ols_cl` in `scripts/cr_cj_calibrate.py`): V = G/(G−1) · (N−1)/(N−K) · (X′X)⁻¹ (Σ_g X_g′u_g u_g′X_g) (X′X)⁻¹. |
+
+## Amendment A1 (Code, Step 0, before any fit) — align on quote time
+
+C4 is replaced: a snapshot pairs with the ES close at its **quote time**, `quote_date` rounded to the nearest minute Q (the close of the bar starting Q − 1). Snapshots whose `quote_date` is > 5 min from the label are dropped (R-a 220 rows, 2026 none). Time-of-day buckets, the fit domain and the 0DTE clock stay on the snapshot label (in R-a the quotes are ≈ 2 min older than the bucket says; immaterial at 30-min buckets). The current-curve comparison (C11a) uses the module's own `stock_price`, which is consistent with the quotes in both periods. No standing ruling is affected. A field-conventions row is added for `quote_date` in R-a.
