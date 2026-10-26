@@ -173,3 +173,31 @@ ES from `ironbeam_es_1m_bars` at quote time; bar close = flow close on 389 / 390
   - Off: the Overview panel PNG on this branch is **byte-identical** to `origin/main` `4f84484` (and to a second branch capture), and no stickiness request is made.
   - On: three rows with the Part 2 numbers; every computed colour in the rows is in {`#94a3b8`, `#60a5fa`, `#64748b`, `#e2e8f0` (inherited panel text)}; the smile's height is unchanged and its overlap with the table is no larger than with the setting off (the Plotly legend already overlaps the table header on main); the setting survives a reload.
   - Screenshots: `specs/assets/cr-ck/overview-off-{main,branch,branch2}.png`, `overview-on-branch.png`.
+
+---
+
+## Wrap (2026-10-26)
+
+**Deliverables.**
+- `packages/shared/skew_expected.py`: `sticky_strike_put_skew_change_pp`, `trend_change_pp`, `noise_band_pp`, `stickiness_read`, and `NOISE_BAND_PP` (measured, Part 1). 36 unit tests, 18 of them new. Parity with the Part 1 run: 0 / 5,306 noise-flag mismatches.
+- Scripts:
+  - `scripts/cr_ck_step0.py`;
+  - `scripts/cr_ck_stickiness.py` (Part 1);
+  - `scripts/cr_ck_live_7731.py` (Part 2);
+  - `scripts/cr_ck_smoke_backend.py` (Playwright).
+- Route `/api/ironbeam/skew-stickiness`, Overview "Stickiness" setting (off by default), Playwright `cr-ck.spec.js` 2 / 2.
+
+**Plain English for Ryan.**
+- **A normal ratio is about 0, and it is noisy.** On 2026 train windows, half the readings fall between about −0.8 and +0.6, and about half are negative. One in six is above 1. Only about one in four has a skew change bigger than the noise band, so read the ratio only when the panel says "beyond noise".
+- **Declines are lopsided.** When ES falls, put skew more often *falls* too (about 60 % of windows), the opposite of the sticky-strike mechanics. So "put skew falling on a sell-off" (A6's bullish divergence) is the usual state in 2026, not a signal by itself.
+- **The noise band is wider than A14's ~0.6 vol pts.** That figure holds for a 5-minute change. Over the 15–30-minute windows and legs that matter it is about 0.8–1.3 vol pts on 07:00–10:30, and 2–9 vol pts after 11:00.
+- **7731 on 2026-10-26.** On the approach (07:30 → 07:50, or the swing-12 leg 07:34 → 07:53 / 08:03), ES rose 17–30 pts.
+  - Put skew fell about 0.4–0.7 vol pts, against a sticky-strike expectation of −1.2 to −2.8, so the ratio was **+0.2 to +0.4**: ordinary re-forming, inside the noise band.
+  - Put skew did **not** pick up into the level.
+  - In the range (07:50 → 08:48), ES was flat (+1.25 pts), so there is no ratio ("move too small"). Put skew drifted up about 0.25 vol pts, also inside noise.
+  - On this day skew gave no warning. Whatever made the short at the top of the range, it came from the range itself (A17, A19), not from skew.
+
+**Deferred / follow-ups.**
+- A14's "~0.6 vol pts per 5 min" could be restated as the length-dependent band. Ryan's call; Code does not edit standing rulings.
+- Whether a beyond-noise ratio < 0 on the approach precedes anything is an outcome question. It needs a pre-registered test on train (A15 stop-free direction first); this CR read no outcomes.
+- The 12:00 band row is unreliable for ≥ 45-min windows (C6 clamp artifact), and the 06:30 bucket has no band.
