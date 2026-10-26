@@ -682,3 +682,224 @@ def holm(ps):
 TR, FUN_R = trades_from(R[R["D"] > 0].copy())
 TP, FUN_P = trades_from(P[P["D"] > 0].copy())
 INFO["trade_funnel"] = dict(real=FUN_R, placebo=FUN_P)
+
+
+# ================================================================================================ A2
+from packages.shared import flow_features as ff  # noqa: E402
+from packages.shared.surface_compare import k_for_abs_delta  # noqa: E402
+
+SWINGS, SWING_PRIMARY = (8.0, 12.0, 16.0), 12.0
+ABSORB_MIN, FREE_MAX, SNAP_MAX_AGE = 1.5, 1.0, 300
+RACE_PTS = 20.0
+
+
+def rth_minutes(d):
+    """C14: completed Databento minutes 06:30 .. 12:59 PT (arrays of length NB): h, l, c, vol, delta."""
+    f = FLOW[d]
+    a, b = rth_slice(d)
+    F = {k: f[k][a:b] for k in ("t", "o", "h", "l", "c", "buy", "sell")}
+    F["vol"] = F["buy"] + F["sell"]
+    t0 = ep(pt(d, 6, 30))
+    m = ff.complete_minutes(ff.minutes_from_seconds(F)[list(ff.COLUMNS)], t0, t0 + 60 * NB)
+    return dict(h=m["h"].to_numpy(float), l=m["l"].to_numpy(float), c=m["c"].to_numpy(float),
+                vol=m["vol"].to_numpy(float), delta=(m["buy"] - m["sell"]).to_numpy(float), t0=t0)
+
+
+MIN = {d: rth_minutes(d) for d in USABLE}
+
+
+def approach_leg(d, k, side, swing):
+    """C15/C16. Returns dict (dir, start_i, start_px, ext, pts, push, cpp, prev_cpp, ratio) or a reason string."""
+    m = MIN[d]
+    if k < 1:
+        return "touch in first bar"
+    legs = ff.leg_effort(ff.swing_legs(m["h"][:k + 1], m["l"][:k + 1], swing), m["vol"][:k + 1], m["delta"][:k + 1])
+    if not legs:
+        return "no confirmed leg"
+    last = legs[-1]
+    dirn, si, spx = -last["dir"], last["end_i"], float(last["end_px"])
+    if dirn != -side:
+        return "in-progress leg against the approach"
+    seg = slice(si + 1, k + 1)
+    if si >= k:
+        return "leg has no bars"
+    ext = float(m["h"][seg].max()) if dirn == 1 else float(m["l"][seg].min())
+    pts_ = abs(ext - spx)
+    if pts_ <= 0:
+        return "zero-point leg"
+    vol, dl = float(m["vol"][seg].sum()), float(m["delta"][seg].sum())
+    cpp = vol / pts_
+    prev = [lg for lg in legs if lg["dir"] == dirn]
+    pc = prev[-1]["cpp"] if prev else None
+    ratio = cpp / pc if (pc is not None and pc > 0) else np.nan
+    return dict(dir=dirn, start_i=int(si), start_px=spx, ext=ext, pts=pts_, push=dl * dirn, cpp=cpp,
+                prev_cpp=pc if pc is not None else np.nan, ratio=ratio, mins=int(k - si))
+
+
+def effort_class(ratio):
+    if not np.isfinite(ratio):
+        return "neutral"
+    return "ABSORBED" if ratio >= ABSORB_MIN else ("FREE" if ratio <= FREE_MAX else "neutral")
+
+
+# ------------------------------------------------------------------------------- C17–C20 skew
+import importlib.util as _ilu  # noqa: E402
+
+_spec = _ilu.spec_from_file_location("skew_callbacks", REPO_ROOT / "apps" / "web" / "modules" / "Skew" / "callbacks.py")
+SK = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(SK)
+assert SK.BETA_VOLPTS_PER_1PCT == 4.5 and SK.THETA_ATM_PP_PER_SQRT_YEAR == -638 and SK.BETA_MAX_SHIFT_PP == 6.0
+
+
+def skew_expiry(d):
+    r = q("""SELECT DISTINCT expir_date, expiry_tod FROM orats_monies_minute
+             WHERE ticker = 'SPX' AND trade_date = %s AND expir_date >= %s ORDER BY expir_date LIMIT 6""",
+          (d.isoformat(), d.isoformat()))
+    pm = r[r["expiry_tod"].astype(str).str.lower() == "pm"]["expir_date"].tolist()
+    if not pm:
+        return None, None
+    return pm[0], bool(pm[0] != d.isoformat())
+
+
+def skew_rows(d, exp_iso):
+    r = q("""SELECT * FROM orats_monies_minute WHERE ticker = 'SPX' AND trade_date = %s AND expir_date = %s
+             AND snapshot_pt >= %s AND snapshot_pt < %s ORDER BY snapshot_pt""",
+          (d.isoformat(), exp_iso, f"{d.isoformat()} 06:30:00", f"{d.isoformat()} 13:00:00"))
+    r["snap_pt"] = pd.to_datetime(r["snapshot_pt"])
+    r["snap_ep"] = [ep(x.to_pydatetime().replace(tzinfo=PT)) for x in r["snap_pt"]]
+    return r.reset_index(drop=True)
+
+
+SKEXP, SKROWS = {}, {}
+for _d in USABLE:
+    SKEXP[_d] = skew_expiry(_d)
+    SKROWS[_d] = skew_rows(_d, SKEXP[_d][0]) if SKEXP[_d][0] else pd.DataFrame()
+
+
+def snap_at(d, bar_i):
+    """C17: latest snapshot <= the bar's close; None if missing or > 5 min older."""
+    r = SKROWS[d]
+    if r.empty:
+        return None
+    x = MIN[d]["t0"] + 60 * (bar_i + 1)
+    j = np.searchsorted(r["snap_ep"].to_numpy(), x, side="right") - 1
+    if j < 0 or x - int(r["snap_ep"].iloc[j]) > SNAP_MAX_AGE:
+        return None
+    return r.iloc[j]
+
+
+def residual_put_skew(prev_row, now_row, exp_iso):
+    """C18: the callbacks.py Expected-SS block, prev = leg start, now = touch. Returns put_skew_now − exp_put_skew (pp)."""
+    stock_now, prev_stock = float(now_row["stock_price"]), float(prev_row["stock_price"])
+    atm_now, _, put_now = SK._skews_from_row(now_row)
+    T_now, prev_T = SK._T_from_row_snapshot(now_row, exp_iso), SK._T_from_row_snapshot(prev_row, exp_iso)
+    k_prev, s_prev = SK._prev_smile_interp(prev_row, prev_T)
+    k_shift = np.log(stock_now / prev_stock) if (prev_stock and stock_now) else 0.0
+    exp_atm_shape = SK._interp_linear_extrap(k_shift, k_prev, s_prev)
+    ret_frac = (stock_now - prev_stock) / prev_stock
+    level_shift_pp = max(-SK.BETA_MAX_SHIFT_PP, min(SK.BETA_MAX_SHIFT_PP, (-ret_frac) * 100.0 * SK.BETA_VOLPTS_PER_1PCT))
+    droot = max(0.0, np.sqrt(max(prev_T, SK.EPS_T)) - np.sqrt(max(T_now, SK.EPS_T)))
+    atm_exp = exp_atm_shape + level_shift_pp / 100.0 + SK.THETA_ATM_PP_PER_SQRT_YEAR * droot / 100.0
+    k_p25_now = k_for_abs_delta(0.25, is_put=True, sigma=atm_now, T=T_now)
+    exp_p25 = SK._interp_linear_extrap(k_p25_now + k_shift, k_prev, s_prev) + (atm_exp - exp_atm_shape)
+    return float(put_now - (exp_p25 - atm_exp) * 100.0)
+
+
+def skew_read(d, start_i, k, dirn):
+    """C19: (residual change, raw change, read) with read in {divergent, confirming, none}."""
+    a, b = snap_at(d, start_i), snap_at(d, k)
+    if a is None or b is None:
+        return np.nan, np.nan, "none", "missing snapshot"
+    raw = float((b["vol75"] - b["vol50"]) * 100.0 - (a["vol75"] - a["vol50"]) * 100.0)
+    try:
+        res = residual_put_skew(a, b, SKEXP[d][0])
+    except Exception as exc:  # module block failure -> missing (C18)
+        return np.nan, raw, "none", f"module: {type(exc).__name__}"
+    if not np.isfinite(res) or res == 0:
+        return res, raw, "none", "zero or non-finite"
+    return res, raw, ("divergent" if np.sign(res) == dirn else "confirming"), "ok"
+
+
+def raw_read(raw, dirn):
+    if not np.isfinite(raw) or raw == 0:
+        return "none"
+    return "divergent" if np.sign(raw) == dirn else "confirming"
+
+
+def call(push, eff, sk):
+    if push > 0 and eff == "ABSORBED" and sk == "divergent":
+        return "FADE"
+    if push > 0 and eff == "FREE" and sk == "confirming":
+        return "BREAK"
+    return "NO TRADE"
+
+
+def call_delta(push, eff):
+    return "FADE" if (push > 0 and eff == "ABSORBED") else ("BREAK" if (push > 0 and eff == "FREE") else "NO TRADE")
+
+
+def call_skew(sk):
+    return {"divergent": "FADE", "confirming": "BREAK"}.get(sk, "NO TRADE")
+
+
+def a2_reads(E):
+    """Touch events -> one row per event with entry (C14) and A2 reads at every swing size."""
+    rows = []
+    for x in E.itertuples():
+        m = MIN[x.d]
+        k = int((x.t - m["t0"]) // 60)
+        row = dict(d=x.d, sidx=x.sidx, cell=x.cell, first=bool(x.first), L=x.L, side=int(x.side), t=int(x.t), k=k,
+                   entry=float(m["c"][k]))
+        for sw in SWINGS:
+            tag = f"s{int(sw)}"
+            lg = approach_leg(x.d, k, x.side, sw)
+            if isinstance(lg, str):
+                row.update({f"{tag}_why": lg, f"{tag}_call": "NO TRADE", f"{tag}_call_delta": "NO TRADE",
+                            f"{tag}_call_skew": "NO TRADE", f"{tag}_call_raw": "NO TRADE"})
+                continue
+            res, raw, sk, why = skew_read(x.d, lg["start_i"], k, lg["dir"])
+            eff = effort_class(lg["ratio"])
+            row.update({f"{tag}_why": "ok", f"{tag}_push": lg["push"], f"{tag}_ratio": lg["ratio"],
+                        f"{tag}_pts": lg["pts"], f"{tag}_mins": lg["mins"], f"{tag}_eff": eff,
+                        f"{tag}_res": res, f"{tag}_raw": raw, f"{tag}_skew": sk, f"{tag}_skew_why": why,
+                        f"{tag}_call": call(lg["push"], eff, sk), f"{tag}_call_delta": call_delta(lg["push"], eff),
+                        f"{tag}_call_skew": call_skew(sk),
+                        f"{tag}_call_raw": call(lg["push"], eff, raw_read(raw, lg["dir"]))})
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+# ------------------------------------------------------------------------------- C24 any-price population
+def swing_levels(d, swing=SWING_PRIMARY):
+    """Confirmed swing extremes in RTH with the epoch second they become known (confirm bar close)."""
+    m = MIN[d]
+    legs = ff.swing_legs(m["h"], m["l"], swing)
+    out = {}
+    for lg in legs:
+        px, known = float(lg["end_px"]), m["t0"] + 60 * (lg["confirm_i"] + 1)
+        if px not in out or known < out[px]:
+            out[px] = known
+    return [dict(L=px, mag=0.0, net=0.0, t_known=tk) for px, tk in out.items()]
+
+
+def events_from(d, levels, tag):
+    """events_for (CR-CE, unchanged rule) with each level armed only from its t_known."""
+    out = []
+    for lv in levels:
+        for ev in events_for(d, [lv], tag):
+            if ev["t"] > lv["t_known"]:
+                out.append(ev)
+    return out
+
+
+def build_anyprice():
+    rows = []
+    for d in USABLE:
+        rows += events_from(d, swing_levels(d), "anyprice")
+    E = pd.DataFrame(rows)
+    n0 = len(E)
+    E = E[(E["pre_gap"] <= GAP_MAX) & (E["side"] != 0)].copy()
+    E["first"] = E.groupby(["d", "L"])["t"].transform("min") == E["t"]   # first touch after the level is known
+    E["cell"] = np.where(E["side"] == 1, "above", "below")
+    E["sidx"] = [USABLE.index(d) for d in E["d"]]
+    return E[E["D"] > 0].copy(), dict(touches=n0, kept=int(len(E)), d_gt0=int((E["D"] > 0).sum()))

@@ -213,3 +213,96 @@ Switching to Ironbeam buys an exact fixture match, at the cost of 92 missing min
 | C24 | **Any-price readout population (A2.6)** | Per session, every swing-12 extreme confirmed in RTH (the ends of `swing_legs` legs, plus the in-progress leg's start) becomes a level from its confirm bar's close. Touches follow the CR-BW/CR-CE rule unchanged (`events_for`: re-arm at 0.10·IM, then a 1-s bar containing the level, D > 0, pre-touch gap ≤ 15 s), counted only after the confirm time. Cells: from below / from above. The same A2 reads and calls apply. A readout, with no gate. |
 | C25 | **R-a availability (A2.8)** | Counts only, no prices. On 2024-04-03 → 2024-12-31 NYSE sessions: the number with `es_flow_1s_databento` RTH rows, and the number with 0DTE-PM (or fallback) `orats_monies_minute` RTH snapshots (≥ 300 distinct minutes). |
 | C26 | **Run order** | One committed run script. First the A2 primary, with all A2 readouts (swing 8 and 16, delta-only, skew-only, raw skew, any-price, the 4 CR-CE cells, first touch only). Then the demoted L2 grid with A1 (verdict wording kept as written, labelled as a readout). Every statistic is written to JSON before anything is printed. |
+
+---
+
+## Step 0 for A2 (2026-10-26) — no outcomes
+
+Script: `scripts/cr_ci_step0_a2.py`. The A2 machinery is in `scripts/cr_ci_lib.py`. Read-only. The 803 touches are asserted. No price after a touch bar's close enters any statistic. Logs and reads are in `scripts/logs/cr_ci/step0_a2.*` (git-ignored).
+
+**Stop for Ryan's review (A2.8).**
+
+### Entry (A2.0)
+
+The touch-bar close sits on the fade side of the level by a median of +0.25 pts (p5 −3.25, p95 +4.0). Every one of the 803 touches has an entry.
+
+### Approach legs and effort (A2.1, A2.2)
+
+| | swing 8 | **swing 12** | swing 16 |
+|---|---|---|---|
+| approach leg defined | 696 | **569** | 428 |
+| no leg: in-progress leg against the approach | 61 | 139 | 206 |
+| no leg: no confirmed leg yet | 39 | 88 | 162 |
+| no leg: touch in the first bar | 7 | 7 | 7 |
+| push > 0 | 677 | 552 | 413 |
+| leg pts, p25 / 50 / 75 | 11.8 / 15.5 / 21.5 | 15.5 / 20.3 / 28.8 | 20.3 / 25.3 / 34.5 |
+| leg minutes, p25 / 50 / 75 | 5 / 9 / 18 | 7 / 15 / 33 | 11 / 25 / 59 |
+| ratio defined | 654 | 495 | 345 |
+| ratio, p5 / 25 / 50 / 75 / 95 | 0.32 / 0.63 / 0.99 / 1.63 / 3.63 | 0.29 / 0.62 / 1.05 / 1.77 / 4.24 | 0.27 / 0.58 / 1.03 / 1.87 / 5.20 |
+| ABSORBED / FREE / neutral | 185 / 330 / 181 | **149 / 238 / 182** | 113 / 169 / 146 |
+
+### Skew (A2.3)
+
+**Coverage:**
+- A snapshot within 5 min exists at 100 % of touch bars and leg starts.
+- Every session has a 0DTE PM row (no fallback expiry needed).
+- 389–390 RTH snapshots per session.
+
+**C20, `snap_shot_date`:**
+- It is ISO text in UTC ("…Z"), equal to `snapshot_pt` + the PT→UTC offset on 33 490 of 33 490 rows. The module's T is built on the right clock.
+- `quote_date` lags the snapshot label by 0–20 s (median 10 s). A snapshot never post-dates its label.
+- Added to [[field-conventions]].
+
+**Swing-12 reads:**
+- Divergent 423, confirming 146.
+- Residual change in pp, p5 / 25 / 50 / 75 / 95: −5.41 / −1.15 / +0.21 / +1.28 / +3.49.
+- Raw 25Δ − ATM change: −5.09 / −0.84 / −0.04 / +0.69 / +3.11.
+- Residual and raw agree in sign on 64 %; correlation 0.74.
+
+> [!warning] Finding for review: "divergent" is the residual's default state
+> At swing 12 the residual reads divergent on **74 %** of approach legs, against **43 %** for raw skew.
+> - By leg-size quartile the residual's divergent share is 0.82 / 0.79 / 0.71 / 0.65, and raw's 0.46 / 0.55 / 0.37 / 0.34.
+> - Down legs 0.71, up legs 0.77.
+> - Signed residual vs leg pts: Spearman 0.01.
+>
+> So the expected curve (BETA 4.5, THETA −638; uncalibrated, see [[skew-expected-curve-calibration]]) predicts more put-skew movement *with* price than actually happens, by a roughly constant amount. "Residual divergent" mostly means "the model over-predicted", whatever the leg size.
+>
+> Consequences:
+> - It does not bias A2.7: the rule is compared with always-fade and always-break on the same called touches.
+> - It does tilt the calls toward FADE, about 2 : 1.
+> - It means the skew leg of the rule carries less information than its label suggests. The raw-skew readout is the cross-check.
+>
+> **Code's recommendation: run A2 as specified.** The residual is what Ryan reads on his screen, and that is the thing under test. Keep raw as the readout.
+
+### Calls (A2.4), n of 803
+
+| | FADE | BREAK | NO TRADE |
+|---|---|---|---|
+| **primary, swing 12** | **116** | **58** | **629** |
+| swing 8 | 132 | 71 | 600 |
+| swing 16 | 83 | 48 | 672 |
+| delta-only, swing 12 | 142 | 231 | 430 |
+| skew-only, swing 12 | 423 | 146 | 234 |
+| raw-skew rule, swing 12 | 62 | 126 | 615 |
+| first touch only, swing 12 | 27 | 12 | 179 |
+
+**Primary by cell, swing 12** (FADE / BREAK): put below 22 / 15, put above 23 / 9, call below 42 / 16, call above 29 / 18.
+
+**n called:** 174 at swing 12 before ties and unresolved races drop out. The A2.7 n ≥ 60 gate is likely met pooled. Per-cell n are 25–58, readouts only.
+
+### Any-price population (A2.6 readout, C24)
+
+- **Touches:** 2 549 swing-12 extreme touches over 82 sessions, after the extreme is known; 1 997 with D > 0 (below 1 078, above 919; first touch 681).
+- **Approach legs:** defined for 1 744; push > 0 on 1 686.
+- **Effort:** ABSORBED 548, FREE 862, neutral 334.
+- **Skew:** divergent 1 435, confirming 309.
+- **Calls:** FADE 441, BREAK 159, NO TRADE 1 397.
+
+### R-a (2024-04-03 → 2024-12-31): can it confirm? (C25, counts only)
+
+Of 189 NYSE sessions:
+- 189 have `es_flow_1s_databento` RTH rows;
+- 186 have ≥ 300 0DTE-PM `orats_monies_minute` snapshots;
+- 186 have both.
+
+**Yes, R-a has the flow and the skew.** Corrected levels exist there from CR-CB A17.
