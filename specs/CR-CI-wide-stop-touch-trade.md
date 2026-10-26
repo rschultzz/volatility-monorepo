@@ -64,3 +64,23 @@ CR-CI — Wide-stop, big-target trade at CR-BW level touches (read-only, pre-reg
 Branch first: git checkout -b feat/CR-CI-wide-stop-touch-trade off origin/main. Own worktree.
 (... full kickoff in the 2026-10-26 Code session; L0–L6 above are its content ...)
 ```
+
+---
+
+## Amendment A1 (Ryan, 2026-10-26)
+
+Ryan sent A1 as "before Step 0". An uncommitted Step 0 run had already finished when it arrived. That run computed no outcome at a real level (only real entries, EDGE tags and random-draw validity, plus placebo P&L for the A/A), so A1 is still fixed before any real-level outcome. Step 0 is re-run with A1 included.
+
+| # | Clause |
+|---|---|
+| A1.1 | **Baseline (c), opposite direction.** Each real touch is traded the other way (break instead of fade), at the same entry price and time, with the same S/T grid, the same 13:00 PT exit and the same cost. |
+| A1.2 | **Primary readout adds real − opposite** per grid cell, bootstrapped as in L4 (paired, session-cluster, seed 20260920). It also adds the share of touches where the fade hits its target first vs where the break hits its target first. |
+| A1.3 | **The verdict rule (L5) is unchanged.** The opposite-direction result is reported alongside it, and is flagged in the plain-English summary as the direct answer to "can we pick which way". |
+
+**Pre-run choices for A1 (Code, before Step 0 re-run):**
+
+| # | Choice | Value |
+|---|---|---|
+| C11 | **Break trade's stop** | **The same risk in points as the paired fade trade.** For a fade with side s, R = S + \|entry − L\|. The break has side −s: stop = entry + s·R, target = entry − s·T, exits as in C4. Rejected alternative: a stop S beyond the level on the break's adverse side. When entry sits past the level (e.g. fixture 3, entry 13.5 above L), that leaves a 1.5-pt stop on a 15-pt S, so risk would differ from the fade by construction rather than by direction. Same-R isolates direction. |
+| C12 | **Target race** | Per real trade and per T ∈ {20, 30}, over the bars from entry through 12:59 PT, with no stops: the first bar whose range reaches entry + s·T (fade) or entry − s·T (break). The race is a **tie** if one bar reaches both, and **neither** if no bar does. Reported per T: the shares fade-first / break-first / tie / neither, and fade-first − break-first with the session-cluster CI. Pooled and per CR-CE cell. |
+| C13 | **Real − opposite statistic** | Paired: the mean over real trades of (fade P&L − break P&L), per grid cell, with CI and one-sided p (C8). Holm over the 6 cells is a readout. It also goes into the plain-English summary: "can we pick which way". |
