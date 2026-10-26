@@ -72,3 +72,14 @@ Standing ruling A14 (rewritten 2026-10-26 after CR-CJ): the baseline for intrada
 | C2 | honoured | Off by default; existing route and panel unchanged; pixel check C14. |
 
 No "deviates".
+
+---
+
+## Step 0 findings (2026-10-26, `scripts/cr_ck_step0.py` → `scripts/logs/cr_ck/step0.json`, no fits)
+
+| Q | Finding |
+|---|---|
+| 2026 train coverage | 107 sessions (2026-01-02 → 06-05); **106** have 0DTE PM put skew and Databento ES on ≥ 90 % of the 07:00–12:45 domain minutes. Only `y26` was loaded; R-a and 2025 were not queried. |
+| Swing-12 legs | 1,226 legs inside the domain. Length (start → end bar) p10 **2 min**, median 13, p90 52, max 278. Legs shorter than 4 min cannot meet C3 (≥ 5 snapshot points), so they drop out of the ratio sample; the count is reported in Step 2. The band table (C6) reaches 120 min; longer legs use the 120-min band (clamped, as frozen). |
+| 2026-10-26 (Part 2) | 390 0DTE PM snapshots 06:30 → 12:59 PT (91 in 07:20–08:50), quote lag median 10 s; `ironbeam_es_1m_bars` 390 RTH bars (`source` ironbeam), `ironbeam_es_flow_1s` on 390 RTH minutes. Part 2 can run. |
+| Sticky-strike parity | Moved to Step 2: it needs the C9 function, which lands in Step 1. No ruling or choice is affected. |
