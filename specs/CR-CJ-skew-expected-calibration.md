@@ -97,3 +97,71 @@ For a previous snapshot `prev` and the current one `now`, on the selected expiry
 ## Amendment A1 (Code, Step 0, before any fit) — align on quote time
 
 C4 is replaced: a snapshot pairs with the ES close at its **quote time**, `quote_date` rounded to the nearest minute Q (the close of the bar starting Q − 1). Snapshots whose `quote_date` is > 5 min from the label are dropped (R-a 220 rows, 2026 none). Time-of-day buckets, the fit domain and the 0DTE clock stay on the snapshot label (in R-a the quotes are ≈ 2 min older than the bucket says; immaterial at 30-min buckets). The current-curve comparison (C11a) uses the module's own `stock_price`, which is consistent with the quotes in both periods. No standing ruling is affected. A field-conventions row is added for `quote_date` in R-a.
+
+---
+
+## Run as frozen (C1–C14 + A1) — `scripts/cr_cj_calibrate.py` → `scripts/logs/cr_cj/results.json`
+
+293 sessions (R-a 186, 2026 107). Fit domain 07:00–12:45 PT. Vol pts; β in vol pts per 1 % ES move. CIs 95 %, session-clustered (β) or session bootstrap (shares).
+
+### Step 1 — noise (K4), put skew
+
+| 30-min bucket (PT) | 06:30 | 07:00 | 08:00 | 09:00 | 10:00 | 11:00 | 11:30 | 12:00 | 12:30 |
+|---|---|---|---|---|---|---|---|---|---|
+| SD of 1-min Δ | 6.05 | 0.48 | 0.47 | 0.45 | 0.55 | 0.59 | 1.01 | 1.49 | 1.55 |
+| SD of 5-min Δ | 3.58 | 0.66 | 0.64 | 0.55 | 0.72 | 1.05 | 2.00 | 2.07 | 2.94 |
+| SD of 15-min Δ | 2.81 | 0.83 | 0.73 | 0.69 | 0.85 | 1.55 | 1.48 | 3.89 | 5.76 |
+| VR(15) | 0.01 | 0.20 | 0.17 | 0.16 | 0.16 | 0.47 | 0.14 | 0.45 | 0.92 |
+
+Variance ratios far below 1 (07:00–11:00: VR(5) 0.29–0.44, VR(15) 0.16–0.32, VR(30) 0.08–0.15): **most 1-min skew movement is fit noise that reverses**. A 5-min change has SD ≈ 0.55–0.74 vol pts on 07:00–11:00 (A16's "~0.7"). Noise jumps after 11:30 and is extreme in the first 30 min. ATM vol50: 1-min SD 0.47–0.82 on 07:00–11:00, VR(15) 0.37–0.59.
+
+### Step 2 — fits (K5), α-model (α per start bucket + β·r), OLS
+
+| Sample | n | Put skew β | β up / β down | Wald equal β by bucket, p | ATM β | ATM β up / down |
+|---|---|---|---|---|---|---|
+| 5-min | 19,362 | **−1.79** [−2.43, −1.16] | −3.69 / −0.02 (p 0.001) | 0.007 | −6.24 [−7.77, −4.72] | +1.06 / −13.09 |
+| 15-min | 6,541 | **−2.33** [−4.12, −0.55] | −5.34 / +0.36 (p 0.13) | < 0.001 | −4.87 [−9.26, −0.48] | +6.42 / −14.95 |
+| 30-min | 3,169 | **−1.54** [−3.63, +0.54] | −4.29 / +0.92 (p 0.21) | 0.002 | −4.23 [−9.14, +0.68] | +4.70 / −12.27 |
+| Swing-12 legs (minutes model) | 2,246 | **−1.61** [−2.26, −0.96] | −3.71 / −0.80 | — | −5.45 [−7.55, −3.35] | +1.55 / −8.09 |
+
+- R² 0.01–0.05: the ES move explains little of the skew change; noise dominates.
+- By period, put β (15-min): R-a −1.49, 2026 −3.64; legs R-a −1.13, 2026 −2.11.
+- Per-bucket put β (15-min) runs from about 0 at 07:00–09:00 to −3 to −4 at 09:30–11:00, and −13 at 12:00.
+- Readouts outside the domain: open 06:30–07:00 put β −12.2, late 12:45–13:00 +5.1.
+- Time term (15-min, Δ√T in place of buckets): put γ −266, ATM γ −1,806 vol pts per √year.
+- **C10:** 5/15/30-min β −1.79 / −2.33 / −1.54 is not a ± 25 % plateau, so β comes from the legs (−1.61).
+
+### Step 3 — current curve vs fitted (K6)
+
+| Sample | Put skew: current implied β | fitted β | ATM: current implied β | fitted β |
+|---|---|---|---|---|
+| 5-min | −6.40 | −1.79 | −9.11 | −6.24 |
+| 15-min | −5.72 | −2.33 | −9.42 | −4.87 |
+| 30-min | −5.40 | −1.54 | −9.65 | −4.23 |
+| Legs | −4.46 | −1.61 | −9.69 | −5.45 |
+
+- The beta/theta add-ons cancel out of expected skew exactly (max |difference| 6e−15 vol pts).
+- **The sticky-strike skew response is 3–4× too steep.**
+- On ATM, the curve's −9.4 is roughly sticky strike (≈ −5) plus the 4.5 add-on. The fitted ATM β (−4.2 to −6.2) is about sticky strike alone, so **the 4.5 double-counts**.
+
+### Step 4 — balance (K7), share "divergent"
+
+| Sample | Raw | Current | Fitted, single β (C9) | Fitted, β up/down (C9) | Fitted, β by bucket | Fitted, bucket × up/down |
+|---|---|---|---|---|---|---|
+| Random 15–30 min (n 5,730) | 0.479 [0.464, 0.495] | **0.760** [0.748, 0.772] | 0.568 [0.553, 0.584] | 0.539 | 0.563 | 0.543 |
+| … up / down | 0.464 / 0.496 | 0.857 / 0.655 | 0.573 / 0.563 | **0.303 / 0.796** | 0.571 / 0.555 | 0.420 / 0.677 |
+| … small / mid / large \|move\| | 0.49 / 0.48 / 0.46 | 0.64 / 0.79 / 0.85 | 0.52 / 0.57 / 0.61 | | | |
+| Swing-12 legs (n 2,246) | 0.481 [0.449, 0.510] | **0.780** [0.759, 0.800] | 0.625 [0.594, 0.654] | 0.606 | 0.600 | 0.574 |
+| … up / down | 0.484 / 0.478 | 0.829 / 0.733 | 0.629 / 0.621 | 0.484 / 0.722 | 0.621 / 0.580 | 0.494 / 0.650 |
+
+**C8: no variant is inside 45–55 % in every cell; the pre-registered procedure yields no recommended curve.** Two causes, found in the tables, not tuned:
+1. **Mean vs median.** OLS fits the mean change; "divergent" is a sign, which tracks the median. A few large skew jumps on down moves pull the OLS slope away from the typical response. So the single-β residual still leans divergent, more so on large moves (0.52 → 0.61).
+2. **C9's 1-min drift can't carry an asymmetric slope.** θ is estimated after removing β_up·r⁺ + β_dn·r⁻ minute by minute. Over a window, the sum of 1-min r⁺ is much larger than the window's r⁺ (path cancellation), so the drift absorbs a spurious term. That is why the up/down variants split 0.30 / 0.80.
+
+### Step 5 — out of sample (K8), single-β curve
+
+| Split | Random windows: fitted / current / raw | Legs: fitted / current / raw |
+|---|---|---|
+| **2026 H1 (01-02 → 03-19, 53) → H2 (03-20 → 06-05, 54)** | 0.530 [0.487, 0.575] / 0.790 / 0.479 | 0.561 [0.495, 0.621] / 0.787 / 0.462 |
+| R-a → 2026 (readout) | 0.546 / 0.787 / 0.499 | 0.620 / 0.804 / 0.529 |
+| 2026 → R-a (readout) | 0.594 / 0.745 / 0.468 | 0.608 / 0.750 / 0.423 |
