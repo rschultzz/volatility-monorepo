@@ -215,3 +215,26 @@ Variance ratios far below 1 (07:00–11:00: VR(5) 0.29–0.44, VR(15) 0.16–0.3
 - Not flat in two places: the 12:00–13:00 drift (LAD θ ≈ −0.025 vol pts/min) and the first 30 minutes are outside the domain.
 
 **ATM is different.** The median β is stable at −5.8 to −9.0 in every subsample. The published ATM curve is LAD single: β **−7.02** vol pts per 1 % [−7.92, −6.29], with drift θ by bucket (results.json `a2.lad_single_atm_theta`): −0.034 /min at 07:00, about 0 on 09:00–11:30, −0.13 at 12:00, −0.34 at 12:30. It is reported, not gated (A2.6): A6's divergence read is about put skew.
+
+---
+
+## Wrap (2026-10-26)
+
+**Deliverable (K9).**
+- `packages/shared/skew_expected.py`: pure, 18 unit tests, parity with the run (legs 0.511 vs 0.510, random 0.498 vs 0.498).
+- Recommended `PUT_SKEW_PARAMS` = flat (expected change 0; residual = raw Δ put skew, A2.4).
+- `PUT_SKEW_LAD_A2_PARAMS` (reference, not recommended).
+- `ATM_PARAMS` = LAD β −7.02 with per-bucket drift.
+- Not imported by the Dash app. The Skew module is unchanged.
+
+**Plain English.**
+- The current curve expects put skew to move about 4× more with price than the typical move: −5.7 vol pts per 1 % against a median of ≈ −0.3, which isn't reliably different from zero. So the residual reads "divergent" about three times out of four.
+- Typical put skew barely responds to the ES move inside 07:00–12:45, and the small slope it has flips sign between samples. The best "expected" put-skew change is zero, so read the raw change.
+- Raw is close to balanced (≈ 48 %; out of sample 42–53 % depending on the split).
+- ATM vol does respond: about +7 vol pts per 1 % sell-off.
+
+**Deferred / follow-ups.**
+- Wiring a raw-Δ put-skew read and the fitted ATM curve into the Skew table is a UI CR (C2: off by default).
+- CR-CI A2's successor can use raw Δ put skew over the leg as the A14 residual.
+- With 5-min noise at SD ≈ 0.6 vol pts, any divergence read needs a size threshold or a leg-length trend (A16). That is not measured here.
+- A14's wording ("relative to what's expected for the price move") is Ryan's to revisit given this result. Standing rulings are not edited by Code.
