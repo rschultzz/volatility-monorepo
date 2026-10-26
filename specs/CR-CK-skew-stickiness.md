@@ -258,3 +258,10 @@ There is a small systematic pattern. 15 of 36 cells have a median CI that exclud
 All of these are 3–30 % of the noise band for the same window, so they don't change any read.
 
 **A1.7 (late-day flag)** is implemented regardless: `StickinessRead.late_day` / the route's `late_day` field is true when the window ends after 11:00 PT, and the line appends "late-day: low reliability".
+
+**A1.7 implemented.** Changes:
+- `skew_expected.LATE_DAY_MIN` and `StickinessRead.late_day`;
+- the route row's `late_day`;
+- the line suffix "late-day: low reliability", in slate.
+
+Tests: 37 `skew_expected` + 7 route. Playwright 2/2 with a fourth time (11:30): the 08:48 → 11:30 line carries the flag, the earlier lines do not, and off is still byte-identical to `origin/main` `4f84484` (re-captured with four times).

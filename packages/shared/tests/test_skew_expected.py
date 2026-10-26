@@ -254,6 +254,18 @@ class TestStickinessRead(unittest.TestCase):
                                band_table=TestNoiseBand.TABLE)
         self.assertFalse(r.beyond_noise)
 
+    def test_late_day_flag(self):
+        r = se.stickiness_read(self.ts, [0.0] * 21, time(7, 30), time(7, 50), self.v, 7000.0, 7028.0)
+        self.assertFalse(r.late_day)
+        ts = list(range(640, 661))                               # 10:40 .. 11:00: ends at 11:00, not after
+        r = se.stickiness_read(ts, [0.0] * 21, time(10, 40), time(11, 0), self.v, 7000.0, 7028.0)
+        self.assertFalse(r.late_day)
+        ts = list(range(641, 662))                               # 10:41 .. 11:01
+        r = se.stickiness_read(ts, [0.0] * 21, time(10, 41), time(11, 1), self.v, 7000.0, 7028.0)
+        self.assertTrue(r.late_day)
+        r = se.stickiness_read([700, 720], [0.0, 1.0], time(11, 40), time(12, 0), self.v, 7000.0, 7028.0)
+        self.assertEqual((r.reason, r.late_day), ("insufficient data", True))
+
     def test_insufficient_data(self):
         r = se.stickiness_read([450, 470], [0.0, 1.0], time(7, 30), time(7, 50), self.v, 7000.0, 7028.0)
         self.assertEqual(r.reason, "insufficient data")

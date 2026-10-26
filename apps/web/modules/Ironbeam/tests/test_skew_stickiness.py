@@ -58,6 +58,12 @@ class TestRows(unittest.TestCase):
         self.assertAlmostEqual(r["ratio"], round(r["actual"] / r["expected"], 2), delta=0.02)
         self.assertIsNotNone(r["beyond_noise"])
 
+    def test_late_day(self):
+        df = snaps(range(650, 671), lambda m: 2.0)                              # 10:50 .. 11:10
+        es = {m - 1: 7000.0 for m in range(645, 672)}
+        rows = ss.build_skew_stickiness_rows(["10:50", "11:00", "11:10"], df, es)
+        self.assertEqual([r["late_day"] for r in rows], [False, False, True])
+
     def test_move_too_small_and_missing(self):
         df = snaps(range(450, 471), lambda m: 2.0)
         es = {m - 1: 7000.0 for m in range(445, 472)}

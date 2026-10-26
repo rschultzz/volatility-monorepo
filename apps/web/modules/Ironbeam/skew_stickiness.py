@@ -78,10 +78,11 @@ def build_skew_stickiness_rows(times: list[str], snaps: pd.DataFrame, es_close: 
     out = []
     for i, m in enumerate(mins):
         row = {"time": _hhmm(m), "window": None, "actual": None, "expected": None, "ratio": None,
-               "reason": "first time", "band": None, "beyond_noise": None, "es_move_pct": None}
+               "reason": "first time", "band": None, "beyond_noise": None, "es_move_pct": None, "late_day": False}
         if i > 0:
             a = mins[i - 1]
             row["window"] = f"{_hhmm(a)}-{_hhmm(m)}"
+            row["late_day"] = m > se.LATE_DAY_MIN
             es0, es1 = es_at(a), es_at(m)
             if a not in put or m not in put or es0 is None or es1 is None:
                 row["reason"] = "insufficient data"
@@ -92,7 +93,7 @@ def build_skew_stickiness_rows(times: list[str], snaps: pd.DataFrame, es_close: 
                 rd = se.stickiness_read(ts, [put[k] for k in ts], a, m, vols, es0, es1)
                 row.update(actual=_r(rd.actual_pp), expected=_r(rd.expected_pp), ratio=_r(rd.ratio),
                            reason=rd.reason, band=_r(rd.band_pp), beyond_noise=rd.beyond_noise,
-                           es_move_pct=_r(rd.es_move_pct, 3))
+                           es_move_pct=_r(rd.es_move_pct, 3), late_day=rd.late_day)
         out.append(row)
     return out
 

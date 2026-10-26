@@ -156,6 +156,7 @@ def divergence_read(put_skew_residual: float, es_move: float) -> str:
 MIN_ES_MOVE_PCT = 0.15                # ratio defined only for |ES move| >= 0.15 % (A14 / CR-CK K2)
 EPS_T = 1e-4                          # T floor, years (as the Skew module)
 TREND_MIN_COVERAGE = 0.8              # CR-CK C3: >= 80 % of the window's minutes carry a snapshot
+LATE_DAY_MIN = 11 * 60                # CR-CK A1.7: a window ending after 11:00 PT is flagged low reliability
 TREND_MIN_POINTS = 5
 
 # CR-CK C6: SD of the endpoint change in put skew (vol pts) by window length (min) and 30-min start bucket (index from
@@ -293,6 +294,7 @@ class StickinessRead:
     reason: str                         # "ok" | "move too small" | "insufficient data"
     band_pp: Optional[float]
     beyond_noise: Optional[bool]        # |actual| > band; None when either is unknown
+    late_day: bool = False              # window ends after 11:00 PT (noise band 2-9 vol pts; A1.7)
 
 
 def stickiness_read(times: Sequence[TimeLike], put_skew_pp: Sequence[float], t_start: TimeLike, t_end: TimeLike,
@@ -308,8 +310,9 @@ def stickiness_read(times: Sequence[TimeLike], put_skew_pp: Sequence[float], t_s
         expected = None
     band = noise_band_pp(minute_of_day(t_end) - minute_of_day(t_start), t_start, band_table)
     beyond = None if (actual is None or band is None) else abs(actual) > band
+    late = minute_of_day(t_end) > LATE_DAY_MIN
     if actual is None or expected is None:
-        return StickinessRead(actual, expected, r, None, "insufficient data", band, beyond)
+        return StickinessRead(actual, expected, r, None, "insufficient data", band, beyond, late)
     if abs(r) < MIN_ES_MOVE_PCT or expected == 0:
-        return StickinessRead(actual, expected, r, None, "move too small", band, beyond)
-    return StickinessRead(actual, expected, r, actual / expected, "ok", band, beyond)
+        return StickinessRead(actual, expected, r, None, "move too small", band, beyond, late)
+    return StickinessRead(actual, expected, r, actual / expected, "ok", band, beyond, late)

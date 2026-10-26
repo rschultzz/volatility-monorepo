@@ -118,7 +118,8 @@ function StickinessRow({ item, last }) {
   }
   const border = last ? '0' : '1px solid #1e293b'
   if (!item || item.reason === 'first time' || item.reason === '0DTE only' || item.reason === 'insufficient data') {
-    const note = !item ? '' : item.reason === 'first time' ? 'stickiness: needs a previous time' : `stickiness: ${item.reason}`
+    let note = !item ? '' : item.reason === 'first time' ? 'stickiness: needs a previous time' : `stickiness: ${item.reason}`
+    if (item?.late_day) note += ' · late-day: low reliability'
     return (
       <tr data-stickiness-row="1" style={{ borderBottom: border }}>
         <td colSpan={6} style={{ ...cellStyle, color: STICKY_IN_NOISE }}>{note}</td>
@@ -137,6 +138,7 @@ function StickinessRow({ item, last }) {
         </span>
         {' · '}
         <span style={{ color: valueColor }}>{item.beyond_noise ? 'beyond noise' : 'in noise'}</span>
+        {item.late_day && <span style={{ color: STICKY_IN_NOISE }}>{' · late-day: low reliability'}</span>}
       </td>
     </tr>
   )

@@ -19,7 +19,7 @@ const BRANCH_URL = process.env.CRCK_BRANCH_URL || 'http://localhost:5178'
 const MAIN_URL = process.env.CRCK_MAIN_URL || 'http://localhost:5179'
 const ASSETS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../specs/assets/cr-ck')
 const DAY = '2026-10-26'
-const TIMES = ['07:30', '07:50', '08:48']
+const TIMES = ['07:30', '07:50', '08:48', '11:30']
 
 async function open(page, base) {
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -83,6 +83,8 @@ test('on: one stickiness row per selected time, Part 2 numbers, Dash palette onl
   expect(texts[1]).toContain('SS -1.23')
   expect(texts[1]).toContain('in noise')
   expect(texts[2]).toContain('move too small')
+  expect(texts[2]).not.toContain('late-day')
+  expect(texts[3]).toContain('late-day: low reliability')     // A1.7: window 08:48-11:30 ends after 11:00
   // every colour inside the stickiness rows is blue / light grey / slate
   const colors = await rows.evaluateAll((els) => {
     const out = new Set()
