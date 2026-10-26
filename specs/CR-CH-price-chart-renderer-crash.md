@@ -87,3 +87,33 @@ A minimal page building 13 M `Intl.DateTimeFormat`s in 300 s did not crash. The 
 1. `App.jsx`: memoize the Flow v2 payloads passed to the pane.
 2. Regression spec `tests/e2e/cr-ch.spec.js`: with Flow v2 shown, interaction that re-renders App leaves the pane's `payloads` prop and its `aligned` / `snapped` memos referentially unchanged.
 3. Smoke: the new spec fails on `origin/main` and passes on the branch. Existing suites cr-bv, cr-cd and cr-cd-a5 pass with byte-identical screenshots. Headed repro on the branch build: clean 10 min ×2 (and the unfixed `origin/main` build still crashes).
+
+## Smoke (2026-10-26)
+
+**Regression spec** `tests/e2e/cr-ch.spec.js` (dev server, `cr_cd_smoke_backend.py` on 8062, 2026-05-01, Flow v2):
+
+| frontend | result |
+|---|---|
+| `origin/main` `8f1226b` (unfixed) | **fails** at `expect(cmp.samePayloads).toBe(true)`; the re-render assertion before it passes |
+| branch (fixed) | **passes** (10.6 s) |
+
+**Existing suites on the branch:**
+- cr-bv 9/9, cr-cd 4/4, cr-cd-a5 4/4 pass. cr-cd-a5's own byte comparisons against the pre-A5 frontend (`0bb6003`) pass.
+- 9 screenshots in `specs/assets/` come out different from the committed copies (5 × cr-bv, 4 × cr-cd v2). Unfixed `origin/main` produces the **same bytes** as the branch for all 9, so the drift is environmental (data and frontend changes since the assets were captured), not this change. The assets were left as committed.
+- Read-only throughout: the review routes ran on a read-only connection, not `cr_cc_smoke_backend.py`.
+
+**Headed repro.** Google Chrome 155, full Dash page locally on a read-only DB, live session, production builds, same seeded hard zoom/pan sequence, date changed twice:
+
+| build | Flow | Effort | result |
+|---|---|---|---|
+| `origin/main` `8f1226b` (control) | v2 | off | **crash 84.9 s** |
+| branch `4e4f88d` run 1 | v2 | off | **clean 600 s** (2692 interactions) |
+| branch `4e4f88d` run 2 | v2 | off | **clean 600 s** (2763 interactions) |
+| branch `4e4f88d` | v2 | on, swing 8 (26 labels) | **clean 600 s** (2752 interactions) |
+
+Before the fix, Flow v2 crashed in every headed run under this sequence (27–226 s, 20+ runs across builds and gates).
+
+## Deferred
+
+- `partsForZone` (shared with Current) builds a new `Intl.DateTimeFormat` per timestamp. Caching it would make each alignment ~10× cheaper (`fix-fmt` was clean 1/1). Not needed for the crash, and out of scope here because it touches Current's helper (L2).
+- The Chrome-side `CHECK` (`+0x8628b7c`) stays unidentified. Ryan's uploaded crash reports could go to crbug if it shows up elsewhere.
