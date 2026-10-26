@@ -169,3 +169,29 @@ After matching, placebo equals real by construction. Unlike CR-CF (63 % vs 24 %)
 - The fixture-4 miss is one tick on the entry price, caused by the card's source series.
 
 Switching to Ironbeam buys an exact fixture match, at the cost of 92 missing minutes inside trade paths.
+
+---
+
+## Ruling on the Step 0 stop (Ryan, 2026-10-26) — A1.4
+
+| # | Clause |
+|---|---|
+| A1.4 | **Use the Databento minute bars, as frozen (C3).** Fixture tolerance is **0.25 pt (one tick)** for cards built on Ironbeam bars. Fixture 4 (entry 6637.75 vs 6638.0, heat 16.0 vs ≤ 15.75) passes under it, so the L6 fixture gate passes. Ironbeam is kept as a readout only if it's cheap; it is not required. |
+
+## Amendment A2 (Ryan, 2026-10-26) — Ryan's direction rule, stop-free
+
+**A2 becomes the PRIMARY question.** The L2 stop/target grid (with A1's opposite-direction baseline) is demoted to a readout. It runs after the A2 primary, in the same committed run script. The amendment was written into the repo spec and this note before any A2 code.
+
+| # | Clause |
+|---|---|
+| A2.0 | **Entry for A2:** the close of the **touch** bar, for every one of the 803 touches. Not the fade-confirm bar: that conditions on fade behaviour and would bias the break side. |
+| A2.1 | **Approach leg:** the last swing leg into the touch at swing size 12, by the CR-CD A5 rule: from the last swing high/low **confirmed** before the touch, to the touch bar. Causal: nothing after the touch is used. Readouts at swing sizes 8 and 16. |
+| A2.2 | **Delta read on the approach leg** (Databento flow). **Push** = net delta (buy − sell) in the approach direction: selling into a level from above, buying into it from below. Push > 0 is required for either call. **Effort ratio** = the leg's contracts/pt ÷ the previous same-direction leg's (the A5 ratio). **ABSORBED** if ratio ≥ 1.5; **FREE** if ratio ≤ 1.0; neutral in between. |
+| A2.3 | **Skew read on the approach leg.** Dash residual put skew = actual − the Skew module's expected curve (BETA 4.5, THETA −638, as computed in `apps/web/modules/Skew/callbacks.py`), as the change from leg start to touch. **Divergent** if it moves against price (price down and residual put skew falling, or price up and residual rising). **Confirming** if it moves with price. Readout: the same with raw 25Δ put − ATM IV (nearest expiry), no expected curve. |
+| A2.4 | **Call:** **FADE** if ABSORBED and skew divergent. **BREAK** if FREE and skew confirming. Otherwise **NO TRADE**. Readouts: a delta-only call and a skew-only call. |
+| A2.5 | **Outcome (stop-free):** a race from entry, first to +20 or −20 pts in the called direction by 13:00 PT. A bar reaching both is a tie; unresolved races are reported separately. Also the signed move at +60 min, +120 min and 13:00. |
+| A2.6 | **Population:** primary = the CR-CE 803 touches (train). Readout = every swing-12 low/high touch at any price (no level): the CR-CG "any price" version. |
+| A2.7 | **Primary, paired on the same called touches:** the race win rate of the rule's call vs always-fade and vs always-break at those touches, and vs 50 %. Session-cluster bootstrap, seed 20260920. **PASS** (shortlist for R-a) if rule − max(always-fade, always-break) has CI lower bound > 0 **and** n called ≥ 60. **REFUTED** if the CI upper bound is < 0. Otherwise **INCONCLUSIVE**. Report n FADE / BREAK / NO TRADE and the accuracy per side. |
+| A2.8 | **Re-run Step 0 for A2 (no outcomes):** skew coverage at the touch timestamps; approach-leg counts; the distributions of ratio and skew change; n per call; and whether R-a (2024) has the flow and skew to confirm. **Stop for Ryan's review after Step 0.** |
+
+**Plain-English summary for Ryan at the end:** when delta and skew agree, is the direction right more often than always-fade or always-break?
