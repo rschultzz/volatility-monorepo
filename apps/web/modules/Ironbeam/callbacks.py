@@ -39,6 +39,7 @@ from packages.shared.level_placement import (
 )
 from packages.shared.trading_calendar import prev_trading_day
 from modules.Ironbeam.routes import register_gex_landscape_route
+from modules.Ironbeam.skew_stickiness import register_skew_stickiness_route
 from modules.Ironbeam import flow_v2
 
 # Import skew helpers for the React API
@@ -3181,6 +3182,9 @@ def register_ironbeam_callbacks(app):
                 return resp, status
 
             app.server._ironbeam_react_skew_data_route_registered = True
+
+        # CR-CK: stickiness rows for the Overview panel (fetched only when its setting is on)
+        register_skew_stickiness_route(app.server, engine, _parse_until_pt)
 
         if not getattr(app.server, "_ironbeam_react_smile_data_route_registered", False):
             @app.server.route("/api/ironbeam/smile-data", methods=["GET"])

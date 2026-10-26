@@ -16,6 +16,8 @@ const FLOW_V2_MARKERS_STORAGE_KEY = 'ib-react-flow-v2-markers'
 const FLOW_V2_EFFORT_STORAGE_KEY = 'ib-react-flow-v2-effort'
 const GEX_MIN_ABS_B_STORAGE_KEY = 'ib-react-gex-min-abs-b'
 const GEX_LEVELS_MODE_STORAGE_KEY = 'ib-react-gex-levels-mode'
+// CR-CK — Overview panel "Stickiness" rows; off unless the user turns them on in settings.
+const SKEW_STICKINESS_STORAGE_KEY = 'ib-react-skew-stickiness'
 const GEX_LANDSCAPE_SPOT_MODE_KEY = 'GEX_LANDSCAPE_SPOT_MODE'
 // LIVE-mode landscape re-fetches only when ES moves materially.
 const GEX_LANDSCAPE_SPOT_DELTA_PTS = 5
@@ -606,6 +608,16 @@ export default function App() {
       return 'current'
     }
   })
+
+  // CR-CK: Stickiness rows under the Overview skew table (off by default).
+  const [stickinessOn, setStickinessOn] = useState(() => {
+    try {
+      return window.localStorage.getItem(SKEW_STICKINESS_STORAGE_KEY) === '1'
+    } catch (err) {
+      return false
+    }
+  })
+  const [stickinessData, setStickinessData] = useState([])
 
   // CR-CC L6 — a review candidate is always shown in Corrected levels mode; the
   // stored preference is left untouched and applies again after review.
@@ -1218,6 +1230,14 @@ export default function App() {
       // ignore
     }
   }, [gexLevelsMode])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SKEW_STICKINESS_STORAGE_KEY, stickinessOn ? '1' : '0')
+    } catch (err) {
+      // ignore
+    }
+  }, [stickinessOn])
 
   useEffect(() => {
     try {
@@ -1907,6 +1927,59 @@ export default function App() {
     }
   }, [apiBase, tradeDate, expirationDate, smileTimes, expectedOn, loadingCenter, error, reviewUntil])
 
+  // --- CR-CK: Stickiness rows (only while the setting is on; same times and cutoff as the skew fetch) ---
+  useEffect(() => {
+    if (!stickinessOn) {
+      setStickinessData([])
+      return undefined
+    }
+    if (loadingCenter || error) return undefined
+
+    let disposed = false
+    let inFlight = false
+    let activeController = null
+
+    const tick = async () => {
+      if (disposed || inFlight) return
+      inFlight = true
+      const controller = new AbortController()
+      activeController = controller
+      try {
+        const url = new URL(`${apiBase}/api/ironbeam/skew-stickiness`)
+        url.searchParams.set('trade_date', tradeDate)
+        url.searchParams.set('expiration_date', expirationDate)
+        if (smileTimes && smileTimes.length > 0) url.searchParams.set('times', smileTimes.join(','))
+        if (reviewUntil) url.searchParams.set('until', reviewUntil)
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          credentials: 'include',
+          signal: controller.signal,
+          cache: 'no-store',
+        })
+        if (!response.ok) throw new Error('Stickiness fetch failed')
+        const payload = await response.json()
+        if (disposed) return
+        setStickinessData(payload.stickiness || [])
+      } catch (err) {
+        if (err?.name !== 'AbortError') {
+          console.error('Stickiness refresh failed', err)
+        }
+      } finally {
+        if (activeController === controller) activeController = null
+        inFlight = false
+      }
+    }
+
+    tick()
+    const timer = reviewUntil ? null : window.setInterval(tick, SKEW_DATA_POLL_MS)
+
+    return () => {
+      disposed = true
+      if (timer != null) window.clearInterval(timer)
+      if (activeController) activeController.abort()
+    }
+  }, [apiBase, tradeDate, expirationDate, smileTimes, stickinessOn, loadingCenter, error, reviewUntil])
+
   // --- Smile Data Fetching ---
   // CR-CC A2: same cutoff rules as the skew fetch. With no review selection yet, the
   // server's default (latest snapshot <= until) is adopted as the review selection.
@@ -2255,6 +2328,9 @@ export default function App() {
                 onLinkedCrosshairChange={handleLinkedCrosshairChange}
                 onInteractionActiveChange={handleInteractionActiveChange}
                 skewData={skewData}
+                stickinessOn={stickinessOn}
+                stickinessData={stickinessData}
+                onApplyStickiness={setStickinessOn}
                 smileData={smileData}
                 smileSnapshots={smileSnapshots}
                 atmIvSeries={visibleAtmIvSeries}
