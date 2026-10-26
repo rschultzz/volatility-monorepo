@@ -227,3 +227,34 @@ Choices fixed by Code before the run:
 | A1.7 | Late-day flag | `late_day` = the window's end is after 11:00 PT (end minute > 11:00). Line suffix "late-day: low reliability". The route row gets the field; Part 1 is not re-cut. |
 
 No standing ruling is affected: train only, no outcomes, display off by default (C2).
+
+### A1 result (run as frozen) — `scripts/cr_ck_a1_drift.py` → `scripts/logs/cr_ck/a1_drift.json`
+
+7,074 flat-price windows (|ES move| < 0.05 %), 107 sessions, 2026 train. Trend Δ put skew, vol pts; 95 % session-bootstrap CIs. 06:30 band measured for this comparison only: 4.70 / 4.31 / 4.39 at 15 / 30 / 60 min.
+
+| Start | L | n | Median [CI] | Mean [CI] | Band | \|median\| / band |
+|---|---|---|---|---|---|---|
+| 06:30 | 15 / 30 / 60 | 119 / 92 / 44 | +0.28 / **+0.95** [0.11, 1.41] / −0.20 | +0.43 / +0.61 / −0.59 | 4.70 / 4.31 / 4.39 | 0.06 / 0.22 / 0.04 |
+| 07:00 | 15 / 30 / 60 | 200 / 142 / 79 | +0.03 / −0.06 / **−0.29** [−0.44, −0.21] | +0.10 / +0.05 / −0.33 | 1.13 / 1.26 / 1.07 | 0.03 / 0.05 / **0.27** |
+| 07:30 | 15 / 30 / 60 | 178 / 126 / 97 | −0.03 / −0.02 / −0.18 | +0.03 / +0.02 / −0.15 | 1.26 / 1.19 / 1.21 | ≤ 0.15 |
+| 08:00 | 15 / 30 / 60 | 255 / 177 / 132 | +0.06 / +0.05 / −0.01 | +0.02 / +0.04 / −0.06 | 0.85 / 0.88 / 0.88 | ≤ 0.07 |
+| 08:30 | 15 / 30 / 60 | 275 / 209 / 156 | +0.07 / +0.11 / +0.07 | +0.04 / +0.17 / +0.11 | 0.82 / 0.82 / 1.18 | ≤ 0.13 |
+| 09:00 | 15 / 30 / 60 | 274 / 220 / 180 | +0.15 / +0.15 / +0.08 | +0.14 / +0.12 / +0.09 | 0.79 / 1.11 / 1.17 | ≤ 0.19 |
+| 09:30 | 15 / 30 / 60 | 299 / 233 / 156 | +0.11 / +0.15 / −0.17 | +0.17 / +0.17 / −0.21 | 1.44 / 1.36 / 1.33 | ≤ 0.13 |
+| 10:00 | 15 / 30 / 60 | 275 / 212 / 163 | +0.12 / +0.05 / −0.02 | +0.05 / 0.00 / −0.15 | 1.06 / 1.19 / 1.41 | ≤ 0.11 |
+| 10:30 | 15 / 30 / 60 | 313 / 226 / 149 | +0.16 / +0.09 / 0.00 | +0.17 / +0.12 / −0.07 | 0.94 / 1.31 / 2.53 | ≤ 0.17 |
+| 11:00 | 15 / 30 / 60 | 317 / 229 / 168 | +0.08 / +0.05 / −0.20 | +0.08 / +0.05 / −0.13 | 2.56 / 2.50 / 3.02 | ≤ 0.07 |
+| 11:30 | 15 / 30 / 60 | 343 / 236 / 144 | +0.13 / 0.00 / **−0.75** [−1.05, −0.47] | +0.10 / 0.00 / −0.75 | 3.05 / 3.69 / 5.23 | ≤ 0.14 |
+| 12:00 | 15 / 30 | 296 / 215 | −0.09 / **−0.47** [−0.66, −0.32] | −0.09 / −0.43 | 5.13 / 5.03 | ≤ 0.09 |
+| 12:30 | 15 | 145 | −0.09 | −0.04 | 8.83 | 0.01 |
+
+**A1.5 outcome: no cell's drift exceeds its noise band** (largest \|median\| / band 0.27, at 07:00 over 60 min; no \|mean\| exceeds either). **The expected change is unchanged** (sticky-strike Δ, zero-move baseline). Part 1 and Part 2 stand as reported, and the Stickiness line shows no drift item.
+
+There is a small systematic pattern. 15 of 36 cells have a median CI that excludes 0:
+- **+0.1 to +0.15 vol pts per 15–30 min** on 08:00–10:30 (put skew creeps up when price is flat mid-morning);
+- **−0.2 to −0.3 over 60 min from 07:00–07:30**;
+- **−0.5 to −0.75 into the close** (12:00 → 12:30, 11:30 → 12:30).
+
+All of these are 3–30 % of the noise band for the same window, so they don't change any read.
+
+**A1.7 (late-day flag)** is implemented regardless: `StickinessRead.late_day` / the route's `late_day` field is true when the window ends after 11:00 PT, and the line appends "late-day: low reliability".
