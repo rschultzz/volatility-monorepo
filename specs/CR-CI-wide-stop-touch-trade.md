@@ -84,3 +84,88 @@ Ryan sent A1 as "before Step 0". An uncommitted Step 0 run had already finished 
 | C11 | **Break trade's stop** | **The same risk in points as the paired fade trade.** For a fade with side s, R = S + \|entry − L\|. The break has side −s: stop = entry + s·R, target = entry − s·T, exits as in C4. Rejected alternative: a stop S beyond the level on the break's adverse side. When entry sits past the level (e.g. fixture 3, entry 13.5 above L), that leaves a 1.5-pt stop on a 15-pt S, so risk would differ from the fade by construction rather than by direction. Same-R isolates direction. |
 | C12 | **Target race** | Per real trade and per T ∈ {20, 30}, over the bars from entry through 12:59 PT, with no stops: the first bar whose range reaches entry + s·T (fade) or entry − s·T (break). The race is a **tie** if one bar reaches both, and **neither** if no bar does. Reported per T: the shares fade-first / break-first / tie / neither, and fade-first − break-first with the session-cluster CI. Pooled and per CR-CE cell. |
 | C13 | **Real − opposite statistic** | Paired: the mean over real trades of (fade P&L − break P&L), per grid cell, with CI and one-sided p (C8). Holm over the 6 cells is a readout. It also goes into the plain-English summary: "can we pick which way". |
+
+---
+
+## Step 0 (2026-10-26) — no outcome at a real level
+
+Scripts: `scripts/cr_ci_lib.py` (CR-CE `cr_ce_stage1.py` lines 52–400 copied unchanged, plus the CR-CI machinery) and `scripts/cr_ci_step0.py`. Read-only connection. Universe asserted: 86 sessions, 803 real touches with D > 0. Run on both minute-bar series (`CR_CI_BARS=databento` per C3, and `ironbeam`, the `setup_candidates` series). Logs are in `scripts/logs/cr_ci/` (git-ignored).
+
+**Result: STOP for Ryan's review.** Under C3 (Databento bars), fixture 4 does not reproduce to the tick. Every other gate passes on both series.
+
+### Counts (trades per CR-CE cell; the same in all 6 grid cells and in the IM readout)
+
+| cell | real events → trades (Databento) | placebo (Databento) | real (Ironbeam) | placebo (Ironbeam) |
+|---|---|---|---|---|
+| put-heavy, from below | 138 → 106 | 162 → 119 | 105 | 116 |
+| put-heavy, from above | 136 → 113 | 148 → 119 | 113 | 119 |
+| call-heavy, from below | 285 → 229 | 161 → 123 | 229 | 123 |
+| call-heavy, from above | 244 → 203 | 131 → 111 | 203 | 111 |
+| **pooled** | **803 → 651** | **602 → 472** | **650** | **469** |
+
+- **Real touches with no trade (Databento):** 151 have no confirm bar within 10 bars, and 1 confirms at 12:59. Placebo: 128 and 2. So 81 % of real touches and 78 % of placebo touches become trades.
+- **First touch only:** 170 real / 138 placebo trades.
+- **Concentration:** the top-3 sessions hold 10.6 % of real trades (05-18 25, 05-04 23, 05-29 21; 84 sessions have trades).
+- **C2:** the CR-CC 5-bar direction disagrees with the CR-BW side on 13 of 651 trades, and is undefined on 19.
+- **Entry distance from the level |entry − L|** (p5/25/50/75/95): real 0.25 / 0.75 / 1.5 / 3.25 / 7.0; placebo 0.25 / 1.0 / 2.0 / 3.5 / 8.7.
+
+### Coverage after EDGE matching (gate: ≥ 80 % in every cell)
+
+- **Placebo:** 100 % in every cell. Every cell × EDGE stratum holds ≥ 30 placebo trades (smallest: call_above|EDGE, 30).
+- **Random:** 100 % in every cell (3 255 of 3 255 draws valid).
+- **Opposite direction (A1):** 100 % by construction.
+- **Pass.**
+
+**EDGE share, real vs raw placebo** (Databento):
+
+| cell | real | raw placebo |
+|---|---|---|
+| put below | 0.26 | 0.30 |
+| put above | 0.27 | 0.29 |
+| call below | 0.37 | 0.37 |
+| call above | 0.28 | 0.27 |
+| **pooled** | **0.31** | **0.31** |
+
+After matching, placebo equals real by construction. Unlike CR-CF (63 % vs 24 %), the CR-CE placebo touches are already balanced on EDGE, so the matching changes little.
+
+### A/A, centre cell S = 15 / T = 20, placebo vs placebo (gate: the CI must include 0)
+
+| | primary split: A − B (matched) | 200 splits: share of CIs excluding 0 | 200 splits: median |
+|---|---|---|---|
+| Databento | −2.49 [−6.66, +2.12] (253 / 219 trades) | 5.0 % | +0.06 |
+| Ironbeam | −2.81 [−7.00, +1.90] | 4.5 % | +0.05 |
+
+**Pass on both.** The 200-split spread of A − B (p5–p95) is −3.7 to +3.3 pts: the noise floor for a real − placebo difference at this n.
+
+**Placebo descriptive, centre cell** (Databento, not a test): mean −1.45 pts per trade, with 212 stops, 169 targets and 91 time exits out of 472.
+
+### Fixture reproduction (L6)
+
+| # | session | in the trade set | Databento entry → heat / +20 | Ironbeam entry → heat / +20 | Ryan |
+|---|---|---|---|---|---|
+| 1 | 01-06 long | no (before 01-09; D ≤ 0) | 6966.25 → 15.75 / 19:00Z | same | 15.75 / 19:00Z |
+| 2 | 02-02 long | yes | 6991.5 → 4.75 / 17:05Z | same | 4.75 / 17:05Z |
+| 3 | 03-02 long | yes | 6858.5 → 10.25 / 16:09Z | same | 10.25 / 16:09Z |
+| 4 | 04-01 short | yes | **6637.75** → **16.0** / 18:18Z | 6638.0 → 15.75 / 18:18Z | ≤ 15.75 / 18:18Z |
+| 5 | 05-01 long | yes | 7279.25 → 23.75 / never (max +16.5) | same | 23.75 / never (+16.5) |
+
+**Fixture 4 on Databento:**
+- The 08:38 PT confirm bar closes at 6637.75 on Databento and at 6638.0 on Ironbeam. That one tick moves the entry, and the heat becomes 16.0.
+- This is a feed difference, not a logic error: the cards were built on Ironbeam bars.
+- Every timestamp, direction and the other four fixtures match exactly on both series.
+
+### The choice for Ryan (the run waits on it)
+
+|  | Databento minute bars (C3 as frozen) | Ironbeam 1-min bars (`setup_candidates` series) |
+|---|---|---|
+| Fixtures | 4 of 5 to the tick; fixture 4 one tick off | 5 of 5 to the tick |
+| Missing RTH minutes in the 86 sessions | **0** | **92 on 11 sessions** (02-13 29, 05-08 16, 04-02 14, 05-07 11, …) |
+| Feed status | reference (CR-CA); same feed as CR-CE's touches | live feed; fragment bars repaired 2026-10-25; known undercounting in flow |
+| Trades | 651 real / 472 placebo | 650 / 469 |
+
+**Code's recommendation: keep Databento (C3).**
+- It is the reference feed and has no holes.
+- The touches and D already come from it.
+- The fixture-4 miss is one tick on the entry price, caused by the card's source series.
+
+Switching to Ironbeam buys an exact fixture match, at the cost of 92 missing minutes inside trade paths.
