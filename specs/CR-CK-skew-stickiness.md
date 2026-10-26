@@ -161,3 +161,15 @@ ES from `ironbeam_es_1m_bars` at quote time; bar close = flow close on 389 / 390
 - **Approach:** put skew fell as price rallied into 7731, by about a fifth to two-fifths of what sticky strike implies. Ratio +0.18 to +0.38 sits at the 53rd–64th percentile of up legs in train: an ordinary reading. Put skew did not pick up into the level (no bearish divergence), and the change is inside the noise band.
 - **Range:** ES moved 1.25 pts net, far below 0.15 %, so there is no ratio. Put skew drifted up about +0.25 vol pts on the trend (+0.53 endpoint), inside the band.
 - So on this day the skew read was "normal re-forming" on the way in, and the range said nothing. A17 says the range's order flow decides, and skew alone is never the trigger; this example agrees with that.
+
+---
+
+## Part 3 result — display (C12–C14)
+
+- **Route** `GET /api/ironbeam/skew-stickiness` (`apps/web/modules/Ironbeam/skew_stickiness.py`, registered next to `/api/ironbeam/skew-data`, which is unchanged). It reproduces Part 2 exactly for 07:30 / 07:50 / 08:48 and 07:34 / 07:53 on 2026-10-26. 6 route tests, no DB.
+- **Frontend.** `App.jsx` owns the setting (`localStorage` `ib-react-skew-stickiness`, default off) and the fetch, which runs only while the setting is on and uses the skew fetch's times, `until` cap and 10 s poll. In `PriceChart.jsx`, the settings dialog gets one checkbox, "Stickiness". When on, the Overview skew table gets one line under each time row, and the Overview window grows 18 px per line so the smile keeps its size. Colours: `#94a3b8`, `#60a5fa` (beyond noise), `#64748b` (in noise). The line reads e.g. "Δput -0.47 · SS -1.23 · ratio +0.38 · in noise". The first time reads "stickiness: needs a previous time".
+- **Disclosed:** the settings dialog itself gains a row (the toggle has to live somewhere); the Overview panel is unchanged with the setting off. When run standalone (no parent Dash), Apply leaves the dialog open with the existing "Could not sync bar interval" note. That is existing behaviour, shared by the ATM IV line setting, and the setting still applies.
+- **Playwright** (`react_price_preview/tests/e2e/cr-ck.spec.js`, backend `scripts/cr_ck_smoke_backend.py`, read-only). 2/2 pass:
+  - Off: the Overview panel PNG on this branch is **byte-identical** to `origin/main` `4f84484` (and to a second branch capture), and no stickiness request is made.
+  - On: three rows with the Part 2 numbers; every computed colour in the rows is in {`#94a3b8`, `#60a5fa`, `#64748b`, `#e2e8f0` (inherited panel text)}; the smile's height is unchanged and its overlap with the table is no larger than with the setting off (the Plotly legend already overlaps the table header on main); the setting survives a reload.
+  - Screenshots: `specs/assets/cr-ck/overview-off-{main,branch,branch2}.png`, `overview-on-branch.png`.

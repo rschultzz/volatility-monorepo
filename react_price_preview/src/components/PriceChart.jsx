@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   createChart,
   CrosshairMode,
@@ -91,6 +91,55 @@ function fmtGammaB(v) {
 function fmtGexExpDate(iso) {
   const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
   return m ? `${m[2]}/${m[3]}` : String(iso || '—')
+}
+
+// CR-CK — one Stickiness line under a skew-table time row (Dash palette only: blue / light grey / slate).
+// Window = previous selected time -> this time. Values in vol pts; ratio = actual / sticky-strike expected.
+const STICKY_TEXT = '#94a3b8'
+const STICKY_BEYOND = '#60a5fa'
+const STICKY_IN_NOISE = '#64748b'
+const STICKY_ROW_PX = 18
+
+function fmtSigned(v) {
+  if (v == null || !Number.isFinite(v)) return '--'
+  return `${v > 0 ? '+' : ''}${v.toFixed(2)}`
+}
+
+function StickinessRow({ item, last }) {
+  const cellStyle = {
+    height: `${STICKY_ROW_PX}px`,
+    padding: '0 0 4px 0',
+    fontSize: '10px',
+    lineHeight: '14px',
+    color: STICKY_TEXT,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  }
+  const border = last ? '0' : '1px solid #1e293b'
+  if (!item || item.reason === 'first time' || item.reason === '0DTE only' || item.reason === 'insufficient data') {
+    const note = !item ? '' : item.reason === 'first time' ? 'stickiness: needs a previous time' : `stickiness: ${item.reason}`
+    return (
+      <tr data-stickiness-row="1" style={{ borderBottom: border }}>
+        <td colSpan={6} style={{ ...cellStyle, color: STICKY_IN_NOISE }}>{note}</td>
+      </tr>
+    )
+  }
+  const valueColor = item.beyond_noise ? STICKY_BEYOND : STICKY_IN_NOISE
+  return (
+    <tr data-stickiness-row="1" style={{ borderBottom: border }}>
+      <td colSpan={6} style={cellStyle} title={`window ${item.window}; noise band ${item.band ?? '--'} vol pts`}>
+        Δput <span style={{ color: valueColor }}>{fmtSigned(item.actual)}</span>
+        {' · SS '}<span style={{ color: valueColor }}>{fmtSigned(item.expected)}</span>
+        {' · ratio '}
+        <span style={{ color: valueColor, fontWeight: 600 }}>
+          {item.reason === 'ok' ? fmtSigned(item.ratio) : item.reason}
+        </span>
+        {' · '}
+        <span style={{ color: valueColor }}>{item.beyond_noise ? 'beyond noise' : 'in noise'}</span>
+      </td>
+    </tr>
+  )
 }
 
 function partsForZone(epochSec, timeZone = 'America/Los_Angeles') {
@@ -733,6 +782,10 @@ export default function PriceChart({
   onLinkedCrosshairChange,
   onInteractionActiveChange,
   skewData = [],
+  // CR-CK: optional Stickiness rows under the skew table (state and fetch live in App.jsx).
+  stickinessOn = false,
+  stickinessData = [],
+  onApplyStickiness = null,
   smileData = null,
   // Snapshots and anchor controls
   smileSnapshots = null,
@@ -1031,6 +1084,13 @@ export default function PriceChart({
     }
   })
   const [draftAtmIvLineEnabled, setDraftAtmIvLineEnabled] = useState(atmIvLineEnabled)
+  const [draftStickinessOn, setDraftStickinessOn] = useState(stickinessOn)
+  // CR-CK: with Stickiness on, the Overview window grows by one line per time row so the smile keeps its size.
+  const stickinessExtraPx = stickinessOn && skewData?.length ? skewData.length * STICKY_ROW_PX : 0
+  const stickinessByTime = useMemo(
+    () => new Map((stickinessData || []).map((item) => [item.time, item])),
+    [stickinessData],
+  )
   // CR-BT: Levels: Current | Corrected — owned by App (URL param + localStorage).
   const [draftGexLevelsMode, setDraftGexLevelsMode] = useState(gexLevelsMode)
 
@@ -1217,10 +1277,11 @@ export default function PriceChart({
       setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
       setDraftInterval(normalizeIntervalValue(interval, '1min'))
       setDraftAtmIvLineEnabled(atmIvLineEnabled)
+      setDraftStickinessOn(stickinessOn)
       setDraftGexLevelsMode(gexLevelsMode)
       setSettingsError('')
     }
-  }, [gexMinAbsB, interval, atmIvLineEnabled, gexLevelsMode, settingsOpen])
+  }, [gexMinAbsB, interval, atmIvLineEnabled, stickinessOn, gexLevelsMode, settingsOpen])
 
   useEffect(() => {
     hideParentTopControls()
@@ -2563,6 +2624,7 @@ export default function PriceChart({
     setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
     setDraftInterval(normalizeIntervalValue(interval, '1min'))
     setDraftAtmIvLineEnabled(atmIvLineEnabled)
+    setDraftStickinessOn(stickinessOn)
     setDraftGexLevelsMode(gexLevelsMode)
     setSettingsError('')
     setSettingsOpen(true)
@@ -2574,6 +2636,7 @@ export default function PriceChart({
     setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
     setDraftInterval(normalizeIntervalValue(interval, '1min'))
     setDraftAtmIvLineEnabled(atmIvLineEnabled)
+    setDraftStickinessOn(stickinessOn)
     setDraftGexLevelsMode(gexLevelsMode)
   }
 
@@ -2601,6 +2664,7 @@ export default function PriceChart({
     // so they still take effect when the React app runs standalone (no parent
     // Dash controls present, e.g. dev/preview mode).
     setAtmIvLineEnabled(draftAtmIvLineEnabled)
+    if (typeof onApplyStickiness === 'function') onApplyStickiness(Boolean(draftStickinessOn))
     try {
       window.localStorage.setItem('ib-react-atm-iv-line', draftAtmIvLineEnabled ? '1' : '0')
     } catch (e) {
@@ -3387,7 +3451,7 @@ export default function PriceChart({
               boxShadow: '0 10px 25px rgba(0,0,0,0.4)',
               minWidth: smileCollapsed ? 'auto' : '280px',
               width: smileCollapsed ? 'auto' : smileWindowSize.width || 'auto',
-              height: smileCollapsed ? 'auto' : smileWindowSize.height || 'auto',
+              height: smileCollapsed ? 'auto' : (smileWindowSize.height ? smileWindowSize.height + stickinessExtraPx : 'auto'),
               color: '#e2e8f0',
               fontSize: '13px',
               pointerEvents: 'auto',
@@ -3467,7 +3531,8 @@ export default function PriceChart({
                       </thead>
                       <tbody style={{ fontFamily: 'ui-monospace, monospace', fontSize: '12px' }}>
                         {skewData.map((row, idx) => (
-                          <tr key={idx} style={{ borderBottom: idx === skewData.length - 1 ? '0' : '1px solid #1e293b' }}>
+                          <Fragment key={idx}>
+                          <tr style={{ borderBottom: (stickinessOn || idx === skewData.length - 1) ? '0' : '1px solid #1e293b' }}>
                             <td style={{ padding: '6px 0', fontWeight: 600 }}>{row.time}</td>
                             <td style={{ textAlign: 'right', color: row.d_atm > 0 ? '#4ade80' : row.d_atm < 0 ? '#f87171' : 'inherit' }}>
                               {row.d_atm != null ? row.d_atm.toFixed(2) : '--'}
@@ -3508,6 +3573,13 @@ export default function PriceChart({
                               </button>
                             </td>
                           </tr>
+                          {stickinessOn && (
+                            <StickinessRow
+                              item={stickinessByTime.get(row.time)}
+                              last={idx === skewData.length - 1}
+                            />
+                          )}
+                          </Fragment>
                         ))}
                       </tbody>
                     </table>
@@ -3633,6 +3705,29 @@ export default function PriceChart({
                   <span>
                     Show 0DTE ATM IV line{' '}
                     <span style={{ color: '#06b6d4', fontWeight: 700 }}>(cyan)</span>
+                  </span>
+                </label>
+
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    marginBottom: '14px',
+                    fontSize: '12px',
+                    color: '#cbd5e1',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={draftStickinessOn}
+                    onChange={(event) => setDraftStickinessOn(event.target.checked)}
+                    style={{ accentColor: '#60a5fa' }}
+                  />
+                  <span>
+                    Stickiness{' '}
+                    <span style={{ color: '#94a3b8' }}>(Overview: Δ put skew vs sticky strike, 0DTE)</span>
                   </span>
                 </label>
 
