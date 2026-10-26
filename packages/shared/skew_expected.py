@@ -1,7 +1,8 @@
 """Fitted expected curve for intraday 0DTE SPX put skew and ATM vol vs the ES move (CR-CJ).
 
-Pure functions, no I/O. Not wired into the Dash chart (CR-CJ K9); the Skew module's sticky-strike
-"Expected SS" block (`apps/web/modules/Skew/callbacks.py`) is unchanged.
+Pure functions, no I/O. The fitted curves are not wired into the Dash chart (CR-CJ K9); the Skew module's
+sticky-strike "Expected SS" block (`apps/web/modules/Skew/callbacks.py`) is unchanged. The CR-CK stickiness functions
+back the Overview panel's optional "Stickiness" rows (`apps/web/modules/Ironbeam/skew_stickiness.py`).
 
 Inputs, as CR-CJ measured them:
   put skew  = (vol75 - vol50) * 100 vol pts on the 0DTE PM expiry (`orats_monies_minute`; vol75 = 25-delta put)
