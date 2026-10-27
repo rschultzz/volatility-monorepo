@@ -186,6 +186,21 @@ not as a deviation from a ruling.
 - **C17 — guards.** Every DB read asserted ≥ 2026-01-01 00:00 UTC (prior-session P_target for 2026-01-06 is in range)
   and < 2026-06-05 21:00 UTC; read-only transaction; `dash_backfill_writer` role checked.
 
+- **C18 — missing minutes.** A RTH minute with no trades (no `es_flow_1m_databento` row) becomes a flat bar at the
+  previous close with zero volume, so `swing_legs` and the race see a continuous series. Sessions with a run of > 5
+  missing RTH minutes are excluded (counted). Step 0 reports the counts. Under this fill the C10 "gap" outcome can't
+  occur.
+
+## Approvals (Ryan, 2026-10-26, after freeze `6f58558`, before any data)
+
+- **C1 approved:** "Start confirmed". The approach is the leg whose start is confirmed (price has moved ≥ swing_d from the
+  prior opposite extreme); its end is the running extreme. Chosen in chat over the literal end-confirmed reading.
+- Implementation note for C5/C6 under C1: the leg is a candidate on qualifying bars k ∈ [c_s, c_next), where c_s is its
+  start confirmation and c_next is the bar that confirms the next leg's start (= this leg's end confirmation in the A5
+  code; the session's last bar + 1 for the leg still in progress). With the hold fixed at H bars, the box for a given
+  qualifying bar k is r0 = k − H + 1, so "earliest r0" in C6 is automatic; r0 must lie in [e(k), e(k) + 5], e(k) =
+  first bar of the running extreme over [leg start, k].
+
 ## Step 0 (no range outcomes) — stop for Ryan's review
 
 1. `es_flow_1m_databento` vs the `es_flow_1s_databento` minute aggregate (C3); field-conventions row.
