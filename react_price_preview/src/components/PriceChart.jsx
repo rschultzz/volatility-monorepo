@@ -24,6 +24,7 @@ import {
 } from 'web-shared'
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
+import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
 
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
@@ -74,11 +75,6 @@ const LIVE_OVERLAY_DOWN_FILL = 'rgba(229,231,235,0.18)'
 
 const EXPECTED_MOVE_COLOR = '#ef4444'
 
-function coerceGexMinAbsB(value, fallback = 10) {
-  const num = Number(value)
-  if (!Number.isFinite(num)) return fallback
-  return Math.max(0, Math.min(200, Math.round(num)))
-}
 
 // Shared formatters for GEX popup & panel
 function fmtGammaB(v) {
@@ -774,7 +770,7 @@ export default function PriceChart({
   selectedTimes: parentSelectedTimes = [],
   gexSegments,
   gexEnabled,
-  gexMinAbsB = 50,
+  gexMinAbsB = GEX_MIN_ABS_B_DEFAULT,
   expectedMoveLevels,
   onApplyGexMinAbsB,
   gexLevelsMode = 'current',
@@ -1071,7 +1067,7 @@ export default function PriceChart({
       }
     }
   }, [hoveredPanelLevel])
-  const [draftGexMinAbsB, setDraftGexMinAbsB] = useState(() => coerceGexMinAbsB(gexMinAbsB, 10))
+  const [draftGexMinAbsB, setDraftGexMinAbsB] = useState(() => coerceGexMinAbsB(gexMinAbsB))
   const [draftInterval, setDraftInterval] = useState(() => normalizeIntervalValue(interval, '1min'))
   const [settingsError, setSettingsError] = useState('')
 
@@ -1276,7 +1272,7 @@ export default function PriceChart({
 
   useEffect(() => {
     if (!settingsOpen) {
-      setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
+      setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB))
       setDraftInterval(normalizeIntervalValue(interval, '1min'))
       setDraftAtmIvLineEnabled(atmIvLineEnabled)
       setDraftStickinessOn(stickinessOn)
@@ -2623,7 +2619,7 @@ export default function PriceChart({
   }, [settingsOpen])
 
   function openSettings() {
-    setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
+    setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB))
     setDraftInterval(normalizeIntervalValue(interval, '1min'))
     setDraftAtmIvLineEnabled(atmIvLineEnabled)
     setDraftStickinessOn(stickinessOn)
@@ -2635,7 +2631,7 @@ export default function PriceChart({
   function closeSettings() {
     setSettingsOpen(false)
     setSettingsError('')
-    setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB, 10))
+    setDraftGexMinAbsB(coerceGexMinAbsB(gexMinAbsB))
     setDraftInterval(normalizeIntervalValue(interval, '1min'))
     setDraftAtmIvLineEnabled(atmIvLineEnabled)
     setDraftStickinessOn(stickinessOn)
@@ -3797,7 +3793,7 @@ export default function PriceChart({
                     marginBottom: '10px',
                   }}
                 >
-                  {coerceGexMinAbsB(draftGexMinAbsB, 10)}
+                  {coerceGexMinAbsB(draftGexMinAbsB)}
                 </div>
 
                 <div style={{ fontSize: '11px', color: '#94a3b8', lineHeight: 1.45 }}>
