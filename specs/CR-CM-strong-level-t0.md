@@ -253,3 +253,25 @@ without Ryan's ruling.
 4. **Env.** Confirm `GEX_COLOR_ABS_MAX` is unset (and `GEX_COLOR_PERCENTILE` = 95) on `Dash - MonoRepo`.
 5. Freeze-time choices 1, 2, 5, 6 (band at the open; ±1·IM window — 34 % / 48 % of strong lines fall outside it;
    first touch; train window) stand unless you change them.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-26, from Step 0 counts only; no outcome computed)
+
+**Rulings (Ryan, verbatim in substance):**
+1. A/A gate applies to the **primary (matched)** statistic, which passes in every cell. The train-put unmatched
+   median (+3.005 vs ±3) is recorded as a near-miss in an underpowered cell; proceed.
+2. Placebos must also sit ≥ 10 pts from **any CR-CB line** (gross ≥ 40 $bn), not just the strong set. A17's literal
+   rule is a readout. Report the resulting placebo counts per cell.
+3. Puts: the primary put read = **train + R-a pooled**, labelled **EXPLORATORY** — no untouched confirmation; R-b
+   (2025) is reserved for that. Calls unchanged: train verdict, R-a confirmation. Holm across calls / puts.
+4. Render env (checked by Ryan): `GEX_COLOR_ABS_MAX` unset, `GEX_COLOR_PERCENTILE` unset → code defaults (95th
+   percentile, no fixed scale), as Step 0 assumed.
+
+| # | Clause (implementation, fixed before the run) |
+|---|---|
+| A1.1 | **Gate.** M5 reads the matched statistic only; it passed in every cell on train and R-a (Step 0). Unmatched A/A is a readout. |
+| A1.2 | **Placebo (amends the A17 placebo for every set: S, X100, W).** As A16.4, plus: a candidate bin is dropped if it is < 10 pts from any level of the session's CR-CB set (A1.1: Corrected, ≤ 30 DTE, gross ≥ 40 $bn, 5-pt spacing, ±1·IM_d, top 6 — the "CR-CB line" measured in Step 0) or of the in-window strong set S. The 4 nearest surviving bins per real level, deduplicated, parent's sign. **Readout:** the same statistics with the A17 literal placebo (≥ 10 pts from the set under test only). Placebo counts per cell are reported for both. |
+| A1.3 | **Hypotheses and Holm.** H_call: strong calls, **train** (2026-01-06 → 06-05). H_put: strong puts, **train + R-a pooled** (236 sessions; one session-multinomial bootstrap over the union, seed 20260920, 10,000), labelled **EXPLORATORY**. Holm across {H_call, H_put}, one-sided α 0.025, matched statistic (M2). **Call confirmation:** strong calls on R-a alone, same statistic, one-sided p ≤ 0.025 and CI lower bound > 0. Readouts (no gate): put train-only and R-a-only; call pooled; all-type pooled per scope. |
+| A1.4 | **Verdicts.** H_call: B1 three verdicts on train; "confirmed" if it passes and the R-a confirmation passes, "train-only" if only train passes. H_put: B1 three verdicts, always tagged EXPLORATORY (R-a is no longer untouched for it; R-b reserved for confirmation). |
+| A1.5 | **Run.** `scripts/cr_cm_t0.py` (imports `scripts/cr_cm_lib.py`; the lib gains an optional `avoid` argument to `placebo`, default behaviour unchanged) is committed before its single run. JSON written before printing. Everything else as frozen (M1–M4, readouts, secondary dwell, IM < 25 exclusion readout, S − W comparison). |
