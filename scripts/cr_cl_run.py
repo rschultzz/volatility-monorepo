@@ -8,7 +8,8 @@ holdout are never loaded). Definitions live in scripts/cr_cl_lib.py (shared with
                    bootstrap CI (10,000 draws, seed 20260920); PASS / REFUTED / INCONCLUSIVE; >= 40 resolved + covered.
   readouts (A2.3): G1-up, G2-up, G2-down; swing 8 / 16; ratio cut -0.5 / 1.5; late legs; G1-down by GEX tag.
                    Unadjusted 95 % CIs, no verdicts, never pooled.
-Writes scripts/logs/cr_cl/results.json and legs.parquet.
+Writes scripts/logs/cr_cl/results.json and legs.parquet. Under CR_CL_PERIOD=y23 (CR-CO A1) the primary uses the
+vol-scaled swing and fixed swing 12 is a readout; outputs go to scripts/logs/cr_co/.
 """
 from __future__ import annotations
 
@@ -130,24 +131,37 @@ ALL_LEGS = []
 # ------------------------------------------------------------------------------------------ swing 12
 W12, cuts12 = C.add_terciles(C.build_legs(D, 12.0))
 P12 = W12[~W12["late"]]
-assert len(W12) == 1233 and int((W12["reason"] == "ok").sum()) == 764      # Step 0 parity (CR-CK)
-main, lg = cells_for(P12)
+if C.PERIOD == "y23":                  # CR-CO A1: primary on the vol-scaled swing; fixed swing 12 is a readout
+    WV, IM_TRAIN, NO_IM = C.vol_scaled_legs(D)
+    WP, _ = C.add_terciles(WV)
+    assert len(WP) == 2351 and int((WP["reason"] == "ok").sum()) == 738     # Step 0 parity (O8 counts)
+    assert len(W12) == 547 and int((W12["reason"] == "ok").sum()) == 506    # Step 0 parity (swing 12)
+    R.update(primary_swing="vol-scaled (12 x IM / IM_train)", im_train=IM_TRAIN, sessions_no_im=NO_IM)
+else:
+    WP = W12
+    assert len(W12) == 1233 and int((W12["reason"] == "ok").sum()) == 764  # Step 0 parity (CR-CK)
+PP = WP[~WP["late"]]
+main, lg = cells_for(PP)
 ALL_LEGS += lg
 prim = main["G1-down"]
 prim["verdict"] = verdict(prim)
 R["primary_G1_down"] = prim
-R["readout_swing12"] = {k: v for k, v in main.items() if k != "G1-down"}
+if C.PERIOD == "y23":
+    R["readout_vol_scaled"] = {k: v for k, v in main.items() if k != "G1-down"}
+    R["readout_swing12"], _ = cells_for(P12)
+else:
+    R["readout_swing12"] = {k: v for k, v in main.items() if k != "G1-down"}
 
 # ratio cut -0.5 / 1.5
-R["readout_ratio_cut"], _ = cells_for(P12, -0.5, 1.5)
+R["readout_ratio_cut"], _ = cells_for(PP, -0.5, 1.5)
 
 # late legs (own baseline, same strata)
-Lt = W12[W12["late"]]
+Lt = WP[WP["late"]]
 R["readout_late"], _ = cells_for(Lt)
 
 # GEX tags on G1-down (A8): each tag's legs vs the full matched baseline
 lev, _why = C.gex_levels(D)
-Pg = C.tag_gex(P12, lev)
+Pg = C.tag_gex(PP, lev)
 G1d = Pg[C.group_mask(Pg, "G1", -1)]
 baseg = Pg[(Pg["grp"] == "base") & (Pg["dir"] == -1)]
 R["readout_gex_G1_down"] = {}

@@ -111,6 +111,29 @@ def build_legs(D, swing: float) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def vol_scaled_legs(D) -> tuple[pd.DataFrame, float, list]:
+    """CR-CO A1 (A7 as changed 2026-10-26): per session swing = 12 x IM_d / IM_train, IM = canonical implied_move_1d,
+    IM_train = median over the y26 train sessions (the one train read: a pre-open feature). No-IM sessions: no legs."""
+    from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
+    imq = """SELECT trade_date, (feature_vector->>'implied_move_1d')::float AS im FROM bt_daily_features
+             WHERE feature_version = %s AND ticker = 'SPX' AND active AND trade_date BETWEEN %s AND %s"""
+    lo26, hi26 = L.PERIODS["y26"]
+    L.guard(lo26, hi26)
+    im26 = L.q(imq, (CANONICAL_FEATURE_VERSION, lo26, hi26)).drop_duplicates("trade_date")
+    im_train = float(im26[im26["trade_date"].isin(L.sessions("y26"))]["im"].dropna().median())
+    lo, hi = L.PERIODS[PERIOD]
+    L.guard(lo, hi)
+    im = L.q(imq, (CANONICAL_FEATURE_VERSION, lo, hi)).drop_duplicates("trade_date").set_index("trade_date")["im"]
+    parts, no_im = [], []
+    for d in D["SESS"]:
+        v = im.get(d)
+        if v is None or not np.isfinite(v) or v <= 0:
+            no_im.append(d)
+            continue
+        parts.append(build_legs(dict(D, SESS=[d]), 12.0 * float(v) / im_train))
+    return pd.concat(parts, ignore_index=True), im_train, no_im
+
+
 def add_terciles(W: pd.DataFrame) -> tuple[pd.DataFrame, list]:
     """C6b: tercile cut points of leg size over primary legs with a ratio (directions pooled), per swing."""
     W = W.copy()

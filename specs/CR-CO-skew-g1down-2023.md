@@ -55,7 +55,7 @@ CR-CL's single primary, G1-down (a swing-12 decline leg during which raw 0DTE PM
 | A1, A2, A4, A5, A9, A10, A13, A18, A19, A20, A21 | n/a | No levels traded, ranges, stops, entries, second touches or sizing; a direction test on legs. |
 | A3 | honoured | No entry modelled; the clock starts at the leg's confirmation bar close. |
 | A6 | honoured | G1-down is A6's "price down with put skew falling = bullish". |
-| A7 | honoured | Swing 12 primary; 8 / 16 and the vol-scaled swing (O8) are readouts. |
+| A7 | honoured (as changed 2026-10-26, Amendment A1) | Frozen: swing 12 primary; 8 / 16 and the vol-scaled swing (O8) readouts. **After A1:** A7 now reads a volatility-scaled swing (12 × session IM ÷ 2026 train median IM); the primary uses it; fixed 12 / 8 / 16 are readouts. |
 | A8, A12 | n/a | The GEX readout that splits put vs call levels cannot be computed before 2024-04-03 (O10); no level population is used. |
 | A11 | honoured | ±10 race primary, ±20 readout, favourable-excursion distribution. |
 | A14 | honoured | CR-CK definitions and shipped band, unchanged (K2). Step 0 reports the 2023 band for information only (O7). |
@@ -185,3 +185,23 @@ Unbiased (medians within 1 pp of 0), at or below nominal 5 %, wide (±30 pp on ~
 - No outcome was computed on any group leg. `cr_cl_run.py` was not run or changed.
 
 Stopped for Ryan's review.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-26, from the Step 0 counts only — no outcome read): vol-scaled primary
+
+Transcribed:
+- **Standing-rulings A7 changed 2026-10-26** to a volatility-scaled swing: swing = 12 × the session's implied move ÷ the 2026 train median implied move.
+- **The primary becomes G1-down on the vol-scaled swing** (50 legs, 50 covered at Step 0), i.e. the O8 legs.
+- **Everything else exactly as frozen:** CR-CK definitions and shipped band, ratio < 0 beyond noise, h = up, ±10 race from the confirmation bar close by 13:00 PT, 3-key matched in-noise baseline (terciles cut on the vol-scaled primary legs, as O8), session-cluster bootstrap 10,000 draws seed 20260920, ≥ 40 legs resolved and covered, three verdicts (K9), legs ending after 11:00 PT readout only, O5 / O6 exclusions.
+- **Fixed swing 12 (22 legs, underpowered) and swing 8 become readouts.**
+
+How Code applies it (fixed before the run):
+
+| # | Item | Value |
+|---|---|---|
+| A1.1 | Legs | `cr_cl_lib.vol_scaled_legs(D)`: per session `swing_legs(H, L, 12 × IM_d ÷ IM_train)`, IM as O8 (IM_train = 65.71, median of 102 train sessions); 9 sessions without IM contribute no legs. Same result as Step 0's O8 block (parity assert: 2,351 legs, 738 ratio-defined). |
+| A1.2 | Readouts (no verdicts, unadjusted) | On the vol-scaled legs: G1-up, G2-up, G2-down; ratio cut −0.5 / 1.5; late legs. Fixed swing 12 (all four cells incl. G1-down), swing 8, and swing 16 (it comes out of the unchanged loop; disclosed). GEX readout not computed (O10). |
+| A1.3 | Run | `CR_CL_PERIOD=y23 apps/web/.venv/bin/python scripts/cr_cl_run.py`, once, after this amendment and the script change are committed. `y26` path unchanged. |
+
+Conformance after A1: A7 row updated above (honoured, as changed by Ryan). A17 still deviates, pre-approved. No new "deviates".
