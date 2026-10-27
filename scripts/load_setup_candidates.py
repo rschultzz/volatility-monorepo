@@ -1,6 +1,6 @@
 """CR-CC L3 — load a setup gallery JSON (L10) into `setup_candidates`.
 
-    apps/web/.venv/bin/python -m scripts.load_setup_candidates research/gallery/<file>.json [--dry-run]
+    apps/web/.venv/bin/python -m scripts.load_setup_candidates research/gallery/<file>.json [--dry-run] [--run-cr CR-X]
 
 Validation (A1.4 / D4) rejects the whole file on any error; nothing is inserted:
   - top level: cr_id, set_name, level_frame (es_corrected | es | B | spx_cash), events[];
@@ -14,7 +14,8 @@ Validation (A1.4 / D4) rejects the whole file on any error; nothing is inserted:
 
 Rows are immutable: INSERT ... ON CONFLICT (id) DO NOTHING; the run reports inserted vs
 skipped. A corrected re-load needs a new set_name. Runs under the backfill protocol
-(dash_backfill_writer has INSERT/SELECT on setup_candidates and no DELETE).
+(dash_backfill_writer has INSERT/SELECT on setup_candidates and no DELETE), as backfill_run(--run-cr),
+default CR-CC.
 """
 from __future__ import annotations
 
@@ -187,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("gallery", type=Path)
     ap.add_argument("--dry-run", action="store_true", help="validate only; no DB connection")
+    ap.add_argument("--run-cr", default=CR_ID, help=f"CR recorded in bt_backfill_runs (default {CR_ID})")
     args = ap.parse_args(argv)
 
     doc = json.loads(args.gallery.read_text())
@@ -208,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
 
     conn = get_backfill_db_conn()
     assert_role_or_die(conn)
-    with backfill_run(conn, CR_ID) as run_id:
+    with backfill_run(conn, args.run_cr) as run_id:
         with conn.transaction():
             inserted, skipped = insert_rows(conn, rows)
         n_set = conn.execute(
