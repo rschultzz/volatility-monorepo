@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CR-CP Step 0 — counts, distributions, A/A. NO range outcome is computed. READ-ONLY, train only.
+"""CR-CP Step 0 (re-run after A1: primary = close box + close > 2-pt restart) — counts, distributions, A/A. NO range outcome is computed. READ-ONLY, train only.
 
 Spec: specs/CR-CP-range-edge-flow.md, "Step 0". Writes scripts/logs/cr_cp/step0.json.
   1. es_flow_1m_databento vs the es_flow_1s_databento minute aggregate (C3).
@@ -146,6 +146,8 @@ for nm, p in C.VARIANTS.items():
     log(f"  {nm:16s} ranges {s['n_ranges']:4d}  calls {s.get('calls')}  chosen fills "
         f"{(s.get('ch_fill') or {}).get('fill', 0)}  status {s.get('dstatus')}")
 SCH["primary"].to_parquet(C.OUT / "step0_primary_schedule.parquet")
+hb = R["schedules"]["hl_box"]                          # A1: hl_box = Step 0 v1's primary (parity with edd21bb)
+assert hb["n_ranges"] == 322 and hb["ch_fill"].get("fill") == 115, (hb["n_ranges"], hb["ch_fill"])
 
 # per-session range counts (primary)
 P0 = SCH["primary"]
@@ -157,12 +159,13 @@ LV = C.load_levels()
 R["levels_universe"] = dict(n=len(LV["USABLE"]), funnel=[f[:3] for f in LV["funnel"]])
 P0 = C.tag_levels(P0, LV)
 P0 = C.tag_skew(P0)
+P0 = C.tag_a9(P0, LV)
 P0["hour"] = (390 + P0["t"]) // 60
 P0["first"] = np.where(P0["n_in_session"] == 1, "first range", "later")
 call = P0[P0["dstatus"] == "call"]
 fills = call[call["ch_status"] == "fill"]
 R["splits"] = {}
-for col in ("lv_pos", "lv_strength", "lv_kind", "hour", "first", "skew", "g1down_like"):
+for col in ("lv_pos", "lv_strength", "lv_kind", "hour", "first", "skew", "g1down_like", "a9"):
     R["splits"][col] = dict(
         ranges={str(k): int(v) for k, v in P0[col].value_counts().items()},
         calls={str(k): int(v) for k, v in call[col].value_counts().items()},
@@ -207,6 +210,12 @@ R["aa"] = dict(n_splits=C.N_AA, mean_diff_pp=100 * float(np.nanmean(diffs)), med
                baseline_win_rate=float(BT["w"].mean()), baseline_n=int(len(BT)),
                baseline_edge_share=float((BT["edge"] == "EDGE").mean()))
 log("  A/A", R["aa"])
+
+# A1.5 gate
+n_fill, n_sess = int(len(fills)), int(fills["d"].nunique())
+R["a1_gate"] = dict(chosen_fills=n_fill, sessions=n_sess, aa_mean_pp=R["aa"]["mean_diff_pp"],
+                    passed=bool(n_fill >= 40 and n_sess >= 30 and abs(R["aa"]["mean_diff_pp"]) <= 1.0))
+log("  A1.5 gate", R["a1_gate"])
 
 R["elapsed_s"] = _time.time() - T0
 (C.OUT / "step0.json").write_text(json.dumps(R, indent=1, default=str))

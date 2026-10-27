@@ -72,6 +72,8 @@ class P:
     touch: float = 1.0
     entry: str = "edge"                     # "edge" (D4) or "close" (decision-bar close)
     X: float = 10.0
+    box: str = "close"                      # A1.1: "close" (edges / void on closes) or "hl" (frozen high / low box)
+    reset: str = "close2"                   # A1.2: "close2" (a close > 2 pts beyond the anchor) or "any" (frozen)
 
 
 PRIMARY = P()
@@ -86,7 +88,10 @@ VARIANTS = {
     "prog1": replace(PRIMARY, prog=1.0), "prog4": replace(PRIMARY, prog=4.0),
     "cpp_pushes": replace(PRIMARY, rule="cpp"),
     "entry_close": replace(PRIMARY, entry="close"),
+    "hl_box": replace(PRIMARY, box="hl", reset="any"),           # A1.1 readout = the Step 0 (frozen) primary
+    "frozen_reset": replace(PRIMARY, reset="any"),               # A1.2 readout
 }
+STEP0_FROZEN = replace(PRIMARY, box="hl", reset="any")           # what Step 0 v1 ran as "primary"
 
 _CONN = None
 
@@ -243,20 +248,26 @@ def swing_of(D, d, p: P):
 
 
 def find_range(B, lg, p: P):
-    """C6: first qualifying bar k in [c_s, c_next) with r0 = k - hold + 1 in [e(k), e(k) + start_win] and box width
-    <= p.width. Returns None or the range dict."""
-    H, L = B["h"], B["l"]
+    """C6 / A1: first qualifying bar k in [c_s, c_next) with r0 = k - hold + 1 in [e(k), e(k) + start_win] and box
+    width <= p.width. Box on closes (A1.1) or highs / lows (frozen). Anchor e: frozen = first bar of the running wick
+    extreme; A1.2 / A1.a = moves only on a close > 2 pts beyond the anchor bar's close. Returns None or the range."""
+    H, L, Cl = B["h"], B["l"], B["c"]
+    TOP, BOT = (Cl, Cl) if p.box == "close" else (H, L)
     s, dr = lg["start_i"], lg["dir"]
     hold = p.hold
-    best_px, e = (-np.inf if dr == 1 else np.inf), None
+    best_px, e, anc = (-np.inf if dr == 1 else np.inf), None, None
     for k in range(s, min(lg["c_next"], NB)):
         x = H[k] if dr == 1 else L[k]
         if (dr == 1 and x > best_px) or (dr == -1 and x < best_px):
-            best_px, e = float(x), k
+            best_px = float(x)
+            if p.reset == "any":
+                e = k
+        if p.reset == "close2" and (anc is None or dr * (Cl[k] - anc) > p.void):
+            e, anc = k, float(Cl[k])
         r0 = k - hold + 1
         if k < lg["c_s"] or e is None or not (e <= r0 <= e + p.start_win):
             continue
-        hi, lo = float(np.max(H[r0:k + 1])), float(np.min(L[r0:k + 1]))
+        hi, lo = float(np.max(TOP[r0:k + 1])), float(np.min(BOT[r0:k + 1]))
         leg_pts = abs(best_px - lg["start_px"])
         wmax = 0.5 * leg_pts if p.width == "half" else float(p.width)
         if hi - lo <= wmax:
@@ -292,6 +303,8 @@ def side_call(B, r0, t, p: P):
 
 
 def broken(B, j, rg, p: P):
+    if p.box == "close":                                       # A1.1: void only on a close > 2 pts beyond an edge
+        return B["c"][j] > rg["hi"] + p.void or B["c"][j] < rg["lo"] - p.void
     return B["h"][j] > rg["hi"] + p.void or B["l"][j] < rg["lo"] - p.void
 
 
@@ -315,7 +328,10 @@ def fill(B, rg, t, h, p: P):
     px = rg["lo"] + p.touch if h == 1 else rg["hi"] - p.touch
     for j in range(t + 1, NB):
         touch = B["l"][j] <= px if h == 1 else B["h"][j] >= px
-        far_break = (B["h"][j] > rg["hi"] + p.void) if h == 1 else (B["l"][j] < rg["lo"] - p.void)
+        if p.box == "close":                                   # A1.1 / A1.c
+            far_break = (B["c"][j] > rg["hi"] + p.void) if h == 1 else (B["c"][j] < rg["lo"] - p.void)
+        else:
+            far_break = (B["h"][j] > rg["hi"] + p.void) if h == 1 else (B["l"][j] < rg["lo"] - p.void)
         if far_break:                                          # broke the other edge (same-bar touch -> void)
             return "no fill: box broke", j, None
         if touch:
@@ -434,6 +450,30 @@ def tag_levels(S: pd.DataFrame, LV) -> pd.DataFrame:
         kind.append("put" if x["net"] < 0 else "call")
     S = S.copy()
     S["lv_pos"], S["lv_strength"], S["lv_kind"] = pos, strength, kind
+    return S
+
+
+def tag_a9(S: pd.DataFrame, LV) -> pd.DataFrame:
+    """A1.3 / A1.d: chosen edge (short = hi, long = lo) within 2 pts of a displayed Corrected line; 'second of two' if
+    another displayed line within 10 pts sits on the side the approach came from."""
+    out = []
+    for r in S.itertuples():
+        if r.d not in LV["CHART"]:
+            out.append("no levels")
+            continue
+        if r.side == 0:
+            out.append(None)
+            continue
+        E = r.hi if r.side == -1 else r.lo
+        at = [x["L"] for x in LV["CHART"][r.d] if abs(x["L"] - E) <= 2.0]
+        if not at:
+            out.append("not at a line")
+            continue
+        L2 = min(at, key=lambda z: abs(z - E))
+        prior = [x["L"] for x in LV["CHART"][r.d] if 0 < abs(x["L"] - L2) <= 10.0 and np.sign(L2 - x["L"]) == r.dir]
+        out.append("second of two" if prior else "at a line (single)")
+    S = S.copy()
+    S["a9"] = out
     return S
 
 
