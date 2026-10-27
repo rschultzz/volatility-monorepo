@@ -92,7 +92,7 @@ block (A6, A14, A16) used as readout only.
 | A6 | skew divergence direction | n/a (parked) | skew only as an A17 readout |
 | A7 | approach = larger move, swing 12 × IM ÷ 2026-train median IM; fixed 12 a readout | honoured | D0 primary vol-scaled (C2); fixed 12, 8, 16 readouts |
 | A8 | put levels overshoot; analyse put and call separately | honoured | put vs call split in the level readout; never pooled into the primary as a level effect |
-| A9 | two close levels → wait for the second | n/a | no level in the primary |
+| A9 | two close levels → wait for the second | n/a → **honoured (readout) after A1** | A1.3: edge at a GEX line, and "second of two close levels" |
 | A10 | earlier same-day S/R matters | honoured (readout) | "reach the last same-day pivot" readout |
 | A11 | target open; ±10 primary, ±20 readout, favourable-excursion distribution | honoured | D5 + MFE readout |
 | A12 | levels = chart's yellow / darkest (net ≥ day p95 \|net\|) | honoured (readout) | CR-CM `chart_levels` |
@@ -309,3 +309,39 @@ win rate is exactly 50 % by construction (each minute is raced both ways).
 1. Primary as frozen: 115 chosen-side fills / 156 calls / 322 ranges. Run as is?
 2. D1 leg-end reset: keep as frozen, or let the end move only on a > 2-pt new extreme (410 ranges)?
 3. Put / call and skew splits are too thin on train. Keep them as descriptive readouts (as frozen), or drop them?
+
+## Amendment A1 (Ryan, 2026-10-26, after Step 0 counts, before any outcome; motivated by the 2026-10-26 forward example, not test data)
+
+Vault spec D1 and Splits updated by Ryan. Changes (everything else as frozen):
+
+- **A1.1 — D1 box on 1-min closes.** Box edges = highest and lowest **close** over r0..k; width = highest − lowest close
+  ≤ 12. Wicks neither define nor void the box. **Void only if a bar closes > 2 pts beyond an edge** before entry (in
+  C8's decision loop and C9's fill search). Readout `hl_box`: the original high/low box (the Step 0 primary).
+- **A1.2 — box restart.** The leg's end (the anchor e, and so the r0 window and the 15-min clock) moves only when a bar
+  **closes > 2 pts beyond the running extreme**. Readout `frozen_reset`: the frozen rule (any new high / low moves it),
+  on the close box.
+- **A1.3 — A9 readout (new).** Chosen edge within 2 pts of any Corrected GEX line (the chart's displayed lines at the RTH
+  open: gross ≥ 40 $bn, CR-CM `chart_levels`, no ±IM window) vs not; and "second of two close levels": two displayed
+  lines within 10 pts of each other with the chosen edge within 2 pts of the farther one.
+- **A1.4 — thin splits** (put / call, range position, skew, hold 30) stay descriptive readouts as frozen; put / call is
+  reported "not readable on train" if a cell is < 40.
+- **A1.5 — gate (Ryan).** Re-run Step 0. If ≥ 40 chosen-side fills on ≥ 30 sessions and the A/A is clean (|mean| ≤ 1
+  pp), commit the run script and run the primary once without stopping again; otherwise stop and report.
+
+Readings Code fixed for A1 (before the re-run):
+
+- **A1.a — "running extreme" in A1.2 is on closes.** The anchor price is the anchor bar's close; the anchor moves to bar k
+  when c[k] is > 2 pts beyond it in the leg's direction (and also at the leg's first bar). Everything in A1 is on
+  closes, and a wick-based anchor would make the restart depend on the wicks A1.1 removes. The leg size for the
+  half-leg width readout stays the A5 wick extreme − start.
+- **A1.b — D4 touch and fill unchanged:** short touch = a bar's high ≥ close-box high − 1, filled at close-box high − 1
+  (long mirror). D4 wasn't amended; the edge it refers to is now the close edge.
+- **A1.c — a bar that touches the chosen edge and closes > 2 pts beyond the other edge** counts as a void (as frozen).
+- **A1.d — "second of two" side.** The farther line is the second one along the approach: for an up approach, the
+  other line sits below the edge's line (price passed it first); for a down approach, above. Tags: "second of two",
+  "at a line (single)", "not at a line"; sessions outside CR-CM's level universe are "no levels".
+- **A1.e — readout grid** (C12) re-centred on the A1 primary; `hl_box` and `frozen_reset` added.
+
+Conformance changes: **A9** n/a → **honoured (readout)**, via A1.3. **A2** stays honoured (A1 changes what the box is
+measured on, not its duration). **A3 / A20** honoured: the entry edge is now the accepted (close) top / bottom, as in
+Ryan's example. No "deviates".
