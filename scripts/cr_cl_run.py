@@ -134,7 +134,7 @@ P12 = W12[~W12["late"]]
 if C.PERIOD == "y23":                  # CR-CO A1: primary on the vol-scaled swing; fixed swing 12 is a readout
     WV, IM_TRAIN, NO_IM = C.vol_scaled_legs(D)
     WP, _ = C.add_terciles(WV)
-    assert len(WP) == 2351 and int((WP["reason"] == "ok").sum()) == 738     # Step 0 parity (O8 counts)
+    assert len(WP) == 2351 and int((WP[~WP["late"]]["reason"] == "ok").sum()) == 738   # Step 0 parity (O8, primary)
     assert len(W12) == 547 and int((W12["reason"] == "ok").sum()) == 506    # Step 0 parity (swing 12)
     R.update(primary_swing="vol-scaled (12 x IM / IM_train)", im_train=IM_TRAIN, sessions_no_im=NO_IM)
 else:

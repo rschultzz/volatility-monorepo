@@ -205,3 +205,5 @@ How Code applies it (fixed before the run):
 | A1.3 | Run | `CR_CL_PERIOD=y23 apps/web/.venv/bin/python scripts/cr_cl_run.py`, once, after this amendment and the script change are committed. `y26` path unchanged. |
 
 Conformance after A1: A7 row updated above (honoured, as changed by Ryan). A17 still deviates, pre-approved. No new "deviates".
+
+**Run log (A1.3).** Launch 1 crashed on the parity assert before any number was computed or saved: the assert compared *all* ratio-defined vol-scaled legs (1,075) with Step 0's *primary* ratio-defined count (738). The legs were identical to Step 0 (2,351 legs; 738 primary ratio-defined; G1-down 50). Fixed the assert to the primary count (O12 / C15 fix-and-rerun), committed, relaunched once.
