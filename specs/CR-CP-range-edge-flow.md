@@ -129,8 +129,10 @@ not as a deviation from a ruling.
   its running extreme (highest high of an up leg so far). This is causal and matches the worked example. Stop for
   Ryan's OK on this reading before Step 0 data is loaded.
 - **C2 — vol-scaled swing.** swing_d = 12 × IM_d ÷ median(IM) where IM = canonical `bt_daily_features`
-  `implied_move_1d` (SPX pts) and the median is over the CR-CP train universe (2026-01-06 → 2026-06-05, after C4's
-  exclusions). One number, reported in Step 0. Sessions with no IM are excluded (counted). D1 width (12), D2 progress
+  `implied_move_1d` (SPX pts) and the median is ~~over the CR-CP train universe (2026-01-06 → 2026-06-05, after C4's
+  exclusions)~~ **(amended before any data, see A0)** CR-CO's IM_train: the median over the CR-CJ `y26` sessions
+  (2026-01-02 → 2026-06-05, early closes out), computed the same way as `cr_cl_lib.vol_scaled_legs` (CR-CO A1.1:
+  65.71 pts, n 102). One number, reported and asserted in Step 0. Sessions with no IM are excluded (counted). D1 width (12), D2 progress
   (2), D4 (1 pt), D5 (±10) stay fixed in points as drafted; only the swing scales.
 - **C3 — bars and flow.** 1-min bars and flow from `es_flow_1m_databento` (o/h/l/c, `volume`, `buy_vol`, `sell_vol`),
   RTH 06:30–13:00 PT, the session's most-RTH-volume symbol (CR-CJ / CR-CM rule; roll weeks hold both contracts).
@@ -200,6 +202,12 @@ not as a deviation from a ruling.
   code; the session's last bar + 1 for the leg still in progress). With the hold fixed at H bars, the box for a given
   qualifying bar k is r0 = k − H + 1, so "earliest r0" in C6 is automatic; r0 must lie in [e(k), e(k) + 5], e(k) =
   first bar of the running extreme over [leg start, k].
+
+## Amendment A0 (Code, 2026-10-26, before any CR-CP data was read)
+
+- After branching, `origin/main` gained CR-CO (#96), which defines the vol-scaled swing's denominator (IM_train =
+  median canonical IM over the `y26` sessions, 65.71 pts). The branch was rebased onto `4075d27` and C2 now uses that
+  definition, so A7's "2026-train median implied move" is one number across CRs. Nothing else changes.
 
 ## Step 0 (no range outcomes) — stop for Ryan's review
 

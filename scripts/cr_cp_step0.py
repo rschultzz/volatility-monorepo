@@ -87,6 +87,7 @@ im = C.load_im()
 D = C.build(m1, im)
 R["funnel"] = D["funnel"]
 R["median_im"] = D["MED_IM"]
+assert abs(D["MED_IM"] - 65.71) < 0.01, D["MED_IM"]   # A0: CR-CO A1.1 IM_train
 R["swing_d"] = qtiles(list(D["SW"].values()))
 R["n_sessions"] = len(D["SESS"])
 R["missing_minutes"] = dict(sessions_with_any=int(sum(D["MISS"][d]["n_missing"] > 0 for d in D["SESS"])),

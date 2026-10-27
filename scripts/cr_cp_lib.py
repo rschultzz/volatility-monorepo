@@ -6,7 +6,7 @@ script so both use one definition of every quantity.
 
   data (C3, C4, C17, C18): es_flow_1m_databento RTH minutes, the session's most-RTH-volume symbol; canonical IM;
                 every read asserted >= 2026-01-01 and < 2026-06-05 21:00 UTC. Missing minutes = flat bars.
-  legs (C1, C2, C5): flow_features.swing_legs at swing_d = 12 x IM_d / median IM; a leg is an approach from the bar
+  legs (C1, C2, C5): flow_features.swing_legs at swing_d = 12 x IM_d / IM_train (A0: CR-CO's); a leg is an approach from the bar
                 that confirms its start (price >= swing_d from the prior extreme) until the next leg's start is
                 confirmed. One range per leg.
   range (C6), side (C7, C8), entry (C9), race (C10: CR-CL `race` plus the fill bar's adverse extreme).
@@ -146,13 +146,23 @@ def load_minutes() -> pd.DataFrame:
     return r
 
 
+IM_LO = date(2026, 1, 2)                    # A0: CR-CO's IM_train is the median over the CR-CJ y26 sessions
+
+
 def load_im() -> pd.Series:
-    guard_ts(pt(D_FROM, 0, 0), pt(D_TO, 13, 0))
+    guard_ts(pt(IM_LO, 0, 0), pt(D_TO, 13, 0))
     f = q("""
         SELECT trade_date, (feature_vector->>'implied_move_1d')::float AS im FROM bt_daily_features
         WHERE feature_version = %s AND ticker = 'SPX' AND active AND trade_date BETWEEN %s AND %s
-    """, (CANONICAL_FEATURE_VERSION, D_FROM, D_TO)).set_index("trade_date")["im"]
-    return f[~f.index.duplicated()]
+    """, (CANONICAL_FEATURE_VERSION, IM_LO, D_TO))
+    f = f.drop_duplicates("trade_date").set_index("trade_date")["im"]
+    return f
+
+
+def im_train(im: pd.Series) -> float:
+    """A0 / C2: as cr_cl_lib.vol_scaled_legs (CR-CO A1.1)."""
+    import cr_cj_lib as CJ
+    return float(im[im.index.isin(CJ.sessions("y26"))].dropna().median())
 
 
 def build(m1: pd.DataFrame, im: pd.Series) -> dict:
@@ -197,7 +207,7 @@ def build(m1: pd.DataFrame, im: pd.Series) -> dict:
         rm = [d for d in U if rule(d)]
         U = [d for d in U if not rule(d)]
         funnel.append([nm, len(rm), len(U), [str(x) for x in rm]])
-    med = float(np.median([im[d] for d in U]))
+    med = im_train(im)
     SW = {d: SWING_REF * float(im[d]) / med for d in U}
     return dict(SESS=U, BARS={d: BARS[d] for d in U}, SYM=SYM, MISS=MISS, IM={d: float(im[d]) for d in U},
                 MED_IM=med, SW=SW, funnel=funnel)
