@@ -207,3 +207,42 @@ How Code applies it (fixed before the run):
 Conformance after A1: A7 row updated above (honoured, as changed by Ryan). A17 still deviates, pre-approved. No new "deviates".
 
 **Run log (A1.3).** Launch 1 crashed on the parity assert before any number was computed or saved: the assert compared *all* ratio-defined vol-scaled legs (1,075) with Step 0's *primary* ratio-defined count (738). The legs were identical to Step 0 (2,351 legs; 738 primary ratio-defined; G1-down 50). Fixed the assert to the primary count (O12 / C15 fix-and-rerun), committed, relaunched once.
+
+---
+
+## Results (run 2026-10-26, `cr_cl_run.py` @ the run-assert commit, `CR_CL_PERIOD=y23`, launch 2 → `scripts/logs/cr_co/results.json`, `legs.parquet`, `run_stdout.log`)
+
+200 sessions (2023-05-01 → 2024-04-02 after O5 / O6 exclusions); vol-scaled swing with IM_train 65.71 pts; 9 sessions without IM. 10,000 session-cluster draws, seed 20260920.
+
+### Primary — G1-down on the vol-scaled swing → up, ±10 race
+
+| | Value |
+|---|---|
+| Legs / sessions | 50 / 38; resolved and covered **50** (32 win, 18 loss, 0 tie, 0 unresolved); EDGE share 60 % |
+| Win rate, group | **64.0 %** |
+| Win rate, matched in-noise baseline | 50.7 % (262 down legs: 130 win / 110 loss / 22 unresolved) |
+| Difference | **+13.3 pp, 95 % CI [−7.2, +32.0]**, two-sided bootstrap p 0.21 |
+| **Verdict (K9)** | **INCONCLUSIVE** (CI spans 0; not refuted: upper bound > 0) |
+
+Same direction and similar size as 2026 train (CR-CL: +17.4 pp [−1.2, +37.3], n 47), again with a CI that reaches below 0.
+
+### Primary-cell readouts (unadjusted, no verdicts)
+
+- ±20 race: +26.3 pp [−10.0, +51.0], n 28 resolved.
+- Signed move: +30 min +1.05 pts [−1.98, +4.16]; +60 min +1.90 pts [−2.46, +6.31] (group +0.31 / +2.77 vs baseline −0.74 / +0.87).
+- MFE before −10: median 13.75 pts (baseline 9.62); reaches +10 on 64 % (baseline 49.6 %); of those, +15 on 75 % (72 %) and +20 on 50 % (45 %).
+
+### Other readouts (±10 race diff, 95 % CI, n resolved and covered)
+
+| Readout | G1-up | **G1-down** | G2-up | G2-down |
+|---|---|---|---|---|
+| Vol-scaled (primary legs) | +5.6 [−16.1, +27.6] 34 | **+13.3 [−7.2, +32.0] 50** | +6.9 [−13.9, +29.5] 41 | −8.9 [−28.7, +13.3] 44 |
+| Vol-scaled, ratio cut −0.5 / 1.5 | +7.9 [−14.6, +30.8] 33 | +12.2 [−8.3, +30.9] 49 | +14.8 [−8.4, +39.5] 32 | −5.3 [−26.8, +19.4] 38 |
+| Vol-scaled, late legs | +4.8 [−71, +75] 5 | +5.4 [−70, +63] 8 | +4.5 [−41, +46] 10 | −1.1 [−49, +38] 12 |
+| Fixed swing 12 | −2.5 [−43, +39] 14 | +13.9 [−22.2, +51.4] 18 | +23.9 [−7.3, +65.6] 18 | +4.1 [−34, +48] 14 |
+| Fixed swing 8 | −3.3 [−25.0, +19.6] 33 | +11.6 [−10.5, +35.1] 40 | +9.5 [−12.4, +29.3] 40 | −18.5 [−38.9, +4.4] 46 |
+| Fixed swing 16 | n 6 | +7.1 [−60, +67] 7 | n 4 | n 7 |
+
+GEX readout: not computed (O10; every leg "no levels").
+
+The G1-down point estimate is +12 to +14 pp in every version with n ≥ 40 (vol-scaled, ratio cut, swing 8) and in fixed swing 12; none has a CI excluding 0. G2 (skew relaxed as mechanics imply → continuation) shows nothing consistent.
