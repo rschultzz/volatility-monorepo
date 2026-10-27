@@ -77,3 +77,94 @@ One "deviates" (A17). Step 0 reads no outcomes on group legs, so Code proceeds t
 ## Amendment A1 (Code, 2026-10-26, before any data was pulled): N2 parity check without reading train
 
 N2's parity check ("CR-CL Step 0 re-run on `y26` must reproduce its `step0.json`") would load 2026 train, which K6 forbids in this CR. Replaced by a **code-level parity check**: the diff to `cr_cl_lib.py` / `cr_cl_step0.py` replaces only the literal `"y26"` (5 sites) by `PERIOD`, whose default is `"y26"`, plus the `OUT` switch (`cr_cl` under `y26`); a test asserts that under the default the module resolves `PERIOD == "y26"` and `OUT == scripts/logs/cr_cl`, and that no `"y26"` literal remains outside the default. No train data is loaded. Everything else unchanged.
+
+---
+
+## Step 0 findings (2026-10-26, `scripts/cr_cn_step0.py` @ `a37218e` → `scripts/logs/cr_cn/step0.json`, `step0_extra.json`; no group outcome computed)
+
+R-a only: **186 sessions, 2024-04-03 → 2024-12-31**, none missing (the loader's `guard` held; 2026 train, 2025 and the holdout were not loaded). Loads were fresh SELECTs (no R-a cache existed). One launch, no errors. A1 parity held: under the default the module resolves `PERIOD = y26`, `OUT = logs/cr_cl`, and no `"y26"` literal remains outside the default.
+
+### Funnel, swing 12, primary legs (end ≤ 11:00 PT) — R-a vs CR-CL train
+
+| Step | R-a (186 sessions) | Train (107 sessions) |
+|---|---|---|
+| Legs in domain | 1,036 | 1,233 |
+| Primary legs | 681 (late 355) | 972 (late 261) |
+| Ratio defined | 399 (move too small 222; insufficient 55; no read 5) | 597 (219; 155; 1) |
+| In noise → baseline pool | 324 (up 152, down 172) | 448 (227, 221) |
+| Beyond noise | 75 (18.8 % of ratio-defined): **G1 25**, G2 28, neither 22 | 149 (25.0 %): G1 76, G2 45, neither 28 |
+
+Size tercile cuts (N5, re-cut on R-a): **20.92 / 29.5 pts** (train 20.0 / 28.5).
+
+R-a has 74 % more sessions than train but **fewer legs** (1,036 vs 1,233; 3.7 vs 9.1 primary per session after ratio-definition: 2.1 vs 5.6). 2024 moved less: swing-12 legs are rarer and a larger share is "move too small".
+
+### Cells (pre-outcome; covered = the stratum has ≥ 1 baseline leg)
+
+| Cell | Legs | Sessions | Covered | EDGE share | Can reach 40? |
+|---|---|---|---|---|---|
+| G1-up | 14 | 13 | 13 | 64 % | no |
+| **G1-down (primary)** | **11** | **11** | **11** | 82 % | **no — the primary is INCONCLUSIVE (underpowered) before any outcome** |
+| G2-up | 14 | 13 | 14 | 43 % | no |
+| G2-down | 14 | 12 | 14 | 50 % | no |
+| Baseline up / down | 152 / 172 | | | 47 % / 62 % | |
+
+- **The primary cannot carry a verdict.** 11 legs against a 40-leg minimum (train had 49). Under K7 the run would return INCONCLUSIVE (underpowered) whatever the outcomes.
+- The EDGE key costs nothing here (coverage without it: 11 / 11). Baseline strata: 108 occupied, median 3 legs, 23 with one leg.
+- Every readout cell is also small: ratio cut −0.5 G1-down 7; swing 8 G1-down 14; swing 16 G1-down 7; late G1-down 1. Pooling swings is not in the spec (CR-CL "never pooled").
+- GEX: levels on 172 / 186 sessions (median 6; 10 without P_target, 4 without IM). G1-down legs: put level 4, call 1, none 6.
+
+### Beyond-noise share by 30-min start bucket (ratio-defined legs, primary + late)
+
+| Start | 07:00 | 07:30 | 08:00 | 08:30 | 09:00 | 09:30 | 10:00 | 10:30 | 11:00 | 11:30 | 12:00 | 12:30 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| n | 105 | 73 | 81 | 57 | 46 | 43 | 45 | 36 | 44 | 41 | 29 | 6 |
+| Beyond | 15 % | 10 % | 24 % | 25 % | 28 % | 5 % | 24 % | 22 % | 11 % | 10 % | 0 % | 17 % |
+| G1 / G2 | 7 / 5 | 3 / 3 | 4 / 11 | 7 / 3 | 3 / 5 | 0 / 0 | 1 / 7 | 1 / 3 | 0 / 4 | 1 / 2 | 0 / 0 | 0 / 1 |
+
+Train's early-morning G1 cluster (07:00–07:59: 31 legs) is mostly absent (10 on R-a).
+
+### Quote lag (N3)
+
+- All 72,709 R-a 0DTE PM RTH rows: label − `quote_date` median **129 s** (p5 79, p95 179); 0.3 % > 5 min (dropped). Matches field-conventions.
+- At the leg's end snapshot e: median 108 s on ratio-defined primary legs (G1-down 85 s; baseline down 111 s).
+- **Consequence:** the ES price paired with snapshot e is the close **1–4 bars before the leg's extreme bar** (1: 110 legs, 2: 237, 3: 51, 4: 1), against 0 in 2026. So on R-a the skew window and its ES move both stop about 2 min short of the leg's extreme. This is CR-CJ A1 working as specified (skew and price stay paired), but it means the R-a "leg" read is the leg minus its last ~2 minutes, which lowers |ES move| (more "move too small") and can change the ratio. K5 forbids changing it; disclosed.
+
+### 2024 noise band vs the shipped band (N4; report only — the band was not changed)
+
+SD of the endpoint Δ put skew, vol pts, CR-CK C6 method on R-a, and its ratio to the shipped (2026) band:
+
+| Start | 5 min | 15 | 30 | 60 | 120 | ratio 5 / 15 / 30 / 60 / 120 |
+|---|---|---|---|---|---|---|
+| 07:00 | 0.62 | 0.69 | 0.79 | 0.84 | 0.96 | 0.85 / 0.61 / 0.62 / 0.78 / 0.95 |
+| 07:30 | 0.55 | 0.68 | 0.77 | 0.89 | 1.02 | 0.62 / 0.54 / 0.65 / 0.73 / 0.73 |
+| 08:00 | 0.63 | 0.65 | 0.76 | 0.81 | 0.85 | 0.96 / 0.76 / 0.87 / 0.92 / 0.66 |
+| 08:30 | 0.63 | 0.70 | 0.73 | 0.86 | 0.99 | 1.10 / 0.85 / 0.89 / 0.73 / 0.93 |
+| 09:00 | 0.52 | 0.61 | 0.70 | 0.85 | 1.03 | 0.90 / 0.77 / 0.63 / 0.72 / 0.81 |
+| 09:30 | 0.53 | 0.67 | 0.69 | 0.89 | 1.26 | 0.58 / 0.46 / 0.51 / 0.67 / 0.48 |
+| 10:00 | 0.57 | 0.68 | 0.81 | 0.87 | 1.30 | 0.63 / 0.64 / 0.68 / 0.62 / 0.43 |
+| 10:30 | 0.71 | 0.86 | 0.91 | 1.37 | 1.77 | 0.90 / 0.91 / 0.69 / 0.54 / 0.39 |
+| 11:00 | 0.75 | 0.88 | 1.17 | 1.32 | 1.81 | 0.52 / 0.34 / 0.47 / 0.44 / 0.39 |
+| 11:30 | 1.09 | 1.43 | 1.39 | 1.80 | 1.80 | 0.37 / 0.47 / 0.38 / 0.34 / 0.34 |
+| 12:00 | 1.04 | 1.23 | 2.00 | 3.21* | 3.21* | 0.33 / 0.24 / 0.40 / 2.19 / 2.19 |
+| 12:30 | 1.73 | 2.78 | 2.78* | 2.78* | 2.78* | 0.32 / 0.31 / 0.31 / 0.31 / 0.31 |
+
+\* carried (C6 clamp). **2024 noise is lower than the shipped band:** median ratio 0.71 (IQR 0.61–0.85) over 07:00–10:30; after 11:00 it is a third of 2026's. So the shipped band is **conservative** on R-a (fewer legs flagged beyond noise than a 2024-measured band would flag). R-a median 0DTE put skew level 1.87 vol pts.
+
+### A/A (N9; ±10 race on baseline legs only, 200 session halves, 500-draw bootstrap each)
+
+| Direction scored | Up legs: median [2.5, 97.5 %] | CI excludes 0 | Down legs: median [2.5, 97.5 %] | CI excludes 0 |
+|---|---|---|---|---|
+| Continuation | −1.4 pp [−21.6, +23.8] | 2.0 % | +1.4 pp [−19.0, +17.6] | 1.0 % |
+| Against | +0.8 pp [−21.8, +21.7] | 2.0 % | −1.2 pp [−19.1, +20.9] | 3.5 % |
+
+Unbiased (medians within 1.5 pp of 0), slightly conservative (1–3.5 % vs nominal 5 %), wider than train (±20 pp on ~80-leg halves).
+
+### Gate summary for Ryan
+
+- **No data gate failed.** Sessions complete, loader guard held, coverage 93–100 %, A/A clean.
+- **The primary is underpowered before any outcome:** G1-down has **11 legs** on R-a (train 49). By K7 the run can only return INCONCLUSIVE (underpowered). Every readout cell is ≤ 14 legs.
+- Two R-a differences drive the low count, both outside K5's reach: 2024 has fewer and smaller swing-12 legs, and the 2-min quote lag cuts the last ~2 minutes off each leg's skew / price read.
+- The shipped band is wider than 2024's own noise (≈ 0.7×), so it under-flags on R-a. Not changed (K2).
+- **A17 approval is still pending.**
+
+Stopped for Ryan's review. No run script change has been made; the run has not been executed.
