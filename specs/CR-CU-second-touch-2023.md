@@ -145,3 +145,51 @@ functions (with 1-min ones).
 | Revoked | R1 touch-bar close | **not used** | R2 level entry, labelled; R3–R7 not used |
 
 Two "deviates" (A3, A7), both pre-approved by Ryan in the kickoff; nothing else deviates. Proceeding to Step 0.
+
+## Step 0 findings (2026-10-26; `scripts/cr_cu_step0.py` + `scripts/cr_cu_lib.py` → `scripts/logs/cr_cu/step0.json`; no touch outcome computed)
+
+One launch, exit 0. Read-only role and transaction asserted; every read inside [2023-05-01 00:00 PT, 2024-04-02 13:00
+PT]. Embedded constants checked against the main-checkout logs: CR-CT cuts (`cr_ct/step0.json`) and CR-CO exclusions
+(`cr_co/exclusions.json`) equal. Every bar read is `source = 'databento'`. The only races run are the random-baseline
+entries for the A/A.
+
+**C1 confirmed:** no 1-s (or 1-min Databento flow) table covers 2023, so the touch is the 1-min touch bar and the race
+runs on `ES.c.0` 1-min bars from bar j + 1 (as frozen above). Reported here, before any outcome was loaded.
+
+**Universe (U2):** 234 NYSE sessions → no Databento RTH bars 3 (expiry Fridays 2023-09-15, 12-15, 2024-03-15) → early
+close 3 (2023-06-16 expiry Friday with 1 bar, 07-03, 11-24) → no canonical IM 10 → CR-CO roll-contaminated 10 → CR-CO
+2023-09 15 (5 more of its 20 already out) → **191 sessions**. IM p10 / p50 / p90 21.0 / 34.6 / 54.5 pts (2026 train
+median 67). 216 relvol priors.
+
+**Levels per session** (median [IQR]): F1 3 [2, 3], F2 2 [2, 2], RUN 4 [3, 5]. F1 and F2 missing on 3 sessions each:
+2023-05-01 (no prior read) and the two Mondays after an expiry Friday in the window (U3).
+
+**Touches** (n / sessions, duplicates C5):
+
+| | F1 | F2 | RUN |
+|---|---|---|---|
+| first touch | 253 / 147 (1 dup) | 215 / 177 (15 dup) | 430 / 182 (31 dup) |
+| second touch | 193 / 125 | 168 / 153 (4 dup) | 261 / 150 (15 dup) |
+
+Primary set (deduped second touches): **603 on 179 sessions**, RUN 246 / F1 193 / F2 164; break up 293 / down 310;
+EDGE 153 / INTERIOR 450; 14 on expiry-week Mon / Tue. Relvol undefined on 26 (< 10 priors, the first weeks of May).
+
+**Classes on CR-CT's frozen cuts (no re-fit):**
+
+| window | second touch FAST | SLOW | NEITHER | undefined | first touch FAST | SLOW |
+|---|---|---|---|---|---|---|
+| **10 min (primary)** | **73 (57 s)** | **164 (95 s)** | 340 | 26 | 188 (105 s) | 199 (117 s) |
+| 5 min | 94 (70) | 135 (90) | 348 | 26 | 204 (120) | 170 (101) |
+| 20 min | 69 (51) | 157 (89) | 351 | 26 | 165 (91) | 171 (98) |
+
+Second touches by family, FAST / SLOW: F1 26 / 46, F2 16 / 48, RUN 31 / 70 (FAST cells < 40, so readout only). Without
+expiry-week Mon / Tue: FAST 73, SLOW 158. **Era note:** on the frozen cuts, 57 % of 2023 second touches are at or below
+the lower speed cut and 19 % at or above the upper (first touches 37 % / 36 %). So second-touch approaches in 2023 were
+slower per unit of IM than the train first touches the cuts came from. Relvol p10 / p50 / p90 0.62 / 1.02 / 2.11.
+
+**A/A (U9, 200 splits, keys = 237 second-touch FAST ∪ SLOW):** mean **+0.26 pp**, median +0.10, SD 3.2, p5 / p95
+−4.8 / +5.3; 3.0 % of keys unmatched. Baseline 116,362 resolved entries (win rate 0.500 by construction), EDGE share
+0.24.
+
+**Gate:** FAST 73 ≥ 40 on 57 ≥ 30 sessions; SLOW 164 ≥ 40 on 95 ≥ 30; |A/A| 0.26 ≤ 1 pp → **passed**. Committing the
+run script, then running once without stopping.
