@@ -155,3 +155,41 @@ position short of 24 / straddling 11 / beyond 24; **put 15 / call 44** (put not 
 
 **E9 gate: passed** (218 ≥ 40 fills, 125 ≥ 30 sessions, |A/A| 0.30 ≤ 1 pp). Per the kickoff the run script is committed
 and the primary is run once without stopping.
+
+## Result (single run, 2026-10-26) — `scripts/cr_cr_run.py` @ `21dd906` → `scripts/logs/cr_cr/results.json`
+
+One launch, exit 0 (6.8 s on Step 0's caches). The schedule asserts held (990 ranges, 218 chosen fills, as Step 0). R-a
+only: 180 sessions, 10,000 session-cluster draws, seed 20260920. Train, R-b and the holdout were not read.
+
+### Primary — effort-chosen edge minus the opposite edge, ±10 race (stop-free; a direction test, not Ryan's exit, B6)
+
+| | resolved | win rate | vs 50 % |
+|---|---|---|---|
+| chosen side | 173 (111 sessions; 44 unresolved, 1 tie) | **52.0 %** | +2.0 [−5.6, +9.8] |
+| opposite side | 231 (49 unresolved, 1 tie) | **50.2 %** | +0.2 [−6.3, +6.8] |
+| **chosen − opposite** | | **+1.8 pp [−10.6, +14.6]** | **INCONCLUSIVE** |
+
+Train gave +14.6 [−0.8, +30.0]; R-a's point estimate is an eighth of that and its CI is centred near 0.
+
+### Readouts (no verdicts, unadjusted)
+
+- True pairs (both sides filled and resolved, n 143): −4.2 [−19.6, +11.1].
+- vs the C13 matched random baseline (coverage 100 %): chosen +2.4 [−5.4, +10.1]; opposite +0.1 [−6.4, +6.6].
+- ±20 race (A11): chosen 55.2 % (n 87) vs opposite 42.7 %, +12.4 [−6.6, +31.4].
+- Max favourable before −10 (A11): chosen median 7.75 pts (≥ 10: 41 %, ≥ 20: 19 %); opposite 6.5 (41 %, 17 %).
+- Grid (chosen − opposite, pp): ratio 1.3 +4.4 [−4.6, +13.9] (332); ratio 2.0 +4.5 [−29.5, +37.6] (31, descriptive);
+  swing fixed 12 +7.0 [−5.7, +19.7] (123). All positive and all cover 0: a flat, small lean, no plateau above 0.
+- Splits:
+  - call side: short +10.1 [−9.5, +28.9] (85); long −6.3 [−25.3, +13.3] (88).
+  - levels: strong line within 10 pts +12.5 [−13.6, +39.0] (47); weak −0.4 [−16.4, +15.3] (95); none / no levels
+    descriptive. Position vs the strong line: every cell < 40 (descriptive). **Put / call not readable on R-a** (call
+    33, put 14).
+  - decision hour: every hour < 40 (descriptive).
+  - G1-down flag on the approach: 3 trades (descriptive); the rest +1.8 (170).
+
+### Reading
+
+On R-a, ranges where the up pushes (or down pushes) took far more contracts per point without price getting
+anywhere did **not** pick the better edge in a way the data can tell apart from chance: chosen edge 52 %, opposite 50 %,
++1.8 pp with a CI from −11 to +15. INCONCLUSIVE. The train lead (+14.6) does not repeat at its size; every readout
+leans slightly positive but none excludes 0. Not shortlisted.
