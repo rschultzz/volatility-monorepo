@@ -125,3 +125,66 @@ Reads: the latest timestamp in each input table (no values from any session ≥ 
 | Q5 | **A17 (deviates)** | Approve on the CR-CL terms (measurement only, nothing shortlisted), as for CR-CL / CR-CN / CR-CO. |
 
 Amendment to X6, effective now: the completeness gate is **390 / 390 RTH ES bars** (finding 2).
+
+---
+
+## Rulings (Ryan, 2026-10-27, from Step 0 only — no outcome read), transcribed
+
+| # | Ruling |
+|---|---|
+| RL1 | **ES input: daily Databento pull** of the prior session's ES 1-min bars (and anything else the frozen code reads from the Databento tables), keeping B5 and the frozen G1-down code unchanged. Price it in Step 0 (one session) and check availability timing. STOP if > $1 per session or not available by 10:30 UTC the next morning. Needs the Databento key and `BACKFILL_DATABASE_URL` on the cron service (Ryan sets them). |
+| RL2 | **Log the baseline:** every qualifying leg with its CR-CL matching keys (size tercile, 30-min bucket, EDGE / INTERIOR), with outcomes for G1-down **and** the in-noise down legs. |
+| RL3 | **Cron 11:00 UTC weekdays (Tue–Sat)**, processing the previous session. Completeness: all 390 RTH bars, else the session is logged as skipped (counted, no events). |
+| RL4 | **MFE: yes.** Max favourable move before −10, plus ±20 and +30 / +60 as listed. |
+| RL5 | **A17 approved on the CR-CL terms:** a measurement only; nothing shortlisted from it. |
+
+Supersedes K9 (cron time) and the parts of X3, X5, X6, X7, X8 that conflict. Q1–Q5 are answered.
+
+## Step 0b (RL1 gate) — `scripts/cr_cx_step0b.py` → `scripts/logs/cr_cx/step0b.json` (metadata calls only; nothing downloaded or written)
+
+- **Cost (`metadata.get_cost`, `trades`, CR-CA window [06:15, 13:00) PT, every contract CR-CA stores that day):**
+  - 2026-10-26: ESZ6 **$0.447** (17.1 MB).
+  - 2026-10-23: ESZ6 **$0.471** (18.0 MB).
+  - 2026-09-15, a roll week with two contracts: ESU6 $0.087 + ESZ6 $0.306 = **$0.393**.
+  - **Max $0.47 per session, under the $1 cap. Passes.**
+- **Availability (`get_dataset_range`, GLBX.MDP3 `trades`):** checked at 14:11:34 and 14:12:15 UTC, the end was 06:11:35 and 06:12:15 UTC. That is a **rolling 8-hour delay** on this account's historical access. So a session ending 20:00 UTC (PDT) or 21:00 UTC (PST) is available by **04:00–05:00 UTC**, 5½–6½ h before 10:30 UTC. **Passes.** The script re-checks the dataset end before every pull (Y4).
+
+No STOP. Implementation proceeds.
+
+## Implementation choices (fixed 2026-10-27 after the rulings, before implementation code; supersede X3–X12 where they differ)
+
+| # | Choice | Value |
+|---|---|---|
+| Y1 | Target sessions | Default: every NYSE trading day from **2026-10-27** through the last session before today (UTC), that has no `forward_log_sessions` row. This is normally one session (the previous one); after a failed run it catches up. `--session D` processes one date. **Any date < 2026-10-27 is refused** (exit 2) before any DB or network call. So is a date that is not a trading day, or one whose Databento window end + 8 h is in the future. |
+| Y2 | Databento pull (RL1) | Per session: for each `cr_ca_step0.contracts_for(D)` contract, cost-check (`get_cost` ≤ $1.00 for the session, else abort), confirm the dataset end ≥ the window end, download `trades` [06:15, 13:00) PT to a temp dir, aggregate with `cr_ca_step0.aggregate_1s` and `in_window`. Insert into `es_flow_1s_databento` (ON CONFLICT DO NOTHING, the CR-CA insert), then roll up that window into `es_flow_1m_databento` with `packages/shared/flow_1m.insert_sql` (CR-CD A4). The frozen code reads only `es_flow_1s_databento` (CR-CJ `load_es`); the 1-min table is kept consistent, as CR-CA / CR-CD left it. If the session's 1-s rows already exist (re-run), the download is skipped. |
+| Y3 | Inputs to the frozen code | One session, by the CR-CJ loader SQL restricted to that date, with no `guard` (B4 is enforced by Y1). Skew: the `load_skew` query. ES: the `load_es` Databento query. Then `skew_minutes`, `front_bars`, `es_close_at_snapshot`. IM_d: canonical `bt_daily_features.implied_move_1d` (`CANONICAL_FEATURE_VERSION`). Legs: `cr_cl_lib.build_legs(D, 12 × IM_d ÷ 65.71410292087306)`, the per-session body of `vol_scaled_legs`; IM_train is a frozen constant, re-derived in the parity test. |
+| Y4 | Completeness (RL3) | Skipped, with a `forward_log_sessions` row and no legs, if: the front symbol lacks any of the 390 RTH bars (`build_legs` would silently return nothing); or there is no IM_d; or there are no 0DTE PM skew rows; or it is an NYSE early close (2026-11-27, 2026-12-24, 2027-11-26; cr_cj `EARLY_CLOSES` convention). The skew snapshot count is stored on every session row, so thin ORATS days are visible. |
+| Y5 | Logged legs (RL2) | Every **primary** (e ≤ 11:00 PT) leg with `reason == 'ok'` (ratio defined), either direction, with its group (`G1` / `G2` / `base` / `neither`) and cell label (`G1-down`, `G1-up`, `G2-up`, `G2-down`, `base-down`, `base-up`, `neither-down`, `neither-up`). Matching keys: `dir`, `size_pts`, `size_tercile` (cut at the **frozen y26 vol-scaled cuts 21.25 / 30.33 pts**, re-derived in the parity test), `cbucket` (30-min bucket of the confirmation bar), `edge` (EDGE / INTERIOR, C7). The confirmation re-cuts terciles on the logged sample by C6b if pre-registered that way; the raw size is stored for that. Late and non-ratio legs are counted on the session row, not logged. |
+| Y6 | Outcomes (RL2, RL4) | For `G1-down` and `base-down` legs only, h = +1. `race_10`, `race_20` ∈ {win, loss, tie, unresolved, gap} (`cr_cl_lib.race`), `move_30`, `move_60` (pts, `move_at`, NULL past 12:59), `mfe_before_m10` (`mfe_before`, pts). They are computed from the same session's bars in the same transaction as the legs, because the race ends at the 12:59 bar. A run also writes outcomes for any earlier eligible leg missing one (catch-up), reloading that session's bars. |
+| Y7 | Atomicity / idempotency | One DB transaction per session: legs, outcomes, session row. Every insert is ON CONFLICT DO NOTHING on its unique key: legs (definition_version, session_date, leg_end_ts_pt, dir); outcomes (event_id); sessions (definition_version, session_date). A re-run inserts 0. |
+| Y8 | Tables | `forward_log_events`, `forward_log_outcomes`, `forward_log_sessions` (`scripts/cr_cx_ddl.sql`), insert-only by trigger, as `setup_reviews`. Applied once by the owner with `DATABASE_URL`; `dash_backfill_writer` gets SELECT, INSERT (and USAGE on the sequences). |
+| Y9 | Printing (B4, K6) | stdout and `update_run_smoke` carry counts only: sessions processed / skipped (with reason), legs logged by cell, outcomes inserted, Databento rows and cost. No outcome value, rate or aggregate is printed or stored outside the outcome rows. A test asserts that no outcome value appears in stdout. |
+| Y10 | Render | `databento` added to `apps/cron/requirements.txt` (pinned to the local 0.86.0). `cr_cj_lib` reads `.env` only if it exists (it raises today, and Render has none). That is a no-op change for local runs; the frozen definitions are untouched. Code SHA = `RENDER_GIT_COMMIT`, else `git rev-parse HEAD`. |
+| Y11 | Tests (`tests/test_cr_cx_forward_log.py`) | (a) Guard: dates < 2026-10-27 (train, holdout, 2026-10-26) are refused with no DB or network call. (b) Parity: on 3 `y26` train sessions, Y3's one-session loader + leg builder returns exactly `cr_cl_lib.vol_scaled_legs`'s legs, groups and keys (in memory, nothing inserted). The same test re-derives IM_train and the tercile cuts. (c) Idempotency on **temp** copies of the three tables (session-local `pg_temp`, never the real tables): processing a train session twice inserts n, then 0; UPDATE and DELETE raise; stdout holds counts only. |
+| Y12 | First live run | The cron's first run (2026-10-28 11:00 UTC) logs 2026-10-27. No forward session is processed by hand in this CR. Only Y11 runs here, on train data and temp tables. |
+
+## Standing rulings conformance (re-checked after RL1–RL5)
+
+| Ruling | Status | Note |
+|---|---|---|
+| A1–A5, A9, A10, A12, A13, A18–A21 | n/a | No levels, ranges, entries, stops or sizing. |
+| A6, A7, A14, A15, A16 | honoured | Unchanged from freeze. |
+| A8 | n/a | No level population. |
+| A11 | honoured | ±10 primary, ±20, +30 / +60 moves, and MFE before −10 (RL4). |
+| **A17** | **deviates — approved by Ryan 2026-10-27 (RL5)** on the CR-CL terms: a measurement only, nothing shortlisted. Logged in standing-rulings. |
+| B1 | honoured | No verdict here. |
+| B2, B3 | n/a | Nothing tuned. |
+| B4 | honoured | Sessions ≥ 2026-10-27 only, enforced before any read. Holdout never read (Step 0b used metadata only). Counts only printed. |
+| B5 | **honoured (RL1)** | Databento pulled daily; the frozen code reads it unchanged. The B5 deviation at freeze is withdrawn. |
+| B6 | honoured | Stop-free signal log, not Ryan's trade. |
+| B7 | honoured | EDGE / INTERIOR stored on every logged leg (RL2), for the matched baseline. |
+| B8 | n/a | No labels. |
+| C1, C2 | n/a | No display. |
+| R1–R7 | not used | |
+
+One remaining "deviates" (A17), approved (RL5). Proceeding to implementation.
