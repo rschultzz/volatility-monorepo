@@ -275,3 +275,76 @@ without Ryan's ruling.
 | A1.3 | **Hypotheses and Holm.** H_call: strong calls, **train** (2026-01-06 → 06-05). H_put: strong puts, **train + R-a pooled** (236 sessions; one session-multinomial bootstrap over the union, seed 20260920, 10,000), labelled **EXPLORATORY**. Holm across {H_call, H_put}, one-sided α 0.025, matched statistic (M2). **Call confirmation:** strong calls on R-a alone, same statistic, one-sided p ≤ 0.025 and CI lower bound > 0. Readouts (no gate): put train-only and R-a-only; call pooled; all-type pooled per scope. |
 | A1.4 | **Verdicts.** H_call: B1 three verdicts on train; "confirmed" if it passes and the R-a confirmation passes, "train-only" if only train passes. H_put: B1 three verdicts, always tagged EXPLORATORY (R-a is no longer untouched for it; R-b reserved for confirmation). |
 | A1.5 | **Run.** `scripts/cr_cm_t0.py` (imports `scripts/cr_cm_lib.py`; the lib gains an optional `avoid` argument to `placebo`, default behaviour unchanged) is committed before its single run. JSON written before printing. Everything else as frozen (M1–M4, readouts, secondary dwell, IM < 25 exclusion readout, S − W comparison). |
+
+---
+
+## Result (single run, 2026-10-26)
+
+**Run.** `scripts/cr_cm_t0.py` + `scripts/cr_cm_lib.py` at commit `580c42a` (sha256 `6801fb709476…` /
+`0962cdb268ea…`); one run, exit 0. JSON `scripts/logs/cr_cm/t0.json` and log `t0.log` (git-ignored), JSON written
+before printing. Read-only; reads asserted in the train / R-a guards; R-b and holdout not read. Sessions: train 89,
+R-a 147, pooled 236.
+
+**Disclosure.** R-a has now been read three times for T0 (CR-CB A16, A17, CR-CM). The put hypothesis pools train and
+R-a (A1 ruling 3) and is **EXPLORATORY**: it has no untouched confirmation; R-b (2025) is reserved for that.
+
+### Placebo counts (A1.2 strict rule vs A17 literal), S
+
+| | train real tests / sess | strict placebo | literal placebo | R-a real | strict | literal |
+|---|---|---|---|---|---|---|
+| put | 14 / 12 | 46 / 14 | 50 / 16 | 30 / 27 | 39 / 17 | 83 / 27 |
+| call | 42 / 34 | 67 / 35 | 135 / 47 | 61 / 52 | 37 / 19 | 119 / 53 |
+| put/below | 5 / 5 | 19 / 6 | 20 / 7 | 14 / 14 | 16 / 7 | 27 / 11 |
+| put/above | 9 / 8 | 27 / 13 | 30 / 13 | 16 / 15 | 23 / 12 | 56 / 19 |
+| call/below | 32 / 26 | 47 / 26 | 82 / 35 | 33 / 29 | 23 / 13 | 78 / 41 |
+| call/above | 10 / 10 | 20 / 12 | 53 / 23 | 28 / 24 | 14 / 6 | 41 / 18 |
+
+Placebo levels built: train 305 strict / 433 literal; R-a 183 / 403.
+
+### Primary — time to escape 0.25·IM, matched (M2), real − placebo, minutes
+
+| hypothesis | n real / plc (sessions) | real | placebo | diff [95 % CI] | one-sided p | Holm thr | verdict |
+|---|---|---|---|---|---|---|---|
+| **H_call** strong calls, train | 42 / 67 (34 / 35) | 56.41 | 42.51 | **+10.72 [−6.37, +28.30]** | 0.112 | 0.0125 | **inconclusive** |
+| **H_put** strong puts, train + R-a (**EXPLORATORY**) | 44 / 85 (39 / 31) | 40.39 | 43.44 | **−2.11 [−14.29, +10.42]** | 0.638 | 0.0250 | **inconclusive** |
+| call confirmation, R-a | 61 / 37 (52 / 19) | 36.00 | 50.72 | −14.32 [−30.74, +1.24] | 0.966 | 0.025 | inconclusive |
+
+(real / placebo columns are the unstratified session-weighted means; diff is the matched statistic.)
+
+- **Calls overall: inconclusive.** Train leans slower at strong calls (+10.7), R-a leans the other way (−14.3).
+  Neither CI excludes 0.
+- **Puts overall: inconclusive (EXPLORATORY).**
+- Undefined resamples (a stratum with real tests and no placebo session): H_call 64, H_put 145, R-a call
+  confirmation **3,662 of 10,000** (5 INTERIOR real tests vs 1 placebo); its CI rests on the defined 6,338.
+- EDGE share real / placebo: H_call 0.93 / 0.91; H_put 0.96 / 0.95; R-a calls 0.92 / 0.97. Matching changes little:
+  unmatched H_call +13.91 [−2.27, +30.55], EDGE-only +12.66 [−5.99, +30.99].
+
+### Readouts (no gate), matched unless noted, diff [95 % CI] min
+
+| | train | R-a | pooled |
+|---|---|---|---|
+| S put | −6.68 [−26.47, +15.76] | −2.81 [−19.49, +12.15] | −2.11 [−14.29, +10.42] |
+| S call | +10.72 [−6.37, +28.30] | −14.32 [−30.74, +1.24] | −3.29 [−15.70, +8.68] |
+| S all | +6.24 [−7.88, +20.71] | −10.88 [−22.55, +0.26] | −3.51 [−12.41, +5.29] |
+| S, A17 literal placebo: call / put | +12.80 [−1.84, +28.93] / −11.35 | −6.48 / −0.28 | +0.96 / −3.34 |
+| S-first (level's first touch): call / put | +13.13 [−5.88, +31.81] / −7.83 | −17.02 [−36.05, +1.08] / −9.21 | −2.30 / −7.57 |
+| S excl. IM < 25: call | +10.72 | −8.51 [−25.42, +7.49] | +0.85 [−11.76, +13.27] |
+| X100 (\|net\| ≥ 100 $bn): call / put | +7.25 / +2.54 | **−23.10 [−40.05, −7.24]** / unmatchable | −5.95 / +7.75 [−1.32, +16.79] |
+| W (CR-CB minus strong): call / put | +5.68 / −10.18 [−20.85, +0.64] | −6.44 / unmatchable | −1.46 / **−9.40 [−17.17, −1.97]** |
+| **S − W on real tests** (unmatched): call / put / all | +10.31 [−5.95, +27.59] / −5.95 / +5.27 | −1.42 / +9.61 [−3.07, +23.31] / −0.10 | **+3.39 [−5.74, +13.00] / +4.76 [−6.36, +16.56] / +1.83 [−5.36, +9.50]** |
+| S dwell (s in L ± O_c over 60 min): call / put | +198 [−236, +641] / −361 | −170 / +164 | +106 [−221, +435] / +90 [−339, +541] |
+
+Approach cells, S pooled: put/below +5.83 [−14.47, +27.79], put/above −9.19 [−22.97, +3.73], call/below +3.80
+[−12.11, +19.41], call/above −11.67 [−29.00, +4.33]. Train put/above −16.89 [−34.39, −1.64] (9 real tests).
+
+### Reading
+
+- **No evidence that the chart's strongest lines slow price** more than fake levels, at calls or puts. Every
+  primary CI covers 0. Train calls lean slower, R-a calls lean faster; pooled across both, strong lines sit at −3.5
+  [−12.4, +5.3] min against placebo.
+- **No evidence that strong lines beat weak ones.** Strong − weak on real tests, pooled: +1.8 [−5.4, +9.5] min.
+- The readouts agree: no CI clears 0 toward "slower" anywhere; the three that clear 0 (X100 calls on R-a, W puts
+  pooled, train put/above) all point to **faster** escape at the real lines, and they are readouts.
+- Power is the limit: ~2 strong lines per session and one test each give 14–61 real tests per hypothesis; CIs are
+  ±15–20 min wide. An effect of +10 min (a quarter of the mean escape time) cannot be ruled out for calls.
+- Taken with CR-CB A17 and CR-CF: three T0 reads, three level definitions, no slowdown signal.
