@@ -92,7 +92,8 @@ rct = pd.read_parquet(ref / "ct_events.parquet")
 rct = rct[rct["cls10"].isin(["FAST", "SLOW"])].reset_index(drop=True)
 k4 = ["d", "L", "j", "b", "k1s", "cls10", "fam"]
 check("S4 event set = CR-CT stored FAST / SLOW first touches", len(P4) == len(rct) == 160 and
-      P4[k4].reset_index(drop=True).equals(rct[k4].astype(P4[k4].dtypes.to_dict())), dict(n=len(P4), ref=len(rct)))
+      P4[k4].astype({"d": str}).reset_index(drop=True).equals(rct[k4].astype({"d": str})),   # stored d is a str
+      dict(n=len(P4), ref=len(rct)))
 o_ct = [CT.race1s(A["S1ct"][r.d], int(r.k1s), float(r.L), int(r.b), 10.0) for r in P4.itertuples()]
 check("S4 CR-CT race reproduces stored res10 (break)", o_ct == list(rct["res10"]), dict(Counter(o_ct)))
 

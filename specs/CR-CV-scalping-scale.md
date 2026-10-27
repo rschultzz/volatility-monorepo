@@ -197,3 +197,78 @@ R3–R7 not used.
 
 **Deviations:** A3, A11, B6 pre-approved in the kickoff; A7 (S4) and A17 (S1) inherited from CR-CT / CR-CL on the
 terms Ryan approved them (C12). No other "deviates".
+
+---
+
+## Step 0 findings (2026-10-26; `scripts/cr_cv_step0.py` @ `d70673b` + the comparison fix below → `scripts/logs/cr_cv/step0.json`; no ±2 / ±4 outcome and no primary-fill outcome computed)
+
+Read-only connection asserted (`default_transaction_read_only` = on, role `dash_backfill_writer`). Every 1-s read was
+inside [2026-01-01, 2026-06-05 21:00 UTC). R-a, R-b and the holdout were not read. Unit tests (C13): 8 / 8 pass
+(`apps/web/.venv/bin/python scripts/test_cr_cv_lib.py`; that interpreter has no pytest, so the file carries a plain
+runner).
+
+**Run note.** Run 1 failed one check, "S4 event set = CR-CT stored first touches". Cause: the stored parquet holds the
+session date as a string, the rebuilt set as a `date`. All seven key columns (d, L, j, b, k1s, cls10, fam) were equal
+as values. The comparison now casts `d` to str. Run 2 (reported) passed every check, and its other numbers equal run 1's.
+Run 1 log kept as `step0_run1_stdout.log`.
+
+### Event sets (C1): each CR's own code, equal to its stored run
+
+| Setup | Events | Sessions | Rebuilt = stored | Own race reproduces stored ±10 outcome |
+|---|---|---|---|---|
+| S1 CR-CL G1-down | 49 (47 covered) | 36 of 107 | yes (8 key columns) | yes: 32 W / 17 L |
+| S2 CR-CP calls | 235 (short 108, long 127) | 88 of 101 | yes (decision bar, side, box, both fills) | yes, chosen and opposite |
+| S3 CR-CS fades | 58 | 41 of 101 | yes | yes, fade and continuation |
+| S4 CR-CT FAST / SLOW | 160 (FAST 85, SLOW 75) | 72 of 101 | yes | yes: 86 break W / 69 L / 5 unresolved |
+
+One S1 leg falls on 2026-01-02 / 01-05: CR-CL's own `y26` sessions, 2026 train.
+
+### 1-s data (C2), measured before use
+
+- 2,291,024 rows on 104 (session, symbol) pairs. o and c lie within [l, h] on every row.
+- **The 1-s minute aggregate equals each setup's own minute bars on all 53,430 minutes** (S1's CR-CJ bars on its 36
+  sessions; CR-CP's bars on all 101 × 390), on o / h / l / c. No minute exists in one source only.
+- h / l / c equal CR-CT's own 1-s cache on all 101 sessions.
+
+### Fills (C3, C9)
+
+| Cell | Primary fills | Touch-fill fills | Trade-through share of touch fills | No primary fill |
+|---|---|---|---|---|
+| S1 long / short | 49 / 49 | 49 / 49 | (market) | — |
+| S2 chosen | 175 (76 sessions) | 178 | **98.3 %** | box broke 58, 13:00 2 |
+| S2 opposite | 170 (81 sessions) | 171 | **99.4 %** | box broke 64, 13:00 1 |
+| S3 fade / continuation | 58 / 58 | 58 / 58 | (market) | — |
+| S4 hypothesis / opposite | 138 / 138 (68 sessions) | 160 / 160 | **86.3 %** | no trade-through in the touch minute 22 |
+
+- S2's edge limit sits 1 pt inside the box edge. Price nearly always trades through it once it touches, and when the
+  touch minute does not trade through, a later minute does (the fill search continues).
+- S4's level is the touch extreme itself. On 22 of 160 touches price reached the level but never traded a tick
+  beyond it in that minute: those are the touches where a resting order at L may not fill.
+- The touch-fill model finds CR-CP's own fill minute on every S2 trade, and CR-CT's own touch second on every S4 touch.
+
+### ±10 reproduction (C8b): 1-s touch-fill model vs each CR's reported win rate
+
+| Side | 1-s touch-fill | Original | Δ |
+|---|---|---|---|
+| S1 long, covered (31 / 47) | 65.96 % | 66.0 % | < 0.1 pp |
+| S1 long, all 49 (32 / 49) | 65.31 % | 65.31 % (CR-CL race) | 0 |
+| S1 short, all 49 | 34.69 % | 34.69 % | 0 |
+| S2 chosen (70 / 151) | 46.36 % | 46.4 % | < 0.1 |
+| S2 opposite (80 / 145) | 55.17 % | 55.2 % | < 0.1 |
+| S3 fade (20 / 51) | 39.22 % | 39.2 % | < 0.1 |
+| S3 continuation | 60.78 % | 60.8 % | < 0.1 |
+| S4 FAST break (48 / 85) | 56.47 % | 56.5 % | < 0.1 |
+| S4 SLOW break (38 / 70) | 54.29 % | 54.3 % | < 0.1 |
+| S4 hypothesis pooled (80 / 155) | 51.61 % | 51.61 % | 0 |
+| S4 opposite pooled | 48.39 % | 48.39 % | 0 |
+
+Every side reproduces within 0.05 pp. The 1-s race also reproduces the minute-bar races outcome for outcome: the
+originals had no same-minute ties, so the finer clock changes no ±10 result.
+
+### Gate (C9): passed
+
+- Every primary cell has ≥ 40 fills (minimum 49: S1).
+- All 28 data and reproduction checks pass.
+- S1 (49 legs) and S3 (58 fades) are close to the 40-resolved floor. At ±2 / ±4 almost every trade resolves before
+  13:00, so this should not bind; the run reports it either way.
+- Next: commit `scripts/cr_cv_run.py`, then run it once.
