@@ -33,7 +33,7 @@ B4 (frozen 2026-10-27) makes data from 2026-10-27 onward the **forward log**: re
 | X3 | ES input | **Open — see Step 0 Q1.** CR-CL reads Databento minute bars (`es_flow_1s_databento`, B5). |
 | X4 | Outcome | As CR-CL C9 / C10 and A2.4: P0 = close of bar confirm_i. ±10 race (primary) and ±20 race on bars confirm_i + 1 … 12:59 PT; result ∈ {win, loss, tie, unresolved, gap}. Signed move h × (close(confirm_i + k) − P0) at k = 30, 60 (NULL past 12:59). `cr_cl_lib.race` / `move_at`, unchanged. |
 | X5 | Date guard | `session_date < 2026-10-27` → refuse (exit 2, nothing read or written). `session_date` not an NYSE trading day, or an early close → refuse. Run before the session closes (now < 13:15 PT on `session_date`) → refuse. The guard runs before any DB connection. |
-| X6 | Completeness gate | Events and outcomes are written once and never changed, so the script writes nothing for a session whose inputs are incomplete. It requires all of: the IM row; ≥ 380 of 390 RTH ES bars; ≥ 80 % of RTH 0DTE PM snapshots. Otherwise it exits non-zero with the reason, so the next run can retry. A session that is still incomplete after the retry window is recorded as a **skip row** (X8) with the reason, so a gap is never silent. |
+| X6 | Completeness gate | Events and outcomes are written once and never changed, so the script writes nothing for a session whose inputs are incomplete. It requires all of: the IM row; **390 / 390** RTH ES bars (amended at Step 0; was ≥ 380); ≥ 80 % of RTH 0DTE PM snapshots. Otherwise it exits non-zero with the reason, so the next run can retry. A session that is still incomplete after the retry window is recorded as a **skip row** (X8) with the reason, so a gap is never silent. |
 | X7 | Outcomes timing | The race ends at the 12:59 PT bar, so every event resolves (win / loss / tie / unresolved / gap) on its own session. A run writes outcomes for its own session's events, plus any earlier event without an outcome (catch-up after a failed run). |
 | X8 | Tables | `forward_log_events`: id bigserial; signal; definition_version (`'G1-down v1'`); session_date; leg_start_ts_pt / leg_end_ts_pt / confirm_ts_pt (naive PT, bar starts); entry_price (P0); start_px, end_px, swing_pts, im_pts; ratio, actual_pp, expected_pp, band_pp, beyond_noise; es_source; code_sha; run_id; written_at. UNIQUE (signal, definition_version, session_date, leg_end_ts_pt). `forward_log_outcomes`: id; event_id UNIQUE → events; race_10, race_20; move_30, move_60; code_sha; run_id; written_at. `forward_log_sessions` (one row per session processed: event count or skip reason) so that zero-event days are distinguishable from missed days. All three are insert-only by trigger (UPDATE / DELETE raise), DDL applied once by the owner (`dash_backfill_writer` has no CREATE), with SELECT, INSERT granted to `dash_backfill_writer`. |
 | X9 | Idempotency | `INSERT … ON CONFLICT DO NOTHING` on the unique keys; a re-run for a logged session inserts 0 rows and reports it. |
@@ -73,3 +73,55 @@ B4 (frozen 2026-10-27) makes data from 2026-10-27 onward the **forward log**: re
 | R1–R7 | not used | |
 
 Two "deviates" (A17, B5): **stop for Ryan** before any implementation code.
+
+---
+
+## Step 0 findings (2026-10-27, `scripts/cr_cx_step0.py` @ `7b0dd45` → `scripts/logs/cr_cx/step0.json`; legs only, no outcome computed)
+
+Reads: the latest timestamp in each input table (no values from any session ≥ 2026-06-06), and `y26` train (107 sessions) through the CR-CJ loader and its guard. One launch, exit 0.
+
+### 1. Live inputs (feed heads at 2026-10-27 ~13:00 UTC, before the open)
+
+| Input | Latest row | Live daily? |
+|---|---|---|
+| `es_flow_1s_databento` / `es_flow_1m_databento` | 2026-10-23 19:59 UTC | **No.** A one-off CR-CA load (`scripts/cr_ca_databento_flow.py`, run by hand); no cron. |
+| `ironbeam_es_1m_bars`, `ironbeam_es_flow_1s` | 2026-10-27 12:58 UTC | Yes (Ironbeam cron / trades-ws). |
+| `orats_monies_minute` SPX 0DTE PM | 2026-10-26 13:00 PT, 391 rows, `updated_at` 13:30 → 20:00 UTC | Yes, minute by minute through the session. Complete by the close. |
+| `bt_daily_features.implied_move_1d` | 2026-10-27 | Yes (13:35 UTC implied-move cron). |
+
+**So CR-CL's frozen code cannot run on its frozen ES input after 2026-10-23.** CR-CL C1 reads Databento minute bars built from `es_flow_1s_databento` (B5).
+
+### 2. Ironbeam vs Databento on the frozen G1-down code (`y26` train, vol-scaled swing, primary legs)
+
+- **Train baseline (Databento): 28 G1-down v1 events in 107 sessions** (0.26 per session; 801 primary legs, 1,033 legs). IM_train re-derived: 65.714 (matches CR-CO's 65.71). 5 sessions have no IM.
+- **On sessions both feeds cover fully, the events match:**
+
+| Ironbeam source | Complete sessions (of 107) | G1-down on common sessions: Databento / Ironbeam / identical | All legs identical |
+|---|---|---|---|
+| `ironbeam_es_flow_1s` → minutes | 87 | 23 / 23 / 22 | 813 of 831 |
+| `ironbeam_es_1m_bars` | 92 | 24 / 24 / 23 | 907 of 913 |
+
+  The one mismatch (2026-03-16) is the same leg, same end and confirmation bar, starting one minute later on Ironbeam (a tied low). It is a G1-down event on both feeds.
+- **The cost is whole sessions.** `cr_cl_lib.build_legs` skips any session with a single missing RTH bar (`np.isfinite(H).all()`). Ironbeam bars miss ≥ 1 RTH minute on 15 of 107 train sessions (flow: 20), against 0 for Databento. That loses 4 of 28 G1-down events (bars) or 5 (flow). This also means **X6's "≥ 380 of 390 bars" gate is wrong**: the frozen code needs **390 / 390**, or it silently returns no legs. X6 is amended to 390 / 390.
+
+### 3. K9's cron time and DST
+
+20:30 UTC is 13:30 PDT today, but **DST ends 2026-11-01**. From 2026-11-02, 20:30 UTC is **12:30 PST, half an hour before the close**. The race runs to the 12:59 PT bar, so X5's before-close guard would refuse every run from November to March. A fixed UTC time must be ≥ 21:15 UTC (13:15 PST / 14:15 PDT), or the run moves to the next morning.
+
+### 4. Can the log support a confirmation? (B4 "used only as a pre-registered confirmation")
+
+- **Baseline.** CR-CL / CR-CO's estimator is G1-down win rate **minus a matched in-noise baseline** (direction × size tercile × confirmation bucket × EDGE, B7). K2 logs only G1-down events, so the baseline would have to be recomputed later from raw tables. Those are not write-once (Ironbeam bars get repaired, e.g. CR-BZ), and the recomputation would happen after the outcomes are known. Logging the baseline legs (in-noise primary down legs) with their strata keys and outcomes, in the same write-once tables, would fix the comparison at the time it happens.
+- **Power.** At train's 0.26 events per session, 40 resolved events take ~150–160 sessions, so about **mid-2027**. CR-CO's 2023 rate (50 in 200, 0.25) agrees.
+- **MFE.** CR-CL / CR-CO reported MFE before −10 (A11's favourable-excursion distribution); K3 does not list it. It is one column.
+
+### Questions for Ryan (stop here; no implementation code written)
+
+| # | Decision | Options (Code's recommendation first) |
+|---|---|---|
+| Q1 | **ES input (B5 deviates)** | **(a) Daily Databento pull** of the session's front-contract trades into `es_flow_1s_databento` with the CR-CA code, then the frozen code unchanged. Honours B5 and K4 exactly. Needs a Databento key on the cron service. Cost is small: CR-CA's cap was $330 for 643 sessions, so under ~$0.5 per session; the actual daily price is not yet measured. Same-day availability of Databento historical data is not yet measured either, so plan the run for the next morning. **(b) Ironbeam `ironbeam_es_1m_bars`** with the frozen code. Events match on complete sessions (23 / 24), but ~14 % of sessions drop and the log's input differs from CR-CL's (a B5 deviation to approve). |
+| Q2 | Log the matched baseline? | **Yes:** log every primary vol-scaled leg that is ratio-defined (`grp` ∈ G1 / G2 / base / neither) with strata keys (direction, size, confirmation bucket, EDGE), and outcomes for G1-down and in-noise down legs. **No:** G1-down only, as K2. |
+| Q3 | Cron time | With Q1(a): **11:00 UTC next morning** for the previous session (DST-proof, after Databento's daily file). With Q1(b): **21:30 UTC** weekdays (14:30 PDT / 13:30 PST), with the X5 guard. |
+| Q4 | MFE column | **Add** `mfe_before_m10` to `forward_log_outcomes` (A11), or leave as K3. |
+| Q5 | **A17 (deviates)** | Approve on the CR-CL terms (measurement only, nothing shortlisted), as for CR-CL / CR-CN / CR-CO. |
+
+Amendment to X6, effective now: the completeness gate is **390 / 390 RTH ES bars** (finding 2).
