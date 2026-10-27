@@ -218,3 +218,94 @@ not as a deviation from a ruling.
 5. Entry-fill share (chosen and opposite), no-fill reasons.
 6. Counts per split (level position, strong / weak / none, put / call, hour, first vs later, skew).
 7. A/A on the random baseline (C13).
+
+## Step 0 findings (2026-10-26; `scripts/cr_cp_step0.py` @ `1c112b3` → `scripts/logs/cr_cp/step0.json`, `scripts/cr_cp_step0_extra.py` → `step0_extra.json`; no range outcome computed)
+
+### 1. `es_flow_1m_databento` (C3)
+
+- **The minute table is the 1-s table aggregated, exactly.** On train RTH (2026-01-06 → 06-05, 44,460 symbol-minutes,
+  roll weeks have two symbols), `minute_utc` = `date_trunc('minute', ts_utc)` of the 1-s rows (minute **start**):
+  44,460 / 44,460 equal on o, h, l, c, volume, buy_vol, sell_vol, n_seconds; no minute in one table only. With a
+  1-min shift, 6–8 % of prices match (shift rejected). Window: 06:15 → 12:59 PT starts (as the 1-s table). Row added to
+  field-conventions.
+
+### 2. Universe and swing (C2, C4, C18)
+
+- 105 trading days. Excluded: 4 with no canonical IM. **101 usable**. No session has a missing RTH minute (C18 fill
+  never used). Front symbol H26 on 45 sessions, M26 on 56. Roll-week sessions kept: 2026-03-09 → 03-20 (10).
+- IM_train **65.71** (asserted = CR-CO). swing_d median **12.3 pts** (p5 6.8, p25 9.4, p75 16.3, p95 22.0).
+- Approach legs (start confirmed) per session: median 12 (p5 4, p95 29); 1,436 in all.
+
+### 3–5. Ranges, decisions, fills — primary
+
+| | count |
+|---|---|
+| ranges (one per leg at most) | **322** on 98 sessions (median 3 per session, p95 6) |
+| box width | median 8.4 pts (p5 4.3, p95 11.8); approach leg median 17.5 pts (p5 8.5, p95 41) |
+| void before decision (broke > 2 pts) | 157 (49 %) |
+| no call by r0 + 60 | 9 |
+| **calls** | **156**: short 67, long 89 |
+| by approach | up → long 55, up → short 32, down → long 34, down → short 35 |
+| decision bar − qualifying bar | median **0** (p75 3, p95 16.5): the call is usually made the moment the range qualifies |
+| delta share at the call | p25 −3.5 %, p50 −2.3 %, p75 +2.4 % (thresholds ±2 %) |
+| progress at the call (c[t] − o[r0]) | p5 −3.0, p50 −0.25, p95 +2.0 pts |
+| **chosen-side fills** | **115 (74 %)**, on 64 sessions; no fill: box broke 40, 13:00 1 |
+| opposite-side fills | 105 (67 %); box broke 51 |
+| both sides filled (true pairs) | 64 |
+| chosen fills EDGE / INTERIOR | 9 / 106 (opposite 24 / 81) |
+| no-call ranges at both edges | long 2 fills, short 4 (too few to read) |
+
+The primary has 115 chosen-side fills against the 40 minimum, before ties and unresolved are removed.
+
+### Readout grid (counts)
+
+| definition | ranges | calls (S / L) | chosen fills | pairs | sessions |
+|---|---|---|---|---|---|
+| primary | 322 | 67 / 89 | 115 | 64 | 64 |
+| swing fixed 12 | 352 | 66 / 78 | 96 | 49 | 59 |
+| swing fixed 8 | 249 | 59 / 83 | 107 | 62 | 57 |
+| swing fixed 16 | 312 | 50 / 59 | 70 | 37 | 49 |
+| width 8 | 219 | 51 / 71 | 96 | 56 | 53 |
+| width 16 | 361 | 72 / 96 | 123 | 68 | 68 |
+| width ≤ 0.5 × leg | 276 | 58 / 67 | 97 | 58 | 63 |
+| hold 10 | 540 | 128 / 146 | 190 | 102 | 81 |
+| hold 30 | 93 | 13 / 27 | **27** | 10 | 24 |
+| delta 1 % | 322 | 97 / 111 | 146 | 80 | 74 |
+| delta 3 % | 322 | 42 / 63 | 80 | 44 | 49 |
+| progress 1 | 322 | 54 / 72 | 87 | 52 | 57 |
+| progress 4 | 322 | 86 / 118 | 161 | 74 | 76 |
+| contracts/pt pushes | 322 | 51 / 68 | 55 | 37 | 43 |
+| entry at decision-bar close | 322 | 67 / 89 | 156 | — | 74 |
+
+Hold 30 is under 40 fills (readout underpowered). With entry at the decision-bar close both sides enter at the same
+price, so "chosen − opposite" there is just 2 × (chosen win rate − 50 %); it is read as chosen vs 50 % only.
+
+### D1 leg-end reset (diagnostic, `step0_extra.json`)
+
+D1 starts the box at the leg's end, so a new high (low) inside a box moves the end and restarts the 15-min hold. If the
+end moved only on a new extreme > 2 pts beyond it (D1's void tolerance): **410 ranges instead of 322** (96 legs gain
+a range, 8 lose one), and 174 of the 314 found by both rules qualify at a different bar. The primary is unchanged; this
+is Ryan's call at review.
+
+### 6. Splits on the primary (chosen fills, n 115)
+
+- Levels (CR-CM universe, 89 sessions; 10 fills on sessions outside it): strong line within 10 pts **26**, weak only 66,
+  none 13. Position vs the nearest strong line: short of 8, straddling 7, beyond 11; by approach, no cell above 8.
+  **Put vs call: 1 put, 25 call.** The A8 put/call split can't be read on train (strong put lines sit far from these
+  ranges). The A18 position split is descriptive only (≤ 11 per cell).
+- Time (decision hour, PT): 07 8, 08 18, 09 25, 10 25, 11 23, 12 16. First range of the session 28, later 87.
+- Skew on the approach leg (CR-CK read): in noise 51, move too small 48, **beyond noise 9**, outside 07:00–12:45 5,
+  insufficient data 2. G1-down-like legs: 0. The skew readout is too thin to read.
+
+### 7. A/A on the random baseline (C13)
+
+200 random session halves, pseudo-trades on the 115 chosen-fill keys (fill minute, side, EDGE) in half A, baseline
+from half B: matched difference mean **−0.3 pp**, median −0.1, SD 4.6, p5 −7.5, p95 +6.9; 0.3 % of keys
+unmatched. Unbiased. Baseline: 69,948 resolved same-minute entries, EDGE share 7 % (trades 8 %). The pooled baseline
+win rate is exactly 50 % by construction (each minute is raced both ways).
+
+### For Ryan's review
+
+1. Primary as frozen: 115 chosen-side fills / 156 calls / 322 ranges. Run as is?
+2. D1 leg-end reset: keep as frozen, or let the end move only on a > 2-pt new extreme (410 ranges)?
+3. Put / call and skew splits are too thin on train. Keep them as descriptive readouts (as frozen), or drop them?
