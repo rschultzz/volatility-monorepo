@@ -183,3 +183,5 @@ Transcribed:
 `scripts/cr_cl_run.py` was never executed under `ra`, and its parity assert was not changed. No group outcome was computed on R-a. Logs are copied to the main checkout's `scripts/logs/cr_cn/` (git-ignored, machine-local).
 
 Setup registry, G1-down: **train: inconclusive +17 [−1, +37]; R-a: not testable.**
+
+Conformance re-checked after A1 and this ruling: no row changes; A17 now "deviates — approved for the record by Ryan 2026-10-26 (moot, not run)". Revoked / superseded R1–R7: none used. Process note: the frozen table had A17 as "deviates" and Step 0 ran before Ryan's approval, on the grounds that Step 0 computes no group outcome (disclosed at freeze). Under the CLAUDE.md "Standing rulings" rule (merged after this freeze, #94) a "deviates" is a stop before any further step.
