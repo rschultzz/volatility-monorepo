@@ -115,3 +115,43 @@ Approvals, A0, A1 incl. A1.a–A1.e), unchanged.
 | C1, C2 | UI | n/a | |
 
 **No "deviates".** Proceeding to Step 0 per the kickoff.
+
+## Step 0 findings (2026-10-26; `scripts/cr_cr_step0.py` @ `5a63f6c` → `scripts/logs/cr_cr/step0.json`; no range outcome computed)
+
+- **Parity (E1):** under the default, `cr_cp_lib` resolves `train`, 2026-01-06 → 06-05, guard [2026-01-01, 2026-06-05
+  21:00) UTC, `logs/cr_cp`. Unchanged.
+- **C3 on R-a (E4):** `es_flow_1m_databento` = the `es_flow_1s_databento` minute aggregate **exactly**: 83,345 / 83,345
+  RTH symbol-minutes equal on o, h, l, c, volume, buy, sell, n_seconds; none in one table only; a 1-min shift matches
+  8–11 % of prices (rejected). Symbols: ESM4, ESU4, ESZ4, ESH5 (outrights only, **no `ES.c.0`**).
+- **Universe:** 189 trading days → early close 3 (2024-07-03, 11-29, 12-24) → no canonical IM 6 → **180 usable**. No
+  missing-minute run > 5; C18 fill never needed.
+- **Roll weeks (E3):** 28 roll-window sessions kept; 25 have both contracts in RTH; the session uses its
+  most-volume contract, whose share of RTH volume is ≥ 0.60 on every one (lowest 2024-09-16 0.60, 2024-12-16 0.64).
+  No intraday splice, so nothing excluded.
+- **Swing (E2):** IM_train 65.714 (constant). R-a IM median **41.7 pts** (p5 20.7, p95 87.4), so swing_d median **7.6
+  pts** (p5 3.8, p25 6.0, p75 10.8, p95 16.0); 44 sessions under 6 pts. 2024 moved less than 2026 (train swing_d
+  median 12.3); per A7 the swing scales down with it. Legs per session median 15.
+
+| primary (effort rule) | count |
+|---|---|
+| ranges | **990** on 180 sessions (median 5 per session); close-box width median 4.0 pts (p5 2.0, p95 9.25) |
+| void before decision | 620 (63 %); no call by r0 + 60: 51 |
+| calls | **319**: short 150, long 169 (up → short 79, up → long 88, down → short 71, down → long 81) |
+| decision bar − qualifying bar | median 0 (p75 2, p95 10) |
+| cpp_up ÷ cpp_down at the call | p25 0.61, p50 0.66, p75 1.60 (thresholds 1 ÷ 1.5 and 1.5) |
+| **chosen-side fills** | **218 (68 %) on 125 sessions**; box broke 97, 13:00 4 |
+| opposite-side fills | 281 (88 %); both filled 184 |
+| chosen fills EDGE / INTERIOR | 22 / 196 |
+
+Readouts (ranges / calls S-L / chosen fills / sessions): ratio 1.3 990 / 290-295 / 422 / 167; **ratio 2.0 990 / 24-33 /
+39 / 35 (under 40: descriptive)**; swing fixed 12 736 / 100-119 / 140 / 94.
+
+Splits (chosen fills): levels (CR-CM R-a universe 147 sessions) strong within 10 pts 59, weak 115, none 8, no levels 36;
+position short of 24 / straddling 11 / beyond 24; **put 15 / call 44** (put not readable); call side long 113 / short
+105; hour 06: 6, 07: 26, 08: 30, 09: 34, 10: 38, 11: 45, 12: 39; **G1-down flag 3** (skew beyond noise 10): descriptive.
+
+**A/A (C13):** 200 splits, mean **+0.30 pp** (median +0.36, SD 3.4, p5 −5.2, p95 +5.7); 0.007 % keys unmatched;
+119,040 baseline entries, EDGE share 10 %.
+
+**E9 gate: passed** (218 ≥ 40 fills, 125 ≥ 30 sessions, |A/A| 0.30 ≤ 1 pp). Per the kickoff the run script is committed
+and the primary is run once without stopping.
