@@ -26,7 +26,7 @@ PT, UTC, PRE, NB = T.PT, T.UTC, T.PRE, T.NB
 OFF = 60 * PRE                                # 900 s: 06:15 -> 06:30
 TICK = 0.25
 S_1230, S_1245, S_1300 = 60 * (PRE + 360), 60 * (PRE + 375), 60 * (PRE + 390)
-T_MAX = 134                                   # C11: turn bar must close by 12:45 (the 12:44 bar)
+T_MAX = 374                                   # C11: turn bar must close by 12:45 (the 12:44 bar, RTH index 374)
 W_PRIMARY, W_READ = 10, (5, 20)               # C4
 RETRACE = 1.0                                 # C6
 RETRACE_BANDS = ((0, 1), (2, 4), (5, 10 ** 6))
@@ -96,13 +96,18 @@ def path_stats(S, i0, i1, b):
     path = float(np.abs(np.diff(c)).sum())
     if path <= 0:
         return None
-    n_rt, ext = 0, b * c[0]
+    n_rt, up, ext = 0, True, b * c[0]                # zigzag at 1 pt: count each -b leg once
     for x in b * c[1:]:
-        if x > ext:
-            ext = x
-        elif ext - x >= RETRACE:
-            n_rt += 1
-            ext = x
+        if up:
+            if x > ext:
+                ext = x
+            elif ext - x >= RETRACE:
+                n_rt, up, ext = n_rt + 1, False, x
+        else:
+            if x < ext:
+                ext = x
+            elif x - ext >= RETRACE:
+                up, ext = True, x
     return dict(eff=float(net / path), net=float(net), path=path, retr=n_rt)
 
 
@@ -175,6 +180,8 @@ def h2_event(S, B, k, L, b, brk=BRK, pb=PB) -> dict:
     np.add.at(band_vol, ti[m] // 4, vv[m])
     snap = int(nb - 1 - np.argmin(band_vol[::-1]))    # lowest volume; ties -> farthest from L
     far = snap + 0.75
+    snap_x = int(nb - 2 - np.argmin(band_vol[:-1][::-1]))   # C13(f): final band excluded
+    far_x = snap_x + 0.75
     # C13(b) bottom-quartile ticks L .. E inclusive (zero-volume ticks included)
     nt = int(np.floor(E / TICK + 1e-9))
     tick_vol = np.zeros(nt + 1)
@@ -189,7 +196,7 @@ def h2_event(S, B, k, L, b, brk=BRK, pb=PB) -> dict:
     nz = prof[prof > 0]
     snap_cum = float(prof[bins == snap].sum()) if (bins == snap).any() else 0.0
     light = bool(snap_cum < float(np.median(nz))) if nz.size else None
-    ev = dict(x=x, E=E, nb=nb, snap=snap, far=far, band_vol=band_vol.tolist(), q_far=q_far, light=light,
+    ev = dict(x=x, E=E, nb=nb, snap=snap, far=far, snap_x=snap_x, far_x=far_x, band_vol=band_vol.tolist(), q_far=q_far, light=light,
               snap_cum=snap_cum, prof_median=float(np.median(nz)) if nz.size else None)
     # C10 pullback: running b-extreme P from x; first row with P - adverse >= pb, before 12:45
     P, pe, r = E, x, None
@@ -212,7 +219,7 @@ def h2_event(S, B, k, L, b, brk=BRK, pb=PB) -> dict:
     end = int(np.searchsorted(sec, 60 * (t + PRE + 1)))
     pb_ext = float(np.min(ax[pe:end]))
     return dict(ev, r=r, pe=pe, P=P, t=t, entry=float(Cl[t]), pb_ext=pb_ext, end=end, stage="trade",
-                cls="HOLD" if pb_ext > far else "FILL", cls_q="HOLD" if pb_ext > q_far else "FILL")
+                cls="HOLD" if pb_ext > far else "FILL", cls_q="HOLD" if pb_ext > q_far else "FILL", cls_x="HOLD" if pb_ext > far_x else "FILL")
 
 
 def h2_events(D, S1, P, brk=BRK, pb=PB) -> pd.DataFrame:

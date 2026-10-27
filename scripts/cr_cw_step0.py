@@ -82,6 +82,8 @@ assert np.allclose(cc, c10) and nn == ct["cuts"]["10"]["n"], (cc, c10)
 P["cls10"] = T.classify(P, "speed10", "relvol10", c10)
 R["h1_by_ct_class"] = {k: counts(g, "h110") for k, g in P.groupby("cls10")}
 R["h1_by_family"] = {k: counts(g, "h110") for k, g in P.groupby("fam")}
+P["spd_terc"] = np.where(P["speed10"] >= c10[1], "top", np.where(P["speed10"] <= c10[0], "bottom", "middle"))
+R["h1_by_speed_tercile"] = {k: counts(g, "h110") for k, g in P.groupby("spd_terc")}
 P["retr_band"] = [W.retr_band(x) for x in P["retr10"]]
 R["retrace"] = dict(quantiles=[float(x) for x in P["retr10"].dropna().quantile([.1, .25, .5, .75, .9])],
                     bands=counts(P, "retr_band"), median=float(P["retr10"].dropna().median()))
@@ -104,7 +106,7 @@ for name, (brk, pb) in VARIANTS.items():
     H2[name] = H
     tr = H[(H["stage"] == "trade") & ~H["dup"]]
     R["h2"][name] = dict(brk=brk, pb=pb, stages=H["stage"].value_counts().to_dict(), dup=int(H["dup"].sum()),
-                         classes=counts(tr, "cls"), classes_q=counts(tr, "cls_q"),
+                         classes=counts(tr, "cls"), classes_q=counts(tr, "cls_q"), classes_x=counts(tr, "cls_x"),
                          light=counts(tr.assign(lt=tr["light"].map({True: "light", False: "heavy"})), "lt"))
     log(" ", name, R["h2"][name])
 H = H2["primary"]
@@ -117,6 +119,7 @@ R["snap"] = dict(
     snap_over_median_band=[float(x) for x in pd.Series([min(b) / np.median(b) if np.median(b) > 0 else np.nan
                                                         for b in br["band_vol"]]).quantile([.1, .5, .9])],
     trade_snap_index=tr["snap"].value_counts().sort_index().to_dict(),
+    snap_x_index=br["snap_x"].value_counts().sort_index().to_dict(),
     trade_by_cls_snap=tr.groupby(["cls", "snap"]).size().rename("n").reset_index().to_dict("records"),
     pb_ext_quantiles=[float(x) for x in tr["pb_ext"].quantile([.1, .5, .9])],
     P_quantiles=[float(x) for x in tr["P"].quantile([.1, .5, .9])],
