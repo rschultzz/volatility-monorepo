@@ -376,3 +376,71 @@ A/A: mean **+0.44 pp**, median +0.36, SD 3.9, p5 −5.9, p95 +6.9; 0.7 % of keys
 
 **A1.5 gate: passed** (178 ≥ 40 fills, 76 ≥ 30 sessions, |A/A| 0.44 ≤ 1 pp). Per Ryan, the run script is committed and
 the primary is run once without another stop.
+
+## Result (single run, 2026-10-26) — `scripts/cr_cp_run.py` @ `a4b7f11` → `scripts/logs/cr_cp/results.json`
+
+One launch, exit 0 (3.7 s on cached loads). The schedule asserts held: 470 ranges, 178 chosen fills, the same as Step 0
+v2. Train only. R-a, R-b and the holdout were not read. 101 sessions; 10,000 session-cluster draws, seed 20260920.
+
+### Primary — flow-chosen edge minus the opposite edge, ±10 race (stop-free; a direction test, not Ryan's exit, B6)
+
+| | resolved | win rate | vs 50 % |
+|---|---|---|---|
+| chosen side | 151 (74 sessions; 27 unresolved, 0 ties) | **46.4 %** | −3.6 [−12.8, +5.5] |
+| opposite side | 145 (26 unresolved) | **55.2 %** | +5.2 [−2.3, +13.0] |
+| **chosen − opposite** | | **−8.8 pp [−23.0, +4.9]** | **INCONCLUSIVE** |
+
+- True pairs (both sides filled and resolved, n 92): −9.8 [−29.6, +10.0].
+- Against the B7 matched random baseline (same minute, side, EDGE; coverage 100 %): chosen −3.4 [−12.2, +5.6], opposite
+  +5.1 [−2.5, +12.7].
+
+### Readouts (no verdicts, unadjusted)
+
+- ±20 race: chosen 40.4 % (n 89) vs opposite 59.0 %, −18.6 [−37.6, +1.5].
+- Move at +30 min: chosen −1.1 pts [−3.1, +0.8], opposite +0.8 [−1.0, +2.7]. At +60: −1.1 [−3.3, +1.0] vs +1.7 [−1.0, +4.3].
+- Max favourable before −10: chosen median 6.9 pts (≥ 10: 39 %, ≥ 20: 15 %); opposite 9.0 (47 %, 23 %).
+- Reach the last same-day pivot before −10 (A10): chosen 57 % (n 65), opposite 54 % (n 96).
+- No-call ranges at both edges: 3 + 3 resolved (not readable).
+- **Grid (chosen − opposite, pp):**
+
+  | definition | resolved chosen | diff [95 % CI] |
+  |---|---|---|
+  | swing fixed 12 | 116 | −10.8 [−26.3, +5.0] |
+  | swing fixed 8 | 149 | −1.1 [−16.2, +13.4] |
+  | swing fixed 16 | 99 | +0.9 [−13.9, +14.9] |
+  | width 8 | 134 | −13.9 [−29.8, +1.5] |
+  | width 16 | 151 | −7.0 [−20.8, +6.6] |
+  | width ≤ 0.5 × leg | 136 | −8.8 [−23.9, +5.9] |
+  | hold 10 | 229 | +3.7 [−7.5, +15.2] |
+  | hold 30 | 46 | +1.1 [−24.5, +26.3] |
+  | delta 1 % | 207 | −5.3 [−16.2, +5.7] |
+  | delta 3 % | 88 | −18.8 [−37.6, −0.1] |
+  | progress 1 | 115 | −12.3 [−27.8, +2.5] |
+  | progress 4 | 201 | −9.0 [−21.1, +2.4] |
+  | contracts/pt pushes | 90 | +14.6 [−0.8, +30.0] |
+  | entry at decision-bar close (chosen − 50 %) | 205 | −5.6 [−12.6, +1.2] |
+  | `hl_box` (Step 0 v1 primary) | 99 | −9.2 [−25.7, +7.3] |
+  | `frozen_reset` | 114 | −12.1 [−27.5, +3.1] |
+
+  13 of 16 point estimates are negative. No definition has a CI above 0. Delta 3 % has a CI just below 0: one of 16
+  unadjusted readouts, so that's expected by chance at this count (B2). Contracts/pt (A19's "heavy contracts/pt on
+  the pushes", at a 1.5× ratio) is the only readout leaning positive, and its CI covers 0.
+- **Splits** (chosen − opposite, pp; "descriptive" = < 40 resolved chosen):
+  - approach → call: up → long −13.5 [−35.1, +9.6] (52); up → short −6.7 [−32.7, +20.4] (43); down → long −11.9 (32,
+    descr.); down → short +3.0 (24, descr.).
+  - call side: long −13.0 [−32.1, +5.8] (84); short −3.8 [−25.3, +18.2] (67).
+  - levels: weak line within 10 pts −7.1 [−24.5, +10.1] (88); strong −19.8 (33, descr.); no line −23.1 (13, descr.).
+    Position vs strong line: all cells < 15 (descr.). **Put / call: not readable on train** (call 31, put 2).
+  - A9: edge at a line, second of two −24.1 [−44.4, −2.9] (77); not at a line +2.3 [−22.6, +25.0] (51); single line 6
+    (descr.). Unadjusted, and "second of two" is mostly "at a line" because the displayed lines are dense (Step 0 v2).
+  - time: every hour < 40 (descr.); first range −12.5 (24, descr.); later −8.1 [−24.2, +7.1] (127).
+  - skew: in noise −2.3 [−23.8, +19.7] (55); move too small −21.9 [−44.1, −0.9] (66); beyond noise 11 (descr.).
+  - EDGE / INTERIOR (chosen fill's tag): INTERIOR −20.4 [−36.8, −4.1] (147; the opposite counts in this row are the
+    opposite fills of those ranges); EDGE 4 (descr.).
+
+### Reading
+
+On train, when a range forms after a larger move, the in-range delta rule (D2) does **not** pick the better edge. The
+chosen edge won 46 %, the opposite edge 55 %, and the difference −8.8 pp has a CI from −23 to +5: inconclusive, leaning
+the wrong way. Most readouts lean the same way, and none pass. The setup is **not shortlisted**. R-a confirmation was
+conditional on a PASS, so R-a is not read.
