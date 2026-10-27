@@ -155,3 +155,51 @@ Read-only against the database; no table writes, no cron, no frontend. Train onl
 | Revoked | R1 touch-bar close | **not used** (E-R2) | R2 level entry, labelled; R3–R7 not used |
 
 Two "deviates" (A3, A7), both approved by Ryan; nothing else deviates. Proceeding to Step 0.
+
+## Step 0 findings (2026-10-26; `scripts/cr_ct_step0.py` + `scripts/cr_ct_lib.py` → `scripts/logs/cr_ct/step0.json`; no touch outcome computed)
+
+Read-only role asserted, `default_transaction_read_only = on`; every read inside [2026-01-01, 2026-06-05 21:00 UTC).
+The only races run are the random-baseline entries for the A/A (C12). Two runs: run 1 crashed in §5 on a
+`dict(...)` line (removed); run 2 is reported, and its §1–§4 output is identical to run 1's.
+
+**Universe.** 105 train sessions → 4 without canonical IM (as CR-CF) → **101**; no early close, no missing-flow
+session, none starting late. IM median 67.4 pts. 1-min ext data 06:15 → 12:59 PT on every session; every touch had a
+1-s print at the level in its minute (0 dropped, C6).
+
+**Levels per session** (median [IQR]): F1 3 [2, 3] (F1 missing 1 session: prior session other front symbol); F2 2
+[2, 2] (missing 6: 06:29 Ironbeam vs Databento check / no bar); RUN 4 [3, 5].
+
+**Touches** (n / sessions; pooled duplicates C5):
+
+| | F1 | F2 | RUN |
+|---|---|---|---|
+| first touch | 141 / 86 (1 dup) | 95 / 85 (8 dup) | 198 / 91 (3 dup) |
+| second touch | 101 / 66 | 66 / 63 (4 dup) | 128 / 78 (3 dup) |
+
+Primary event set (first touches, deduped): **422 on 101 sessions** — RUN 195, F1 140, F2 87; break up 233 / down 189;
+173 in the first hour; EDGE 257 / INTERIOR 165. Relvol undefined on 37 (touches before 2026-01-16, < 10 priors, C8).
+
+**Tercile cuts (C9, fixed here; speed = fraction of IM per minute):**
+
+| window | p33.3 | p66.7 | n |
+|---|---|---|---|
+| **10 min (primary)** | **0.00725** | **0.01400** | 385 |
+| 5 min | 0.01016 | 0.02102 | 385 |
+| 20 min | 0.00404 | 0.00960 | 368 |
+| A7 leg | 0.00929 | 0.02105 | 384 |
+
+At the median IM (67 pts) the 10-min cuts are ≈ 4.9 and 9.4 pts in 10 min. Relvol (10 min) quantiles p10 / p50 / p90
+0.68 / 0.99 / 1.67.
+
+**Classes (first touches):** 10 min **FAST 85 (44 sessions), SLOW 75 (46)**, NEITHER 225, UNDEFINED 37. 5 min 90 /
+76; 20 min 74 / 85; A7 leg 78 / 94. Speed alone top / bottom 140 / 139; volume alone heavy / light 189 / 196. By
+family FAST / SLOW: F1 32 / 16, F2 19 / 20, RUN 34 / 39 (each family cell < 40: readout only). Second touch FAST 39 /
+SLOW 63. Before she goes flagged on 33 of 422. Strong line within 3 pts: 22 (call 20, put 2), none 350, no levels 50 —
+the A12 / A8 readouts will be too thin to read.
+
+**A/A (C12, 200 splits, keys = the 160 FAST ∪ SLOW touches):** mean **+0.24 pp**, median +0.11, SD 4.0, p5 / p95
+−6.0 / +7.4; 0.9 % of keys unmatched. Baseline 69,948 resolved entries, win rate 0.500 (symmetric by construction),
+EDGE share 0.14 (touches 0.61 — hence the EDGE key).
+
+**Gate:** FAST 85 ≥ 40 on 44 ≥ 30 sessions; SLOW 75 ≥ 40 on 46 ≥ 30; |A/A| 0.24 ≤ 1 pp → **passed**. Committing the
+run script, then running once without stopping.
