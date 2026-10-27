@@ -35,9 +35,10 @@ import pandas as pd  # noqa: E402
 from packages.shared.trading_calendar import is_trading_day  # noqa: E402
 
 PT, UTC = ZoneInfo("America/Los_Angeles"), timezone.utc
-PERIODS = {"ra": (date(2024, 4, 3), date(2024, 12, 31)), "y26": (date(2026, 1, 2), date(2026, 6, 5))}
+PERIODS = {"ra": (date(2024, 4, 3), date(2024, 12, 31)), "y26": (date(2026, 1, 2), date(2026, 6, 5)),
+           "y23": (date(2023, 1, 3), date(2024, 4, 2))}     # CR-CO O1
 HOLDOUT_TS = datetime(2026, 6, 5, 21, 0, tzinfo=UTC)
-EARLY_CLOSES = {date(2024, 7, 3), date(2024, 11, 29), date(2024, 12, 24)}
+EARLY_CLOSES = {date(2024, 7, 3), date(2024, 11, 29), date(2024, 12, 24), date(2023, 7, 3), date(2023, 11, 24)}
 NB = 390                                       # RTH minutes 06:30 .. 12:59 PT
 QUOTE_MAX_AGE_S = 300                          # A1: drop snapshots whose quotes are > 5 min from the label
 VOLS = [f"vol{n}" for n in range(5, 100, 5)]
@@ -111,10 +112,29 @@ def load_es(period: str) -> pd.DataFrame:
     """1-min bars per (session, symbol) from es_flow_1s_databento, RTH 06:30-13:00 PT."""
     path = OUT_DIR / f"es_{period}.parquet"
     if path.exists():
-        return pd.read_parquet(path)
+        r = pd.read_parquet(path)
+        return r[r["symbol"] == "ES.c.0"].reset_index(drop=True) if period == "y23" else r
     lo, hi = PERIODS[period]
     guard(lo, hi)
     a, b = pt(lo, 6, 30), pt(hi, 13, 0)
+    if period == "y23":
+        # CR-CO O4: es_flow_1s_databento starts 2024-04-03; before it the only Databento ES series is the ES.c.0
+        # minute bars in ironbeam_es_1m_bars (naive UTC bar start; no contract column -> pseudo-symbol). Non-Databento rows are kept
+        # with their source so Step 0 can list them; front_bars uses only source = 'databento'.
+        r = q("""
+            SELECT ((datetime AT TIME ZONE 'UTC') AT TIME ZONE 'America/Los_Angeles')::date AS d,
+                   CASE WHEN source = 'databento' THEN 'ES.c.0' ELSE 'src:' || coalesce(source, 'null') END AS symbol,
+                   ((datetime AT TIME ZONE 'UTC') AT TIME ZONE 'America/Los_Angeles') AS m_pt,
+                   open::float AS o, high::float AS h, low::float AS l, close::float AS c, volume::float AS vol
+            FROM ironbeam_es_1m_bars
+            WHERE datetime >= %s AND datetime < %s
+              AND ((datetime AT TIME ZONE 'UTC') AT TIME ZONE 'America/Los_Angeles')::time >= '06:30'
+              AND ((datetime AT TIME ZONE 'UTC') AT TIME ZONE 'America/Los_Angeles')::time < '13:00'
+            ORDER BY datetime
+        """, (a.astimezone(UTC).replace(tzinfo=None), b.astimezone(UTC).replace(tzinfo=None)))   # naive UTC column
+        assert r["d"].min() >= lo and r["d"].max() <= hi
+        r.to_parquet(path)
+        return r[r["symbol"] == "ES.c.0"].reset_index(drop=True)
     r = q("""
         WITH s AS (
             SELECT symbol, ts_utc, open, high, low, close, volume,

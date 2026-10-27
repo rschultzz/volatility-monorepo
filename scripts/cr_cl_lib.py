@@ -13,6 +13,8 @@ scripts/cr_cl_run.py so both use one definition of every quantity.
 """
 from __future__ import annotations
 
+import json
+import os
 from datetime import timedelta
 
 import numpy as np
@@ -33,7 +35,8 @@ EDGE_PTS = 2.0                             # C7
 GAP_MAX = 5                                # C9: a missing run > 5 bars inside the race drops the leg
 MIN_CELL = 40                              # C12
 CELLS = [("G1", 1), ("G1", -1), ("G2", 1), ("G2", -1)]
-OUT = L.REPO_ROOT / "scripts" / "logs" / "cr_cl"
+PERIOD = os.environ.get("CR_CL_PERIOD", "y26")   # CR-CN N2: "ra" re-runs CR-CL unchanged on R-a
+OUT = L.REPO_ROOT / "scripts" / "logs" / {"y26": "cr_cl", "ra": "cr_cn", "y23": "cr_co"}[PERIOD]   # CR-CO O2
 OUT.mkdir(parents=True, exist_ok=True)
 
 # GEX readout (C14): CR-CF select_levels constants
@@ -41,9 +44,14 @@ DTE_MAX, MAG_MIN, SPACING, WIN_IM, TOP_N, INTO_PTS = 30, 40e9, 5.0, 1.0, 6, 5.0
 
 
 def load():
-    mins = L.skew_minutes(L.load_skew("y26"))
-    sym, bars = L.front_bars(L.load_es("y26"))
-    sess = [d for d in L.sessions("y26") if d in mins and d in bars]
+    mins = L.skew_minutes(L.load_skew(PERIOD))
+    sym, bars = L.front_bars(L.load_es(PERIOD))
+    sess = [d for d in L.sessions(PERIOD) if d in mins and d in bars]
+    if PERIOD == "y23":                    # CR-CO O5 / O6: roll-week and quote-time exclusions fixed in Step 0
+        ex = OUT / "exclusions.json"
+        if ex.exists():
+            drop = set(json.loads(ex.read_text())["sessions"])
+            sess = [d for d in sess if str(d) not in drop]
     px = {d: L.es_close_at_snapshot(bars, d, mins) for d in sess}
     return dict(MIN=mins, BARS=bars, SYM=sym, SESS=sess, PX=px)
 
@@ -212,7 +220,9 @@ def gex_levels(D) -> tuple[dict, dict]:
     """Corrected levels per session (CR-CF select_levels, copied). Sessions whose prior session is not a y26 session
     with the same front symbol (roll weeks, 2026-01-02), or without P_target / IM / gamma rows, get none (counted)."""
     from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
-    lo, hi = L.PERIODS["y26"]
+    if PERIOD == "y23":                    # CR-CO O10: orats_oi_gamma.stock_price is not a forward before 2024-04-03
+        return {}, {d: "pre-2024-04-03: placement undefined (CR-BT)" for d in D["SESS"]}
+    lo, hi = L.PERIODS[PERIOD]
     L.guard(lo, hi)
     oig = L.q("""
         SELECT trade_date, expir_date, strike::float AS strike, stock_price::float AS stock_price, gex_call, gex_put
