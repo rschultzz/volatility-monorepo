@@ -246,3 +246,51 @@ breaks, not readable.
 
 **Gate (C15):** H1 CLEAN 141 / 73 s, CHOPPY 141 / 77 s, |A/A| 0.23 → **passed**. H2 HOLD 78 / 60 s, FILL 219 / 95 s,
 |A/A| 0.03 → **passed**. Committing the run script (both hypotheses, Holm m = 2), then running once without stopping.
+
+## Result (single run, 2026-10-27) — `scripts/cr_cw_run.py` @ `f662b2d` → `scripts/logs/cr_cw/results.json`
+
+One run, exit 0, no re-run. Event sets, cuts and HOLD / FILL counts asserted equal to Step 0. Races are stop-free ±10
+direction tests, not Ryan's exit (B6). H1 entry = the level price at the touch second (R2 level-entry variant,
+labelled); H2 entry = the turn-bar close.
+
+### Primaries (Holm m = 2)
+
+| | group A | group B | A − B (95 % CI) | Holm p | Holm CI | verdict |
+|---|---|---|---|---|---|---|
+| **H1** break, CLEAN − CHOPPY | 54.5 % (73 / 61; n 134, 71 s) | 55.9 % (76 / 60; n 136, 76 s) | **−1.4 pp [−13.7, +11.4]** | 1.00 (raw 0.83) | [−15.5, +13.3] (97.5 %) | **INCONCLUSIVE** |
+| **H2** continuation, HOLD − FILL | 48.7 % (37 / 39; n 76, 58 s) | 49.3 % (106 / 109; n 215, 95 s) | **−0.6 pp [−13.5, +12.4]** | 1.00 (raw 0.91) | [−13.5, +12.4] (95 %) | **INCONCLUSIVE** |
+
+### H1 readouts (unadjusted, no verdicts)
+
+- CLEAN vs 50 % +4.5 [−5.2, +13.9]; CHOPPY +5.9 [−2.1, +13.6]; MIDDLE 51.9 %; all 422 first touches 54.1 % (as CR-CT).
+- ±20: −4.1 [−19.0, +10.9] (48.6 % vs 52.8 %). MFE before −10: median 10.0 vs 12.25 pts, mean diff −0.3 [−6.6, +6.1];
+  reached +10 52 % vs 54 %.
+- vs matched random (B7): CLEAN +3.2 [−6.3, +12.8], CHOPPY +5.6 [−2.6, +13.0].
+- **Efficiency at equal speed** (CR-CT middle speed tercile): CLEAN 50.0 % (n 24) vs CHOPPY 60.0 % (n 20), −10.0
+  [−43.4, +21.6]. Within CR-CT NEITHER: −1.0 [−20.8, +19.3] (49 / 61). Within FAST / SLOW and the outer speed
+  terciles one side has 2–4 trades: not readable.
+- Retrace count low (≤ 18) vs high: 56.9 % vs 51.2 %, +5.6 [−5.1, +16.6]. Bands: 2–4 retraces 80 % (n 15), ≥ 5 53.1 %.
+- Windows: 5 min −2.6 [−15.2, +9.7]; 20 min +10.1 [−1.7, +21.7]; A7 leg +0.6 [−12.6, +14.0]. No plateau (sign flips).
+- Family: F1 +2.7, F2 −10.5, RUN +0.4, all CIs ±20 pp.
+
+### H2 readouts (unadjusted, no verdicts)
+
+- All 297 trades 49.1 % (n 291), vs matched random −0.9 [−6.9, +5.5]: buying the first turn after a 3-pt pullback
+  from a ≥ 6-pt break is a coin flip. HOLD vs 50 % −1.3 [−12.7, +9.7]; FILL −0.7 [−8.3, +6.9].
+- ±20: −2.7 [−17.9, +11.9]. MFE median 7.9 vs 9.5 pts, mean diff −0.2 [−5.6, +5.4].
+- Snap variants: bottom-quartile ticks +8.7 [−8.5, +25.3] (HOLD 56.8 % n 37 vs 48.0 %); final band excluded −0.7
+  [−12.7, +10.7] (n 115 vs 176); snap = final band −4.7, snap earlier −4.0.
+- Break 4 / 8: −3.1 / +4.8. Pullback 2 / 4: −1.1 / −2.9. No plateau; every CI covers 0.
+- Light / heavy: heavy n 8, not readable. Family: F1 −1.2, F2 +6.9, RUN −3.1.
+
+### Reading
+
+- **H1: no.** A clean, low-back-ticking push into a level broke 54.5 %; a choppy one 55.9 %. Path efficiency is mostly
+  CR-CT's speed again (r 0.84), and at equal speed the small sample leans the wrong way. The course's "real momentum"
+  path test does not separate breaks from failures at ±10 on these levels.
+- **H2: no.** After a ≥ 6-pt break and a ≥ 3-pt pullback, continuation is 49 % whether the pullback held above the
+  snap band or filled it. Caveats: the lowest-volume band is mostly the last band the leg crossed (construction), and
+  volume at the close is a 1–2-tick approximation (61 % of volume trades in multi-tick seconds). The variant that
+  avoids the final-band artefact also reads −0.7.
+- Nothing shortlisted. The one readout with a CI excluding 0 (2–4 retraces, 80 % n 15) is one of ~40 unadjusted
+  readouts on a cell of 15.
