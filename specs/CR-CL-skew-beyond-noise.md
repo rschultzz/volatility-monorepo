@@ -188,7 +188,7 @@ Stopped for Ryan's review. No run script has been written.
 
 Kickoff, transcribed: **Primary = G1-down alone.** Decline leg, put skew **fell** beyond noise (ratio < 0) → hypothesis: the next move is **UP**. One hypothesis, **no Holm**. Same race (±10 primary), same 3-key matched in-noise baseline, three-verdict rule, 40-leg minimum. **Readouts, each reported separately and not pooled:** G1-up (rally with put skew rising → down; Ryan: "less solid, worth looking at separately"), G2-up, G2-down, plus the existing swing 8 / 16, late-day and GEX-level splits.
 
-**Rationale (Ryan's put-monetization theory).** Into a decline, holders of puts monetise them. That selling of puts takes the bid out of downside protection, so put skew drops while price is still falling, and support forms: the decline is being used to cash protection, not to add it. G1-down is the leg where that shows up beyond noise.
+**Rationale (Ryan's put-monetization theory, in his words):** puts are monetised into the decline, skew drops, support forms. G1-down is the leg where put skew falls beyond noise during a decline.
 
 Choices fixed by Code before the run script was written:
 
