@@ -13,6 +13,7 @@ scripts/cr_cl_run.py so both use one definition of every quantity.
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import timedelta
 
@@ -35,7 +36,7 @@ GAP_MAX = 5                                # C9: a missing run > 5 bars inside t
 MIN_CELL = 40                              # C12
 CELLS = [("G1", 1), ("G1", -1), ("G2", 1), ("G2", -1)]
 PERIOD = os.environ.get("CR_CL_PERIOD", "y26")   # CR-CN N2: "ra" re-runs CR-CL unchanged on R-a
-OUT = L.REPO_ROOT / "scripts" / "logs" / ("cr_cl" if PERIOD == "y26" else "cr_cn")
+OUT = L.REPO_ROOT / "scripts" / "logs" / {"y26": "cr_cl", "ra": "cr_cn", "y23": "cr_co"}[PERIOD]   # CR-CO O2
 OUT.mkdir(parents=True, exist_ok=True)
 
 # GEX readout (C14): CR-CF select_levels constants
@@ -46,6 +47,11 @@ def load():
     mins = L.skew_minutes(L.load_skew(PERIOD))
     sym, bars = L.front_bars(L.load_es(PERIOD))
     sess = [d for d in L.sessions(PERIOD) if d in mins and d in bars]
+    if PERIOD == "y23":                    # CR-CO O5 / O6: roll-week and quote-time exclusions fixed in Step 0
+        ex = OUT / "exclusions.json"
+        if ex.exists():
+            drop = set(json.loads(ex.read_text())["sessions"])
+            sess = [d for d in sess if str(d) not in drop]
     px = {d: L.es_close_at_snapshot(bars, d, mins) for d in sess}
     return dict(MIN=mins, BARS=bars, SYM=sym, SESS=sess, PX=px)
 
@@ -103,6 +109,29 @@ def build_legs(D, swing: float) -> pd.DataFrame:
                              actual=None if rd is None else rd.actual_pp, expected=None if rd is None else rd.expected_pp,
                              band=None if rd is None else rd.band_pp, grp=grp))
     return pd.DataFrame(rows)
+
+
+def vol_scaled_legs(D) -> tuple[pd.DataFrame, float, list]:
+    """CR-CO A1 (A7 as changed 2026-10-26): per session swing = 12 x IM_d / IM_train, IM = canonical implied_move_1d,
+    IM_train = median over the y26 train sessions (the one train read: a pre-open feature). No-IM sessions: no legs."""
+    from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
+    imq = """SELECT trade_date, (feature_vector->>'implied_move_1d')::float AS im FROM bt_daily_features
+             WHERE feature_version = %s AND ticker = 'SPX' AND active AND trade_date BETWEEN %s AND %s"""
+    lo26, hi26 = L.PERIODS["y26"]
+    L.guard(lo26, hi26)
+    im26 = L.q(imq, (CANONICAL_FEATURE_VERSION, lo26, hi26)).drop_duplicates("trade_date")
+    im_train = float(im26[im26["trade_date"].isin(L.sessions("y26"))]["im"].dropna().median())
+    lo, hi = L.PERIODS[PERIOD]
+    L.guard(lo, hi)
+    im = L.q(imq, (CANONICAL_FEATURE_VERSION, lo, hi)).drop_duplicates("trade_date").set_index("trade_date")["im"]
+    parts, no_im = [], []
+    for d in D["SESS"]:
+        v = im.get(d)
+        if v is None or not np.isfinite(v) or v <= 0:
+            no_im.append(d)
+            continue
+        parts.append(build_legs(dict(D, SESS=[d]), 12.0 * float(v) / im_train))
+    return pd.concat(parts, ignore_index=True), im_train, no_im
 
 
 def add_terciles(W: pd.DataFrame) -> tuple[pd.DataFrame, list]:
@@ -214,6 +243,8 @@ def gex_levels(D) -> tuple[dict, dict]:
     """Corrected levels per session (CR-CF select_levels, copied). Sessions whose prior session is not a y26 session
     with the same front symbol (roll weeks, 2026-01-02), or without P_target / IM / gamma rows, get none (counted)."""
     from packages.shared.canonical_version import CANONICAL_FEATURE_VERSION
+    if PERIOD == "y23":                    # CR-CO O10: orats_oi_gamma.stock_price is not a forward before 2024-04-03
+        return {}, {d: "pre-2024-04-03: placement undefined (CR-BT)" for d in D["SESS"]}
     lo, hi = L.PERIODS[PERIOD]
     L.guard(lo, hi)
     oig = L.q("""
