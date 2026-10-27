@@ -82,6 +82,14 @@ If you find yourself editing an `App.jsx` flex/grid rule, a CSS file, or a JSX w
 
 If Step 0 surfaces a requirement the spec didn't anticipate (a missing layout decision, an unexpected dependency, a wrong assumption about an upstream component), amend the spec *and* the session note before writing implementation code. Never "fix it during impl" — the diff stops being reviewable and the session note stops being accurate.
 
+### Standing rulings
+
+Before freezing any research CR spec, read `/Users/ryan/My Drive/Obsidian Vault/Anonymous/Dash/research/standing-rulings.md`. The spec must contain a "Standing rulings conformance" table listing every ruling (A*, B*, C*) as honoured / n/a / deviates, and confirm nothing in "Revoked / superseded" is used. Any "deviates" is a STOP: report it and wait for Ryan's approval in chat; record the approval in the spec and in the rulings file's change log. Re-check the table on every amendment.
+
+### Worktree cleanup
+
+Before removing a CR worktree, copy its git-ignored run logs and caches (`scripts/logs/<cr>/` and any harness under `scripts/`) into the main checkout's `scripts/logs/<cr>/`, and verify the copies, so a forced remove can't delete the only copy.
+
 ## Unattended backfill protocol
 
 All unattended CR scripts (overnight backfills, data rebuilds) must follow this
