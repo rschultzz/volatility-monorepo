@@ -165,7 +165,7 @@ No STOP. Implementation proceeds.
 | Y8 | Tables | `forward_log_events`, `forward_log_outcomes`, `forward_log_sessions` (`scripts/cr_cx_ddl.sql`), insert-only by trigger, as `setup_reviews`. Applied once by the owner with `DATABASE_URL`; `dash_backfill_writer` gets SELECT, INSERT (and USAGE on the sequences). |
 | Y9 | Printing (B4, K6) | stdout and `update_run_smoke` carry counts only: sessions processed / skipped (with reason), legs logged by cell, outcomes inserted, Databento rows and cost. No outcome value, rate or aggregate is printed or stored outside the outcome rows. A test asserts that no outcome value appears in stdout. |
 | Y10 | Render | `databento` added to `apps/cron/requirements.txt` (pinned to the local 0.86.0). `cr_cj_lib` reads `.env` only if it exists (it raises today, and Render has none). That is a no-op change for local runs; the frozen definitions are untouched. Code SHA = `RENDER_GIT_COMMIT`, else `git rev-parse HEAD`. |
-| Y11 | Tests (`tests/test_cr_cx_forward_log.py`) | (a) Guard: dates < 2026-10-27 (train, holdout, 2026-10-26) are refused with no DB or network call. (b) Parity: on 3 `y26` train sessions, Y3's one-session loader + leg builder returns exactly `cr_cl_lib.vol_scaled_legs`'s legs, groups and keys (in memory, nothing inserted). The same test re-derives IM_train and the tercile cuts. (c) Idempotency on **temp** copies of the three tables (session-local `pg_temp`, never the real tables): processing a train session twice inserts n, then 0; UPDATE and DELETE raise; stdout holds counts only. |
+| Y11 | Tests (`scripts/tests/test_cr_cx_forward_log.py`) | (a) Guard: dates < 2026-10-27 (train, holdout, 2026-10-26) are refused with no DB or network call. (b) Parity: on 3 `y26` train sessions, Y3's one-session loader + leg builder returns exactly `cr_cl_lib.vol_scaled_legs`'s legs, groups and keys (in memory, nothing inserted). The same test re-derives IM_train and the tercile cuts. (c) Idempotency on **temp** copies of the three tables (session-local `pg_temp`, never the real tables): processing a train session twice inserts n, then 0; UPDATE and DELETE raise; stdout holds counts only. |
 | Y12 | First live run | The cron's first run (2026-10-28 11:00 UTC) logs 2026-10-27. No forward session is processed by hand in this CR. Only Y11 runs here, on train data and temp tables. |
 
 ## Standing rulings conformance (re-checked after RL1–RL5)
@@ -188,3 +188,36 @@ No STOP. Implementation proceeds.
 | R1–R7 | not used | |
 
 One remaining "deviates" (A17), approved (RL5). Proceeding to implementation.
+
+---
+
+## Implementation and verification (2026-10-27)
+
+**Commits:** step 1 DDL `968af5b`; step 2 script `f83fff2`; step 3 tests (this branch).
+
+**Files**
+- `scripts/cr_cx_ddl.sql`: three insert-only tables with triggers; grants to `dash_backfill_writer`. **Not applied yet** (owner, deploy step 1).
+- `scripts/forward_log_g1down.py`: the daily script.
+- `scripts/tests/test_cr_cx_forward_log.py`: the tests.
+- `scripts/cr_cj_lib.py`: `.env` is read only if present (Y10; no other change).
+- `apps/cron/requirements.txt`: `+ databento==0.86.0`.
+
+**Tests:** `CR_CL_PERIOD=y26 apps/web/.venv/bin/python -m unittest scripts.tests.test_cr_cx_forward_log -v`, **8 / 8 pass**.
+- Guard: 6 dates (train, holdout, 2026-10-26) refused with no DB call; the same-day session and a Saturday refused; catch-up targets never before 2026-10-27.
+- Parity: on 3 `y26` sessions with a G1-down event (first, middle and last such session), every leg matches `cr_cl_lib.vol_scaled_legs` on all 16 keys, and so do the G1-down flags. IM_TRAIN (65.71410292087306) and the tercile cuts (21.25 / 30.33) are re-derived exactly.
+- Idempotency on `pg_temp` tables (asserted not to be the real ones): one train session logs n legs and outcomes, and the second run inserts 0 / 0 / 0. UPDATE and DELETE raise. The returned counts contain no outcome field. A single missing RTH minute → skipped "incomplete ES bars (389/390)".
+
+**Databento pull dry run** (2026-03-16, train, a roll week with ESH6 + ESM6; download and aggregate only, every DB write mocked):
+- 46,167 one-second rows, identical to the CR-CA rows for that window on both contracts: row count, volume, buy, sell, low and high.
+- Cost **$0.676**, the highest seen (two heavily traded contracts). That is under the $1 cap, which is enforced per session before any download.
+- Nothing forward was read or written in this CR. The first forward session (2026-10-27) is logged by the cron's first run.
+
+## Deploy plan (for Ryan; nothing deployed)
+
+1. **Merge the PR**, then apply the DDL as the owner: `psql "$DATABASE_URL" -f scripts/cr_cx_ddl.sql`.
+2. **Render cron** `forward-log-g1down`, set up like `daily-leg-capture`:
+   - rootDir `""`, branch `main`, build `pip install -r apps/cron/requirements.txt`, `PYTHON_VERSION` 3.13.4.
+   - start command `python scripts/forward_log_g1down.py`; schedule **`0 11 * * 2-6`** (11:00 UTC Tue–Sat, previous session; DST-proof).
+   - Env: **`BACKFILL_DATABASE_URL`** (`dash_backfill_writer`) and **`DATABENTO_API_KEY`**. Ryan sets both.
+3. **First run:** 2026-10-28 11:00 UTC, logging 2026-10-27, if the cron exists by then. Otherwise the first run catches up every unlogged session from 2026-10-27.
+4. **Morning check:** counts only. `SELECT session_date, status, skip_reason, legs_logged FROM forward_log_sessions ORDER BY 2`, plus `bt_backfill_runs` where `cr_id = 'CR-CX'`. Do not select from `forward_log_outcomes` before the pre-registered confirmation (B4).
