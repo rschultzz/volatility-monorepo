@@ -272,3 +272,102 @@ originals had no same-minute ties, so the finer clock changes no ±10 result.
 - S1 (49 legs) and S3 (58 fades) are close to the 40-resolved floor. At ±2 / ±4 almost every trade resolves before
   13:00, so this should not bind; the run reports it either way.
 - Next: commit `scripts/cr_cv_run.py`, then run it once.
+
+---
+
+## Result (single run, 2026-10-26) — `scripts/cr_cv_run.py` @ `bb4d25e` → `scripts/logs/cr_cv/results.json`
+
+One launch, exit 0, no re-run (50 s). Schedule asserted equal to Step 0 (2,008 rows; fills per cell unchanged). Train
+only; R-a, R-b and the holdout were not read. 10,000 session-cluster draws, seed 20260920, one matrix per setup universe.
+Every race is a **mechanical bracket (B6), not Ryan's trade**; S1 is a measurement only (C12). No same-second ties
+occurred in any cell; unresolved ≤ 2 per primary cell.
+
+### Primary — 16 cells, after-cost expectancy per trade E = (2p − 1)·T − 0.50 pt (primary fill model)
+
+Break-even win rate: 62.5 % at ±2, 56.25 % at ±4.
+
+| Setup | Side | T | n (sessions) | Win rate [95 %] | E pts [95 % CI] | Holm level: CI | Holm p | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| S1 G1-down | long (hyp) | 2 | 49 (36) | 51.0 % [37.5, 65.3] | −0.46 [−1.00, +0.11] | 98.75 %: [−1.14, +0.26] | 0.49 | INCONCLUSIVE |
+| S1 | long (hyp) | 4 | 49 (36) | 55.1 % [41.5, 69.6] | −0.09 [−1.18, +1.07] | 95.0 %: [−1.18, +1.07] | 0.91 | INCONCLUSIVE |
+| S1 | short (opp) | 2 | 49 (36) | 34.7 % [22.2, 46.5] | −1.11 [−1.61, −0.64] | 99.69 %: [−1.85, −0.41] | < 0.001 | REFUTED |
+| S1 | short (opp) | 4 | 49 (36) | 36.7 % [24.4, 49.0] | −1.56 [−2.54, −0.58] | 99.38 %: [−2.87, −0.14] | 0.019 | REFUTED |
+| S2 range edge | chosen (hyp) | 2 | 175 (76) | 37.1 % [30.1, 44.3] | −1.01 [−1.30, −0.73] | 99.67 %: [−1.42, −0.57] | < 0.001 | REFUTED |
+| S2 | chosen (hyp) | 4 | 173 (76) | 39.3 % [30.6, 48.3] | −1.36 [−2.05, −0.64] | 99.50 %: [−2.34, −0.31] | 0.002 | REFUTED |
+| S2 | opposite | 2 | 170 (81) | 45.9 % [38.7, 53.1] | −0.66 [−0.95, −0.37] | 99.64 %: [−1.11, −0.25] | < 0.001 | REFUTED |
+| S2 | opposite | 4 | 168 (80) | 48.8 % [40.8, 56.9] | −0.60 [−1.24, +0.05] | 99.00 %: [−1.45, +0.26] | 0.41 | INCONCLUSIVE |
+| S3 failed sweep | fade (hyp) | 2 | 58 (41) | 50.0 % [37.1, 61.5] | −0.50 [−1.02, −0.04] | 99.29 %: [−1.17, +0.13] | 0.26 | REFUTED * |
+| S3 | fade (hyp) | 4 | 58 (41) | 48.3 % [35.4, 60.0] | −0.64 [−1.67, +0.30] | 98.33 %: [−1.93, +0.51] | 0.58 | INCONCLUSIVE |
+| S3 | continuation | 2 | 58 (41) | 36.2 % [25.0, 48.3] | −1.05 [−1.50, −0.57] | 99.44 %: [−1.70, −0.35] | 0.004 | REFUTED |
+| S3 | continuation | 4 | 58 (41) | 44.8 % [33.3, 57.1] | −0.91 [−1.83, +0.07] | 99.17 %: [−2.16, +0.48] | 0.41 | INCONCLUSIVE |
+| S4 first touch | FAST break + SLOW fade (hyp) | 2 | 138 (68) | 42.0 % [33.6, 50.3] | −0.82 [−1.16, −0.49] | 99.62 %: [−1.29, −0.34] | < 0.001 | REFUTED |
+| S4 | hyp | 4 | 137 (68) | 53.3 % [45.7, 61.0] | −0.24 [−0.84, +0.38] | 97.50 %: [−0.94, +0.47] | 0.91 | INCONCLUSIVE |
+| S4 | opposite | 2 | 138 (68) | 41.3 % [34.0, 49.2] | −0.85 [−1.14, −0.53] | 99.58 %: [−1.26, −0.38] | < 0.001 | REFUTED |
+| S4 | opposite | 4 | 138 (68) | 41.3 % [33.9, 48.9] | −1.20 [−1.79, −0.59] | 99.55 %: [−2.08, −0.31] | < 0.001 | REFUTED |
+
+**No cell passes. 9 REFUTED, 7 INCONCLUSIVE, 0 underpowered.** Every point estimate is below 0. The best are S1 long
+±4 (−0.09) and S4 hypothesis ±4 (−0.24), both with CIs centred near 0.
+
+\* S3 fade ±2 is REFUTED on the 95 % CI (upper −0.04), the rule C7 fixed from the kickoff's "the CI". Its Holm-level
+upper bound is +0.13, so under a Holm-adjusted refutation it would be INCONCLUSIVE. It is the only cell where the two
+readings differ.
+
+### Readouts (no verdicts, unadjusted)
+
+**Cost 0.25 / 0.75 pt** (primary fills; E [95 % CI]). Positive point estimates appear only at 0.25 pt, and only in
+three cells:
+
+| Cell | E at 0.25 | E at 0.75 |
+|---|---|---|
+| S1 long ±4 | +0.16 [−0.93, +1.32] | −0.34 [−1.43, +0.82] |
+| S4 hyp ±4 | +0.01 [−0.59, +0.63] | −0.49 [−1.09, +0.13] |
+| S3 fade ±2 | −0.25 [−0.77, +0.21] | −0.75 [−1.27, −0.29] |
+| every other cell | −0.21 to −1.31 | −0.71 to −1.81 |
+
+**Touch-fill model** (each CR's original entry, no slippage; E at 0.50):
+
+| Cell | Touch-fill win rate / E | Primary win rate / E |
+|---|---|---|
+| S1 long ±2 / ±4 | 57.1 % / −0.21 [−0.70, +0.29]; 59.2 % / +0.23 [−0.78, +1.32] | 51.0 % / −0.46; 55.1 % / −0.09 |
+| S2 chosen ±2 / ±4 | 41.0 % / −0.86; 41.5 % / −1.18 | 37.1 % / −1.01; 39.3 % / −1.36 |
+| S2 opposite ±2 / ±4 | 48.5 % / −0.56; 49.1 % / −0.57 | 45.9 % / −0.66; 48.8 % / −0.60 |
+| S3 fade ±2 / ±4 | 60.3 % / −0.09 [−0.59, +0.37]; 50.0 % / −0.50 | 50.0 % / −0.50; 48.3 % / −0.64 |
+| S3 continuation ±2 / ±4 | 39.7 % / −0.91; 50.0 % / −0.50 | 36.2 % / −1.05; 44.8 % / −0.91 |
+| S4 hyp ±2 / ±4 | 48.8 % / −0.55; 50.9 % / −0.42 | 42.0 % / −0.82; 53.3 % / −0.24 |
+| S4 opposite ±2 / ±4 | 51.2 % / −0.45; 49.1 % / −0.58 | 41.3 % / −0.85; 41.3 % / −1.20 |
+
+- Even with free fills, only S1 long ±4 has a positive E (+0.23), and its CI spans −0.8 to +1.3.
+- The quarter-point fill cost decides a lot at ±2. For the bar-close entries (S1, S3), win rates fall 6–10 pp
+  (S3 fade 60.3 → 50.0 %). A 0.25-pt adverse fill turns a ±2 race into +2.25 / −1.75.
+
+**±10 reference** (win rate; E at 0.50, [95 % CI]):
+
+| Side | Primary fill | Touch fill (= original) |
+|---|---|---|
+| S1 long | 63.3 % (n 49), E +2.15 [−0.50, +4.82] | 65.3 %, E +2.56 [+0.06, +5.06] |
+| S2 chosen / opposite | 44.6 % (148) / 54.2 % (144) | 46.4 % / 55.2 % |
+| S3 fade / continuation | 38.5 % (52) / 60.8 % (51) | 39.2 % / 60.8 % |
+| S4 hyp / opposite | 51.5 % (136) / 46.3 % (136) | 51.6 % / 48.4 % |
+
+The ±10 touch-fill rates are the Step 0 reproduction. The primary fill costs each ±10 side 0–2 pp.
+
+**Trade-through fill share** (Step 0): S2 chosen 98.3 %, S2 opposite 99.4 %, S4 86.3 % (22 of 160 touches never
+traded a tick beyond the level in the touch minute).
+
+**S4 split, hypothesis side** (descriptive): FAST break ±2 40.0 % (n 75), ±4 **58.7 %** (75), E +0.19 [−0.56, +0.95];
+SLOW fade ±2 44.4 % (63), ±4 46.8 % (62), E −0.76. The ±4 hypothesis number is FAST breaks; SLOW fades lose.
+
+### Reading
+
+- **Nothing works at ±2 or ±4 after costs.** No cell passes. Nine are refuted (credibly negative), and the other seven
+  have point estimates below 0.
+- **±2 is worse than ±4 everywhere.** At ±2 the break-even is 62.5 % and no setup gets near it. The best is S3 fade at
+  50 % (60 % with free fills). At ±4 three cells are near break-even (S1 long 55 %, S4 hyp 53 %, S2 opposite 49 %), and
+  none clears it.
+- **Limit entries at range edges get picked off.** S2's chosen-edge limit fills win 37 % at ±2 (41 % with touch fills).
+  When price trades through a limit at the edge, it tends to keep going: the range breaks more often than it holds.
+  This is the CR-CP result (the flow-chosen edge loses) at a smaller scale.
+- **S1 (G1-down long) is the only setup whose ±10 edge carries down, and it does not survive costs.** About 55 % at ±4
+  against a 56 % break-even; E −0.09 [−1.18, +1.07]. Its ±10 E is +2.2 pts, but that was already inconclusive in
+  CR-CL, and S1 is a measurement only.
+- Not shortlisted. Nothing goes to R-a.
