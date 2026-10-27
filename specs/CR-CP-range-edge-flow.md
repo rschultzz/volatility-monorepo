@@ -345,3 +345,34 @@ Readings Code fixed for A1 (before the re-run):
 Conformance changes: **A9** n/a → **honoured (readout)**, via A1.3. **A2** stays honoured (A1 changes what the box is
 measured on, not its duration). **A3 / A20** honoured: the entry edge is now the accepted (close) top / bottom, as in
 Ryan's example. No "deviates".
+
+## Step 0 re-run after A1 (2026-10-26; `scripts/cr_cp_step0.py` @ `63e1ecc` → `scripts/logs/cr_cp/step0.json`; v1 kept as `v1_step0.json`; no range outcome computed)
+
+Universe, 1m-table check and swing unchanged (101 sessions, IM_train 65.71). **Parity:** `hl_box` (= the v1 primary)
+reproduces v1 exactly (322 ranges, 115 chosen fills).
+
+| A1 primary | count |
+|---|---|
+| ranges | **470** on 100 sessions (median 5 per session); close-box width median 6.0 pts (p5 3.0, p95 11.0) |
+| void before decision (a close > 2 pts out) | 223 (47 %); no call by r0 + 60: 12 |
+| calls | **235**: short 108, long 127 (up → short 70, up → long 72, down → short 38, down → long 55) |
+| decision bar − qualifying bar | median 0 (p75 3, p95 14) |
+| chosen-side fills | **178 (76 %) on 76 sessions**; box broke 55, 13:00 2 |
+| opposite-side fills | 171 (73 %); pairs (both filled) 115 |
+| chosen fills EDGE / INTERIOR | 5 / 173 |
+
+Readout grid (chosen fills / sessions): swing 12 131 / 72, swing 8 176 / 73, swing 16 107 / 65, width 8 160 / 70,
+width 16 178 / 76, half-leg 160 / 76, hold 10 265 / 91, **hold 30 60 / 46** (now ≥ 40), delta 1 % 239 / 89, delta 3 %
+105 / 54, progress 1 140 / 68, progress 4 235 / 86, contracts/pt 109 / 69, entry at close 234 / 88, `hl_box` 115 / 64,
+`frozen_reset` 130 / 71.
+
+Splits (chosen fills): strong line within 10 pts 40, weak 102, none 18, no levels 18; position short of 15 / straddling 10
+/ beyond 15; **put 2 / call 38 → put / call not readable on train** (A1.4). A9: second of two 95, at a single line 8, not
+at a line 57, no levels 18. The chart's displayed lines are dense (5-pt spacing, gross ≥ 40 $bn), so most edges that sit
+at a line also have a second line within 10 pts: the "second of two" tag mostly separates "at a line" from "not". Skew:
+beyond noise 12. Hour 07: 20 … 12: 29; first range 24, later 154.
+
+A/A: mean **+0.44 pp**, median +0.36, SD 3.9, p5 −5.9, p95 +6.9; 0.7 % of keys unmatched.
+
+**A1.5 gate: passed** (178 ≥ 40 fills, 76 ≥ 30 sessions, |A/A| 0.44 ≤ 1 pp). Per Ryan, the run script is committed and
+the primary is run once without another stop.
