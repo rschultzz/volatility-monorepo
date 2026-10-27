@@ -156,9 +156,10 @@ def chart_levels(g, ptgt, band_lo, band_hi):
     return disp, span
 
 
-def placebo(levels, o, im):
-    """A16.4 / A15.6 (A17 code, unchanged): around the set's own real levels."""
-    real = np.array([x["L"] for x in levels])
+def placebo(levels, o, im, avoid=None):
+    """A16.4 / A15.6 (A17 code): around the set's own real levels. `avoid` (CR-CM A1.2): extra level prices the bins
+    must also sit >= 10 pts from; None = A17 unchanged."""
+    real = np.array([x["L"] for x in levels] + [float(a) for a in (avoid or [])])
     pool = {}
     for x in levels:
         s = np.sign(x["L"] - o)
