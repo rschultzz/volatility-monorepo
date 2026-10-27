@@ -21,7 +21,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-for line in (REPO_ROOT / ".env").read_text().splitlines():
+_ENV = REPO_ROOT / ".env"                      # CR-CX Y10: absent on Render (env vars set on the service)
+for line in (_ENV.read_text().splitlines() if _ENV.exists() else []):
     line = line.strip()
     if line and not line.startswith("#") and "=" in line:
         k, _, v = line.partition("=")
