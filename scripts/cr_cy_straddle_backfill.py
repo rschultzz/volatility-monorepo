@@ -408,7 +408,7 @@ def main(argv=None) -> None:
         complete = int((by_night["sum"] == 12).sum())
         none_ = int((by_night["max"] == 0).sum())
         partial = len(by_night) - complete - none_
-        third_fri = {r for r in missing if r["reason"] == "am_only"}
+        n_am_only = sum(1 for r in missing if r["reason"] == "am_only")
         smoke = {
             "mode": args.mode, "nights": len(plans), "plan_errors": n_err,
             "nights_complete": complete, "nights_partial": partial, "nights_missing": none_,
@@ -422,7 +422,7 @@ def main(argv=None) -> None:
             "G4_empty_windows_written": int(g4_empty), "G4_pass": g4_empty == 0,
             "missing_contract_windows": len(missing),
             "missing_by_reason": pd.Series([m["reason"] for m in missing]).value_counts().to_dict() if missing else {},
-            "am_only": len(third_fri),
+            "am_only": n_am_only,
             **counters,
             "run_id": run_id,
         }

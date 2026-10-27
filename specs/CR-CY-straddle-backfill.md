@@ -140,3 +140,30 @@ legs), 0 transient / permanent errors, 1.1 min. Projection for the remaining 616
 ≈ 3,700 calls, ≈ 50 min at the 80/min pace.
 
 All gates pass → the full run proceeds unattended (kickoff rule). No amendment.
+
+## Full run (2026-10-27)
+
+Two run rows in `bt_backfill_runs`:
+
+- **`6b107f41-40f1-4851-a6b7-aeedafc9799b` run 1, `aborted`.** It fetched all 621 nights (3,589 ORATS calls, 95,498 rows inserted, 161.6 min, 0 transient errors). It then crashed in the smoke step on a script bug (a set built from dicts). Fixed in the script (`n_am_only` count). The run's logs are kept as `scripts/logs/cr_cy/full_run1.out`, `missing_run1.csv`, `full_windows_run1.csv`.
+- **`76fc3d80-031d-4d8a-a209-57e302839b02` run 2, `completed`.** This is the same command re-run for the smoke step. Everything was a cache hit (3,476 strike-windows skipped, 474 contracts cache-hit) except the 13 permanent-404 strike-windows, which were re-asked (13 calls, 0 rows). Smoke written to the row and to `scripts/logs/cr_cy/full_smoke.json`.
+
+Totals: **3,614 ORATS calls** (25 Step 0 + 3,589 run 1; run 2's 13 are re-asks of 404s), **96,148 rows inserted** (650 + 95,498).
+
+| | |
+|---|---|
+| Nights complete (12/12 contracts) | **595 / 621** |
+| Nights partial | **26**, of which 22 are close windows lost to the AM/PM key collision and 4 are 404 windows |
+| Nights missing (no rows in either window) | **0** |
+| Rows checked | 97,746 (every minute of every window present wherever a contract has rows) |
+
+Smoke over the full set (the kickoff's gates were for Step 0; recomputed here as a report):
+
+| Gate | Full-set result |
+|---|---|
+| G1 ≥ 5/6 contracts | 1,214 / 1,242 windows. **28 short.** 22 close windows with 0/6 = **`am_only`**: t+1 a monthly third Friday (21 of the 24 such nights) plus **2025-04-17** (Thursday before Good Friday, which held the April AM monthly). The AM monthly holds `(opra_symbol, snapshot_pt)`, so the PM rows were not stored. This is the known CR-BN collision, not fixable without a schema change. 6 windows (2023-05-23 open; 2025-01-24 close + open; 2025-05-12 open; 2025-05-13 close + open; 2025-11-26 open) are short because of ORATS **404** on 13 strike-windows (`missing.csv`, reason `http_404`). Nothing was recorded as fetched for them. |
+| G2 mid inside bid–ask | **300 / 97,746 rows (0.31 %) are bid = ask = 0**, ORATS's no-quote marker. 0 crossed, 0 negative. By minute: 06:30 PT 66, 06:31 98, 06:32 113, 06:33 12, 06:37 6, close 12:56 5. The 09:35 ET minute is clean. Readers must treat bid = ask = 0 as missing, never as a mid of 0. |
+| G3 09:35 straddle vs CR-BP | **pass, 22 / 22 overlap nights** in 0.5–2.0×: median 1.00, range 0.61–1.14. Four nights share CR-BP's strike (ratio 1.00 by construction). Ratios < 1 (0.61–0.85) are nights where CR-BP's K sat 10–20 pts off our K0, so its straddle includes intrinsic value. |
+| G4 no empty window written | **pass**: 0 `row_count = 0` windows written by either run. |
+
+Missing list: `scripts/logs/cr_cy/missing.csv`, 152 contract-windows = 126 `am_only` + 26 `http_404`. Git-ignored and machine-local; the counts are recorded here.
