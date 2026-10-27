@@ -111,3 +111,32 @@ No "deviates". No stop.
 
 The T-S1a′ re-run, any premium or variance computation, any read of a fetched quote beyond the G2 / G3
 sanity checks, any change to `options_cache` code, any fetch after 2026-06-05.
+
+## Step 0 findings (2026-10-27, run `0aff7767-db30-49a0-baac-490b07b4f58f`)
+
+Night list frozen: `scripts/cr_cy_nights.csv`, 621 nights (t+1 by year: 2023 131, 2024 201, 2025 199,
+2026 90; last t+1 2026-06-05). Strike plan for the trial (`scripts/logs/cr_cy/step0_plan.csv`):
+
+| t → t+1 | basis_t | S_c | K_c | S_o | K_o |
+|---|---|---|---|---|---|
+| 2023-07-14 → 07-17 | 32.5 | 4503.5 | 4500/4505/4510 | 4504.3 | 4500/4505/4510 |
+| 2024-05-10 → 05-13 | 24.1 | 5225.9 | 5220/5225/5230 | 5238.1 | 5235/5240/5245 |
+| 2025-02-10 → 02-11 | 21.6 | 6065.1 | 6060/6065/6070 | 6043.4 | 6040/6045/6050 |
+| 2025-10-03 → 10-06 | 48.6 | 6719.9 | 6715/6720/6725 | 6740.2 | 6735/6740/6745 |
+| 2026-01-09 → 01-12 | 38.6 | 6971.2 | 6965/6970/6975 | 6930.9 | 6925/6930/6935 |
+
+S_c is within 2–4 pts of the published SPX closes (4505.42, 6066.44, 6715.79). The close window
+uses the last ES minute before 15:55, so it is not the 16:00 print.
+
+| Gate | Result |
+|---|---|
+| G1 ≥ 5/6 contracts per window | **pass**: 10/10 windows have 6/6 contracts; 5/5 nights complete (12/12) |
+| G2 mid inside bid–ask | **pass**: 810/810 rows (= 5 × (6 × 11 + 6 × 16), every minute present), 0 null quotes, 0 crossed or non-positive asks |
+| G3 09:35 straddle vs CR-BP | **pass**: 4 overlap nights, ratios 1.010 / 0.920 / 0.969 / 1.064 (median 0.990). CR-BP's K differs from K0 by 5 pts on all four, so these are independent rows, not a self-comparison |
+| G4 no empty window written | **pass**: 0 `row_count = 0` windows since the run start |
+
+Cost: 25 ORATS calls, 650 rows inserted, 5 strike-windows skipped as already cached (CR-AS 0DTE
+legs), 0 transient / permanent errors, 1.1 min. Projection for the remaining 616 nights:
+≈ 3,700 calls, ≈ 50 min at the 80/min pace.
+
+All gates pass → the full run proceeds unattended (kickoff rule). No amendment.
