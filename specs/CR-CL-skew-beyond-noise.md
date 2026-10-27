@@ -181,3 +181,21 @@ G1 is concentrated before 09:00 (59 of 76 primary G1 legs start 07:00–08:59). 
 - The extra B7 key is not the cause: it cost 3 legs.
 
 Stopped for Ryan's review. No run script has been written.
+
+---
+
+## Amendment A2 (Ryan, 2026-10-26, from the Step 0 counts only — no outcome computed): single primary
+
+Kickoff, transcribed: **Primary = G1-down alone.** Decline leg, put skew **fell** beyond noise (ratio < 0) → hypothesis: the next move is **UP**. One hypothesis, **no Holm**. Same race (±10 primary), same 3-key matched in-noise baseline, three-verdict rule, 40-leg minimum. **Readouts, each reported separately and not pooled:** G1-up (rally with put skew rising → down; Ryan: "less solid, worth looking at separately"), G2-up, G2-down, plus the existing swing 8 / 16, late-day and GEX-level splits.
+
+**Rationale (Ryan's put-monetization theory).** Into a decline, holders of puts monetise them. That selling of puts takes the bid out of downside protection, so put skew drops while price is still falling, and support forms: the decline is being used to cash protection, not to add it. G1-down is the leg where that shows up beyond noise.
+
+Choices fixed by Code before the run script was written:
+
+| # | Choice | Value |
+|---|---|---|
+| A2.1 | Primary | G1-down, h = +1 (up). Swing 12, primary legs (end ≤ 11:00 PT), baseline = in-noise down legs, strata direction × size tercile × confirmation bucket × EDGE (C6). ±10 race (C9). Diff = group win rate − matched baseline win rate. **95 % percentile CI** from the C11 session-cluster bootstrap (10,000 draws, seed 20260920). PASS if lower > 0; REFUTED if upper < 0; else INCONCLUSIVE; INCONCLUSIVE (underpowered) if < 40 legs resolved and covered. Replaces K7 / C11's Holm step. |
+| A2.2 | Verdict meaning (Approvals 1) | No setup is shortlisted from CR-CL. A PASS means only "skew earns a place as an add-on readout in the flow-first setup test". |
+| A2.3 | Readouts | G1-up, G2-up, G2-down (swing 12, primary); all four cells at swing 8 and 16; all four with the ratio cut (−0.5 / 1.5); all four on late legs (late baseline, same strata); G1-down split by GEX tag (put / call / none, A8). Each: the same matched difference with an unadjusted 95 % CI and no verdict. |
+| A2.4 | Per-cell readout quantities | ±20 race (same estimator); signed move at +30 / +60 min (same matched estimator on points); MFE before −10 (quantiles, and among legs reaching +10 the shares reaching +15 and +20) for the cell and its pooled same-direction baseline. Win / loss / tie / unresolved / gap counts for cell and baseline. |
+| A2.5 | Draws | One 10,000 × sessions bootstrap weight matrix (seed 20260920) is drawn once and reused for every cell, so readouts share the primary's resamples. |
