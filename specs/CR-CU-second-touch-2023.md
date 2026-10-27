@@ -1,0 +1,147 @@
+# CR-CU — Replicate CR-CT's second-touch reversal on 2023-05-01 → 2024-04-02
+
+Spec freeze. Branch `feat/CR-CU-second-touch-2023` off `origin/main` `cd2fe36` (PR #101 merge, CR-CT), in its own
+worktree (`.claude/worktrees/cr-cu`). Read-only against the database; no table writes, no cron, no deploy, no display
+change. PR, don't merge.
+
+## Spec body (kickoff, verbatim, Ryan in chat 2026-10-26)
+
+> CR-CU — Replicate CR-CT's second-touch reversal on 2023-05-01 → 2024-04-02 (read-only,
+> pre-registered, train-era data not yet read for this question).
+>
+> Branch first: git checkout -b feat/CR-CU-second-touch-2023 off origin/main (after #101). Own worktree.
+> Read CLAUDE.md, field-conventions.md (2023 quote lag, ES.c.0 roll-week volume, third-Friday rows),
+> standing-rulings.md, and the CR-CT and CR-CO specs. Freeze the spec with the conformance table.
+> Pre-approved by Ryan, record don't stop: A3 / R2 level-price entry at the touch second (as CR-CT);
+> A7 fixed 10-min approach window primary (as approved in CR-CT). Stop on any other "deviates".
+>
+> Hypothesis (CR-CT readout, train 2026: second touch, FAST break rate 36 % (n 39) vs SLOW 64 % (n 58),
+> −27.9 pp [−46.9, −7.9]; one of ~20 readouts, so a lead): on the SECOND touch of a level, a FAST, heavy
+> approach breaks LESS often than a SLOW, light one.
+> Definitions EXACTLY as CR-CT ran them: level families (F1 prior RTH H/L/C, F2 overnight H/L, running
+> RTH high/low ≥ 30 min old), second-touch definition, approach window, speed (÷ session implied move),
+> relative volume (trailing 20-session median, same clock window), FAST / SLOW using CR-CT's FROZEN
+> train tercile cuts (do not re-fit), level-price entry at the touch second, 1-s race ±10 in the break
+> direction by 13:00 PT. Reuse CR-CT's code; switch the date range only. If 1-s data does not exist
+> for 2023, use 1-min Databento bars for the race and report the change as C1 BEFORE loading outcomes.
+> Primary: break win rate SLOW minus FAST on second touches, session-cluster bootstrap, 10 000 draws,
+> seed 20260920. PASS if CI lower bound > 0; REFUTED if CI upper bound < 0; else INCONCLUSIVE; ≥ 40
+> resolved in EACH cell, else underpowered. One hypothesis.
+> Data: 2023-05-01 → 2024-04-02, Databento ES bars; apply CR-CO's exclusions (2023-09, roll-week
+> Wed–Fri, early closes). R-a (from 2024-04-03), R-b, 2026 train and holdout NOT read.
+> Readouts: first touch FAST vs SLOW (CR-CT primary, replicated); each cell vs 50 %; ±20 race; by level
+> family; 5 / 20-min window; matched random baseline (B7 EDGE key).
+> Step 0 (no outcomes): sessions after exclusions, second touches per cell with the frozen cuts, A/A.
+> If each cell ≥ 40 on ≥ 30 sessions and |A/A mean| ≤ 1 pp, commit the run script and run once without
+> stopping; else stop and report.
+> Results + plain-English summary to the vault CR note, setup-registry, session note; push, PR, don't
+> merge; copy logs before removing the worktree. Summary for Ryan: on 2023 data, does a fast push into
+> a level on its second touch fail more often than a slow one?
+
+## C1 — 1-s data does not exist for 2023 (reported before any outcome is loaded)
+
+`es_flow_1s_databento` and `es_flow_1m_databento` start 2024-04-03 (field-conventions; CR-CO O4). In 2023-05-01 →
+2024-04-02 the only Databento ES series is **`ironbeam_es_1m_bars` with `source = 'databento'`**: 1-min bars fetched as
+`ES.c.0` (calendar-roll continuous, no contract column). So, as the kickoff directs:
+
+- **Touch "second" becomes the touch bar.** The touch is CR-CT's C4 touch bar j. CR-CT's C6 drop (no 1-s print at the
+  level in the minute) cannot happen: bar j reaches L by definition. **Entry = L** (R2 level-entry variant, labelled),
+  as CR-CT.
+- **The race runs on 1-min bars from bar j + 1** to the 12:59 PT bar: win = b·(high/low − L) ≥ +10 first; loss =
+  ≤ −10 first; tie = both in one bar; unresolved = neither. The rest of bar j after the touch is **not credited either
+  way**, because the order of prices inside a minute is unknown (in CR-CT the race started the second after the touch,
+  so it saw the rest of minute j). The run reports how many touches already reached +10 or −10 inside bar j.
+- **Volume** is the `ES.c.0` bar volume (one series). CR-CT summed all outright symbols in the minute (roll-robust);
+  outside roll weeks `ES.c.0` is the front contract and carries nearly all volume.
+- The random baseline (CR-CT C12) already raced on 1-min bars from m + 1; it is unchanged, so the touch race and the
+  baseline race now use the same bar resolution.
+
+## Choices the brief doesn't fix (Code, 2026-10-26, before any 2023 price was read)
+
+Everything not listed is CR-CT as shipped (`specs/CR-CT-approach-speed.md` C1–C15, E-R2), reused through
+`scripts/cr_ct_lib.py` functions (`merge`, `run_levels`, `touches`, `approach`, `prior_median`, `edge_at`, `classify`,
+`baseline_table`) and `scripts/cr_cl_lib.py` (`boot_weights`, `strata_matrices`, `matched_diff`). The new module
+`scripts/cr_cu_lib.py` replaces only the data loaders, the universe, the F1/F2 contract guard, and the 1-s outcome
+functions (with 1-min ones).
+
+- **U1 — data window and guard.** Every read inside [2023-05-01 00:00 PT, 2024-04-02 13:00 PT] (asserted), so no R-a
+  row (from 2024-04-03), 2025, 2026 train or holdout row is read. Bars: `ironbeam_es_1m_bars`, 06:15 → 12:59 PT starts
+  (CR-CT's ext window), plus 15:00 → 06:30 PT for F2. Step 0 asserts every row in the window is `source = 'databento'`
+  (CR-CO found no other source). IM: canonical `bt_daily_features.implied_move_1d` (SPX, frame A; a scale only).
+  Nothing is read before 2023-05-01, so session 2023-05-01 has no F1 / F2 (no prior), as CR-CT's first priors.
+- **U2 — universe.** NYSE sessions 2023-05-01 → 2024-04-02 through CR-CT's funnel (CR-CP C4 / C18: no bars, starts
+  after 06:31, early close = last RTH bar before 12:55 PT, missing-minute run > 5, no canonical IM), then **CR-CO's
+  exclusions verbatim** (`scripts/logs/cr_co/exclusions.json`, embedded as a constant): quote-time month 2023-09 (20
+  sessions) and the roll-contaminated sessions (expiry-week Wed–Fri plus 2023-09-12). Early closes (2023-07-03,
+  2023-11-24) fall to the funnel. Expiry-week Mondays and Tuesdays stay in (CR-CO kept them).
+- **U3 — F1 / F2 contract guard.** CR-CT required the prior session's front symbol to equal today's. `ES.c.0` has no
+  symbol, so the equivalent: F1 and F2 are **missing** when the prior session is a quarterly expiry Friday
+  (2023-06-16, 09-15, 12-15; 2024-03-15) or one lies between the prior session and today. The 06:29 Ironbeam-vs-Databento
+  check (CR-CF) is kept as written; here both sides are the same series, so it only checks that the 06:29 bar exists.
+- **U4 — relvol priors.** CR-CT C8 unchanged (up to 20 most recent prior sessions with bars, last bar ≥ 12:55 PT, ≥ 10
+  required), from 2023-05-01 only (so touches in roughly the first two weeks have no relvol, as CR-CT's first two
+  weeks). **Roll-contaminated sessions are not priors** (their `ES.c.0` volume is the dying contract at 0.12–0.35×).
+  2023-09 sessions **are** priors: they were excluded for ORATS quote timing, which ES volume doesn't depend on.
+- **U5 — frozen cuts.** CR-CT's Step 0 cuts, embedded and asserted equal to `scripts/logs/cr_ct/step0.json` where
+  that file exists: 10 min **[0.007250746319479294, 0.014000729018632885]** (primary); 5 min [0.010157656953575242,
+  0.021024723131091827]; 20 min [0.004038630778980846, 0.009603635524005163]. No re-fit. FAST = speed ≥ upper cut and
+  relvol ≥ 1; SLOW = speed ≤ lower cut and relvol < 1 (CR-CT C9).
+- **U6 — event sets.** Touches, arming, break direction and the second touch exactly as CR-CT C4 (the next touch after
+  re-arming on either side); pooled duplicates as C5 per touch number. **Primary set = deduped second touches**;
+  readout set = deduped first touches.
+- **U7 — primary statistic.** Break win rate = wins ÷ (wins + losses), ratio of session-summed counts; **SLOW − FAST**;
+  `boot_weights` 10 000 draws, seed 20260920, percentile 95 % CI; B1 verdict; ≥ 40 resolved in each of FAST and SLOW,
+  else UNDERPOWERED. One hypothesis, no Holm.
+- **U8 — readouts (no verdicts, unadjusted).** First touches FAST − SLOW (CR-CT's primary sign); second-touch FAST vs
+  50 % (break) and SLOW vs 50 % (break); all second touches vs 50 %; ±20 race SLOW − FAST; second touches by level
+  family; windows 5 / 20 min on their frozen cuts; matched random baseline (CR-CT C12 key (j, b, EDGE)) for second-touch
+  FAST, SLOW and all; MFE before −10 (A11; 1-min, bar j not credited); count of touches with a ±10 excursion inside
+  bar j; sensitivity: primary without expiry-week Mondays and Tuesdays (dying-contract volume, U2). CR-CT's A7-leg,
+  before-she-goes, strong-line and A8 readouts are **not run** (not in the kickoff; the strong-line placement is undefined
+  before 2024-04-03, CR-CO O10).
+- **U9 — A/A.** CR-CT C12 / CR-CP §7 unchanged (200 session half-splits, seed 20261025) with keys = the FAST ∪ SLOW
+  **second** touches.
+- **U10 — run once.** Step 0 = `scripts/cr_cu_step0.py` (no touch outcome; the only races are baseline entries for the
+  A/A). Gate: FAST and SLOW second touches each ≥ 40 on ≥ 30 sessions and |A/A mean| ≤ 1 pp. If it passes, commit
+  `scripts/cr_cu_run.py`, then run it once: it asserts the gate, the event set and the cuts, and refuses if
+  `results.json` exists. A crash before any outcome is printed or saved allows a fix-and-rerun, logged. Connection:
+  `get_backfill_db_conn()`, read-only transaction asserted, SELECTs only. Outputs `scripts/logs/cr_cu/` (git-ignored),
+  copied to the main checkout before the worktree is removed. Interpreter `apps/web/.venv/bin/python`.
+
+## Standing rulings conformance (Dash/research/standing-rulings.md, status current, read 2026-10-26)
+
+| # | Ruling (short) | Mark | How |
+|---|---|---|---|
+| A1 | levels slow price, not a trade by themselves | honoured | the call is conditioned on the approach (speed + volume), not on the level alone |
+| A2 | a range ≥ minutes, relative | n/a | no range (second touch, A21) |
+| A3 | no automatic entry at the first touch | **deviates — pre-approved** (kickoff) | entry at the level price at the touch (R2 level-entry variant, labelled), as CR-CT; the primary is the second touch, which A21 names as a possible entry |
+| A4 | stops beyond the zone | n/a | stop-free direction test (A15) |
+| A5 | flow decides fade vs break; never "always" either | honoured | speed + volume pick the side per touch; both outcomes scored |
+| A6 | skew divergence | n/a (parked) | |
+| A7 | approach = vol-scaled swing leg; fixed readout | **deviates — pre-approved** (kickoff; as approved in CR-CT) | fixed 10-min window primary; the A7 leg readout is not run (U8) |
+| A8 | put / call levels separately | n/a | no option levels; strong-line placement undefined before 2024-04-03 (CR-CO O10) |
+| A9 | two close levels → wait for the second | n/a | |
+| A10 | earlier same-day S/R matters | honoured | RUN (running RTH high / low ≥ 30 min old) in the event set |
+| A11 | ±10 primary, ±20 readout, favourable-excursion distribution | honoured | U7, U8 (±20, MFE) |
+| A12 | levels = chart's strongest colours | n/a | primary families are CR-CF's, set by the kickoff; strong lines undefined in this era |
+| A13 | sizing | n/a | |
+| A14 | skew vs expected | n/a (parked) | |
+| A15 | direction first, stop-free | honoured | ±10 race |
+| A16 | skew trend | n/a (parked) | |
+| A17 | flow first, skew optional | honoured | volume / speed only; no skew |
+| A18 | range position split | n/a | no range |
+| A19 | in-range confirmation | n/a | no range |
+| A20 | trade the range edges | n/a | no range (the A3 deviation) |
+| A21 | second touch a different setup; separate cells | honoured | second touch is the primary cell; first touches a separate readout; not pooled, not re-armed past the second |
+| B1 | three verdicts | honoured | U7 |
+| B2 | many parameters disclosed; plateau | honoured | all readouts reported; frozen cuts, nothing chosen |
+| B3 | one setup at a time | honoured | single hypothesis |
+| B4 | data split | honoured | 2023-05-01 → 2024-04-02 is train-era; R-a, R-b, 2026 train, holdout not read (U1 guard). CR-CT's frozen cuts and CR-CO's exclusion list are read from logs, not data |
+| B5 | Databento reference | honoured, with a note | the only Databento ES series in 2023 is the `ES.c.0` 1-min bars (C1, CR-CO O4); roll weeks handled by CR-CO's exclusions |
+| B6 | mechanical exits labelled | honoured | ±10 race is a direction test, not Ryan's exit |
+| B7 | placebos matched EDGE / INTERIOR | honoured | U8 baseline key (j, b, EDGE) |
+| B8 | Code labels ≠ Ryan's | n/a | |
+| C1, C2 | UI | n/a | |
+| Revoked | R1 touch-bar close | **not used** | R2 level entry, labelled; R3–R7 not used |
+
+Two "deviates" (A3, A7), both pre-approved by Ryan in the kickoff; nothing else deviates. Proceeding to Step 0.
