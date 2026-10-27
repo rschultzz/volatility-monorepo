@@ -193,3 +193,51 @@ slower per unit of IM than the train first touches the cuts came from. Relvol p1
 
 **Gate:** FAST 73 ≥ 40 on 57 ≥ 30 sessions; SLOW 164 ≥ 40 on 95 ≥ 30; |A/A| 0.26 ≤ 1 pp → **passed**. Committing the
 run script, then running once without stopping.
+
+## Result (single run, 2026-10-26) — `scripts/cr_cu_run.py` @ `bdccf9f` → `scripts/logs/cr_cu/results.json`
+
+One run, exit 0, no re-run. Gate, session count (191), event sets (603 second / 851 first touches), class counts and the
+frozen cuts asserted equal to Step 0. Entry = the level price at the touch bar (R2 level-entry variant, labelled); ±10
+stop-free race on `ES.c.0` 1-min bars from the next bar to 13:00 PT (C1). This is a direction test, not Ryan's exit (B6).
+
+### Primary — break win rate, SLOW − FAST, second touches (±10)
+
+| cell | n | resolved (sessions) | break win rate |
+|---|---|---|---|
+| SLOW (slow + light) | 164 | 140 (89); 24 unresolved | **54.3 %** (76 / 64) |
+| FAST (fast + heavy) | 73 | 63 (51); 10 unresolved | **54.0 %** (34 / 29) |
+| **SLOW − FAST** | | | **+0.3 pp [−14.8, +15.8] → INCONCLUSIVE** |
+
+Both cells ≥ 40 resolved, so the verdict is not underpowered. Train's readout was SLOW − FAST **+27.9** [+7.9, +46.9].
+That value lies **above this CI's upper bound**, so an effect as large as train's is not supported by 2023. The CI
+still allows a moderate effect either way.
+
+### Readouts (no verdicts, unadjusted)
+
+- Second-touch cells vs 50 % (break): FAST +4.0 [−10.0, +17.7]; SLOW +4.3 [−4.2, +13.0]. All second touches broke
+  50.5 % (509 resolved), +0.5 [−5.1, +6.0]; NEITHER 48.2 %.
+- **First touches (CR-CT's primary, replicated): FAST − SLOW +4.3 [−7.5, +16.0]** (FAST 47.3 % n 169, SLOW 43.0 %
+  n 158). All first touches broke 49.0 % (729), −1.0 [−5.7, +3.6]; in 2026 train it was 54.1 %.
+- ±20 race SLOW − FAST +0.6 [−22.1, +24.9] (49.3 % n 67 vs 48.6 % n 37; most ±20 races unresolved).
+- MFE before −10 (1-min): SLOW mean 12.4 vs FAST 13.5 pts, −1.1 [−5.6, +3.0]; medians 8.9 / 9.3; reached +10 46 % /
+  47 %.
+- Family SLOW − FAST: F1 +11.4 [−15.7, +37.5] (44 / 24); F2 +1.0 [−29.1, +33.8] (43 / 14); RUN −10.7 [−34.7, +13.0]
+  (53 / 25). The FAST cells are all < 40.
+- Windows (frozen cuts): 5 min +6.4 [−8.3, +21.5] (118 / 81); 20 min +4.4 [−11.7, +20.4] (136 / 58). Same sign as train,
+  small, CIs cover 0.
+- Without expiry-week Mon / Tue: −0.6 [−15.8, +14.9] (135 / 63).
+- Break down / up: −3.5 [−24.7, +18.9] / +5.6 [−16.9, +28.3]. EDGE −3.3 [−38.8, +29.8]; INTERIOR +3.2 [−14.3, +21.2].
+- Matched random baseline (key j, b, EDGE; coverage 1.00): second-touch FAST +4.2 [−10.0, +18.2], SLOW +3.6 [−4.6,
+  +12.1], all +0.7 [−4.9, +6.2].
+- C1 disclosure: bar j reached −10 from L inside the touch minute on 5 of 603 second touches (SLOW 1, NEITHER 4) and
+  +10 on none. The uncredited part of bar j barely matters.
+
+### Reading
+
+- **The second-touch reversal did not replicate in 2023.** Slow, light second approaches broke 54.3 % and fast, heavy
+  ones 54.0 %, essentially the same. Train's 28-pp gap is outside this CI, so train's readout was most likely chance
+  (one of ~20 readouts) or specific to 2026. Not shortlisted.
+- On 2023 data, neither first nor second touches show a momentum default (49–50 % break); 2026 train first touches
+  broke 54 %.
+- Caveats: the race is on 1-min bars (C1), not 1-s, and in 2023 the frozen cuts put 57 % of second touches in the slow
+  tail and 19 % in the fast tail, so the FAST cell is the thin one (63 resolved).
