@@ -203,3 +203,53 @@ EDGE share 0.14 (touches 0.61 — hence the EDGE key).
 
 **Gate:** FAST 85 ≥ 40 on 44 ≥ 30 sessions; SLOW 75 ≥ 40 on 46 ≥ 30; |A/A| 0.24 ≤ 1 pp → **passed**. Committing the
 run script, then running once without stopping.
+
+## Result (single run, 2026-10-26) — `scripts/cr_ct_run.py` @ `e3ffe38` → `scripts/logs/cr_ct/results.json`
+
+One run, exit 0, no re-run. Event set and tercile cuts asserted equal to Step 0 (422 first touches; cuts unchanged).
+Entry = the level price at the touch second (R2 level-entry variant, labelled); ±10 stop-free race on 1-s bars to
+13:00 PT — a direction test, not Ryan's exit (B6).
+
+### Primary — break win rate, FAST − SLOW (first touches, ±10)
+
+| cell | n | resolved (sessions) | break win rate |
+|---|---|---|---|
+| FAST (fast + heavy) | 85 | 85 (44) | **56.5 %** (48 / 37) |
+| SLOW (slow + light) | 75 | 70 (45); 5 unresolved | **54.3 %** (38 / 32) |
+| **FAST − SLOW** | | | **+2.2 pp [−15.2, +19.5] → INCONCLUSIVE** |
+
+### Readouts (no verdicts, unadjusted; ~20 readouts, expect about one CI to exclude 0 by chance)
+
+- FAST vs 50 % (break) +6.5 [−6.5, +18.4]; SLOW vs 50 % (**fade**) −4.3 [−15.7, +7.5] — slow drifts did **not** fail
+  more often than not. All 422 first touches broke 54.1 % (405 resolved), +4.1 [−1.2, +9.4]; NEITHER 54.0 %.
+- ±20 race FAST − SLOW −0.5 [−22.5, +22.3] (52.6 % n 78 vs 53.1 % n 49). Move at +30 min +0.05 pts [−5.7, +6.1];
+  +60 min −1.0 [−8.0, +7.0]. MFE before −10: median 11.75 vs 10.25 pts, mean +5.8 [−2.5, +14.5]; reached +10 56 % vs 51 %.
+- Matched random baseline (B7 key m, b, EDGE): FAST +5.5 [−7.7, +18.0]; SLOW +3.6 [−7.6, +13.8]; all touches +3.6
+  [−1.6, +8.8] (coverage 1.00).
+- Speed alone (top vs bottom tercile) +5.3 [−7.8, +18.3] (57.6 % n 139 vs 52.3 % n 132). Volume alone (heavy vs
+  light) −5.4 [−17.1, +6.3] — light-volume approaches broke slightly *more* (57.3 % vs 51.9 %).
+- Window 5 min −4.9 [−22.7, +12.5]; 20 min +3.1 [−14.6, +21.3]; A7 vol-scaled leg −0.1 [−18.1, +17.3]. No plateau:
+  the sign flips with the window.
+- Before she goes (33 flagged): 54.8 % vs 54.0 %, +0.8 [−21.1, +20.0].
+- Family FAST − SLOW: F1 −9.4 [−41.4, +24.0] (32 / 16); F2 −21.1 [−53.3, +10.1] (19 / 19); RUN +18.8 [−6.1, +43.1]
+  (34 / 35). Every family cell < 40. Break rate by kind 50.0 % (running low) → 60.5 % (prior high), every CI covers 50.
+- Break up / down: −1.1 / +7.3. First hour +1.1 [−25.6, +26.7]; later +2.6 [−20.5, +25.1].
+- EDGE (level at the session extreme) −14.8 [−37.7, +8.4]; INTERIOR +27.1 [+2.2, +53.3] (35 / 26).
+- **Second touch** (FAST / SLOW on the first-touch cuts): FAST broke 35.9 % (n 39), SLOW 63.8 % (n 58): **−27.9
+  [−46.9, −7.9]** — the reverse of the hypothesis. All second touches 52.7 % (275).
+- Strong line within 3 pts: 22 touches (20 call, 2 put), none FAST or SLOW; broke 38.1 % vs 55.7 % without, −17.6
+  [−40.9, +6.1]. A8 not readable (2 put touches).
+
+### Reading
+
+- **No evidence that approach speed and volume decide break vs fail at these levels.** A fast, heavy push broke 56.5 %;
+  a slow, light drift broke 54.3 %. The difference is 2 pp with a CI of ±17 pp: compatible with nothing, and with a
+  moderate effect either way. Not shortlisted.
+- Momentum "through the level" is mildly the default (all first touches 54 %, +3.6 vs matched random), but the CI
+  covers 0 and the matched random baseline says most of it is where price is, not the level.
+- The pieces disagree: speed alone leans +5, volume alone leans −5 (light volume broke more), and the window sign flips
+  (5 min −4.9, 10 min +2.2, 20 min +3.1). That is noise, not a plateau (B2).
+- Two readouts exclude 0 — second touch (−27.9: fast second approaches **failed**) and INTERIOR (+27.1) — out of ~20
+  unadjusted readouts on cells of 26–63. Leads at most. The second-touch reversal is the one worth a look: it fits A21
+  (a second touch is a different setup) and Ryan's "something about the respective approaching legs". It would need
+  its own pre-registered CR (train readout → R-a).
