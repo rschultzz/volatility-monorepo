@@ -96,7 +96,7 @@ R-a only: **186 sessions, 2024-04-03 → 2024-12-31**, none missing (the loader'
 
 Size tercile cuts (N5, re-cut on R-a): **20.92 / 29.5 pts** (train 20.0 / 28.5).
 
-R-a has 74 % more sessions than train but **fewer legs** (1,036 vs 1,233; 3.7 vs 9.1 primary per session after ratio-definition: 2.1 vs 5.6). 2024 moved less: swing-12 legs are rarer and a larger share is "move too small".
+R-a has 74 % more sessions than train but **fewer legs** (1,036 vs 1,233). Per session: 3.7 primary legs vs 9.1 on train, and 2.1 ratio-defined vs 5.6. 2024 moved less: swing-12 legs are rarer and a larger share is "move too small".
 
 ### Cells (pre-outcome; covered = the stratum has ≥ 1 baseline leg)
 
