@@ -12,3 +12,4 @@ certifi
 # >=2.9.10 for cp313 wheels (cron PYTHON_VERSION 3.13.4).
 psycopg2-binary>=2.9.10
 python-dotenv
+databento==0.86.0  # CR-CX: forward log daily Databento ES pull (scripts/forward_log_g1down.py)
