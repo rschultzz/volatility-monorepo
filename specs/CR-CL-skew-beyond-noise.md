@@ -199,3 +199,98 @@ Choices fixed by Code before the run script was written:
 | A2.3 | Readouts | G1-up, G2-up, G2-down (swing 12, primary); all four cells at swing 8 and 16; all four with the ratio cut (−0.5 / 1.5); all four on late legs (late baseline, same strata); G1-down split by GEX tag (put / call / none, A8). Each: the same matched difference with an unadjusted 95 % CI and no verdict. |
 | A2.4 | Per-cell readout quantities | ±20 race (same estimator); signed move at +30 / +60 min (same matched estimator on points); MFE before −10 (quantiles, and among legs reaching +10 the shares reaching +15 and +20) for the cell and its pooled same-direction baseline. Win / loss / tie / unresolved / gap counts for cell and baseline. |
 | A2.5 | Draws | One 10,000 × sessions bootstrap weight matrix (seed 20260920) is drawn once and reused for every cell, so readouts share the primary's resamples. |
+
+---
+
+## Result (run once, as frozen through A2) — `scripts/cr_cl_run.py` @ `b3b2f2d` → `scripts/logs/cr_cl/results.json`
+
+107 sessions, 2026 train (`y26` only; R-a, R-b and the holdout not read). Step 0 parity asserted in the run (1,233 legs, 764 ratio-defined). One run, no errors. 10,000 session-cluster bootstrap draws, seed 20260920, shared by every cell (A2.5). Win rates exclude ties and unresolved (C9). "pp" = percentage points. This is a stop-free direction test, **not a test of Ryan's trade** (B6).
+
+### Primary (A2.1): G1-down — decline leg, put skew fell beyond noise (ratio < 0) → next move up
+
+| | G1-down | Matched in-noise baseline | Difference [95 % CI] |
+|---|---|---|---|
+| Legs (sessions) | 49 (36); 47 covered and resolved | 221 down legs | |
+| ±10 race outcomes | 32 win / 17 loss / 0 tie / 0 unresolved | 106 / 113 / 0 / 2 | |
+| **±10 race win rate (primary)** | **66.0 %** | **48.5 %** | **+17.4 pp [−1.2, +37.3]**, p = 0.069 |
+
+**Verdict: INCONCLUSIVE.** The CI's lower bound is just below 0 and its upper bound is well above 0.
+- The point estimate is on the hypothesised side: after a beyond-noise put-skew drop during a decline, price reached +10 before −10 about two times in three, against about one in two for comparable in-noise declines.
+- The data do not rule out no effect.
+- Per Approvals 1 / A2.2, **no setup is shortlisted from CR-CL.** Had it passed, the only consequence would have been that skew earns a place as an add-on readout in the flow-first setup test. As it stands, skew has not earned that place on train.
+
+**Readouts on the primary cell (A2.4, unadjusted, no verdict):**
+
+| Quantity | G1-down | Matched baseline | Difference [95 % CI] |
+|---|---|---|---|
+| ±20 race win rate (n 40 resolved) | 65.0 % | 43.8 % | +21.2 pp [+2.5, +42.2] |
+| Signed move +30 min (pts, up = +) | +6.8 | +0.2 | +6.7 [+1.7, +11.5] |
+| Signed move +60 min | +6.2 | −0.6 | +6.7 [−1.3, +14.3] |
+
+| MFE before −10 (pts) | p25 | p50 | p75 | p90 | Reach +10 | +15 given +10 | +20 given +10 |
+|---|---|---|---|---|---|---|---|
+| G1-down (49) | 5.0 | **20.0** | 36.8 | 61.4 | 65 % | 88 % | 78 % |
+| Baseline down legs (221) | 3.0 | 9.3 | 20.3 | 44.5 | 48 % | 69 % | 55 % |
+
+- When G1-down legs got to +10, most kept going: 78 % reached +20 before −10, against 55 % for the baseline.
+- Every readout points the same way as the primary. They are unadjusted, and the ±20 race and the +30-min move share the primary's legs, so they are not independent confirmation.
+
+### Readout cells (A2.3), each separate, never pooled — ±10 race, difference vs matched baseline [95 % CI, unadjusted]
+
+| Readout | G1-up (→ down) | G1-down (→ up) | G2-up (→ up) | G2-down (→ down) |
+|---|---|---|---|---|
+| Swing 12 (primary legs) | +7.4 [−18.8, +32.6] (25) | *primary* +17.4 [−1.2, +37.3] (47) | +8.4 [−17.5, +33.1] (29) | −6.6 [−38.1, +23.5] (16) |
+| Ratio cut −0.5 / 1.5 | +9.1 [−17.9, +34.7] (24) | +17.1 [−2.9, +38.1] (42) | +5.9 [−28.8, +39.0] (16) | −3.3 [−36.5, +31.2] (14) |
+| Swing 8 | +2.5 [−19.4, +29.4] (36) | +7.6 [−8.9, +27.5] (50) | +3.2 [−21.2, +24.7] (44) | −3.1 [−35.2, +25.7] (23) |
+| Swing 16 | +10.3 [−18.0, +40.5] (17) | +14.7 [−6.7, +36.4] (30) | +1.9 [−25.5, +35.2] (20) | −11.8 [−54.2, +24.7] (15) |
+| Late legs (end 11:00–12:45) | +33 [−43, +100] (5) | −11 [−100, +100] (6) | +17 [−59, +83] (11) | −35 [−93, +25] (5) |
+
+(n = legs covered and resolved.)
+
+- **G1-up** (rally with put skew rising → down; Ryan: "less solid"): +7.4 pp [−18.8, +32.6] at swing 12, on 25 legs. On the ±20 race it is −8.7 pp, and the +60-min move is −2.1 pts. **Nothing there.**
+- **G2** (skew relaxed more than mechanics imply → continuation): G2-up +8.4, G2-down −6.6; all CIs span ±25 pp or more. **No sign of continuation.**
+- **G1-down holds its sign across the cuts.** It is +17.1 with the stricter −0.5 cut, +14.7 at swing 16, and weaker at swing 8 (+7.6, where the noise filter passes more marginal legs). Its +30-min move is positive at every swing (+4.8 / +6.7 / +6.1 pts, each CI above 0). Disclosed per B2: these readouts are many, overlapping and unadjusted.
+- **Late legs** (5–11 per cell) say nothing.
+
+**G1-down by GEX tag (A8; the leg's low within 5 pts of a Corrected level, nearest wins):**
+
+| Tag | Legs | ±10 diff [95 % CI] | +30-min move diff |
+|---|---|---|---|
+| Put level | 13 | +23.0 [−19.5, +58.9] | +6.9 [−5.9, +19.0] |
+| Call level | 0 | — | — |
+| No level nearby | 30 | +22.6 [+0.8, +49.0] | +8.1 [+2.5, +14.5] |
+| No levels that session | 6 | −27 [−76, +25] | −2.2 |
+
+The effect is not concentrated at put levels: the 30 legs with no level nearby carry it as much as the 13 at put levels. Too few legs to say more.
+
+### Plain English for Ryan: when skew moves beyond noise, does it tell you which way price goes next?
+
+- **Maybe, in one case, and not proven.** The case is your put-monetization one: price falls a swing-12 leg and put skew *falls* by more than its noise.
+  - About two times in three, price then went up 10 before it went down 10.
+  - On comparable declines where skew stayed inside noise, that happened about one time in two.
+  - That gap (+17 pts of win rate) is not quite solid enough to call. The range of plausible values runs from about −1 to +37, so "no effect" is still just inside it. Verdict: **inconclusive, leaning your way.**
+- **The other readings show nothing.**
+  - A rally with put skew rising (the bearish divergence) did not reliably come back down.
+  - Skew relaxing more than mechanics imply (either direction) did not reliably continue.
+- **When it worked, the bounce tended to run.** In the falling-skew declines, the median best move before a 10-pt adverse move was 20 pts (vs 9 for the baseline). Of the ones that reached +10, about 4 in 5 reached +20.
+- **It is a small sample.**
+  - 49 legs over 36 days; 38 of them start before 09:00 PT.
+  - It is on train only, and the noise band itself was measured on these days.
+  - Skew still has **not** earned its place: per A17 it remains an optional add-on, and nothing is shortlisted. The next honest step is the flow-first test. Then G1-down can be carried as a pre-registered add-on readout there, or confirmed on R-a, with this exact definition.
+
+---
+
+## Wrap (2026-10-26)
+
+**Deliverables.**
+- Spec + amendments A1, A2 and the Approvals.
+- Scripts:
+  - `scripts/cr_cl_lib.py` (shared definitions);
+  - `scripts/cr_cl_step0.py`;
+  - `scripts/cr_cl_run.py` (one run).
+- Outputs in `scripts/logs/cr_cl/` (git-ignored): `step0.json`, `results.json`, `legs.parquet`.
+- No table writes, no display change, no deploy.
+
+**Follow-ups (not done here).**
+- Carry G1-down (this exact definition: swing 12, ratio < 0, CR-CK band, end ≤ 11:00 PT) into the flow-first setup test as a pre-registered add-on readout, or confirm it on R-a. Ryan's call on order (A17 says flow first).
+- Power: a confirmation needs roughly twice the legs to resolve a +17 pp effect. R-a has about 9 months against train's 5.
