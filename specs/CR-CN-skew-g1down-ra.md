@@ -168,3 +168,18 @@ Unbiased (medians within 1.5 pp of 0), slightly conservative (1–3.5 % vs nomin
 - **A17 approval is still pending.**
 
 Stopped for Ryan's review. No run script change has been made; the run has not been executed.
+
+---
+
+## Ruling (Ryan, 2026-10-26, after Step 0): closed at Step 0, not run
+
+Transcribed:
+- **Close CR-CN at Step 0. Do not run.**
+- **A17 deviation approved for the record** on the CR-CL terms (measurement only, nothing shortlisted). Moot, since nothing runs.
+- **R-a outcomes for this question stay unread.**
+- **Verdict: not testable on R-a.** G1-down has 11 legs on R-a (vs 49 on train), because 2024 moved less and the 2024 quote lag cuts off the end of each leg.
+- **Keep** A1 and the date-range switch in `cr_cl_lib.py` / `cr_cl_step0.py` (harmless; defaults to train).
+
+`scripts/cr_cl_run.py` was never executed under `ra`, and its parity assert was not changed. No group outcome was computed on R-a. Logs are copied to the main checkout's `scripts/logs/cr_cn/` (git-ignored, machine-local).
+
+Setup registry, G1-down: **train: inconclusive +17 [−1, +37]; R-a: not testable.**
