@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""CR-CP shared definitions — range edge, order flow picks the side. READ-ONLY, train only.
+"""CR-CP shared definitions — range edge, order flow picks the side. READ-ONLY, train only
+(CR-CR: `CR_CP_PERIOD=ra` runs the same definitions on R-a, reads guarded to 2024-04-01 .. 2025-01-01).
 
 Spec: specs/CR-CP-range-edge-flow.md (D0-D5, C1-C18, Approvals). Imported by scripts/cr_cp_step0.py and the later run
 script so both use one definition of every quantity.
@@ -42,8 +43,16 @@ from packages.shared.flow_features import swing_legs  # noqa: E402
 from packages.shared.trading_calendar import is_trading_day  # noqa: E402
 
 PT, UTC = ZoneInfo("America/Los_Angeles"), timezone.utc
-D_FROM, D_TO = date(2026, 1, 6), date(2026, 6, 5)
-FLOOR, CAP = datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 6, 5, 21, 0, tzinfo=UTC)
+PERIOD = os.environ.get("CR_CP_PERIOD", "train")   # CR-CR E1: "ra" re-runs CR-CP's definitions on R-a
+assert PERIOD in ("train", "ra"), PERIOD
+if PERIOD == "train":
+    D_FROM, D_TO = date(2026, 1, 6), date(2026, 6, 5)
+    FLOOR, CAP = datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 6, 5, 21, 0, tzinfo=UTC)
+else:
+    D_FROM, D_TO = date(2024, 4, 3), date(2024, 12, 31)
+    FLOOR, CAP = datetime(2024, 4, 1, tzinfo=UTC), datetime(2025, 1, 1, tzinfo=UTC)
+    assert os.environ.setdefault("CR_CL_PERIOD", "ra") == "ra"    # CR-CR E7: CR-CN's R-a skew loader
+IM_TRAIN_CR_CO = 65.71410292087306          # CR-CR E2: CR-CO A1.1 im_train (= CR-CP step0 median_im); no train read
 NB = 390                                    # RTH minutes 06:30 .. 12:59 PT
 EARLY_LAST = 385                            # C4: last RTH bar before 12:55 PT -> early close
 MISS_RUN_MAX = 5                            # C18
@@ -52,7 +61,7 @@ EDGE_PTS = 2.0                              # C13
 SEED, N_BOOT = 20260920, 10_000
 SEED_AA, N_AA = 20261025, 200
 MIN_TRADES = 40
-OUT = REPO_ROOT / "scripts" / "logs" / "cr_cp"
+OUT = REPO_ROOT / "scripts" / "logs" / {"train": "cr_cp", "ra": "cr_cr"}[PERIOD]
 OUT.mkdir(parents=True, exist_ok=True)
 
 
@@ -132,7 +141,7 @@ def sessions():
 
 # ------------------------------------------------------------------------------------------------- data
 def load_minutes() -> pd.DataFrame:
-    path = OUT / "m1_train.parquet"
+    path = OUT / f"m1_{PERIOD}.parquet"
     if path.exists():
         return pd.read_parquet(path)
     a, b = pt(D_FROM, 6, 30), pt(D_TO, 13, 0)
@@ -151,7 +160,7 @@ def load_minutes() -> pd.DataFrame:
     return r
 
 
-IM_LO = date(2026, 1, 2)                    # A0: CR-CO's IM_train is the median over the CR-CJ y26 sessions
+IM_LO = date(2026, 1, 2) if PERIOD == "train" else D_FROM    # A0: CR-CO's IM_train is the median over CR-CJ y26
 
 
 def load_im() -> pd.Series:
@@ -165,7 +174,9 @@ def load_im() -> pd.Series:
 
 
 def im_train(im: pd.Series) -> float:
-    """A0 / C2: as cr_cl_lib.vol_scaled_legs (CR-CO A1.1)."""
+    """A0 / C2: as cr_cl_lib.vol_scaled_legs (CR-CO A1.1). R-a (CR-CR E2): the same number, as a constant."""
+    if PERIOD == "ra":
+        return IM_TRAIN_CR_CO
     import cr_cj_lib as CJ
     return float(im[im.index.isin(CJ.sessions("y26"))].dropna().median())
 
@@ -412,11 +423,11 @@ def leg_counts(D, p: P) -> dict:
 # --------------------------------------------------------------------------------------------- readouts
 def load_levels():
     """C14: CR-CM's train load (chart lines at the RTH open, strong = p95, SETS['S'] within +-1 IM). Cached."""
-    path = OUT / "levels_train.pkl"
+    path = OUT / f"levels_{PERIOD}.pkl"
     if path.exists():
         return pickle.loads(path.read_bytes())
     import cr_cm_lib as CM
-    Dm = CM.load("train")
+    Dm = CM.load(PERIOD)
     lv = dict(USABLE=list(Dm.USABLE), CHART=Dm.CHART, STRONG=Dm.SETS["S"], OPEN=Dm.OPEN, IM=Dm.IM,
               funnel=Dm.funnel)
     path.write_bytes(pickle.dumps(lv))
