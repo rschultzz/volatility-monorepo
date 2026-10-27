@@ -152,3 +152,33 @@ in-range delta); listed for Ryan, not a stop.
   Otherwise stop and report.
 - **C15 — run script.** `scripts/cr_cs_run.py` asserts the primary schedule equals Step 0's (ranges, fades) and refuses
   to run if `results.json` exists.
+
+## Step 0 findings (2026-10-26; `scripts/cr_cs_step0.py` @ `c2357a3` → `scripts/logs/cr_cs/step0.json`; no fade or continuation outcome computed)
+
+- **Caches / universe (C1).** CR-CP's `m1_train.parquet` copied from the main checkout: 44,460 rows, 2026-01-06 14:30 →
+  06-05 19:59 UTC (inside the C17 guard; equals CR-CP Step 0's 44,460). 101 sessions, IM_train 65.71 (asserted).
+- **Ranges.** 470 on 100 sessions (asserted = CR-CP Step 0 v2 primary).
+- **Breaks (primary).** 560 edge breaks after q on 423 ranges (up 283, down 277); no bar broke both edges. Break size
+  median 2.75 pts (p95 5.5). Break bar − q: median 8 bars (p95 56).
+  Sweep volume ÷ range median 1-min volume over all breaks: median **1.28** (p75 1.77, p95 3.6) → **103 bursts (18 %)**,
+  457 without a burst.
+
+  | | failure (close back in ≤ 5 min) | breakout |
+  |---|---|---|
+  | burst (≥ 2×) | **59** | 44 |
+  | no burst | 204 | 253 |
+
+  One fade dropped as an overlap duplicate (C8). **Fades: 58 on 41 sessions** (up sweeps → short 26, down sweeps →
+  long 32). Sweep window 1 bar on 45, 2 on 11, 3 on 2; re-entry lag 0–4 bars (0: 17, 1: 20, 2: 9, 3: 9, 4: 3). Sweep
+  extreme beyond the edge median 3.5 pts (p95 9.5); stop distance (extreme + 1 − entry) median **6.1 pts** (p25 4.3,
+  p75 8.3, p95 17). Sweep delta share (signed to the sweep) median +8.1 % (p5 −0.5 %, p95 +26.7 %). Breakout-direction
+  readout trades: 44.
+- **Readout grid (fades / sessions):** size 1 → 54 / 40; size 4 → 34 / 27; volume 1.5× → 91 / 54; volume 3× → 19 / 13;
+  re-entry 3 min → 42 / 32; re-entry 10 min → 79 / 53. Size 4 and volume 3× are under 40 before outcomes.
+- **Splits (fades).** Up / down sweep 26 / 32; delta top / bottom half 29 / 29; hour 07 4, 08 7, 09 9, 10 14, 11 15,
+  12 9; **levels: sweep beyond a strong line 2, edge at a strong line 2, no strong line 51, no levels 3 → the A12 / A18 /
+  A8 level splits are not readable on train** (all call lines; put 0). EDGE / INTERIOR: 0 / 58.
+- **A/A (C10).** 200 random halves on the 58 fade keys: mean **+0.39 pp**, median +0.17, SD 6.9, p5 −11.3, p95 +11.7;
+  no key unmatched.
+- **Gate (C14): passed** — 58 ≥ 40 fades, 41 ≥ 30 sessions, |A/A| 0.39 ≤ 1 pp. The run script is committed and run once.
+  Note: 58 fades leaves little room; if > 18 are ties / unresolved the primary is UNDERPOWERED by the ≥ 40 rule.
