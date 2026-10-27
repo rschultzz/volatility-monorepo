@@ -93,3 +93,28 @@ Nothing from "Revoked / superseded" is used (R1–R7: no entry rule is modelled;
    `research/gallery/`. The API keeps `outcome` back until a review exists (CR-CC L3). Code writes no review (B8).
 
 No stop: nothing contradicts the kickoff.
+
+---
+
+## Load and wrap (2026-10-27)
+
+| commit | what |
+|---|---|
+| `d04414a` | spec freeze |
+| `29ba8d3` | Step 0 findings |
+| `b31734f` | step 1: the two reason chips in `DEFAULT_REASONS`; unit test (SetupReview 9 tests OK, 2 DB tests skipped) |
+| `cd647d1` | step 2: loader `--run-cr`; `scripts/cr_cz_build_gallery.py` (loader tests 10 OK) |
+| (this commit) | load record, this section |
+
+- **Build.** `scripts/cr_cz_build_gallery.py` (read-only, train): every parity assert held → `scripts/logs/cr_cz/cr-cz-cp-ranges.json`,
+  120 events, short 60 / long 60, 66 sessions, 2026-01-06 → 2026-06-03.
+- **Load.** `load_setup_candidates.py … --run-cr CR-CZ` under the backfill protocol: `bt_backfill_runs`
+  `dc4210ca-d7ed-4960-a6d0-07e9bd455422`, status completed, **inserted 120, skipped 0**; set `CR-CZ` / `cr-cz:cp-ranges`
+  holds 120 (long 60 on 40 sessions, short 60 on 44), outcome stored on all 120, 0 reviews.
+- **Blind check** (local Flask test client on this branch, GET only): the list returns 120 candidates with no `outcome`,
+  `pnl_pts` or race key; the detail of card 1 has no `outcome` (entry 2026-01-06 08:43, short); the reason list carries
+  both new chips.
+- **No analysis, no outcome read.** Nothing was reviewed or revealed; no Playwright test was run (B8).
+- **Visible to Ryan after deploy only:** the two chips are backend; the cards are in the DB now and appear in REVIEW on
+  the deployed app, but the chips show only after "Dash - MonoRepo" deploys this branch.
+- **Not verified:** the deployed panel (Render); the zone band on these cards in the browser.
