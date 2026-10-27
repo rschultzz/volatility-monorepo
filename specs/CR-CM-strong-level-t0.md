@@ -139,3 +139,117 @@ Each script is committed before its single run; statistics go to JSON before pri
    construction).
 5. "First touch of the session" read as the level's first touch (no earlier RTH trade within 2 pts).
 6. Train window 2026-01-06 → 2026-06-05.
+
+---
+
+## Step 0 findings (2026-10-26; no real-level outcome computed)
+
+**Run.** `scripts/cr_cm_step0.py` + `scripts/cr_cm_lib.py` at commit `c9da013` (sha256 `6acdc730dc96…` /
+`eb83f042ffe5…`); one run, exit 0. JSON `scripts/logs/cr_cm/step0.json` (git-ignored), written before printing.
+Read-only; reads asserted inside the train (2026-01-01 → 2026-06-05 21:00 UTC) and R-a (< 2025-01-01) guards.
+Escape was computed on placebo tests only (A/A).
+
+### Universe
+
+| | train | R-a |
+|---|---|---|
+| NYSE sessions | 105 | 191 |
+| roll week | −10 | −29 |
+| no 15:45 ET bar on A | −2 | −6 |
+| early close | 0 | −3 |
+| no canonical IM | −4 | −3 |
+| contract check | 0 | −1 |
+| **usable** | **89** (2026-01-06 → 06-05; ES H26 / M26) | **147** (2024-04-04 → 12-31; same as A17) |
+| IM < 25 | 1 (2026-01-12, 24.1) | 14 (the A17 Mondays) |
+
+### Strong levels (chart rule, band at the open)
+
+| | train | R-a |
+|---|---|---|
+| displayed lines per session, median (IQR) | 35 (30–40) | 30 (27–33) |
+| colour span = p95 \|net\|, $bn, median (IQR) | 115 (89–144) | 103 (80–132) |
+| strong lines per session (any distance), median; range | 2; 1–3 | 2; 1–3 |
+| strong calls / puts per session, mean | 1.62 / 0.56 | 1.29 / 0.67 |
+| strong net $bn, median: calls / puts | +143 / −149 | +155 / −106 |
+| strong lines outside ±1·IM of the open | 66 of 194 | 140 of 289 |
+| **S (in window): levels, calls / puts** | **128: 93 / 35** | **149: 103 / 46** |
+| sessions with no S level / with an S call / with an S put | 13 / 60 / 24 | 38 / 76 / 38 |
+| S distance from open / IM, median | 0.52 | 0.39 |
+| full-session band vs open band: sessions differing | 9 (9 levels only-full, 4 only-open) | 7 (7 / 6) |
+
+- By construction p95 of ~30–35 displayed lines leaves ~2 strong lines per session; they are mostly calls.
+- **S is almost a subset of the CR-CB set:** 123 / 128 (train) and 135 / 149 (R-a) S levels sit within 2 pts of a
+  CR-CB top-6 level. So W = CR-CB minus S is a clean "weak" set: 405 (train) / 733 (R-a) levels.
+- X100: 224 / 206 levels (calls 177 / 163, puts 47 / 43); 108 / 110 S levels are also X100.
+- S levels with another S or CR-CB line within 10 pts (A9 count): 72 / 128 train, 91 / 149 R-a.
+- Worked day 2026-05-01 (open 7264.5, IM 70.2, span 141 $bn): strong = 7227 (net +518) and **7277 (net +158)** —
+  the 7277 call level of Ryan's 2026-05-01 review card is a yellow line.
+
+### Tests per Holm hypothesis (first armed test per level per session)
+
+| set | hyp | train real tests / sessions | train placebo | R-a real | R-a placebo |
+|---|---|---|---|---|---|
+| **S** | **put** | **14 / 12** | 50 / 16 | 30 / 27 | 83 / 27 |
+| **S** | **call** | **42 / 34** | 135 / 47 | 61 / 52 | 119 / 53 |
+| S | pooled | 56 / 45 | 185 / 59 | 91 / 77 | 202 / 79 |
+| S-first | put / call | 14 / 38 | 46 / 124 | 23 / 49 | 74 / 102 |
+| X100 | put / call | 21 / 85 | 73 / 124 | 30 / 94 | 71 / 107 |
+| W | put / call | 72 / 143 | 155 / 174 | 164 / 259 | 145 / 143 |
+
+Approach cells for S (real / placebo tests), train: put/below 5 / 20, put/above 9 / 30, call/below 32 / 82,
+call/above 10 / 53; R-a: 14 / 27, 16 / 56, 33 / 78, 28 / 41.
+
+**Power.** By the CR-CF flag (< 30 tests or < 15 sessions in an arm), **S put on train is underpowered** (14 real
+tests on 12 sessions). S call on train (42 / 34) and both S hypotheses on R-a clear it.
+
+### EDGE / INTERIOR (B7)
+
+| S | EDGE share real / placebo, train | R-a |
+|---|---|---|
+| put | 1.00 / 0.96 | 0.93 / 0.95 |
+| call | 0.93 / 0.96 | 0.92 / 0.97 |
+| pooled | 0.95 / 0.96 | 0.92 / 0.96 |
+
+- With **first-test-only**, almost every test is EDGE in both arms: price reaches a level it was armed away from by
+  making a new session extreme. INTERIOR holds 0–7 tests per arm (underpowered everywhere).
+- So the CR-CF imbalance (real 24 % vs placebo 63 % EDGE, two tests per level and swings) does not occur here; the
+  M2 matched statistic will be close to the EDGE-only difference and to the unmatched one.
+- Every S-first test is EDGE (share 1.00), as expected.
+
+### Placebo coverage
+
+| | train | R-a |
+|---|---|---|
+| S placebo levels / S real levels | 433 / 128 | 403 / 149 |
+| S real levels with ≥ 1 placebo | 90.6 % | 83.2 % |
+| **S placebo bins within 10 pts of a CR-CB-set line** | **49.9 %** | **70.2 %** |
+
+Half (train) to 70 % (R-a) of the "fake" levels for S sit within 10 pts of a weaker GEX line from the CR-CB set,
+because A17's exclusion applies only to the set under test (choice 3).
+
+### A/A (M5; S placebo tests; 200 splits × 2,000 resamples)
+
+| | train unmatched: excl share, median, PASS | train matched | R-a unmatched | R-a matched |
+|---|---|---|---|---|
+| put | 0.065, **+3.005**, **FAIL** | 0.079, +2.93, PASS (139 of 200 splits defined) | 0.065, +1.03, PASS | 0.054, +0.79, PASS |
+| call | 0.050, −0.29, PASS | 0.062, −0.84, PASS | 0.060, +0.25, PASS | 0.053, −0.23, PASS |
+| pooled | 0.050, −0.40, PASS | 0.045, −0.61, PASS | 0.055, −0.43, PASS | 0.055, −0.57, PASS |
+
+**Gate (M5, as frozen): FAIL on train** — the put unmatched median is 3.005 min against a ±3 tolerance; every other
+cell passes. The put placebo arm is 50 tests on 16 sessions. Under the spec the outcome run does not happen
+without Ryan's ruling.
+
+### Decisions for Ryan before any outcome
+
+1. **A/A gate.** Train put unmatched fails by 0.005 min on the median (excl share 6.5 % is fine). The matched
+   statistic (the primary) passes. Options: (a) gate on the primary (matched) statistic only, unmatched becomes a
+   readout — proceed; (b) hold the put hypothesis to "inconclusive (A/A fail)" and run calls only; (c) stop.
+2. **Placebo exclusion.** 50–70 % of S placebos sit near a CR-CB line. Keep A17's literal rule (fake = not a strong
+   line), or exclude placebo bins within 10 pts of any CR-CB-set line too (cleaner "no GEX line" fake, fewer
+   placebos; counts would be re-reported before outcomes).
+3. **Power.** S put on train is underpowered (14 tests / 12 sessions); its train verdict will almost surely read
+   inconclusive. Accept, or name R-a (30 / 27) as the put read — that would change the pre-registered train /
+   confirmation roles and needs your explicit call.
+4. **Env.** Confirm `GEX_COLOR_ABS_MAX` is unset (and `GEX_COLOR_PERCENTILE` = 95) on `Dash - MonoRepo`.
+5. Freeze-time choices 1, 2, 5, 6 (band at the open; ±1·IM window — 34 % / 48 % of strong lines fall outside it;
+   first touch; train window) stand unless you change them.
