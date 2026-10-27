@@ -74,3 +74,114 @@ CR-CL's single primary, G1-down (a swing-12 decline leg during which raw 0DTE PM
 | R1–R7 | not used | |
 
 One "deviates" (A17), pre-approved in the kickoff. No other "deviates": Code proceeds to Step 0 and stops there.
+
+---
+
+## Step 0 findings (2026-10-26, `scripts/cr_co_step0.py` @ `25e7fd4` → `scripts/logs/cr_co/step0.json`, `step0_extra.json`, `exclusions.json`; no group outcome computed)
+
+One launch, exit 0. O2 parity held: under the default the module resolves `PERIOD = y26`, `OUT = logs/cr_cl`. Only `y23` was loaded, plus O8's one statistic (median 2026 train `implied_move_1d`, 102 sessions). R-a, 2025 and the holdout were not read.
+
+### K8 power gate: **G1-down = 22 legs (19 covered) < 40, so stop; not run**
+
+| G1-down count (swing 12, primary) | Legs |
+|---|---|
+| With the O5 / O6 exclusions (the test as frozen, 200 sessions) | **22** (19 covered) |
+| No exclusions (227 sessions) | 22 |
+| Every roll-window session excluded | 20 |
+
+The exclusions cost no G1-down legs; the shortfall is the era itself. Train had 49, R-a 11.
+
+### 1. Coverage (O3 / O4)
+
+- **Calendar:** 311 sessions (2023-01-03 → 2024-04-02, early closes 2023-07-03 / 11-24 removed).
+- **Skew:** `orats_monies_minute` has **no SPX rows of any expiry before 2023-05-01**, so 81 sessions (2023-01-03 → 04-28) are a table gap (ORATS holds them; not backfilled, read-only). From 2023-05-01: 230 sessions with 0DTE PM skew, monthly median 388–390 of 390 RTH minutes; one thin session (2023-05-23, 207 minutes; kept, per-leg coverage rule applies).
+- **Third Fridays:** the 0DTE **PM** row is present on every third Friday 2023-05 → 2024-03 (366–386 RTH rows, AM 7–10 rows). The field-conventions line "PM weeklies on the same date are lost" does not hold for these `orats_monies_minute` sessions. PM only was used (O3).
+- **ES:** `ironbeam_es_1m_bars` holds Databento rows on 307 sessions, with **no non-Databento rows** in the period. There are no RTH bars on the four quarterly expiry Fridays (2023-03-17, 09-15, 12-15, 2024-03-15), and 2023-06-16 has 1 bar: `ES.c.0` expires at the open. Non-roll sessions: 0 missing minutes (median), none with > 5.
+- **Both series present:** 227 sessions.
+
+### 2. Quote timing (O6)
+
+- **2023 quotes are fresh: label − `quote_date` median 21–23 s every month** (p5 9–11, p95 41–51; > 5 min 0.2–0.3 %, unparsed 0 %). That is close to 2026 (10 s), **not** R-a's 129 s. At the primary legs' end snapshot the lag is median 21 s (G1-down 18 s), and the ES price paired with snapshot e is the leg's extreme bar on 278 / 341 legs (1 bar behind on 62, 2 on 1). So the R-a truncation does not apply here.
+- **Alignment:** 1-min Δ `stock_price` vs Δ ES on the quote-time axis peaks at lag 0 in every month (ρ 0.40–0.66), and quote time beats the label slightly (2024-01: 0.663 vs 0.623). Lags −20 … +5 show no 15-min shift in `stock_price` (the CR-BH 2023 delay is in `spot_price`, which is not used).
+- **Excluded by rule: 2023-09** (20 sessions). Both checks peak at lag 0, but `stock_price` ρ is 0.109 (< 0.3) and `vol50` ρ is −0.159 (needs ≤ −0.2), so the O6 rule fails. Probable cause is `stock_price` jitter that month (CR-BH ±15 pts); the quote lag itself is normal (22 s). Excluded as frozen; it would add no G1-down legs (the no-exclusion count is the same 22).
+
+### 3. Roll weeks (O5)
+
+`ES.c.0` volume vs the non-window median (1.20 M contracts per RTH session):
+
+| Expiry | Prior week (Mon–Fri) | Expiry-week Mon / Tue | Wed / Thu | Fri |
+|---|---|---|---|---|
+| 2023-03-17 | 0.98–1.61 | 0.78 / 0.35 | 0.23 / 0.13 | no bars |
+| 2023-06-16 | 1.00–1.31 | 0.31 / 0.31 | 0.22 / 0.12 | 1 bar |
+| 2023-09-15 | 0.72–1.09 | 0.37 / 0.20 | 0.13 / 0.13 | no bars |
+| 2023-12-15 | 0.91–1.24 | 0.30 / 0.16 | 0.22 / 0.14 | no bars |
+| 2024-03-15 | 0.77–1.39 | 0.43 / 0.29 | 0.15 / 0.14 | no bars |
+
+- **Contamination:** the calendar-roll series is the dying contract for the whole expiry week, and its volume falls to about 0.3× from the Monday, after the market rolled on the prior Thursday. No window session has missing minutes. Non-window sessions have a volume p5 of 0.69×.
+- **Excluded by the O5 rule (< 0.25×, or the gap rule):** 17 sessions, the Wed–Fri of each expiry week plus 2023-09-12. No quarter reached the whole-window threshold. Expiry-week Mondays and Tuesdays at 0.30–0.43× pass the rule and stay in.
+- **Count sensitivity with every window session excluded:** G1-down 20.
+
+### 4. Counts (swing 12; 200 sessions after 33 excluded + 81 with no skew)
+
+| Step | y23 (200 sessions) | R-a (186) | Train (107) |
+|---|---|---|---|
+| Legs in domain | 547 | 1,036 | 1,233 |
+| Primary legs | 360 (late 187) | 681 | 972 |
+| Ratio defined | 341 (move too small 13; insufficient 5; no read 1) | 399 | 597 |
+| In noise → baseline | 241 (up 109, down 132) | 324 | 448 |
+| Beyond noise | 100 (29.3 %): G1 38, G2 43, neither 19 | 75 (18.8 %) | 149 (25.0 %) |
+
+Size tercile cuts (O9): **16.0 / 22.67 pts** (train 20.0 / 28.5; R-a 20.92 / 29.5).
+
+The era is quiet: swing-12 legs are rare (median RTH range 36.5 pts; 4.0 swing-12 legs per session, 2.7 in the domain). But because SPX is lower (~4,500), almost none fail the 0.15 % "move too small" rule.
+
+| Cell (pre-outcome; covered = stratum has ≥ 1 baseline leg) | Swing 12 | Ratio cut −0.5 / 1.5 | Late | Swing 8 | Swing 16 |
+|---|---|---|---|---|---|
+| G1-up | 16 (14) | 15 (13) | 4 | 36 (34) | 7 (6) |
+| **G1-down** | **22 (19)** | 21 (18) | 5 | 43 (43) | 9 (7) |
+| G2-up | 25 (18) | 21 (16) | 9 | 44 (40) | 8 (4) |
+| G2-down | 18 (14) | 16 (13) | 12 | 46 (46) | 12 (8) |
+
+- **Baseline coverage:** G1-down 19 / 22 covered with the EDGE key, 21 / 22 without it. Baseline strata: 94 occupied, median 2 legs, 33 with one leg.
+- **Beyond-noise share by start bucket:** 18–33 %. The G1 legs cluster early again (07:00–07:59: 22 of 47 ratio-defined G1 legs, primary + late).
+- **GEX readout:** not computed (O10). All 200 sessions show "pre-2024-04-03: placement undefined".
+
+### A/A (O11; ±10 race on baseline legs only, 200 session halves, 500-draw bootstrap each)
+
+| Direction scored | Up legs: median [2.5, 97.5 %] | CI excludes 0 | Down legs: median [2.5, 97.5 %] | CI excludes 0 |
+|---|---|---|---|---|
+| Continuation | −0.5 pp [−25.5, +32.0] | 4.5 % | −0.0 pp [−29.8, +25.8] | 2.5 % |
+| Against | −1.0 pp [−36.3, +28.6] | 3.0 % | +0.7 pp [−30.0, +27.1] | 4.0 % |
+
+Unbiased (medians within 1 pp of 0), at or below nominal 5 %, wide (±30 pp on ~60-leg halves).
+
+### 2023 noise vs the shipped band (O7; report only, band not changed)
+
+- **07:00–10:30:** the 2023 band is **about the same as the shipped band**, median ratio 1.02 (IQR 0.89–1.23). It runs higher at 07:00 (1.2–1.65×) and slightly lower at 09:30–10:00 (0.8–0.9×). So unlike R-a (0.7×), the shipped band is neither loose nor tight in this era.
+- **After ~11:00 and on long windows from 10:30:** the 2023 SD explodes (30–84 vol pts) because near-expiry 0DTE `vol75 − vol50` blows up late in the session. These cells are beyond the primary (e ≤ 11:00) and are reported only.
+- Median 0DTE put skew level 0.96 vol pts (R-a 1.87).
+
+### 5. Vol-scaled swing readout (O8; counts only)
+
+- **Scale:** swing_d = 12 × IM_d ÷ 65.71 (median 2026 train IM, n 102). The y23 median IM is 34.62, so swing_d is median **6.3 pts** (p5 3.4, p95 10.9). Nine sessions have no IM (excluded).
+- **Funnel:** 2,351 legs; 1,644 primary; 738 ratio-defined (711 "move too small" — at a 6-pt swing many legs fall under the 0.15 % ES-move floor); baseline 531; beyond noise G1 87, G2 93.
+- **Cells:** G1-up 37 (36), **G1-down 50 (50 covered)**, G2-up 45 (41), G2-down 48 (47). Terciles 12.0 / 16.5 pts.
+- It is the only version that clears 40 in this era, but it is **not** the frozen primary. Running it would be a new pre-registered hypothesis (Ryan's call, K7.5).
+
+### Gate summary for Ryan
+
+- **K8: G1-down has 22 legs (< 40), so the CR stops here and is not run.** The primary cannot carry a verdict in this era: 2023-05 → 2024-04 moved little (4 swing-12 legs per session, against 11.5 on train).
+- **Data gates:**
+  - Skew coverage starts 2023-05-01 (81 sessions lost, a table gap).
+  - Quote time is established in 14 of 15 months, and the 2023 lag is ~22 s (no R-a truncation). 2023-09 was excluded by rule.
+  - Roll-week Wed–Fri excluded (17 sessions).
+  - Third-Friday PM present; A/A clean; band ≈ shipped.
+  - None of these change the G1-down count materially (22 / 22 / 20).
+- **What could reach 40:**
+  - Vol-scaled swing readout: 50 legs.
+  - Swing 8 readout: 43 legs.
+  - Backfilling ORATS minute monies for 2023-01 → 04 (+81 sessions; a write, outside this read-only CR).
+  - Each would be a new pre-registration, not CR-CL as run.
+- No outcome was computed on any group leg. `cr_cl_run.py` was not run or changed.
+
+Stopped for Ryan's review.
