@@ -182,3 +182,43 @@ in-range delta); listed for Ryan, not a stop.
   no key unmatched.
 - **Gate (C14): passed** — 58 ≥ 40 fades, 41 ≥ 30 sessions, |A/A| 0.39 ≤ 1 pp. The run script is committed and run once.
   Note: 58 fades leaves little room; if > 18 are ties / unresolved the primary is UNDERPOWERED by the ≥ 40 rule.
+
+## Result (single run, 2026-10-26) — `scripts/cr_cs_run.py` @ `bca648a` → `scripts/logs/cr_cs/results.json`
+
+One launch, exit 0 (2.8 s on cached loads). Schedule asserts held (470 ranges, 58 fades on 41 sessions, 1 overlap drop).
+Train only; R-a, R-b and the holdout were not read. 101 sessions; 10,000 session-cluster draws, seed 20260920.
+
+### Primary — fade minus continuation, ±10 race (stop-free; a direction test, not Ryan's exit, B6)
+
+| | resolved | win rate |
+|---|---|---|
+| fade | 51 (37 sessions; 7 unresolved, 0 ties) | **39.2 %** (−10.8 pp vs 50 % [−24.2, +2.2]) |
+| continuation (same price and bar) | 51 | 60.8 % |
+| **fade − continuation** | | **−21.6 pp [−48.4, +4.3] → INCONCLUSIVE** |
+
+As C6 notes, the two sides share entries, so the difference is 2 × (fade − 50 %).
+
+### Readouts (no verdicts, unadjusted)
+
+- vs B7 matched random baseline (minute, side, EDGE; coverage 100 %): fade −9.9 [−23.0, +3.1]; continuation +9.4
+  [−3.7, +22.4]. All fades are INTERIOR.
+- ±20 race: fade 50 % (n 32), diff 0.0 [−38.5, +33.3].
+- Move at +30 min (fade side): −1.3 pts [−3.9, +1.1]; at +60: 0.0 [−5.1, +4.6] (n 49).
+- Max favourable before −10: fade median 7.1 pts (≥ 10: 34 %, ≥ 20: 17 %); continuation 11.6 (53 %, 24 %).
+- **Stop at the sweep extreme + 1 vs +10 (mechanical, B6):** stopped first 37, target first 18, neither 3 → stopped
+  first on 64 %; target share of resolved 33 % [20, 45]. Median stop distance 6.1 pts (Step 0).
+- Breakout-direction trades (burst breakouts, entry at the 5-min close, sweep direction): 64.1 % (n 39, descriptive),
+  +14.1 pp vs 50 % [−4.8, +32.1].
+- Grid (fade − continuation, pp; resolved fades): size 1 −25.0 [−55.6, +5.3] (48); size 4 −18.8 [−53.3, +21.2] (32);
+  volume 1.5× −14.3 [−35.2, +5.9] (84); volume 3× −11.1 [−60.0, +45.5] (18); re-entry 3 min −21.1 [−52.4, +9.1] (38);
+  re-entry 10 min −21.1 [−43.3, +2.3] (71). **All six point estimates negative; no CI excludes 0.**
+- Splits (all < 40 resolved, descriptive): up sweep → short 43.5 % (23), down sweep → long 35.7 % (28); sweep delta top
+  half 41.7 % (24), bottom half 37.0 % (27); hour cells 4–14. Levels: no strong line 45 resolved, −15.6 [−45.0, +11.8];
+  at / beyond a strong line 3 in all → **A12 / A18 / A8 not readable on train**.
+
+### Reading
+
+On train, when a range edge is swept on a volume burst and price closes straight back inside, fading it did **not** work:
+the fade won 39 % of ±10 races and the continuation 61 %. The CI (−48 to +4) is wide, so the verdict is INCONCLUSIVE,
+leaning against the fade. Every grid variant leans the same way; burst breakouts that held outside kept going (64 %,
+descriptive). Not shortlisted; R-a not read.
