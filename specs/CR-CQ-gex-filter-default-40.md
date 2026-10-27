@@ -64,3 +64,32 @@ Reproduced on unchanged code (this worktree before any fix, Playwright against `
 | D4 | An empty / invalid value never replaces the current one: `handleGexMinAbsBChange` keeps `prev` (K4); `applySettings` already refuses non-numbers. 0 is accepted when chosen explicitly (slider at 0 → Apply). |
 | D5 | Dash: `GexOverlay.default_config()` returns 40 (constant `GEX_OVERLAY_DEFAULT_MIN_ABS_B`), no longer the compute env `GEX_ABS_THRESHOLD`; `GexOverlay.compute` falls back to it only for `None` / blank, so an explicit 0 is honoured. The iframe src builder is unchanged (it passes a value only when the store has one). Server-side `GEX_ABS_THRESHOLD_DEFAULT` (route fallback when no param is sent) is not a display default and stays — the React chart always sends the param. |
 | D6 | "Clear the box" (K6): the chart control is a range slider and cannot be emptied, so the Playwright test covers the empty paths that exist — a blank / junk stored value, an empty `gex_min_abs_b=` URL param, a missing key — plus the legacy-0 migration and an explicit 0. Unit tests cover `''` through the change handler's coercion. |
+
+---
+
+## Smoke (2026-10-26)
+
+| Check | Result |
+|---|---|
+| Unit, React (`npm --prefix react_price_preview run test:unit`, `node --test`) | 4/4 — blank / null / junk → no value (fallback, never 0); explicit 0 kept; clamp/round; load order v2 → legacy > 0 → URL → 40 |
+| Unit, Dash (`test_gex_overlay_default`) | 4/4 — `default_config` 40 regardless of `GEX_ABS_THRESHOLD`; blank / invalid → 40 B; explicit 0 → 0 |
+| Ironbeam Python suite (86 tests, incl. the CR-BT bars golden bodies) | OK |
+| Playwright `cr-cq` (smoke backend `cr_ck_smoke_backend.py` on 8066, read-only; 2026-10-26) | 4/4. Fresh profile requests `gex_min_abs_b=40` and the slider shows 40; set 60 → reload → 60; blank v2 + legacy 60 → 60, junk everywhere + empty URL param → 40; legacy `"0"` → 40, explicit 0 → reload → 0. **All 4 fail on the unchanged code** (fresh profile → `0`). |
+| Playwright `cr-bv` 9/9, `cr-cd` 4/4, `cr-ch` 1/1 | pass |
+| Playwright `cr-cc` read-only tests 4/4 | pass (backend log: no non-GET request). The cr-cc tests that Save / Reveal (write `setup_reviews`) were not run — kickoff: no DB writes. |
+| Playwright `cr-ck` | "on" 1/1. "pixel" (branch vs origin/main, off) **differs**: the Overview window is translucent and the chart behind it now shows 40-B levels instead of 0-B ones. With `GEX_MIN_ABS_B_DEFAULT` temporarily set to 0 the pixel test passes byte-identical, so the default is the only difference (reverted before commit). This is the intended visible change (K1). |
+| `cr-cd-a5` | not run (needs a pre-A5 baseline frontend and the write-capable review backend); it seeds the legacy key to 40 explicitly, which the new code reads unchanged. |
+
+Screenshot assets the existing suites regenerate (`specs/assets/cr-bv|cr-cc|cr-cd|cr-ck`) were restored, not committed.
+
+## Deliverables
+
+- `react_price_preview/src/gexMinAbsB.js` (new), `App.jsx`, `components/PriceChart.jsx` — default 40, no silent 0, v2 storage key.
+- `apps/web/modules/Ironbeam/indicators/gex_overlay.py` — Dash default 40, explicit 0 honoured.
+- Tests: `react_price_preview/tests/unit/gexMinAbsB.test.js`, `tests/e2e/cr-cq.spec.js`, `apps/web/modules/Ironbeam/tests/test_gex_overlay_default.py`; `test:unit` script in `react_price_preview/package.json`.
+
+## Follow-ups (not done)
+
+- A Min |GEX| Ryan deliberately set to 0 before this CR shows as 40 once (D3).
+- Why storage was empty on Ryan's loads was not observed directly; the cause is the same for any of the candidates listed in Step 0, and the fix covers all of them.
+- `apps/web/modules/gamma/callbacks_replacement_autoresolve_symbols.py` is dead code duplicating the Ironbeam callbacks — candidate for removal.
