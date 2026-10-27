@@ -16,7 +16,7 @@ import cr_cl_lib as C
 
 D = C.load()
 R = {"sessions": len(D["SESS"]), "first": str(D["SESS"][0]), "last": str(D["SESS"][-1])}
-assert max(D["SESS"]) <= L.PERIODS["y26"][1]
+assert max(D["SESS"]) <= L.PERIODS[C.PERIOD][1]
 
 
 def bl(b):

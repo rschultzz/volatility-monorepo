@@ -71,3 +71,9 @@ CR-CL's single primary, G1-down (a swing-12 decline leg during which raw 0DTE PM
 | C1, C2 | n/a | No display. |
 
 One "deviates" (A17). Step 0 reads no outcomes on group legs, so Code proceeds to Step 0 and stops there; the run waits on Ryan's A17 approval and his Step 0 review.
+
+---
+
+## Amendment A1 (Code, 2026-10-26, before any data was pulled): N2 parity check without reading train
+
+N2's parity check ("CR-CL Step 0 re-run on `y26` must reproduce its `step0.json`") would load 2026 train, which K6 forbids in this CR. Replaced by a **code-level parity check**: the diff to `cr_cl_lib.py` / `cr_cl_step0.py` replaces only the literal `"y26"` (5 sites) by `PERIOD`, whose default is `"y26"`, plus the `OUT` switch (`cr_cl` under `y26`); a test asserts that under the default the module resolves `PERIOD == "y26"` and `OUT == scripts/logs/cr_cl`, and that no `"y26"` literal remains outside the default. No train data is loaded. Everything else unchanged.
