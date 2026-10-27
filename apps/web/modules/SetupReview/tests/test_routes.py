@@ -57,6 +57,17 @@ class TestRoutesMocked(unittest.TestCase):
         self.assertIn("setup review tables", body["message"])
         self.assertNotIn("postgresql://", json.dumps(body))
 
+    def test_known_reasons_include_cr_cz_tags(self):
+        cur = MagicMock()
+        cur.fetchall.return_value = [("trend day",), ("my custom",)]
+        conn = MagicMock()
+        conn.cursor.return_value.__enter__.return_value = cur
+        got = service.known_reasons(conn)
+        self.assertEqual(got[:len(service.DEFAULT_REASONS)], list(service.DEFAULT_REASONS))
+        self.assertEqual(got[-1], "my custom")
+        i = got.index("take continuation (other edge)")
+        self.assertEqual(got[i + 1:i + 3], ["take fade (called side)", "other"])
+
     def test_missing_tables_is_503(self):
         with patch.object(service, "summary", side_effect=psycopg.errors.UndefinedTable("relation does not exist")):
             r = self.client.get(f"{P}/summary")
@@ -145,6 +156,8 @@ class TestAgainstDb(unittest.TestCase):
         self.assertTrue(all("outcome" not in c for c in lst["candidates"]))
         self.assertNotIn("pnl_pts", json.dumps(lst))
         self.assertIn("trend day", lst["reasons"])
+        for tag in ("take continuation (other edge)", "take fade (called side)"):   # CR-CZ
+            self.assertIn(tag, lst["reasons"])
 
         det = self.client.get(f"{P}/candidates/{self.cid(1)}").get_json()["candidate"]
         self.assertNotIn("outcome", det)

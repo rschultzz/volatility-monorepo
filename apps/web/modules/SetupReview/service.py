@@ -27,6 +27,8 @@ DEFAULT_REASONS = (
     "chop",
     "too late in day",
     "flow against",
+    "take continuation (other edge)",   # CR-CZ
+    "take fade (called side)",          # CR-CZ
     "other",
 )
 STATUSES = ("unreviewed", "reviewed", "all")
