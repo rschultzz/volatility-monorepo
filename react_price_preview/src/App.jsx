@@ -5,6 +5,12 @@ import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS, effortChartMarkers } fro
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import { PANEL_WIDTH as ANALOGUES_PANEL_WIDTH } from './components/AnaloguesPanel'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
+import {
+  GEX_MIN_ABS_B_LEGACY_STORAGE_KEY,
+  GEX_MIN_ABS_B_STORAGE_KEY,
+  coerceGexMinAbsB,
+  resolveInitialGexMinAbsB,
+} from './gexMinAbsB'
 
 
 const FLOW_HEIGHT_STORAGE_KEY = 'ib-react-flow-panel-height'
@@ -14,7 +20,6 @@ const FLOW_MODE_STORAGE_KEY = 'ib-react-flow-mode'
 const FLOW_V2_MARKERS_STORAGE_KEY = 'ib-react-flow-v2-markers'
 // CR-CD A5: swing effort labels (off by default), per viewer.
 const FLOW_V2_EFFORT_STORAGE_KEY = 'ib-react-flow-v2-effort'
-const GEX_MIN_ABS_B_STORAGE_KEY = 'ib-react-gex-min-abs-b'
 const GEX_LEVELS_MODE_STORAGE_KEY = 'ib-react-gex-levels-mode'
 // CR-CK — Overview panel "Stickiness" rows; off unless the user turns them on in settings.
 const SKEW_STICKINESS_STORAGE_KEY = 'ib-react-skew-stickiness'
@@ -141,12 +146,6 @@ function parseFloatOrNull(value) {
 function parseIntOrDefault(value, fallback) {
   const num = Number.parseInt(String(value ?? ''), 10)
   return Number.isFinite(num) ? num : fallback
-}
-
-function coerceGexMinAbsB(value, fallback = 10) {
-  const num = Number(value)
-  if (!Number.isFinite(num)) return fallback
-  return Math.max(0, Math.min(200, Math.round(num)))
 }
 
 function coercePositiveInt(value, fallback) {
@@ -477,7 +476,7 @@ export default function App() {
   }, [params])
 
   const gexEnabled = parseBool(params.get('gex_enabled'), true)
-  const initialGexMinAbsB = parseFloatOrNull(params.get('gex_min_abs_b'))
+  const initialGexMinAbsB = params.get('gex_min_abs_b')
   const explicitDaysEitherSideRaw = params.get('days_either_side')
   const explicitDaysEitherSide =
     explicitDaysEitherSideRaw == null || explicitDaysEitherSideRaw === ''
@@ -588,15 +587,16 @@ export default function App() {
     }
   })
 
+  // CR-CQ: stored value → URL param → 40; an empty or invalid value never becomes 0.
   const [gexMinAbsB, setGexMinAbsB] = useState(() => {
-    const fallback = coerceGexMinAbsB(initialGexMinAbsB, 10)
     try {
-      return coerceGexMinAbsB(
-        window.localStorage.getItem(GEX_MIN_ABS_B_STORAGE_KEY),
-        fallback
-      )
+      return resolveInitialGexMinAbsB({
+        stored: window.localStorage.getItem(GEX_MIN_ABS_B_STORAGE_KEY),
+        legacyStored: window.localStorage.getItem(GEX_MIN_ABS_B_LEGACY_STORAGE_KEY),
+        urlParam: initialGexMinAbsB,
+      })
     } catch (err) {
-      return fallback
+      return resolveInitialGexMinAbsB({ urlParam: initialGexMinAbsB })
     }
   })
 

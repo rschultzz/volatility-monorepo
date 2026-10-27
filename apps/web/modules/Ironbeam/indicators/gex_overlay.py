@@ -25,6 +25,9 @@ GEX_LEVEL_PADDING = float(os.getenv("GEX_LEVEL_PADDING", "150"))
 # Threshold is absolute $ gamma; plugin config uses "billions"
 GEX_ABS_THRESHOLD_DEFAULT = float(os.getenv("GEX_ABS_THRESHOLD", "1e10"))
 
+# CR-CQ: display default for the Min |GEX| (B) filter (the React chart uses the same 40).
+GEX_OVERLAY_DEFAULT_MIN_ABS_B = 40.0
+
 GEX_COLOR_ABS_MAX = float(os.getenv("GEX_COLOR_ABS_MAX", "0"))
 GEX_COLOR_PERCENTILE = float(os.getenv("GEX_COLOR_PERCENTILE", "95"))
 
@@ -165,10 +168,9 @@ class GexOverlay(IndicatorPlugin):
     kind = "overlay"
 
     def default_config(self) -> Dict[str, Any]:
-        # Env var is absolute $ gamma (default 1e10 == 10B). Store config in "billions".
-        env_abs = float(os.getenv("GEX_ABS_THRESHOLD", str(GEX_ABS_THRESHOLD_DEFAULT)))
+        # Config is in "billions"; the default is a display choice, not the compute env GEX_ABS_THRESHOLD.
         return {
-            "min_abs_b": env_abs / 1e9,  # minimum |GEX| (B) to plot
+            "min_abs_b": GEX_OVERLAY_DEFAULT_MIN_ABS_B,  # minimum |GEX| (B) to plot
         }
 
     def schema(self) -> Dict[str, Any]:
@@ -228,7 +230,13 @@ class GexOverlay(IndicatorPlugin):
                 band_max = last_px + 500.0
 
         # --- threshold ---
-        min_abs_b = float((cfg or {}).get("min_abs_b") or (GEX_ABS_THRESHOLD_DEFAULT / 1e9))
+        # Blank / missing → default; an explicit 0 is kept (CR-CQ).
+        raw_min_abs_b = (cfg or {}).get("min_abs_b")
+        try:
+            blank = raw_min_abs_b is None or str(raw_min_abs_b).strip() == ""
+            min_abs_b = GEX_OVERLAY_DEFAULT_MIN_ABS_B if blank else float(raw_min_abs_b)
+        except (TypeError, ValueError):
+            min_abs_b = GEX_OVERLAY_DEFAULT_MIN_ABS_B
         threshold_abs = float(max(0.0, min_abs_b)) * 1e9
 
         # --- df_gex ---
