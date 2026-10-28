@@ -15,16 +15,24 @@
 //
 // Keys (when focus is not in a text field): N / P next / previous,
 // T / S / U label, R reveal.
+//
+// CR-DB layout (queue tab, a card active): the card header (direction, date /
+// time, called edge) stays at the top; the key facts, the collapsed "details"
+// (every other field), the saved review and the outcome scroll in their own
+// region above the queue; the actions (Take / Skip / Unsure, reason chips,
+// comment, Save / Reveal) are a footer pinned to the bottom of the panel.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReviewMeta from './ReviewMeta'
+import { CardHeader, DIRECTION_COLOR, KEY_FACT_META_KEYS, KeyFacts } from './ReviewCard'
 
 export const PANEL_WIDTH = 340
 
+// CR-DB / C1: Dash palette — Take blue, Skip slate, Unsure light grey; `ink` is the text on the filled button.
 const LABELS = [
-  { key: 'take', text: 'Take', hotkey: 'T', color: '#34d399' },
-  { key: 'skip', text: 'Skip', hotkey: 'S', color: '#f87171' },
-  { key: 'unsure', text: 'Unsure', hotkey: 'U', color: '#fbbf24' },
+  { key: 'take', text: 'Take', hotkey: 'T', color: '#60a5fa', ink: '#020617' },
+  { key: 'skip', text: 'Skip', hotkey: 'S', color: '#94a3b8', ink: '#020617' },
+  { key: 'unsure', text: 'Unsure', hotkey: 'U', color: '#cbd5e1', ink: '#020617' },
 ]
 const LABEL_COLOR = Object.fromEntries(LABELS.map((l) => [l.key, l.color]))
 
@@ -94,7 +102,7 @@ async function fetchJson(url, options = {}) {
 
 function Row({ cand, active, onClick }) {
   const arrow = cand.direction === 'long' ? '▲' : '▼'
-  const arrowColor = cand.direction === 'long' ? '#34d399' : '#f87171'
+  const arrowColor = DIRECTION_COLOR[cand.direction] || '#94a3b8'
   return (
     <button
       type="button"
@@ -142,7 +150,7 @@ function KV({ k, v }) {
 
 function SummaryView({ groups, loading, error }) {
   if (loading) return <div style={{ padding: 12, fontSize: 11, color: '#64748b' }}>Loading…</div>
-  if (error) return <div style={{ padding: 12, fontSize: 11, color: '#f87171' }}>{error}</div>
+  if (error) return <div style={{ padding: 12, fontSize: 11, color: '#cbd5e1' }}>{error}</div>
   if (!groups.length) return <div style={{ padding: 12, fontSize: 11, color: '#64748b' }}>No candidates.</div>
   return (
     <div data-testid="review-summary" style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -213,6 +221,7 @@ export default function SetupReviewPanel({
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState('')
+  const [detailsOpen, setDetailsOpen] = useState(false)
 
   const base = `${apiBase}/api/setup-review`
   const activeId = activeCandidate?.id || null
@@ -466,37 +475,104 @@ export default function SetupReviewPanel({
         </div>
       ) : (
         <>
-          {/* Active candidate */}
+          {/* Active candidate: header + scrolling body (CR-DB) */}
           {activeCandidate && (
-            <div data-testid="review-active" style={{ padding: '8px 10px', borderBottom: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ fontSize: 11, fontWeight: 700 }}>
-                {activeCandidate.session_date} · {activeCandidate.direction?.toUpperCase()} · entry {hhmm(activeCandidate.entry_ts_pt)}
-                <span style={{ color: '#64748b', fontWeight: 500 }}> · {activeCandidate.id}</span>
+            <div
+              data-testid="review-active"
+              style={{ flex: '0 1 auto', minHeight: 0, maxHeight: '55%', display: 'flex', flexDirection: 'column', borderBottom: '1px solid #1e293b' }}
+            >
+              <div style={{ padding: '8px 10px 6px', borderBottom: '1px solid #0f172a' }}>
+                <CardHeader cand={activeCandidate} />
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto 1fr', gap: '2px 8px', fontSize: 10 }}>
-                <KV k="cell" v={activeCandidate.cell || '—'} />
-                <KV k="level" v={`${fmtNum(activeCandidate.level_price)}`} />
-                <KV k="net $bn" v={fmtNum(activeCandidate.level_net_bn, 1)} />
-                <KV k="gross $bn" v={fmtNum(activeCandidate.level_gross_bn, 1)} />
-                <KV k="entry" v={fmtNum(activeCandidate.entry_price)} />
-                <KV k="stop" v={fmtNum(activeCandidate.stop_price)} />
-                <KV k="extreme" v={fmtNum(activeCandidate.extreme_price)} />
-                <KV k="frame" v={activeCandidate.meta?.level_frame || '—'} />
-                {/* CR-CC A3.1: meta as readable rows; raw JSON only behind "show raw" */}
-                <ReviewMeta meta={activeCandidate.meta} candidate={activeCandidate} />
-              </div>
+              <div data-testid="review-card-body" style={{ overflowY: 'auto', minHeight: 0, padding: '6px 10px 8px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {savedPreReveal.length > 0 && (
+                  <div style={{ fontSize: 10, color: '#94a3b8' }}>
+                    Saved:{' '}
+                    {(() => {
+                      const r = savedPreReveal[savedPreReveal.length - 1]
+                      return (
+                        <span>
+                          <b style={{ color: LABEL_COLOR[r.label] }}>{r.label.toUpperCase()}</b>
+                          {r.reasons?.length ? ` · ${r.reasons.join(', ')}` : ''}
+                          {r.comment ? ` · “${r.comment}”` : ''}
+                        </span>
+                      )
+                    })()}
+                  </div>
+                )}
 
+                {outcome && (
+                  <div data-testid="review-outcome" style={{ fontSize: 11, padding: '6px 8px', borderRadius: 6, background: '#1e1b4b', color: '#e0e7ff' }}>
+                    <b>Outcome:</b>{' '}
+                    {outcome.pnl_pts != null ? `${fmtSigned(outcome.pnl_pts, 2)} pts` : '—'}
+                    {outcome.result ? ` · ${outcome.result}` : ''}
+                    {outcome.exit_ts_pt ? ` · exit ${hhmm(outcome.exit_ts_pt)}` : ''}
+                    {outcome.exit_price != null ? ` @ ${fmtNum(outcome.exit_price)}` : ''}
+                    {(activeCandidate.reviews || []).some((r) => r.post_reveal) && (
+                      <div style={{ marginTop: 2, color: '#a5b4fc', fontSize: 10 }}>
+                        post-reveal reviews: {(activeCandidate.reviews || []).filter((r) => r.post_reveal).map((r) => r.label).join(', ')}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <KeyFacts cand={activeCandidate} />
+
+                <button
+                  type="button"
+                  data-testid="review-details-toggle"
+                  aria-expanded={detailsOpen}
+                  onClick={() => setDetailsOpen((o) => !o)}
+                  style={{ alignSelf: 'flex-start', background: 'transparent', border: 'none', color: '#64748b', fontSize: 10, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}
+                >
+                  {detailsOpen ? '▾' : '▸'} details
+                </button>
+                {detailsOpen && (
+                  <div data-testid="review-details" style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '2px 8px', fontSize: 10 }}>
+                    <KV k="cell" v={activeCandidate.cell || '—'} />
+                    <KV k="entry" v={fmtNum(activeCandidate.entry_price)} />
+                    <KV k="extreme" v={fmtNum(activeCandidate.extreme_price)} />
+                    <KV k="frame" v={activeCandidate.meta?.level_frame || '—'} />
+                    {/* CR-CC A3.1: meta as readable rows; raw JSON only behind "show raw" */}
+                    <ReviewMeta meta={activeCandidate.meta} candidate={activeCandidate} omit={KEY_FACT_META_KEYS} />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Queue */}
+          <div style={{ padding: '4px 10px', fontSize: 10, color: '#64748b', borderBottom: '1px solid #1e293b' }}>
+            {listLoading ? 'Loading…' : `${candidates.length} candidates · N / P to step`}
+          </div>
+          <div style={{ flex: '1 1 0', minHeight: 40, overflowY: 'auto' }}>
+            {listError ? (
+              <div data-testid="review-error" style={{ padding: 12, fontSize: 11, color: '#cbd5e1' }}>{listError}</div>
+            ) : (
+              candidates.map((c) => (
+                <Row key={c.id} cand={c} active={c.id === activeId} onClick={() => activate(c.id)} />
+              ))
+            )}
+          </div>
+
+          {/* Actions: pinned to the bottom of the panel (CR-DB) */}
+          {activeCandidate && (
+            <div
+              data-testid="review-actions"
+              style={{ flex: 'none', borderTop: '1px solid #334155', background: '#020617', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}
+            >
               <div style={{ display: 'flex', gap: 6 }}>
                 {LABELS.map((l) => (
                   <button
                     key={l.key}
                     type="button"
                     data-testid={`review-label-${l.key}`}
+                    aria-pressed={label === l.key}
                     onClick={() => setLabel(l.key)}
                     style={{
                       ...buttonBase,
                       flex: 1,
-                      color: label === l.key ? '#020617' : l.color,
+                      color: label === l.key ? l.ink : l.color,
                       background: label === l.key ? l.color : '#0f172a',
                       borderColor: l.color,
                     }}
@@ -506,13 +582,14 @@ export default function SetupReviewPanel({
                 ))}
               </div>
 
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              <div data-testid="review-reasons" style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                 {reasonOptions.map((r) => {
                   const on = chosenReasons.includes(r)
                   return (
                     <button
                       key={r}
                       type="button"
+                      aria-pressed={on}
                       onClick={() => toggleReason(r)}
                       style={{
                         ...buttonBase,
@@ -546,7 +623,7 @@ export default function SetupReviewPanel({
                 value={comment}
                 placeholder="comment"
                 onChange={(e) => setComment(e.target.value)}
-                rows={2}
+                rows={1}
                 style={{ ...selectStyle, fontSize: 11, padding: '4px 6px', resize: 'vertical' }}
               />
 
@@ -556,7 +633,7 @@ export default function SetupReviewPanel({
                   data-testid="review-save"
                   onClick={save}
                   disabled={!label || busy}
-                  style={{ ...buttonBase, flex: 1, opacity: !label || busy ? 0.5 : 1 }}
+                  style={{ ...buttonBase, flex: 1, opacity: !label || busy ? 0.5 : 1, borderColor: '#60a5fa', color: '#e2e8f0' }}
                 >
                   {revealed ? 'Save post-reveal review' : 'Save'}
                 </button>
@@ -572,54 +649,9 @@ export default function SetupReviewPanel({
                 </button>
               </div>
 
-              {savedPreReveal.length > 0 && (
-                <div style={{ fontSize: 10, color: '#94a3b8' }}>
-                  Saved:{' '}
-                  {(() => {
-                    const r = savedPreReveal[savedPreReveal.length - 1]
-                    return (
-                      <span>
-                        <b style={{ color: LABEL_COLOR[r.label] }}>{r.label.toUpperCase()}</b>
-                        {r.reasons?.length ? ` · ${r.reasons.join(', ')}` : ''}
-                        {r.comment ? ` · “${r.comment}”` : ''}
-                      </span>
-                    )
-                  })()}
-                </div>
-              )}
-
-              {outcome && (
-                <div data-testid="review-outcome" style={{ fontSize: 11, padding: '6px 8px', borderRadius: 6, background: '#1e1b4b', color: '#e0e7ff' }}>
-                  <b>Outcome:</b>{' '}
-                  {outcome.pnl_pts != null ? `${fmtSigned(outcome.pnl_pts, 2)} pts` : '—'}
-                  {outcome.result ? ` · ${outcome.result}` : ''}
-                  {outcome.exit_ts_pt ? ` · exit ${hhmm(outcome.exit_ts_pt)}` : ''}
-                  {outcome.exit_price != null ? ` @ ${fmtNum(outcome.exit_price)}` : ''}
-                  {(activeCandidate.reviews || []).some((r) => r.post_reveal) && (
-                    <div style={{ marginTop: 2, color: '#a5b4fc', fontSize: 10 }}>
-                      post-reveal reviews: {(activeCandidate.reviews || []).filter((r) => r.post_reveal).map((r) => r.label).join(', ')}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {actionError && <div style={{ fontSize: 10, color: '#f87171' }}>{actionError}</div>}
+              {actionError && <div style={{ fontSize: 10, color: '#e2e8f0', background: '#1e293b', borderRadius: 4, padding: '3px 6px' }}>{actionError}</div>}
             </div>
           )}
-
-          {/* Queue */}
-          <div style={{ padding: '4px 10px', fontSize: 10, color: '#64748b', borderBottom: '1px solid #1e293b' }}>
-            {listLoading ? 'Loading…' : `${candidates.length} candidates · N / P to step`}
-          </div>
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            {listError ? (
-              <div data-testid="review-error" style={{ padding: 12, fontSize: 11, color: '#f87171' }}>{listError}</div>
-            ) : (
-              candidates.map((c) => (
-                <Row key={c.id} cand={c} active={c.id === activeId} onClick={() => activate(c.id)} />
-              ))
-            )}
-          </div>
         </>
       )}
     </div>

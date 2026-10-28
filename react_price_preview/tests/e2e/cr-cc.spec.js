@@ -435,6 +435,7 @@ test('A3 (read-only): round-2 card — readable meta, axis ends at entry, range 
   test.skip(!c, 'no suitable round-2 card')
   await openReview(page, 'cr-cb:round-2')
   await activate(page, c.id, c.session_date)
+  await page.getByTestId('review-details-toggle').click() // CR-DB: meta rows sit under "details"
 
   const text = await noRawJson(page)
   for (const label of ['flow', 'rules', 'skew', 'named', 'range', 'zone', 'cluster']) expect(text).toContain(label)
