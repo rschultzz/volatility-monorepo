@@ -268,7 +268,7 @@ export function coordinateForLinkedCrosshair(chart, linkedCrosshair) {
   return null
 }
 
-// CR-CD L1: "Flow: Current | v2" toggle, shown in both flow panes' headers.
+// CR-CD L1: "Flow: Current | v2" toggle, shown in both flow panes' headers; CR-DC adds v3 (DC1).
 export function FlowModeToggle({ mode = 'current', onChange }) {
   if (typeof onChange !== 'function') return null
   const btn = (value, label) => (
@@ -306,6 +306,7 @@ export function FlowModeToggle({ mode = 'current', onChange }) {
       <span style={{ fontSize: '11px', color: '#94a3b8', padding: '0 6px' }}>Flow:</span>
       {btn('current', 'Current')}
       {btn('v2', 'v2')}
+      {btn('v3', 'v3')}
     </div>
   )
 }

@@ -1,0 +1,486 @@
+// CR-DC — Flow v3 pane: anchored CVD, rolling net delta and the v2 delta histogram, bar-aligned with the
+// price chart like Flow v2 (same slot, height, time-scale sync, crosshair link, session bands). Its series
+// come from the v2 payloads (/api/ironbeam/flow?mode=v2&effort=1 — the legs give "anchor = last swing");
+// the header switches the price-pane layers (Heatmap, Profile, Absorbed) drawn from /api/ironbeam/flow/cells.
+// Palette (C1): blue = buyers, light grey = sellers, slate = neutral / marks. Every element is a visual aid,
+// untested as a signal.
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { createChart, CrosshairMode, ColorType, BaselineSeries, HistogramSeries } from 'lightweight-charts'
+import {
+  FlowModeToggle,
+  coordinateForLinkedCrosshair,
+  computeSessionBands,
+  formatShiftedHHMM,
+  normalizeLogicalRange,
+  normalizeShiftedCandleTimes,
+  rangesClose,
+  utcEpochShowingZoneTime,
+} from './AggressorFlowPanel'
+import { alignV2ToCandles } from './AggressorFlowV2Panel'
+import {
+  DEFAULT_V3_SETTINGS,
+  ROLLING_CHOICES,
+  anchoredCvd,
+  anchorReadout,
+  kfmt,
+  lastSwingAnchor,
+  makeShifter,
+  rollingDelta,
+  sessionOpenAnchor,
+} from '../flowV3'
+
+const BG_COLOR = '#1f2937'
+const MIN_PANEL_HEIGHT = 140
+const BUY_RGBA = (alpha) => `rgba(96,165,250,${alpha})`
+const SELL_RGBA = (alpha) => `rgba(229,231,235,${alpha})`
+const SLATE_RGBA = (alpha) => `rgba(148,163,184,${alpha})`
+const SOURCE_LABEL = { databento: 'Databento', ironbeam: 'Ironbeam' }
+
+const chipStyle = (active) => ({
+  height: '24px',
+  borderRadius: '8px',
+  border: `1px solid ${active ? 'rgba(96,165,250,0.6)' : 'rgba(148, 163, 184, 0.22)'}`,
+  background: active ? 'rgba(96,165,250,0.18)' : 'rgba(15, 23, 42, 0.96)',
+  color: '#cbd5e1',
+  cursor: 'pointer',
+  fontSize: '12px',
+  padding: '0 8px',
+  whiteSpace: 'nowrap',
+})
+
+const iconStyle = {
+  width: '24px', height: '24px', borderRadius: '8px', border: '1px solid rgba(148, 163, 184, 0.22)',
+  background: 'rgba(15, 23, 42, 0.96)', color: '#cbd5e1', cursor: 'pointer', display: 'inline-flex',
+  alignItems: 'center', justifyContent: 'center', fontSize: '13px', lineHeight: 1, padding: 0, flex: '0 0 auto',
+}
+
+const sfmt = (v) => `${v >= 0 ? '+' : '-'}${kfmt(Math.abs(v))}`
+
+function Modal({ title, onClose, children, width = 520 }) {
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(2, 6, 23, 0.58)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1200, padding: '24px' }}>
+      <div role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}
+        style={{ width: `min(${width}px, calc(100vw - 32px))`, maxHeight: 'calc(100vh - 48px)', overflowY: 'auto', borderRadius: '16px', border: '1px solid #1f2937', background: '#0b1220', boxShadow: '0 20px 60px rgba(0, 0, 0, 0.42)', padding: '18px', color: '#e2e8f0', fontSize: '13px', lineHeight: 1.5 }}>
+        <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '12px' }}>{title}</div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function GuideBody() {
+  const h = { fontWeight: 700, marginTop: '12px', color: '#f1f5f9' }
+  const tag = <span style={{ color: '#94a3b8' }}> Visual aid — untested.</span>
+  const sw = (bg) => ({ display: 'inline-block', width: 10, height: 10, background: bg, marginRight: 6, verticalAlign: 'middle' })
+  return (
+    <div>
+      <div style={h}>This pane</div>
+      <div><b>Anchored CVD</b> (line, top): buying minus selling added up from the anchor bar, starting at 0. Set the anchor with 📍 and a click on a price bar, or with "session open" / "last swing" (the end of the last confirmed swing, ⚙ swing size of Flow v2). Esc or "clear" removes it; without an anchor the line is the session CVD. The readout shows delta, price change, minutes and contracts per point since the anchor.{tag}</div>
+      <div><span style={sw(BUY_RGBA(0.7))} /><span style={sw(SELL_RGBA(0.6))} /><b>Rolling net delta</b> (middle bars): buying minus selling over the last N minutes (⚙: 5 / 10 / 15).{tag}</div>
+      <div><b>Delta per bar</b> (bottom bars): the Flow v2 histogram, so this pane stands alone.{tag}</div>
+      <div style={h}>On the price chart</div>
+      <div><span style={sw(SELL_RGBA(0.6))} /><span style={sw(BUY_RGBA(0.6))} /><b>Heatmap</b> (behind the candles): for each 1-minute bar and 0.25 pt (0.5 pt when zoomed out), aggressive selling (market sells hitting the bid, grey, left half) and aggressive buying (market buys lifting the offer, blue, right half). Darker = a bigger cell for that session. Either layer can be switched off in ⚙.{tag}</div>
+      <div><b>Profile</b> (right edge): the same volume summed per price from the anchor (or the session open) to now, selling grey and buying blue.{tag}</div>
+      <div><b>Absorbed</b> (slate triangles): ▲ "sellers absorbed" — aggressive selling at one price at least K× the session's typical cell (median so far), and nothing traded more than 1 tick below it for that minute and the next M minutes. ▼ "buyers absorbed" is the mirror. The slate line runs until price trades through. Hover for the numbers. K and M (default 3 and 3) are display defaults, not tested thresholds.{tag}</div>
+      <div style={h}>Data</div>
+      <div><b>exact: trades</b> / <b>exact: es_flow_price_1m</b> — each trade at its own price and side. Ironbeam keeps raw trades for about 2 days, so this is usually only the live and previous session.</div>
+      <div><b>approximate: 1-s data</b> — older sessions: each second's selling is placed at that second's low and its buying at its high. About 61 % of volume trades in seconds wider than 1 tick, so cells are off by a tick or two and selling leans toward lows, buying toward highs. <b>Absorbed marks are not drawn on approximate data</b>, because that lean manufactures them.</div>
+      <div>Sessions through 2026-06-05 use Databento for RTH; later sessions use Ironbeam, which misses about 6 % of volume and understates buy − sell by about 30 %.</div>
+    </div>
+  )
+}
+
+function Settings({ value, onApply, onClose }) {
+  const [draft, setDraft] = useState({ ...value })
+  const input = { width: '100%', background: '#020617', color: '#e2e8f0', border: '1px solid #334155', borderRadius: '10px', padding: '8px 10px', fontSize: '14px' }
+  const apply = (e) => {
+    e.preventDefault()
+    const n = (k, lo, hi, d) => {
+      const v = Number(draft[k])
+      return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d
+    }
+    onApply({
+      ...value,
+      rollingMin: ROLLING_CHOICES.includes(Number(draft.rollingMin)) ? Number(draft.rollingMin) : DEFAULT_V3_SETTINGS.rollingMin,
+      k: n('k', 0.5, 50, DEFAULT_V3_SETTINGS.k),
+      m: Math.round(n('m', 1, 30, DEFAULT_V3_SETTINGS.m)),
+      sellLayer: Boolean(draft.sellLayer),
+      buyLayer: Boolean(draft.buyLayer),
+    })
+  }
+  const label = (text) => <div style={{ fontSize: '12px', color: '#cbd5e1', marginBottom: '4px' }}>{text}</div>
+  return (
+    <Modal title="Flow v3 settings" onClose={onClose} width={380}>
+      <form onSubmit={apply}>
+        <label style={{ display: 'block', marginBottom: '10px' }}>
+          {label('Rolling net delta window (minutes)')}
+          <select aria-label="Rolling net delta window" value={draft.rollingMin} style={input}
+            onChange={(e) => setDraft((d) => ({ ...d, rollingMin: Number(e.target.value) }))}>
+            {ROLLING_CHOICES.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </label>
+        <label style={{ display: 'block', marginBottom: '10px' }}>
+          {label('Absorbed: K × the session median cell')}
+          <input type="number" step={0.5} min={0.5} aria-label="Absorbed K" value={draft.k} style={input} onChange={(e) => setDraft((d) => ({ ...d, k: e.target.value }))} />
+        </label>
+        <label style={{ display: 'block', marginBottom: '10px' }}>
+          {label('Absorbed: M minutes held')}
+          <input type="number" step={1} min={1} aria-label="Absorbed M" value={draft.m} style={input} onChange={(e) => setDraft((d) => ({ ...d, m: e.target.value }))} />
+          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>Display defaults (3 and 3), not tested thresholds.</div>
+        </label>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+          <input type="checkbox" aria-label="Sell heat layer" checked={Boolean(draft.sellLayer)} onChange={(e) => setDraft((d) => ({ ...d, sellLayer: e.target.checked }))} />
+          Heatmap: sell layer (grey)
+        </label>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+          <input type="checkbox" aria-label="Buy heat layer" checked={Boolean(draft.buyLayer)} onChange={(e) => setDraft((d) => ({ ...d, buyLayer: e.target.checked }))} />
+          Heatmap: buy layer (blue)
+        </label>
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', marginTop: '14px' }}>
+          <button type="button" style={chipStyle(false)} onClick={() => setDraft({ ...DEFAULT_V3_SETTINGS })}>Defaults</button>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button type="button" style={chipStyle(false)} onClick={onClose}>Cancel</button>
+            <button type="submit" style={{ ...chipStyle(true), fontWeight: 700 }}>Apply</button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+export default function AggressorFlowV3Panel({
+  candles,
+  payloads,
+  sessionPayload = null, // the selected session's v2 payload: its segments and legs give the anchors
+  cellsPayload = null,
+  cellsLoading = false,
+  cellsError = '',
+  visibleLogicalRange,
+  linkedCrosshair,
+  height = 220,
+  loading = false,
+  error = '',
+  flowMode = 'v3',
+  onFlowModeChange,
+  settings = DEFAULT_V3_SETTINGS,
+  onSettingsChange,
+  layers = { heat: false, profile: false, marks: false },
+  onLayersChange,
+  anchor = null,
+  onAnchorChange,
+  anchorArmed = false,
+  onAnchorArmedChange,
+}) {
+  const stageRef = useRef(null)
+  const hostRef = useRef(null)
+  const chartRef = useRef(null)
+  const seriesRef = useRef({})
+  const lastAppliedLogicalRef = useRef(null)
+  const candleTimesRef = useRef([])
+  const linkedCrosshairRef = useRef(null)
+  const anchorRef = useRef(null)
+  const refreshDecorationsRef = useRef(() => {})
+
+  const [sessionBands, setSessionBands] = useState([])
+  const [linkedCrosshairX, setLinkedCrosshairX] = useState(null)
+  const [anchorX, setAnchorX] = useState(null)
+  const [guideOpen, setGuideOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [hover, setHover] = useState(null)
+
+  const shift = useMemo(() => makeShifter((t) => utcEpochShowingZoneTime(t, 'America/Los_Angeles')), [])
+  const candleTimes = useMemo(() => normalizeShiftedCandleTimes(candles), [candles])
+  const allBars = useMemo(() => (payloads || []).flatMap((p) => (Array.isArray(p?.bars) ? p.bars : [])), [payloads])
+  const aligned = useMemo(() => alignV2ToCandles(allBars, candles), [allBars, candles])
+  const closes = useMemo(() => {
+    const m = new Map()
+    for (const c of Array.isArray(candles) ? candles : []) m.set(shift(c.time), Number(c.close))
+    return aligned.map((r) => m.get(r.time))
+  }, [candles, aligned, shift])
+  const cvd = useMemo(() => anchoredCvd(aligned, anchor), [aligned, anchor])
+  const rolling = useMemo(() => rollingDelta(aligned, settings.rollingMin), [aligned, settings.rollingMin])
+  const readout = useMemo(() => anchorReadout(aligned, closes, anchor), [aligned, closes, anchor])
+  // An anchor in ETH sums Ironbeam ETH delta with the RTH segment's delta; say so when the sources differ.
+  const mixedNote = useMemo(() => {
+    if (!readout || readout.fromSeg === readout.toSeg) return ''
+    const src = Object.fromEntries((sessionPayload?.segments || []).map((g) => [g.name, g.source]))
+    const a = src[readout.fromSeg]
+    const b = src[readout.toSeg]
+    return a && b && a !== b ? ` · mixed sources (${SOURCE_LABEL[a] || a} + ${SOURCE_LABEL[b] || b})` : ''
+  }, [readout, sessionPayload])
+  const sources = useMemo(() => {
+    const s = new Set()
+    for (const p of payloads || []) for (const seg of p?.segments || []) if (seg.name === 'rth') s.add(seg.source)
+    return [...s]
+  }, [payloads])
+  const cellBadges = useMemo(() => {
+    const out = []
+    for (const seg of cellsPayload?.segments || []) {
+      const label = `${seg.name.toUpperCase()} ${seg.badge}`
+      if (!out.some((b) => b.label === label)) out.push({ label, exact: seg.exact, source: seg.source })
+    }
+    return out
+  }, [cellsPayload])
+  const marksNote = useMemo(() => {
+    const rth = (cellsPayload?.segments || []).find((s) => s.name === 'rth')
+    return rth && !Array.isArray(rth.marks) ? rth.marks_note : null
+  }, [cellsPayload])
+  const notes = useMemo(() => [...new Set((payloads || []).flatMap((p) => p?.notes || []))], [payloads])
+  const hasValues = aligned.some((r) => Number.isFinite(r.delta))
+  const anyLayer = layers.heat || layers.profile || layers.marks
+
+  useEffect(() => { candleTimesRef.current = candleTimes }, [candleTimes])
+  useEffect(() => { linkedCrosshairRef.current = linkedCrosshair || null }, [linkedCrosshair])
+  useEffect(() => {
+    anchorRef.current = anchor
+    requestAnimationFrame(() => refreshDecorationsRef.current())
+  }, [anchor])
+
+  // DC5: Esc disarms a pending pick, else clears the anchor.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      const tag = (e.target?.tagName || '').toLowerCase()
+      if (tag === 'input' || tag === 'select' || tag === 'textarea') return
+      if (anchorArmed) onAnchorArmedChange?.(false)
+      else if (anchor != null) onAnchorChange?.(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [anchor, anchorArmed, onAnchorChange, onAnchorArmedChange])
+
+  useEffect(() => {
+    if (!hostRef.current || !stageRef.current) return undefined
+    const stage = stageRef.current
+    const chart = createChart(hostRef.current, {
+      width: stage.clientWidth || 900,
+      height: Math.max(stage.clientHeight || MIN_PANEL_HEIGHT, MIN_PANEL_HEIGHT),
+      layout: { background: { type: ColorType.Solid, color: BG_COLOR }, textColor: '#cbd5e1', attributionLogo: false },
+      localization: { locale: 'en-US', priceFormatter: (v) => kfmt(Number(v)) },
+      grid: { vertLines: { color: 'rgba(148, 163, 184, 0.08)' }, horzLines: { color: 'rgba(148, 163, 184, 0.08)' } },
+      rightPriceScale: { visible: true, borderColor: 'rgba(148, 163, 184, 0.18)', scaleMargins: { top: 0.42, bottom: 0.30 } },
+      timeScale: { borderColor: 'rgba(148, 163, 184, 0.18)', timeVisible: true, secondsVisible: false, tickMarkFormatter: (t) => formatShiftedHHMM(t) },
+      crosshair: { mode: CrosshairMode.Normal, vertLine: { visible: false, labelVisible: false }, horzLine: { visible: false, labelVisible: false } },
+      handleScroll: { mouseWheel: false, pressedMouseMove: false, horzTouchDrag: false, vertTouchDrag: false },
+      handleScale: { axisPressedMouseMove: false, mouseWheel: false, pinch: false },
+    })
+    const common = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }
+    const delta = chart.addSeries(HistogramSeries, { ...common, priceScaleId: 'delta', base: 0 })
+    chart.priceScale('delta').applyOptions({ visible: false, scaleMargins: { top: 0.74, bottom: 0.02 } })
+    // Rolling net delta carries the visible right axis (the pane keeps a right scale like Flow v2, so its
+    // plot width and bar positions follow the price chart's logical range the same way).
+    const rollingS = chart.addSeries(HistogramSeries, { ...common, priceScaleId: 'right', base: 0 })
+    const cvdS = chart.addSeries(BaselineSeries, {
+      ...common,
+      priceScaleId: 'cvd',
+      baseValue: { type: 'price', price: 0 },
+      topLineColor: BUY_RGBA(0.95),
+      bottomLineColor: SELL_RGBA(0.95),
+      topFillColor1: 'rgba(0,0,0,0)', topFillColor2: 'rgba(0,0,0,0)',
+      bottomFillColor1: 'rgba(0,0,0,0)', bottomFillColor2: 'rgba(0,0,0,0)',
+      lineWidth: 2,
+    })
+    chart.priceScale('cvd').applyOptions({ visible: false, scaleMargins: { top: 0.04, bottom: 0.62 } })
+    chartRef.current = chart
+    seriesRef.current = { delta, rolling: rollingS, cvd: cvdS }
+
+    const refreshDecorations = () => {
+      const w = stageRef.current?.clientWidth || 0
+      setSessionBands(computeSessionBands(chart, candleTimesRef.current, w))
+      const x = coordinateForLinkedCrosshair(chart, linkedCrosshairRef.current)
+      setLinkedCrosshairX(!Number.isFinite(x) || x < 0 || x > w ? null : x)
+      const a = anchorRef.current
+      const ax = a == null ? null : chart.timeScale().timeToCoordinate(a)
+      setAnchorX(ax == null || !Number.isFinite(ax) || ax < 0 || ax > w ? null : ax)
+    }
+    refreshDecorationsRef.current = refreshDecorations
+    const handleResize = () => {
+      if (!stageRef.current) return
+      const w = stageRef.current.clientWidth
+      const h = stageRef.current.clientHeight
+      if (w > 0 && h > 0) chart.applyOptions({ width: w, height: Math.max(h, MIN_PANEL_HEIGHT) })
+      requestAnimationFrame(refreshDecorations)
+    }
+    const onRange = () => requestAnimationFrame(refreshDecorations)
+    const onMove = (param) => {
+      const t = param?.time
+      setHover(t == null ? null : { time: t, x: param.point?.x ?? 0 })
+    }
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(handleResize) : null
+    if (ro) ro.observe(stage)
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onRange)
+    chart.subscribeCrosshairMove(onMove)
+    window.addEventListener('resize', handleResize)
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange)
+      chart.unsubscribeCrosshairMove(onMove)
+      if (ro) ro.disconnect()
+      chart.remove()
+      chartRef.current = null
+      seriesRef.current = {}
+      lastAppliedLogicalRef.current = null
+      refreshDecorationsRef.current = () => {}
+    }
+  }, [])
+
+  useEffect(() => {
+    const s = seriesRef.current
+    if (!s.delta) return
+    const ws = (r) => ({ time: r.time })
+    s.delta.setData(aligned.map((r) => (Number.isFinite(r.delta)
+      ? { time: r.time, value: r.delta, color: r.delta >= 0 ? BUY_RGBA(0.75) : SELL_RGBA(0.6) }
+      : ws(r))))
+    s.rolling.setData(aligned.map((r, i) => (rolling[i] != null
+      ? { time: r.time, value: rolling[i], color: rolling[i] >= 0 ? BUY_RGBA(0.45) : SELL_RGBA(0.38) }
+      : ws(r))))
+    s.cvd.setData(aligned.map((r, i) => (cvd[i] != null ? { time: r.time, value: cvd[i] } : ws(r))))
+    const shared = normalizeLogicalRange(visibleLogicalRange)
+    if (chartRef.current && candleTimes.length >= 2 && !shared) {
+      chartRef.current.timeScale().fitContent()
+      lastAppliedLogicalRef.current = normalizeLogicalRange(chartRef.current.timeScale().getVisibleLogicalRange?.())
+    } else if (chartRef.current && shared) {
+      try {
+        chartRef.current.timeScale().setVisibleLogicalRange(shared)
+        lastAppliedLogicalRef.current = shared
+      } catch (err) {
+        // ignore sync errors
+      }
+    }
+    requestAnimationFrame(() => refreshDecorationsRef.current())
+  }, [aligned, rolling, cvd, candleTimes, visibleLogicalRange])
+
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    const next = normalizeLogicalRange(visibleLogicalRange)
+    const current = normalizeLogicalRange(chart.timeScale().getVisibleLogicalRange?.())
+    if (!next || rangesClose(current, next) || rangesClose(lastAppliedLogicalRef.current, next)) {
+      requestAnimationFrame(() => refreshDecorationsRef.current())
+      return
+    }
+    requestAnimationFrame(() => {
+      try {
+        chart.timeScale().setVisibleLogicalRange(next)
+        lastAppliedLogicalRef.current = next
+      } catch (err) {
+        // ignore sync errors
+      }
+      refreshDecorationsRef.current()
+    })
+  }, [visibleLogicalRange])
+
+  useEffect(() => {
+    requestAnimationFrame(() => refreshDecorationsRef.current())
+  }, [linkedCrosshair, candleTimes])
+
+  const hoverIdx = hover ? aligned.findIndex((r) => r.time === hover.time) : -1
+  const hoverRow = hoverIdx >= 0 ? aligned[hoverIdx] : null
+  const setAnchorTo = (t) => {
+    onAnchorArmedChange?.(false)
+    if (t != null) onAnchorChange?.(t)
+  }
+  const swingAnchor = useMemo(() => lastSwingAnchor(sessionPayload?.legs, candleTimes, shift), [sessionPayload, candleTimes, shift])
+  const openAnchor = useMemo(() => sessionOpenAnchor(sessionPayload?.segments, candleTimes, shift), [sessionPayload, candleTimes, shift])
+
+  return (
+    <div className="flow-shell" style={{ height: `${height}px`, position: 'relative', width: '100%' }} data-testid="flow-v3-panel">
+      <div className="flow-panel-header" style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-start', overflowX: 'auto' }}>
+        <button type="button" style={iconStyle} title="Flow v3 settings" aria-label="Open Flow v3 settings" onClick={() => setSettingsOpen(true)}>⚙</button>
+        <div className="flow-panel-title">Flow v3</div>
+        <FlowModeToggle mode={flowMode} onChange={onFlowModeChange} />
+        {sources.map((s) => (
+          <span key={s} data-testid="flow-v3-source" style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '999px', border: '1px solid rgba(148,163,184,0.35)', color: s === 'databento' ? '#bfdbfe' : '#e5e7eb', whiteSpace: 'nowrap' }}>
+            {SOURCE_LABEL[s] || s}
+          </span>
+        ))}
+        <button type="button" style={chipStyle(layers.heat)} aria-pressed={layers.heat} data-testid="flow-v3-heatmap-toggle"
+          onClick={() => onLayersChange?.((l) => ({ ...l, heat: !l.heat }))} title="Aggressor-side volume heatmap behind the candles — visual aid, untested">
+          Heatmap {layers.heat ? 'on' : 'off'}
+        </button>
+        <button type="button" style={chipStyle(layers.profile)} aria-pressed={layers.profile} data-testid="flow-v3-profile-toggle"
+          onClick={() => onLayersChange?.((l) => ({ ...l, profile: !l.profile }))} title="Volume profile at the right edge, from the anchor (or session open) — visual aid, untested">
+          Profile {layers.profile ? 'on' : 'off'}
+        </button>
+        <button type="button" style={chipStyle(layers.marks)} aria-pressed={layers.marks} data-testid="flow-v3-absorbed-toggle"
+          onClick={() => onLayersChange?.((l) => ({ ...l, marks: !l.marks }))} title="Absorption marks (exact data only) — visual aid, untested">
+          Absorbed {layers.marks ? 'on' : 'off'}
+        </button>
+        <span style={{ width: 1, height: 16, background: 'rgba(148,163,184,0.25)', flex: '0 0 auto' }} />
+        <button type="button" style={chipStyle(anchorArmed)} aria-pressed={anchorArmed} data-testid="flow-v3-anchor-pick"
+          onClick={() => onAnchorArmedChange?.(!anchorArmed)} title="Click, then click a bar on the price chart to anchor CVD there (Esc cancels)">
+          📍 {anchorArmed ? 'click a bar…' : 'set anchor'}
+        </button>
+        <button type="button" style={chipStyle(false)} data-testid="flow-v3-anchor-open"
+          disabled={openAnchor == null} onClick={() => setAnchorTo(openAnchor)}>
+          session open
+        </button>
+        <button type="button" style={chipStyle(false)} data-testid="flow-v3-anchor-swing" disabled={swingAnchor == null}
+          onClick={() => setAnchorTo(swingAnchor)} title="The end of the last confirmed swing (Flow v2 swing size)">
+          last swing
+        </button>
+        <button type="button" style={chipStyle(false)} data-testid="flow-v3-anchor-clear" disabled={anchor == null && !anchorArmed}
+          onClick={() => { onAnchorArmedChange?.(false); onAnchorChange?.(null) }}>
+          clear
+        </button>
+        {anyLayer && cellBadges.map((b) => (
+          <span key={b.label} data-testid="flow-v3-cells-badge" title={b.exact ? 'each trade at its own price and side' : 'each second: sells at its low, buys at its high'}
+            style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '999px', border: `1px solid ${b.exact ? 'rgba(96,165,250,0.45)' : 'rgba(148,163,184,0.35)'}`, color: '#cbd5e1', whiteSpace: 'nowrap' }}>
+            {b.label}
+          </span>
+        ))}
+        {anyLayer && cellsLoading && <span style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>loading cells…</span>}
+        {anyLayer && cellsError && <span style={{ fontSize: '11px', color: '#cbd5e1', whiteSpace: 'nowrap' }} title={cellsError}>cells failed</span>}
+        {layers.marks && marksNote && <span data-testid="flow-v3-marks-note" style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>{marksNote}</span>}
+        <button type="button" style={iconStyle} title="How to read Flow v3" aria-label="How to read Flow v3" onClick={() => setGuideOpen(true)}>?</button>
+      </div>
+      {guideOpen && <Modal title="How to read Flow v3" onClose={() => setGuideOpen(false)}><GuideBody /></Modal>}
+      {settingsOpen && (
+        <Settings value={settings} onClose={() => setSettingsOpen(false)} onApply={(v) => { onSettingsChange?.(v); setSettingsOpen(false) }} />
+      )}
+      <div ref={stageRef} className="flow-stage" style={{ width: '100%' }}>
+        <div ref={hostRef} className="flow-host" style={{ width: '100%', height: '100%' }} />
+        {sessionBands.map((band) => (
+          <div key={band.key} className="session-band" style={{ left: `${band.left}px`, width: `${band.width}px` }} />
+        ))}
+        {Number.isFinite(anchorX) && (
+          <div data-testid="flow-v3-anchor-line" style={{ position: 'absolute', top: 0, bottom: 0, left: `${Math.round(anchorX)}px`, width: 0, borderLeft: `1px dashed ${SLATE_RGBA(0.8)}`, pointerEvents: 'none', zIndex: 3 }} />
+        )}
+        {Number.isFinite(linkedCrosshairX) && (
+          <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${Math.round(linkedCrosshairX)}px`, width: 0, borderLeft: '1px dashed rgba(191, 219, 254, 0.45)', pointerEvents: 'none', zIndex: 4 }} />
+        )}
+        <div data-testid="flow-v3-readout" style={{ position: 'absolute', top: 4, left: 8, zIndex: 4, pointerEvents: 'none', fontSize: '11px', color: '#cbd5e1', background: 'rgba(15,23,42,0.72)', borderRadius: 6, padding: '2px 6px' }}>
+          {readout
+            ? `since ${formatShiftedHHMM(readout.anchorTime)}: Δ ${sfmt(readout.delta)} · ${readout.dPrice == null ? '–' : `${readout.dPrice >= 0 ? '+' : ''}${readout.dPrice.toFixed(2)} pts`} · ${readout.minutes} min · ${readout.cpp == null ? '–' : kfmt(readout.cpp)}/pt`
+              + mixedNote
+            : `CVD from session open · rolling ${settings.rollingMin} min`}
+        </div>
+        {hoverRow && Number.isFinite(hoverRow.delta) && (
+          <div data-testid="flow-v3-tooltip" style={{
+            position: 'absolute', top: 24, left: Math.min(Math.max(0, hover.x + 12), (stageRef.current?.clientWidth || 600) - 260),
+            maxWidth: 250, pointerEvents: 'none', zIndex: 5, background: 'rgba(2,6,23,0.92)', border: '1px solid #334155',
+            borderRadius: 8, padding: '6px 8px', fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4,
+          }}>
+            {formatShiftedHHMM(hoverRow.time)} · Δ {sfmt(hoverRow.delta)} · {settings.rollingMin}-min {rolling[hoverIdx] == null ? '–' : sfmt(rolling[hoverIdx])} · CVD {cvd[hoverIdx] == null ? '–' : sfmt(cvd[hoverIdx])}
+          </div>
+        )}
+        {(loading || error || candleTimes.length < 2 || !hasValues) && (
+          <div className="flow-overlay">
+            <div className="flow-overlay-title">{error ? 'Flow v3 could not load' : loading ? 'Loading Flow v3…' : 'No flow data returned'}</div>
+            <div className="flow-overlay-text">{error || notes[0] || 'The loaded sessions did not return any aggressor flow data.'}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
