@@ -171,3 +171,10 @@ the session note's open questions.
 
 - No circular import: `modules.Ironbeam` never imports `modules.gamma`, and app.py imports both. The Dashboard imports
   `_corrected_gex_tables` from `modules.Ironbeam.callbacks` directly; nothing is moved or copied.
+- **Amendment A1 (switch placement, item 1).** The spec does not say where the switch sits. The GEX graph fills its
+  block (`height: 100%`) and its title / legend / mode bar occupy the figure's top margin, so an overlay would cover
+  one of them. Decision: a single 26 px row directly above the graph inside `gex_block` ("Levels:" + Current /
+  Corrected radios, the Dashboard's existing radio style: white 13 px labels, no new colours); the graph's height
+  becomes `calc(100% - 26px)`. The **figure** (title, axes, traces, ranges, ES 15:01 zoom, live line) stays
+  byte-identical to origin/main in Current; the plot is 26 px shorter in both modes. Smoke compares the Current
+  figure JSON byte-for-byte against origin/main and screenshots both. Ryan can veto in review.
