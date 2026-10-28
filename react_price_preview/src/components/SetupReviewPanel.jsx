@@ -314,7 +314,11 @@ export default function SetupReviewPanel({
       : Boolean(label) && !locked
   )
 
+  // Filters can change while a list request is in flight (e.g. the first-load set default);
+  // only the latest request's response is applied
+  const listSeqRef = useRef(0)
   const loadList = useCallback(async () => {
+    const seq = ++listSeqRef.current
     setListLoading(true)
     setListError('')
     try {
@@ -324,6 +328,7 @@ export default function SetupReviewPanel({
       if (filters.cell) url.searchParams.set('cell', filters.cell)
       url.searchParams.set('status', filters.status)
       const body = await fetchJson(url.toString())
+      if (seq !== listSeqRef.current) return
       setCandidates(body.candidates || [])
       setSets(body.sets || [])
       setReasonOptions(body.reasons || [])
@@ -332,21 +337,22 @@ export default function SetupReviewPanel({
         setDefaultedRef.current = true
         const all = body.sets || []
         const stored = readStoredSet()
-        const valid = stored && (stored.set === ''
-          ? (stored.cr === '' || all.some((x) => x.cr_id === stored.cr))
-          : all.some((x) => x.cr_id === stored.cr && x.set_name === stored.set))
+        const valid = stored && (stored.cr === '' || all.some((x) => x.cr_id === stored.cr)) &&
+          (stored.set === '' || all.some((x) => x.set_name === stored.set && (stored.cr === '' || x.cr_id === stored.cr)))
         if (!valid) {
           const latest = latestSet(all)
-          if (latest && (latest.cr_id !== filters.cr || latest.set_name !== filters.set)) {
-            setFilters((f) => ({ ...f, cr: latest.cr_id, set: latest.set_name, cell: '' }))
+          // only the set: CR stays on "all CRs" so every set remains in the Set list
+          if (latest && latest.set_name !== filters.set) {
+            setFilters((f) => ({ ...f, cr: '', set: latest.set_name, cell: '' }))
           }
         }
       }
     } catch (err) {
+      if (seq !== listSeqRef.current) return
       setCandidates([])
       setListError(err.message)
     } finally {
-      setListLoading(false)
+      if (seq === listSeqRef.current) setListLoading(false)
     }
   }, [base, filters])
 
@@ -442,12 +448,12 @@ export default function SetupReviewPanel({
     if (revealed) setBusy(false)
     try {
       await refreshActive()
-      await loadList()
     } catch (err) {
       setActionError(`Saved, but the card did not refresh: ${err.message}`)
     } finally {
       if (!revealed) setBusy(false)
     }
+    loadList()   // the queue's label column; not awaited, so the card is usable meanwhile
   }, [activeId, base, canSave, chosenReasons, comment, label, loadList, refreshActive, revealed])
 
   const reveal = useCallback(async () => {
@@ -461,12 +467,13 @@ export default function SetupReviewPanel({
       setChosenReasons([])
       setNotice('')
       await refreshActive()
-      await loadList()
     } catch (err) {
       setActionError(`Reveal failed: ${err.message}`)
-    } finally {
       setBusy(false)
+      return
     }
+    setBusy(false)
+    loadList()
   }, [activeId, base, busy, canReveal, loadList, refreshActive])
 
   // Keyboard: N/P, T/S/U, R. Ignored while typing in a field.
@@ -577,13 +584,7 @@ export default function SetupReviewPanel({
           {crOptions.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
         <select aria-label="Set" value={filters.set} style={selectStyle}
-          onChange={(e) => {
-            const set = e.target.value
-            // a set implies its CR, so the remembered choice restores both
-            const cr = filters.cr || sets.find((x) => x.set_name === set)?.cr_id || ''
-            storeSet(set ? cr : filters.cr, set)
-            setFilters((f) => ({ ...f, cr: set ? cr : f.cr, set, cell: '' }))
-          }}>
+          onChange={(e) => { storeSet(filters.cr, e.target.value); setFilters((f) => ({ ...f, set: e.target.value, cell: '' })) }}>
           <option value="">all sets</option>
           {setOptions.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>

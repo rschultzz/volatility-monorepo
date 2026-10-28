@@ -72,7 +72,7 @@ async function openApp(page, viewport, { storage = 'set' } = {}) {
       window.localStorage.setItem('ib-react-gex-min-abs-b', '40')
       window.localStorage.setItem('ib-react-gex-levels-mode', 'current')
       if (storage === 'set' && !window.sessionStorage.getItem('crde-init')) {
-        window.localStorage.setItem('dash.review.set', JSON.stringify({ cr: 'CR-CZ', set: 'cr-cz:cp-ranges' }))
+        window.localStorage.setItem('dash.review.set', JSON.stringify({ cr: '', set: 'cr-cz:cp-ranges' }))
       }
       window.sessionStorage.setItem('crde-init', '1')
     } catch (e) { /* ignore */ }
@@ -207,7 +207,8 @@ test('set filter: defaults to the latest-loaded set, then remembers the choice',
   const setSel = page.getByTestId('review-panel').getByLabel('Set', { exact: true })
   const crSel = page.getByTestId('review-panel').getByLabel('CR', { exact: true })
   await expect(setSel).toHaveValue(latest.set_name, { timeout: 30_000 })
-  await expect(crSel).toHaveValue(latest.cr_id)
+  await expect(crSel).toHaveValue('')                    // CR stays "all": every set stays listed
+  await expect(setSel.locator('option')).toHaveCount(sets.length + 1)
 
   await crSel.selectOption(other.cr_id)
   await setSel.selectOption(other.set_name)
