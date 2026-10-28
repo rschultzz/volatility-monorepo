@@ -281,3 +281,180 @@ export function sessionOpenAnchor(segments, candleTimes, shift) {
 }
 
 export const kfmt = (v) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)}`)
+
+// ---------------------------------------------------------------------------------------------------------
+// CR-DF — absorption levels and the edge readout (exact data only). Inputs are the cells payload (UTC epochs);
+// outputs carry shifted times / candle indexes for the primitives. "Now" is the end of the payload's last
+// 1-minute bar (live: the last completed data; REVIEW replay: `until`, since the payload is cut there).
+
+export const LEVELS_MAX = 8 // DF3
+export const LEVEL_FADE_MIN = 60 // DF2: opacity 1 at 0 min -> LEVEL_ALPHA_MIN at 60 min, then flat
+export const LEVEL_ALPHA_MIN = 0.25
+export const EDGE_BREAK_PTS = 2 // DF4 (CR-CP A1.1 / A1.2): only a close > 2 pts beyond moves the edge
+export const EDGE_NEAR_PTS = 1 // contracts and first touch within 1 pt of the edge
+
+// Line width (px) from contracts absorbed: log scale, 1 px at <= 50, 5 px at >= 1,500 (Step 0: p50 350, max 1,426).
+export function levelWidth(contracts) {
+  const c = Number(contracts)
+  if (!(c > 50)) return 1
+  return Math.min(5, 1 + (4 * Math.log(c / 50)) / Math.log(30))
+}
+
+export function levelAlpha(ageMin) {
+  const a = Math.max(0, Number(ageMin) || 0)
+  return 1 - (1 - LEVEL_ALPHA_MIN) * (Math.min(a, LEVEL_FADE_MIN) / LEVEL_FADE_MIN)
+}
+
+// End of the last 1-minute bar in the payload (UTC epoch), or null.
+export function payloadNow(payload) {
+  let now = null
+  for (const s of Array.isArray(payload?.segments) ? payload.segments : []) {
+    const t = s?.bars?.t
+    if (Array.isArray(t) && t.length) {
+      const e = Math.min(Number(t[t.length - 1]) + 60, Number(s.end))
+      if (now == null || e > now) now = e
+    }
+  }
+  return now
+}
+
+// DF1–DF3: one level per absorption mark that is confirmed by now; it starts at the mark's minute and ends at
+// its break bar or now; opacity fades with age; the top LEVELS_MAX by contracts x opacity are kept.
+export function absorptionLevels(payload, candleTimes, shift, max = LEVELS_MAX) {
+  const now = payloadNow(payload)
+  if (now == null) return []
+  const all = []
+  for (const s of Array.isArray(payload?.segments) ? payload.segments : []) {
+    if (!s?.exact || !Array.isArray(s.marks)) continue
+    for (const mk of s.marks) {
+      if (!(Number(mk.confirm_time) <= now)) continue
+      const start = Number(mk.time)
+      const broken = mk.break_time != null && Number(mk.break_time) <= now
+      const end = broken ? Number(mk.break_time) : now
+      const contracts = Number(mk.aggressor) + (Number(mk.merged_vol) || 0)
+      const ageMin = (now - start) / 60
+      const alpha = levelAlpha(ageMin)
+      const held = Math.max(0, Math.round((end - start) / 60))
+      const side = mk.kind === 'sellers_absorbed' ? 'sellers' : 'buyers'
+      all.push({
+        kind: mk.kind, price: Number(mk.price), start, end, broken, contracts, opposite: Number(mk.opposite),
+        heldMin: held, ageMin, alpha, width: levelWidth(contracts), score: contracts * alpha,
+        label: `${side} absorbed ${kfmt(contracts)} · ${held} min`,
+      })
+    }
+  }
+  all.sort((a, b) => b.score - a.score || b.start - a.start)
+  const kept = all.slice(0, max).sort((a, b) => a.start - b.start || a.price - b.price)
+  const times = Array.isArray(candleTimes) ? candleTimes : []
+  const out = []
+  for (const lv of kept) {
+    const st = shift(lv.start)
+    const idx = floorIndex(times, st)
+    if (idx < 0) continue
+    const endShifted = shift(lv.end)
+    out.push({ ...lv, startShifted: st, endShifted, idx, endIdx: Math.max(idx, floorIndex(times, endShifted)) })
+  }
+  return out
+}
+
+// The payload's 1-minute bars across segments, time-ordered, with each bar's segment exactness.
+export function flattenBars(payload) {
+  const rows = []
+  for (const s of Array.isArray(payload?.segments) ? payload.segments : []) {
+    const b = s?.bars
+    const n = Array.isArray(b?.t) ? b.t.length : 0
+    for (let i = 0; i < n; i += 1) rows.push([Number(b.t[i]), Number(b.h[i]), Number(b.l[i]), Number(b.c[i]), Boolean(s.exact)])
+  }
+  rows.sort((x, y) => x[0] - y[0])
+  return {
+    t: rows.map((r) => r[0]), h: rows.map((r) => r[1]), l: rows.map((r) => r[2]), c: rows.map((r) => r[3]),
+    exact: rows.map((r) => r[4]),
+  }
+}
+
+// DF4 edge readout from the anchor (shifted candle time) to the last bar. The edges start at the anchor
+// minute's close; a later close > EDGE_BREAK_PTS beyond an edge is a break and the edge moves to it, a close
+// within EDGE_BREAK_PTS is a test (edge unchanged). Contracts: aggressor volume of cells since the anchor within
+// EDGE_NEAR_PTS of the current edge (buys at the top, sells at the bottom), only when every bar since the anchor is
+// on an exact segment (else null and `exact` false). First touch: the first minute since the anchor whose high
+// (top) / low (bottom) came within EDGE_NEAR_PTS of the edge. Null without an anchor or bars.
+export function edgeReadout(payload, bars, anchorShifted, shift) {
+  if (anchorShifted == null || !bars?.t?.length) return null
+  let i0 = -1
+  for (let i = 0; i < bars.t.length; i += 1) {
+    if (shift(bars.t[i]) >= anchorShifted) {
+      i0 = i
+      break
+    }
+  }
+  if (i0 < 0) return null
+  const last = bars.t.length - 1
+  let top = bars.c[i0]
+  let bottom = bars.c[i0]
+  let topBreak = null
+  let bottomBreak = null
+  let topBreaks = 0
+  let bottomBreaks = 0
+  for (let i = i0 + 1; i <= last; i += 1) {
+    const c = bars.c[i]
+    if (c > top + EDGE_BREAK_PTS + 1e-9) {
+      top = c
+      topBreak = bars.t[i]
+      topBreaks += 1
+    }
+    if (c < bottom - EDGE_BREAK_PTS - 1e-9) {
+      bottom = c
+      bottomBreak = bars.t[i]
+      bottomBreaks += 1
+    }
+  }
+  let topTouch = null
+  let bottomTouch = null
+  for (let i = i0; i <= last && (topTouch == null || bottomTouch == null); i += 1) {
+    if (topTouch == null && bars.h[i] >= top - EDGE_NEAR_PTS - 1e-9) topTouch = bars.t[i]
+    if (bottomTouch == null && bars.l[i] <= bottom + EDGE_NEAR_PTS + 1e-9) bottomTouch = bars.t[i]
+  }
+  let exact = true
+  for (let i = i0; i <= last; i += 1) if (!bars.exact[i]) exact = false
+  let buys = null
+  let sells = null
+  if (exact) {
+    buys = 0
+    sells = 0
+    const t0 = bars.t[i0]
+    const t1 = bars.t[last]
+    const near = EDGE_NEAR_PTS / TICK
+    const topT = Math.round(top / TICK)
+    const botT = Math.round(bottom / TICK)
+    for (const s of Array.isArray(payload?.segments) ? payload.segments : []) {
+      const c = s?.cells || {}
+      const n = Array.isArray(c.t) ? c.t.length : 0
+      for (let i = 0; i < n; i += 1) {
+        const t = Number(c.t[i])
+        if (t < t0 || t > t1) continue
+        const p = Number(c.p[i])
+        if (Math.abs(p - topT) <= near) buys += Number(c.buy[i]) || 0
+        if (Math.abs(p - botT) <= near) sells += Number(c.sell[i]) || 0
+      }
+    }
+  }
+  const tLast = bars.t[last]
+  const held = (touch) => (touch == null ? null : Math.round((tLast - touch) / 60))
+  return {
+    from: bars.t[i0], to: tLast, exact,
+    top: { price: top, contracts: buys, firstTouch: topTouch, heldMin: held(topTouch), brokeAt: topBreak, breaks: topBreaks },
+    bottom: { price: bottom, contracts: sells, firstTouch: bottomTouch, heldMin: held(bottomTouch), brokeAt: bottomBreak, breaks: bottomBreaks },
+  }
+}
+
+// "Top 7724.75 · 1.8k buyers · held 9 m | Bottom 7715.25 · 4.1k sellers · held 6 m" (+ " · broke hh:mm").
+export function edgeText(r, hhmm) {
+  if (!r) return ''
+  const one = (name, e, who) => {
+    const vol = e.contracts == null ? 'exact data only' : `${kfmt(e.contracts)} ${who}`
+    const held = e.heldMin == null ? '' : ` · held ${e.heldMin} m`
+    const broke = e.brokeAt == null ? '' : ` · broke ${hhmm(e.brokeAt)}`
+    return `${name} ${e.price.toFixed(2)} · ${vol}${held}${broke}`
+  }
+  return `${one('Top', r.top, 'buyers')} | ${one('Bottom', r.bottom, 'sellers')}`
+}

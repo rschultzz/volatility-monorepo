@@ -8,6 +8,7 @@ Run with:
 from __future__ import annotations
 
 import datetime as dt
+import json
 import unittest
 from unittest.mock import patch
 
@@ -44,8 +45,13 @@ class _Base(unittest.TestCase):
 
 class TestSources(_Base):
     def test_golden_2026_05_01(self):
-        golden = (cf.FIXTURE_DIR / "cr_dc_flow_cells_golden_0501.json").read_bytes()
-        self.assertEqual(self.get(cf.QS_0501)[2].data, golden)
+        # CR-DF adds `bars` to each segment; everything else is CR-DC's golden unchanged.
+        golden = json.loads((cf.FIXTURE_DIR / "cr_dc_flow_cells_golden_0501.json").read_bytes())
+        p = self.get(cf.QS_0501)[0]
+        for s in p["segments"]:
+            self.assertIn("bars", s)
+            del s["bars"]
+        self.assertEqual(p, golden)
 
     def test_past_train_date_is_approximate_and_has_no_marks(self):
         p, _, _ = self.get(cf.QS_0501)
@@ -192,3 +198,36 @@ class TestParamsAndCache(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBars(_Base):
+    """CR-DF: each segment's 1-minute flow bars (the edge readout's closes; the marks' hold / break series)."""
+
+    def check(self, p, until_epoch=None):
+        for s in p["segments"]:
+            b = s["bars"]
+            n = len(b["t"])
+            self.assertGreater(n, 0)
+            self.assertEqual({len(b[k]) for k in ("t", "h", "l", "c")}, {n})
+            self.assertEqual(b["t"], sorted(set(b["t"])))
+            self.assertGreaterEqual(b["t"][0], s["start"])
+            self.assertLess(b["t"][-1], s["end"])
+            if until_epoch is not None:
+                self.assertLess(b["t"][-1], until_epoch)
+            for h, l, c in zip(b["h"], b["l"], b["c"]):
+                self.assertTrue(l - 1e-9 <= c <= h + 1e-9)
+            for mk in s["marks"] or []:                     # breaks land on a bar of the same series
+                if mk["break_time"] is not None:
+                    self.assertIn(mk["break_time"], b["t"])
+
+    def test_bars_full_and_exact(self):
+        for qs in (cf.QS_0501, cf.QS_1027):
+            self.check(self.get(qs)[0])
+
+    def test_bars_respect_until(self):
+        self.check(self.get(cf.QS_0501_UNTIL)[0], pt_epoch("2026-05-01T07:39:00"))
+        self.check(self.get(cf.QS_1027_UNTIL)[0], pt_epoch("2026-10-27T08:15:00"))
+
+    def test_rth_bars_match_cell_minutes(self):
+        rth = self.seg(self.get(cf.QS_1027)[0], "rth")
+        self.assertTrue(set(rth["cells"]["t"]) <= set(rth["bars"]["t"]))

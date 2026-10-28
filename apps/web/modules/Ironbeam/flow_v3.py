@@ -8,8 +8,8 @@ Each segment's cells come from the first tier that covers it (spec A1.3 / DC17):
   1. `es_flow_price_1m` (exact; CR-DD) — skipped while the table does not exist;
   2. `ironbeam_es_trades` (exact) — Ironbeam segments, when the oldest retained trade <= segment start;
   3. the 1-second table (approximate: each second's sell at its low, buy at its high).
-Absorption marks (DC9) are computed for the RTH segment on exact tiers only (A1.2). Nothing after `until`
-is read. The DB is read only through the `fetch_*` / `_exists_price_1m` / `_trades_oldest` functions, so
+Absorption marks (DC9) are computed for the RTH segment on exact tiers only (A1.2). Each segment also carries
+its 1-minute flow bars (CR-DF edge readout). Nothing after `until` is read. The DB is read only through the `fetch_*` / `_exists_price_1m` / `_trades_oldest` functions, so
 tests can record and replay them; completed segments are cached in-process, live ones incrementally (DC14).
 """
 from __future__ import annotations
@@ -170,6 +170,13 @@ def _marks_json(marks: list[dict]) -> list[dict]:
     return [{k: (_num(mk[k]) if isinstance(mk[k], (float, np.floating)) else mk[k]) for k in keys} for mk in marks]
 
 
+def _bars_json(m: pd.DataFrame, *, seg_start: int, seg_end: int) -> dict:
+    """CR-DF: the segment's 1-minute flow bars (the series the marks' hold / break use) for the edge readout."""
+    t = np.asarray(m.index, dtype=np.int64)
+    k = (t >= seg_start) & (t < seg_end)
+    return {"t": t[k].astype(int).tolist(), **{c: m[c].to_numpy(dtype=float)[k].tolist() for c in ("h", "l", "c")}}
+
+
 # ------------------------------------------------------------------------------------------ payload
 def build_cells_payload(engine, trade_date: str | None, *, session: str | None, until_pt: dt.datetime | None,
                         params: fh.AbsorbParams, session_date: dt.date, session_note: str | None,
@@ -226,6 +233,7 @@ def _build(engine, trade_date, *, session, until_pt, params, session_date, sessi
                "badge": BADGES[tier], "start": flow_v2._epoch(a), "end": flow_v2._epoch(b),
                "cells": {"t": cells["t"].astype(int).tolist(), "p": cells["p"].astype(int).tolist(),
                          "buy": cells["buy"].astype(float).tolist(), "sell": cells["sell"].astype(float).tolist()},
+               "bars": _bars_json(m, seg_start=flow_v2._epoch(a), seg_end=flow_v2._epoch(b)),
                "marks": None, "marks_note": None}
         if name == "rth":
             if tier == "seconds":
