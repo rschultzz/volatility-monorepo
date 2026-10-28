@@ -15,6 +15,8 @@ import { edgeEffortSeries, edgeReadout, edgeText, edgeVisits, flattenBars, kfmt,
 
 const API_BASE = process.env.CRDF_API_BASE || 'http://127.0.0.1:8064'
 const BASELINE = process.env.CRDF_BASELINE_URL || 'http://localhost:5184'
+// CRDI_SIDE_A=<baseline url> runs the pixel test main-vs-main: how much the live session differs between two loads
+const SIDE_A = process.env.CRDI_SIDE_A || ''
 const LOGS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../scripts/logs/cr-di/smoke')
 const ASSETS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../specs/assets/cr-di')
 const FLOW_KEYS = ['ib-react-flow-mode', 'ib-react-flow-v2-markers', 'ib-react-flow-v2-effort', 'ib-react-flow-mode-v3',
@@ -194,10 +196,18 @@ test('chip off: price chart and Flow v3 pane pixel-identical to origin/main (202
       let tries = 0
       // the live session gains a bar a minute: load both builds at once and retry if a minute boundary split them
       do {
-        ;[a, b] = await Promise.all([shot('', day, storage, anchorOpen), shot(BASELINE, day, storage, anchorOpen)])
+        ;[a, b] = await Promise.all([shot(SIDE_A, day, storage, anchorOpen), shot(BASELINE, day, storage, anchorOpen)])
         tries += 1
-      } while (day === TODAY && (a.price !== b.price || a.flow !== b.flow) && tries < 3)
+      } while (day === TODAY && (a.price !== b.price || a.flow !== b.flow) && tries < 6)
       rows.push({ day, name, tries, price_equal: a.price === b.price, flow_equal: a.flow === b.flow, branch_readout: a.readout, main_readout: b.readout })
+      if (a.price !== b.price || a.flow !== b.flow) {
+        // kept for diagnosis: both composites (data URLs -> png) in the logs
+        fs.mkdirSync(LOGS, { recursive: true })
+        const slug = `${day}-${name.replace(/[^a-z0-9]+/gi, '-')}`
+        for (const [who, r] of [['branch', a], ['main', b]]) {
+          for (const k of ['price', 'flow']) fs.writeFileSync(path.join(LOGS, `diff-${slug}-${k}-${who}.png`), Buffer.from(r[k].split(',')[1], 'base64'))
+        }
+      }
       if (name === 'v3, Edges off') {
         fs.mkdirSync(ASSETS, { recursive: true })
         fs.writeFileSync(path.join(ASSETS, `chip-off-${day}.png`), a.png)
