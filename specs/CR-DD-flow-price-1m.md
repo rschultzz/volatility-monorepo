@@ -110,3 +110,17 @@ Script: `scripts/cr_dd_step0.py` (phases `cost`, `size`, `live`); output in `scr
 | DD6 | Live write role and run tracking | (a′) Every run connects with `BACKFILL_DATABASE_URL` and calls `assert_role_or_die` (insert-only role). `backfill_run(conn, 'CR-DD-live')` + `update_run_smoke` are recorded only on runs that insert rows, which is about 1 row per 5 min while trading, or (a″) only on the post-close pass. (b) A `bt_backfill_runs` row on every 5-min run (288 a day, most of them empty). | (a′) |
 | DD7 | Backfill window | CR-CA's [06:15, 13:00) PT (the raw files cover only this). This matches CR-DC's `databento` use (RTH ≤ 06-05). | as written |
 | DD8 | 2026-10-27 check timing | After the owner applies the DDL, the cron script runs once from the laptop over the retained trades. The check compares it to `ironbeam_es_trades` for the whole 10-27 Globex day, before 2026-10-29 01:00 UTC. | as written |
+
+## Rulings (Ryan, 2026-10-28, after Step 0)
+
+DD1–DD8 approved as recommended. Then: (1) owner applies `scripts/cr_dd_ddl.sql` from the main checkout's
+`.env` (`DATABASE_URL`, never printed) and verifies table, PK and grants (`dash_backfill_writer` SELECT / INSERT
+only; PUBLIC nothing); (2) live aggregator + backfill as specified, backfill from the CR-CA files on disk under
+`backfill_run('CR-DD')`, **no download**; (3) DD8 before 2026-10-29 01:00 UTC plus the 3-session Databento check;
+(4) push, PR, don't merge; the session note carries the Render cron deploy spec (env var names only).
+
+### DDL applied (2026-10-28 ~03:25 UTC, owner)
+
+`es_flow_price_1m` created; PK (minute_utc, symbol, price, source); CHECK source ∈ {ironbeam, databento}.
+ACL `{rschultz=arwdDxtm/rschultz, dash_backfill_writer=ar/rschultz}`: the backfill role has SELECT + INSERT
+only; no PUBLIC entry.
