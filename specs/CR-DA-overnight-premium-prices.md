@@ -128,3 +128,43 @@ No outcome statistic was computed (no RV, premium or P&L).
 - **Tradeable buyback (readout 9).** K0_c is quoted at the open on **240 of 588** nights. **348 (59 %) are model-marked** (Black at V_o, the open ATM variance, plus the open ATM half-spread), as pre-registered. The quote-only subset is reported beside the full readout; the quote-only subset is selected on small overnight moves (|K0_c − K0_o| ≤ 5), so it is not a clean estimate either.
 
 **Gate: S0-G1 … S0-G4 PASS — no amendment; commit the run script and run once.**
+
+## Run summary (single run, 2026-10-27 19:13 PT; `scripts/output/cr_da/report.md`, `summary.json`, `nights.parquet`)
+
+Run script committed before the run (`26cd975`); run once. Final nights 588; D9 population n = 374.
+
+**V1 — INCONCLUSIVE.** S1, non-event weeknights, matched clock (15:55 → 09:35 → 16:00), variance points:
+
+| n | P_on mean | P_on median | P_rth mean | P_rth median | P_on − P_rth |
+|---|---|---|---|---|---|
+| 374 | −0.041 [−0.126, +0.030] | +0.008 [−0.005, +0.020] | −0.015 [−0.082, +0.027] | +0.017 [+0.004, +0.032] | −0.026 [−0.088, +0.035] |
+
+- **Implied vs realised (means).**
+  - Overnight: D_on 0.310 vs RV_on 0.351, ratio 0.883.
+  - RTH: D_rth 0.489 vs RV_rth 0.505, ratio 0.970.
+  - P_on > 0 on 198/374 nights (sign p 0.28).
+- **Against the priors.** The P_on CI's upper bound, +0.030, lies below CR-BP's P6 prior (+0.05) and far below CR-BO's +0.260.
+- **Readout — CR-BO L8 as written:** KILL S1 (kill (a) and (b) both met). Not the verdict (R-DA1).
+- **Readouts.**
+  - **Winsorised 1/99:** P_on −0.020 [−0.048, +0.007]; P_rth +0.010 [−0.011, +0.031].
+  - **Largest |P_on|:** 4 of the 5 are April 2025, the tariff shock: 04-08 −10.2, 04-07 +6.4, 04-02 −5.8, 04-15 −2.8. The fifth is 2024-11-05, election night, +1.7.
+  - **By year (P_on mean):** 2023 −0.016 [−0.042, +0.010]; 2024 +0.040 [+0.003, +0.084]; 2025 −0.142 [−0.377, +0.063] (median +0.008); 2026 −0.024 [−0.113, +0.061]. Only 2024 sits above 0, and the years disagree in sign.
+  - **Placebo:** D_on against the next night's RV gives −0.104 [−0.176, −0.039], vs main −0.043 on the same 360 nights. corr(D_on, RV_on) is +0.61; corr(D_on, RV_on_next) is +0.76.
+  - **CR-BO windows:** P_on −0.017 [−0.102, +0.053], median +0.022; P_rth −0.030 [−0.097, +0.013]; INCONCLUSIVE. The 10 RTH minutes these windows leave out of RV_on carry +0.024 var pts on average.
+  - **±5 strangle:** P_on −0.041 [−0.125, +0.030], indistinguishable from the straddle; INCONCLUSIVE.
+  - **Spreads.** The ATM straddle's full spread has median 0.50 pts at 15:55 and 0.40 at 09:35. The round-trip half-spread cost has median 0.45, mean 0.49.
+  - **Tradeable** (mechanical cousin; index points per night per straddle; population):
+
+    | | mean | median | worst 1 % |
+    |---|---|---|---|
+    | unhedged | −0.30 [−1.69, +0.96] | +2.72 | −57.7 |
+    | ES delta-hedged at entry | −0.28 [−1.67, +0.98] | +2.66 | −58.4 |
+
+    - Mean entry credit 35.96 vs mean exit cost 36.26.
+    - All 588 nights: −0.23 [−1.47, +0.94].
+    - Quote-marked nights only: +1.71 [+0.24, +2.94], n 163. This subset is selected toward small overnight moves.
+    - Worst nights: 2025-04-02 −93.5 (ES −179), 2026-04-07 −76.3 (+178), 2025-04-22 −69.2 (+143), 2026-03-02 −68.5 (−124).
+
+**Post-run diagnostic (not registered; does not change V1).** On the 240 nights where K0_c is quoted at the open, the model mark Black(S_o, K0_c, V_o) + half-spread was compared with the actual ask. The median error is 0.00, but for |K0_c − S_o| ≥ 10 (n 98) the median is −0.69 and the mean −0.79: the model under-marks the buyback after a large move. The 348 model-marked nights have a median |K0_c − S_o| of 21 pts. So the tradeable mean above is probably **optimistic** by roughly 0.4–0.7 pts per night.
+
+**Answer.** On real straddle prices at both ends, the 1-DTE SPX market does not charge measurably more implied variance for the overnight session than ES realises, and it does not undercharge RTH. Selling the straddle at 15:55 and buying it back at 09:35 did not make money after the bid–ask. The typical night earns about +2.7 pts, and a handful of large overnight moves take it all back.
