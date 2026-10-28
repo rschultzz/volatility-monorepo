@@ -96,3 +96,35 @@ No RV, no premium, no P&L. Items:
 | Revoked R1–R7 | | not used | |
 
 No "deviates". Proceeding to Step 0.
+
+## Step 0 — findings (2026-10-27, `scripts/cr_da_step0.py`; full output `scripts/output/cr_da/step0.md`)
+
+No outcome statistic was computed (no RV, premium or P&L).
+
+- **Universe.** 621 = CR-BO `keep` (S0-G1 PASS). CR-CY complete: 595.
+- **Exclusions (D2):**
+  - (a) CR-CY incomplete: 26, the expected set: 21 third-Friday t+1 + 2025-04-17 (AM collision), and 2023-05-23, 2025-01-24, 2025-05-12, 2025-05-13, 2025-11-26 (ORATS 404s).
+    - 2025-01-24 also falls under the collision rule only through a 404, and 2025-05-12/13 likewise; the count matches CR-CY's 22 + 4.
+  - (b) No valid ATM leg quote within ±2 min: 6 nights.
+  - (c) V_px solve failed: 1 night (2024-04-25 → 04-26).
+  - **Final n = 588; D9 population = 374** (by year of t: 2023 78, 2024 119, 2025 124, 2026 53).
+- **Quote validity** on CR-CY-complete nights:
+  - At the target minute: 99.5 % of close legs, 98.7–99.0 % of open legs.
+  - The ±2 fallback was used on 2–3 legs per window.
+  - No bid = ask = 0 row sat at the target minute; they cluster at 06:30–06:33 PT (CR-CY).
+- **Solve success.**
+  - Straddle: close 594/594, open 589/590.
+  - Strangle: the same. Strangle readout n = 588.
+  - (S0-G3 PASS.)
+- **CR-BP reproduction: 22/22** (S0-G2 PASS).
+  - At 06:31, CR-BP has a value on 20 nights, and all 20 reproduce exactly (max relative difference 0).
+  - On the other 2 (2024-05-13, 2024-07-08), CR-BP's own 06:31 solve is NaN because the straddle mid was ≤ intrinsic, and this code returns NaN too. These are why CR-BP had 20 V_px nights, not 22.
+  - **Reading recorded:** "reproduced" = within 1 % or both NaN.
+  - At 06:35: 22/22 exact.
+- **Diagnostics.**
+  - |F_parity − S|: median 1.10 pts at the close, 1.27 at the open.
+  - |K0 − S|: median 1.20 at the close, 4.31 at the open. The open strike was placed on the 09:30 print, and the K-aware solve absorbs the 09:30 → 09:35 drift.
+  - Annualised straddle IV (calendar τ): 0.128 at the close, 0.206 at the open. Calendar time understates the trading-time share of a 0DTE's remaining life; V_px itself needs no τ.
+- **Tradeable buyback (readout 9).** K0_c is quoted at the open on **240 of 588** nights. **348 (59 %) are model-marked** (Black at V_o, the open ATM variance, plus the open ATM half-spread), as pre-registered. The quote-only subset is reported beside the full readout; the quote-only subset is selected on small overnight moves (|K0_c − K0_o| ≤ 5), so it is not a clean estimate either.
+
+**Gate: S0-G1 … S0-G4 PASS — no amendment; commit the run script and run once.**
