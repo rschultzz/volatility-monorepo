@@ -1820,7 +1820,11 @@ export default function PriceChart({
           ? formatter.format(price)
           : price.toFixed(2)
 
-      const timeText = formatShiftedTimestamp(shiftedEpoch)
+      // CR-DG: the time is the bar the crosshair snaps to (`param.time`, the one the axis label shows). The logical
+      // index counts every series' time points (GEX segment ends too), so it is not an index into the candles.
+      // Outside the data (`param.time` undefined) it falls back to the interpolated position.
+      const snappedEpoch = Number(param.time)
+      const timeText = formatShiftedTimestamp(Number.isFinite(snappedEpoch) ? snappedEpoch : shiftedEpoch)
       showTooltipAtPoint(x, y, priceText, timeText)
       reportLinkedCrosshair({ logical: clampedLogical, shiftedTime: shiftedEpoch })
     }
