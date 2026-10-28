@@ -4,14 +4,17 @@
 // range, zone / zone_e4 / cluster_members). Other keys: scalars as rows,
 // objects and arrays behind a per-row "show raw" toggle. Raw JSON is never
 // shown by default. Keys the panel already shows (level_frame, a cell equal to
-// the candidate's) are skipped.
+// the candidate's) are skipped, and so are `omit` keys (CR-DB: the key facts
+// already shown above the details). Long text values (rules, basis notes) are
+// full-width wrapped paragraphs with the label above, not a value cell.
 
 import { useState } from 'react'
 
 const FLOW_ORDER = ['P', 'A_rel', 'Q', 'PD', 'LE', 'RA', 'DV', 'SS']
 const DIV_TEXT = { bull: 'bullish', bear: 'bearish', none: 'none', na: 'n/a' }
-const RULE_COLOR = { fade: '#34d399', break: '#f87171' }
+const RULE_COLOR = { fade: '#60a5fa', break: '#94a3b8' } // CR-DB / C1: Dash blue / slate
 const SPECIAL = new Set(['flow', 'rules', 'skew', 'named', 'range', 'zone', 'zone_e4', 'cluster_members'])
+const LONG_TEXT = 40
 
 function num(v, digits = 2) {
   if (v == null || v === '') return '—'
@@ -153,13 +156,17 @@ function Pairs({ pairs }) {
   )
 }
 
-export default function ReviewMeta({ meta, candidate }) {
+const isLongText = (v) => typeof v === 'string' && v.length > LONG_TEXT
+
+export default function ReviewMeta({ meta, candidate, omit = [] }) {
   const entries = Object.entries(meta || {}).filter(([k, v]) => {
     if (k === 'level_frame') return false // shown as "frame"
     if (k === 'cell' && candidate && v === candidate.cell) return false // shown as "cell"
+    if (omit.includes(k)) return false
     return true
   })
-  const scalars = entries.filter(([k, v]) => !SPECIAL.has(k) && (v == null || typeof v !== 'object'))
+  const texts = entries.filter(([k, v]) => !SPECIAL.has(k) && isLongText(v))
+  const scalars = entries.filter(([k, v]) => !SPECIAL.has(k) && !isLongText(v) && (v == null || typeof v !== 'object'))
   const objects = entries.filter(([k, v]) => !SPECIAL.has(k) && v != null && typeof v === 'object')
   const get = (k) => (meta && k in meta ? meta[k] : undefined)
 
@@ -207,6 +214,12 @@ export default function ReviewMeta({ meta, candidate }) {
       {['zone', 'zone_e4', 'cluster_members'].map((k) => (get(k) !== undefined ? (
         <Row key={k} label={k === 'cluster_members' ? 'cluster' : k} raw={get(k)}>{zoneSummary(k, get(k))}</Row>
       ) : null))}
+      {texts.map(([k, v]) => (
+        <div key={k} data-testid="review-meta-text" style={{ gridColumn: '1 / -1', marginTop: 2 }}>
+          <div style={{ color: '#64748b' }}>{k.replace(/_/g, ' ')}</div>
+          <p style={{ margin: 0, color: '#cbd5e1', lineHeight: 1.4, whiteSpace: 'normal', overflowWrap: 'break-word' }}>{v}</p>
+        </div>
+      ))}
       {objects.map(([k, v]) => (
         <Row key={k} label={k} raw={v}>
           {Array.isArray(v) ? `${v.length} item${v.length === 1 ? '' : 's'}` : `${Object.keys(v).length} fields`}
