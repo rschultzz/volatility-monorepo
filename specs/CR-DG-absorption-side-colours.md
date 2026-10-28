@@ -66,7 +66,7 @@ Then open a PR. Don't merge; Ryan merges. Before removing the worktree, copy scr
 | C1 | **deviates — approved** | Ryan, chat 2026-10-28: orange `#fb923c` for "sellers absorbed"; still no red / green. Logged in the rulings change log. |
 | C2 | honoured | No new feature, nothing on by default changes; the existing absorption display only changes colour by side. |
 
-Visible changes: items 1–3 only.
+Visible changes: items 1–3, plus item 4 (amendment below).
 
 ## Implementation order
 
@@ -146,3 +146,26 @@ snaps to, the one the axis label shows) is available in the same handler.
   hover re-reads its level from each new payload, so an open hover updates on refresh. The server `held_min` and
   the CR-DC golden are unchanged. The level label is already right and is unchanged.
 - **Orange `#fb923c` confirmed** after the 25.7° / σ-band (2.1°) disclosure.
+
+---
+
+## Spec amendment — item 4: Effort toggle in Flow v3 (Ryan, chat, 2026-10-28; before more implementation)
+
+Ryan: "On V3, I can no longer turn the effort on and off." Today the effort labels are v2-only: `App.jsx`
+`flowEffortLegs` returns null when `flowV3` is on (since CR-DC step 3), and the Effort chip exists only in the v2
+header (`flow-v2-effort-toggle`).
+
+4. Add an Effort chip to the Flow v3 header (`flow-v3-effort-toggle`). It uses the **same state** as v2
+   (`flowEffort` / localStorage `ib-react-flow-v2-effort`), so one switch covers both modes. When it is on in v3, the
+   price chart shows the same effort labels as v2, from the v2 legs v3 already fetches (`effort=1`), with the same
+   ⚙ swing size and `effortRatio` threshold. Off by default (C2) unless the viewer already turned it on in v2.
+   Nothing else in v3 changes. Leg hover detail is required only where v2 has it on the price chart; v2's leg hover
+   (`flow-v2-effort-hover`) is in the v2 flow pane, not on the price chart, so no v3 hover is added.
+
+Rulings: **C2 honoured** (the new chip is off by default; existing views are unchanged with it off). Visible change in
+scope, approved by Ryan's request above. Visible changes are now limited to items 1–4.
+
+Commits: one commit for item 4, after this amendment.
+
+Smoke (item 4): 2026-10-27 in v3 — Effort off → no labels (price chart identical to before); on → the same labels as
+v2 for the same settings; the switch carries between v2 and v3. Existing specs stay green.
