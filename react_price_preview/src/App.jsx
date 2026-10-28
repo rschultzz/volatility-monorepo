@@ -583,7 +583,7 @@ export default function App() {
   const [flowV3Layers, setFlowV3Layers] = useState(() => readStoredObject(FLOW_V3_LAYERS_STORAGE_KEY, FLOW_V3_LAYERS_OFF))
   const [flowAnchor, setFlowAnchor] = useState(null)
   const [flowAnchorArmed, setFlowAnchorArmed] = useState(false)
-  const [flowCells, setFlowCells] = useState(null)
+  const [flowCellsLoaded, setFlowCellsLoaded] = useState({ url: null, payload: null })
   const [flowCellsLoading, setFlowCellsLoading] = useState(false)
   const [flowCellsError, setFlowCellsError] = useState('')
   const [flowV2Loading, setFlowV2Loading] = useState(false)
@@ -1944,7 +1944,7 @@ export default function App() {
 
   useEffect(() => {
     if (!flowCellsUrl || loadingCenter || error) {
-      setFlowCells(null)
+      setFlowCellsLoaded({ url: null, payload: null })
       setFlowCellsError('')
       setFlowCellsLoading(false)
       return undefined
@@ -1958,11 +1958,11 @@ export default function App() {
         if (!response.ok) throw new Error(`Flow cells request failed: ${response.status}`)
         const payload = await response.json()
         if (disposed) return
-        setFlowCells(payload)
+        setFlowCellsLoaded({ url: flowCellsUrl, payload })
         setFlowCellsError('')
       } catch (err) {
         if (err?.name === 'AbortError' || disposed) return
-        if (initial) setFlowCells(null)
+        if (initial) setFlowCellsLoaded({ url: null, payload: null })
         setFlowCellsError(err?.message || 'Could not load flow cells')
       } finally {
         if (initial && !disposed) setFlowCellsLoading(false)
@@ -1980,6 +1980,9 @@ export default function App() {
   // CR-DF: the edge readout (DF4) from the anchor, on the cells payload's 1-minute bars; shared by the v3
   // header (text) and the price chart (dashed lines).
   const flowV3Shift = useMemo(() => makeShifter((t) => utcEpochShowingZoneTime(t, 'America/Los_Angeles')), [])
+  // CR-DF: only the payload of the current request (date, session, K / M, `until`) is used — while a new one
+  // loads, the previous session's cells must not feed the levels or the edge readout (seen in the headed soak).
+  const flowCells = flowCellsLoaded.url === flowCellsUrl ? flowCellsLoaded.payload : null
   const flowCellsBars = useMemo(() => (flowCells ? flattenBars(flowCells) : null), [flowCells])
   const flowV3Edges = useMemo(() => {
     if (!flowV3 || !flowV3Layers.edges || !flowCells || flowAnchor == null) return null
