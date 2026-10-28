@@ -287,3 +287,16 @@ Candidates measured on 2026-10-28, anchor 07:00 (bars to 09:07 PT):
   one shared function. So the strip's main bars over the current box still sum to the header.
 - The strip draws the minutes of the drawn boxes (the last 4 frozen + current), each against its own box. Visits
   are computed per box.
+
+## Amendment 2 (Ryan, chat 2026-10-28) — the pane grows by the strip
+
+11. When the Edge effort strip is drawn, the Flow v3 pane grows by the strip's height (64 px), so CVD, rolling and
+    delta keep their current heights.
+    - The 64 px come from the price chart above it (the price pane flexes; the flow pane has a fixed height).
+    - With the chip off, the pane height and everything in it are pixel-identical to origin/main (C2).
+    - "Drawn" is one shared condition (`flowV3.edgeStripDrawn`): chip on, Edges on, an anchor, and exact data. App sizes
+      the pane by it, and the panel draws the strip by it, so the two can't disagree.
+    - Re-run cr-di and the chip-off pixel comparisons on 2026-10-27 and 2026-10-28; record the results.
+
+Standing rulings: C2 honoured (chip off = origin/main); the visible change with the chip on is approved by Ryan in
+chat 2026-10-28. C1 n/a.
