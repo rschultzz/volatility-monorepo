@@ -177,4 +177,4 @@ the session note's open questions.
   Corrected radios, the Dashboard's existing radio style: white 13 px labels, no new colours); the graph's height
   becomes `calc(100% - 26px)`. The **figure** (title, axes, traces, ranges, ES 15:01 zoom, live line) stays
   byte-identical to origin/main in Current; the plot is 26 px shorter in both modes. Smoke compares the Current
-  figure JSON byte-for-byte against origin/main and screenshots both. Ryan can veto in review.
+  figure JSON byte-for-byte against origin/main and screenshots both. **Approved by Ryan in chat 2026-10-28.**
