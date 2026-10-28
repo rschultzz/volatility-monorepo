@@ -18,6 +18,9 @@
 // "replay": a review replay sends `until`; no cell, bar or mark after it.
 import { test, expect } from '@playwright/test'
 import fs from 'node:fs'
+// CR-DF: Heatmap and Absorbed moved from the v3 header into ⚙ ("Heatmap (cells)", "Absorbed (marks)"); the
+// tests below switch them there. The 'unchanged' test compares against a pre-v3 origin/main (DC1) and is
+// superseded by cr-df.spec.js's identity test once origin/main has v3.
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -55,6 +58,13 @@ async function open(page, day, { base = '', storage = {} } = {}) {
   }, { keys: FLOW_KEYS, values: storage })
   await page.goto(`${base}/?trade_date=${day}&interval=1min&days_either_side=0&api_base=${encodeURIComponent(API_BASE)}`)
   await page.locator('.tv-lightweight-charts').first().waitFor()
+}
+
+async function gearLayers(page, want) {
+  await page.getByRole('button', { name: 'Open Flow v3 settings' }).click()
+  const dlg = page.getByRole('dialog', { name: 'Flow v3 settings' })
+  for (const [id, on] of Object.entries(want)) await dlg.getByTestId(id).setChecked(on)
+  await dlg.getByRole('button', { name: 'Apply' }).click()
 }
 
 async function settle(page) {
@@ -181,9 +191,12 @@ test('v3 defaults: layers off, no cells request, price chart unchanged, remember
   await page.getByTestId('flow-mode-v3').click()
   await expect(page.getByTestId('flow-v3-panel')).toBeVisible()
   await settle(page)
-  for (const id of ['flow-v3-heatmap-toggle', 'flow-v3-profile-toggle', 'flow-v3-absorbed-toggle']) {
+  for (const id of ['flow-v3-levels-toggle', 'flow-v3-profile-toggle', 'flow-v3-edges-toggle']) {
     await expect(page.getByTestId(id)).toHaveAttribute('aria-pressed', 'false')
   }
+  await page.getByRole('button', { name: 'Open Flow v3 settings' }).click()
+  for (const id of ['flow-v3-heatmap-toggle', 'flow-v3-absorbed-toggle']) await expect(page.getByTestId(id)).not.toBeChecked()
+  await page.keyboard.press('Escape')
   expect(urls.some((u) => u.includes('mode=v2') && u.includes('effort=1'))).toBeTruthy()
   expect(urls.some((u) => u.includes('/flow/cells'))).toBeFalsy()
   expect(Buffer.compare(await page.locator('.react-top-pane').screenshot(), before), 'price chart with v3, layers off').toBe(0)
@@ -209,10 +222,9 @@ test('v3 on 2026-05-01: approximate cells, no marks, anchor pick and readout', a
   await settle(page)
   const off = await page.locator('.react-top-pane').screenshot()
   const cellsResp = page.waitForResponse((r) => r.url().includes('/flow/cells'))
-  await page.getByTestId('flow-v3-heatmap-toggle').click()
+  await gearLayers(page, { 'flow-v3-heatmap-toggle': true, 'flow-v3-absorbed-toggle': true })
   const cells = await (await cellsResp).json()
   await page.getByTestId('flow-v3-profile-toggle').click()
-  await page.getByTestId('flow-v3-absorbed-toggle').click()
   await settle(page)
   const cu = urls.filter((u) => u.includes('/flow/cells')).pop()
   expect(cu).toContain('a_k=3')
