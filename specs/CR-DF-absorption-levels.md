@@ -185,3 +185,120 @@ Pooled contracts per level (n 107): p10 39, p25 259, **p50 350**, p75 444, p90 6
   cells. Adding `bars: {t, h, l, c}` per segment is ≈ 390 × 4 numbers per segment.
 
 **Gate.** No ruling changes and no stop. Implementation proceeds in the frozen order.
+
+---
+
+## Implementation and smoke (2026-10-27/28)
+
+| step | commit | what |
+|---|---|---|
+| freeze | `5e343b9` | kickoff verbatim, DF1–DF4, conformance, design |
+| Step 0 | `bdb594c` | levels per session, contract sizes → width scale, 8-cap, B4 disclosure |
+| 1 | `3cb9af9` | cells payload: `bars {t, h, l, c}` per segment |
+| 2 | `d179e35` | `flowV3.absorptionLevels`, `edgeReadout`, `edgeText` + 11 unit tests |
+| 3 | `e97eb57` | magenta level / edge primitives, header toggles, ⚙ Heatmap (cells) / Absorbed (marks), guide |
+| fix | `e10d54b` | level labels avoid each other |
+| harness | `778e57a` | Playwright `cr-df.spec.js`, `cr-dc.spec.js` adapted, smoke backend, headed driver |
+| fix | `fd6a705` | App: cells payload only from the current request (see "App guard") |
+| harness | `11f848d` | headed driver waits for the anchor reset; v3dc control; review-banner wait 30 s |
+
+### Readings fixed during implementation (Claude Code; within DF1–DF4, no ruling changed)
+
+- **"Now"** for levels and the readout is the end of the payload's last 1-minute bar: live = the last completed data,
+  REVIEW replay = `until` (the payload is already cut there). CR-DC's server-side `held_min` is not used for levels
+  (see Observations).
+- **Anchor minute.** The readout starts at the first 1-minute bar at or after the anchor candle (on 5-minute charts,
+  the candle's first minute); the edges start at that minute's close.
+- **Contracts within 1 pt** = cells with |price − edge| ≤ 1.00 (four ticks either side, inclusive), from the anchor
+  minute through the last minute, against the current edge.
+- **After a break** the edge text keeps "held N m" (from the first touch of the new edge) and adds "broke hh:mm" (the
+  latest break), so both are visible.
+- **Labels** that would overlap an already drawn label are nudged one line up / down, else not drawn (the line and
+  its hover remain). Found in the smoke on 2026-05-01, where several levels end at now.
+- **Edge lines** run from the anchor candle to the last bar's candle; on 5-minute charts both ends snap to candles.
+- **Header.** "Absorption levels", "Profile", then the anchor buttons, "Edges" and the readout text (the header still
+  scrolls when narrow, CR-DC). The marks note ("Absorbed: exact data only") also shows with levels on.
+- **Smoke backend** caps the Ironbeam engine at 3 + 2 connections (Render DB: 103 slots).
+
+### Tests
+
+- **Python:** `test_flow_cells` 16/16 (3 new: bars sorted, inside the segment, before `until`, every mark break on a
+  bar; RTH cell minutes ⊆ bar minutes; CR-DC golden equal apart from `bars`); Ironbeam suite 102/102; `flow_heat` 16/16.
+- **Frontend unit:** 28/28 (`flowV3Levels.test.js` 11: fade, width, now, start / end, causal confirm and break, top 8,
+  approximate → none, edge tests vs breaks incl. repeated breaks, first touch / held, ±1 pt contracts, exact-only,
+  text format).
+- **Playwright `cr-df.spec.js` 6/6** (branch dev server vs `origin/main` `4db4173` dev server, read-only backend):
+  - *unchanged:* Current and v2 on 2026-05-01 — same flow requests, no cells request; price chart, flow plot and the
+    whole flow header byte-identical (pixels and DOM) to `origin/main`.
+  - *defaults:* Absorption levels / Profile / Edges off; ⚙ Heatmap (cells) / Absorbed (marks) unchecked; no cells
+    request; the price chart with v3 and every layer off is byte-identical to Current's; guide has the new entries,
+    ≥ 7 "Visual aid — untested."; a stored CR-DC layers object `{heat, marks: true}` keeps both on in ⚙.
+  - *2026-05-01* (RTH exact, `es_flow_price_1m`): 5 marks → 5 levels; header text equal to `edgeText(edgeReadout(…))`
+    of the page's payload and anchor (last swing 12:26; an RTH click 09:45: "Top 7280.25 · 12.9k buyers · held 159 m ·
+    broke 10:28 | Bottom 7257.50 · 8.8k sellers · held 0 m · broke 12:59"); hover on the largest level ("sellers
+    absorbed 509 · 6 min": from 12:36, opposite 176, broke at 12:42).
+  - *live 2026-10-28* (before the RTH open): ETH exact (trades); no RTH segment yet → no levels (DC9 RTH only); edge
+    readout from "session open" (15:00) with contracts — the header follows each 15 s poll (checked against the last
+    payload the page received).
+  - *replay* (CR-CC fixture 5, `until` 07:39): every bar < `until`, every mark confirmed ≤ `until`, every level ends
+    ≤ `until`, the readout ends before `until` and equals `edgeText` of the replay payload.
+- **Playwright `cr-dc.spec.js`** with Heatmap / Absorbed switched in ⚙: 5/5 (v3 defaults, 2026-05-01, exact marks
+  2026-10-27, live, replay). Its "unchanged" test compares against a **pre-v3** `origin/main` (DC1: the extra "v3"
+  button) and no longer applies now that `origin/main` has v3; CR-DF's identity test replaces it. CR-DC's committed
+  assets were restored after the run.
+
+- **Re-run on the final build (after `fd6a705`)**: `cr-df.spec.js` 6/6 and `cr-dc.spec.js` 5/5. During that re-run the
+  laptop → Render DB round trip rose to ≈ 0.64 s per query (`/api/ironbeam/bars` 19–64 s, candidate detail ≈ 9.6 s; no
+  code of this branch on that path), and three tests hit timeouts: CR-DC "v3 defaults" (120 s test timeout on a
+  reload; passed with `--timeout 420000`) and both replay tests (the review banner took ≈ 8 s against a 5 s wait). The
+  same CR-DC replay test passed against the `origin/main` frontend at that time; in the browser the branch showed the
+  banner after 8 s, so the wait was raised to 30 s in both specs (test only) and both replay tests passed.
+
+Screenshots and JSON: `specs/assets/cr-df/`.
+
+### Headed Chrome, CR-CH / CR-DC-style 10-min drag / zoom
+
+`scripts/cr_df_headed/headed_v3.mjs` (CR-DC's driver + an anchor after every load) against the full Dash app locally
+(`scripts/cr_df_headed/dash_app.py`, read-only, production build of this branch), real Google Chrome, live session
+2026-10-28, date → 2026-05-01 at 300 s and back at 420 s, the same seeded wheel-zoom / pan / price-axis / time-axis /
+reset sequence. Cells: **v3all** = every v3 layer on (Heatmap, Profile, Absorbed, Absorption levels, Edges) with
+"session open" as anchor; **v3dc** = control, CR-DC's layers only, same branch and sequence.
+
+| run | actions | crash | page errors | JS heap after forced GC (MB): first → range → last |
+|---|---|---|---|---|
+| v3all (run 2) | 1,717 | no | 0 | 48.7 → 71–114 → 90.9 |
+| v3dc control | 1,706 | no | 0 | 63.9 → 59–130 → 106.4 |
+| v3all (final, after the App guard below) | 875 | no | 0 | 56.2 → 63–128 → 81.8 |
+
+The heap rises and falls with the session loaded and with the forced GC — the same sawtooth with and without the CR-DF
+layers, no monotonic growth over the run. The final run made fewer actions because its harness waits (up to 2 min)
+for each date switch to clear the anchor before re-anchoring, and the input loop pauses meanwhile. Edge readouts in the
+final run: live "Top 7766.00 · 859 buyers · held 257 m · broke 20:50 | Bottom 7754.75 · 2.8k sellers · held 568 m ·
+broke 15:02"; 2026-05-01 (anchor = 15:00 ETH, approximate → "exact data only") "Top 7299.25 · exact data only · held
+356 m · broke 07:21 | Bottom 7246.75 · exact data only · held 1266 m · broke 02:03". Logs (git-ignored):
+`scripts/logs/cr_df/` (`run2-*`, `headed-v3dc*`, `headed-v3all*`; runs 1, 3, 4 kept, see below).
+
+**Harness history (disclosed).** Run 1 clicked "session open" before the live session had loaded (button disabled), so
+the edges were not on for its first 300 s (no crash, heap 49–131 MB). Runs 2 and 3 logged, right after each date
+switch, a readout of the *previous* session. Claude Code first read that as the app using the previous session's
+cells and added the App guard below; run 3 (with the guard) logged the same, so the cause was the harness reading the
+page before the switch took effect. Run 4 tried to wait for an iframe URL with the new date and found none (the
+harness threw at 400 s; no crash). The guard is kept on its own merits (next bullet); the final harness waits for the
+anchor reset (CR-DC DC5) instead.
+
+- **App guard (`flowCells` only from the current request URL).** While a new cells request is loading, the previous
+  response is no longer used — so after a date / session / K / M / `until` change, levels, edges, heat, marks and
+  profile disappear until the new payload arrives instead of drawing the old one. Within the standalone app a date
+  change keeps React state, and a later session's levels would otherwise snap onto the new date's last candle for a
+  moment. The CR-DC layers are covered by it too (they briefly blank instead of showing stale cells); their content is
+  unchanged.
+
+### Observations (not changed; Ryan's call)
+
+- **CR-DC `held_min` on live sessions.** The server computes an unbroken mark's `held_min` to the segment end, which on
+  a live session (no `until`) is 13:00 PT, not now — so the **Absorbed (marks)** hover overstates "held" for unbroken
+  live marks until the close. Absorption levels compute held minutes client-side to now and are not affected. A
+  one-line server fix (stop at the last bar) would change CR-DC's hover; left for Ryan.
+- **Price scale.** With GEX lines on, the price axis spans all of them (≈ 7,075–7,525 on 2026-05-01), so the session
+  occupies a thin band and the levels and their labels sit close together; zooming the price axis separates them.
+- **Levels are RTH only** (DC9), so the live session shows none before 06:30 PT; the edge readout works in ETH.
