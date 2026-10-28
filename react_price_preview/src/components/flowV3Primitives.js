@@ -301,6 +301,8 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
     const plotW = bitmapSize.width / hr
     ctx.font = `${Math.round(10 * vr)}px sans-serif`
     ctx.textBaseline = 'bottom'
+    const placed = [] // label boxes (css px): a label that would overlap one is nudged up / down, else not drawn
+    const free = (r) => placed.every((q) => r.x1 < q.x0 || r.x0 > q.x1 || r.y1 < q.y0 || r.y0 > q.y1)
     for (const lv of d.levels) {
       if (lv.endIdx < range[0] || lv.idx > range[1]) continue
       const y = series.priceToCoordinate(lv.price)
@@ -320,7 +322,14 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
       ctx.fillStyle = `rgba(${MAGENTA_RGB},${Math.max(0.55, lv.alpha)})`
       const tw = ctx.measureText(lv.label).width / hr
       const lx = Math.min(x1 + 4, plotW - tw - 2)
-      ctx.fillText(lv.label, Math.round(lx * hr), Math.round((y - lv.width / 2 - 2) * vr))
+      const base = y - lv.width / 2 - 2
+      for (const dy of [0, -11, 11 + lv.width + 2, -22]) {
+        const box = { x0: lx, x1: lx + tw, y0: base + dy - 11, y1: base + dy }
+        if (!free(box)) continue
+        placed.push(box)
+        ctx.fillText(lv.label, Math.round(lx * hr), Math.round((base + dy) * vr))
+        break
+      }
       this._hit.push({ x0, x1, y, level: lv })
     }
   }
