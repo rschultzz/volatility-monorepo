@@ -3,8 +3,9 @@
 // come from the v2 payloads (/api/ironbeam/flow?mode=v2&effort=1 — the legs give "anchor = last swing");
 // the header switches the price-pane layers drawn from /api/ironbeam/flow/cells: Absorption levels and
 // Profile, plus the edge readout (CR-DF); Heatmap (cells) and Absorbed (marks) moved into ⚙ (CR-DF item 3, DF1).
-// Palette (C1): blue = buyers, light grey = sellers, slate = neutral / marks; magenta = absorption levels and
-// edges (C1 deviation approved by Ryan, CR-DF). Every element is a visual aid, untested as a signal.
+// Palette (C1): blue = buyers, light grey = sellers, slate = neutral / marks; magenta = buyers-absorbed levels and
+// edges (C1 deviation approved by Ryan, CR-DF); orange = sellers-absorbed levels (C1 deviation approved by Ryan,
+// CR-DG). Every element is a visual aid, untested as a signal.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createChart, CrosshairMode, ColorType, BaselineSeries, HistogramSeries } from 'lightweight-charts'
 import {
@@ -30,6 +31,7 @@ import {
   rollingDelta,
   sessionOpenAnchor,
 } from '../flowV3'
+import { ORANGE_RGB } from './flowV3Primitives'
 
 const BG_COLOR = '#1f2937'
 const MIN_PANEL_HEIGHT = 140
@@ -37,6 +39,7 @@ const BUY_RGBA = (alpha) => `rgba(96,165,250,${alpha})`
 const SELL_RGBA = (alpha) => `rgba(229,231,235,${alpha})`
 const SLATE_RGBA = (alpha) => `rgba(148,163,184,${alpha})`
 const MAGENTA_RGBA = (alpha) => `rgba(232,121,249,${alpha})`
+const ORANGE_RGBA = (alpha) => `rgba(${ORANGE_RGB},${alpha})`
 const SOURCE_LABEL = { databento: 'Databento', ironbeam: 'Ironbeam' }
 
 const chipStyle = (active) => ({
@@ -92,7 +95,7 @@ function GuideBody() {
       <div><span style={sw(BUY_RGBA(0.7))} /><span style={sw(SELL_RGBA(0.6))} /><b>Rolling net delta</b> (middle bars): buying minus selling over the last N minutes (⚙: 5 / 10 / 15).{tag}</div>
       <div><b>Delta per bar</b> (bottom bars): the Flow v2 histogram, so this pane stands alone.{tag}</div>
       <div style={h}>On the price chart</div>
-      <div><span style={sw(MAGENTA_RGBA(0.9))} /><b>Absorption levels</b> (magenta lines): a price where aggressive selling ("sellers absorbed") or buying ("buyers absorbed") hit the Absorbed rule below. The line starts at the minute the volume built up, appears once the hold window has passed, and ends when price trades through it (else it runs to now). Thicker = more contracts absorbed; it fades from full to 25 % over 60 minutes. At most 8 are drawn, the largest after fading. The label says side, contracts and minutes held; hover for start, opposite-side contracts and where it broke. Exact data only.{tag}</div>
+      <div><span style={sw(ORANGE_RGBA(0.9))} /><span style={sw(MAGENTA_RGBA(0.9))} /><b>Absorption levels</b> (orange and magenta lines): a price where aggressive selling ("sellers absorbed", a floor, orange) or buying ("buyers absorbed", a ceiling, magenta) hit the Absorbed rule below. The line starts at the minute the volume built up, appears once the hold window has passed, and ends when price trades through it (else it runs to now). Thicker = more contracts absorbed; it fades from full to 25 % over 60 minutes. At most 8 are drawn, the largest after fading. The label says side, contracts and minutes held; hover for start, opposite-side contracts and where it broke. Exact data only.{tag}</div>
       <div><span style={{ ...sw('transparent'), borderTop: `2px dashed ${MAGENTA_RGBA(0.8)}`, height: 0 }} /><b>Edge readout</b> (header, with an anchor; dashed magenta lines): the box is the highest and lowest 1-minute close since the anchor. A close up to 2 pts beyond an edge is a test and the edge stays; a close more than 2 pts beyond is a break ("broke hh:mm") and the edge moves to that close (as CR-CP's close box). For each edge: aggressive contracts traded within 1 pt of it since the anchor (buyers at the top, sellers at the bottom; exact data only) and minutes since price first came within 1 pt of it.{tag}</div>
       <div><span style={sw(SELL_RGBA(0.6))} /><span style={sw(BUY_RGBA(0.6))} /><b>Heatmap (cells)</b> (⚙, behind the candles): for each 1-minute bar and 0.25 pt (0.5 pt when zoomed out), aggressive selling (market sells hitting the bid, grey, left half) and aggressive buying (market buys lifting the offer, blue, right half). Darker = a bigger cell for that session. Either layer can be switched off in ⚙.{tag}</div>
       <div><b>Profile</b> (right edge): the same volume summed per price from the anchor (or the session open) to now, selling grey and buying blue.{tag}</div>

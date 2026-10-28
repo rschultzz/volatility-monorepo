@@ -2566,7 +2566,8 @@ export default function PriceChart({
     const mx = (rows) => rows.reduce((m, r) => Math.max(m, r.buy + r.sell), 0)
     return { rows: { 1: r1, 2: r2 }, max: { 1: mx(r1), 2: mx(r2) } }
   }, [v3ProfileOn, v3Flat, v3ProfileFrom])
-  // CR-DF — absorption levels (exact marks as fading magenta lines) and the edge readout's dashed lines.
+  // CR-DF — absorption levels (exact marks as fading lines: magenta buyers absorbed, orange sellers absorbed, CR-DG)
+  // and the edge readout's dashed lines.
   const v3LevelsOn = Boolean(flowV3?.levels && v3Payload)
   const v3Levels = useMemo(() => (v3LevelsOn ? absorptionLevels(v3Payload, v3Times, v3Shift) : null), [v3LevelsOn, v3Payload, v3Times, v3Shift])
   const v3EdgeReadout = flowV3?.edges || null
