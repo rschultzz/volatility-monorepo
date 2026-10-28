@@ -84,7 +84,7 @@ async function openApp(page, viewport, { storage = 'set' } = {}) {
 
 async function openCard(page, c, viewport = { width: 1440, height: 900 }) {
   await openApp(page, viewport)
-  await expect(page.getByTestId('review-panel').getByLabel('Set', { exact: true })).toHaveValue(SET, { timeout: 30_000 })
+  await expect(page.getByTestId('review-panel').getByLabel('Set', { exact: true })).toHaveValue(SET, { timeout: 120_000 })
   await page.locator(`[data-testid="review-row"][data-candidate-id="${c.id}"]`).click()
   await expect(page.getByTestId('review-active')).toContainText(String(c.id))
 }
@@ -206,7 +206,7 @@ test('set filter: defaults to the latest-loaded set, then remembers the choice',
   await openApp(page, { width: 1440, height: 900 }, { storage: 'none' })
   const setSel = page.getByTestId('review-panel').getByLabel('Set', { exact: true })
   const crSel = page.getByTestId('review-panel').getByLabel('CR', { exact: true })
-  await expect(setSel).toHaveValue(latest.set_name, { timeout: 30_000 })
+  await expect(setSel).toHaveValue(latest.set_name, { timeout: 120_000 })
   await expect(crSel).toHaveValue('')                    // CR stays "all": every set stays listed
   await expect(setSel.locator('option')).toHaveCount(sets.length + 1)
 
@@ -216,7 +216,7 @@ test('set filter: defaults to the latest-loaded set, then remembers the choice',
   await page.reload()
   await page.locator('.tv-lightweight-charts').first().waitFor()
   await page.getByRole('button', { name: 'Show setup review panel' }).click()
-  await expect(setSel).toHaveValue(other.set_name, { timeout: 30_000 })
+  await expect(setSel).toHaveValue(other.set_name, { timeout: 120_000 })
   await expect(crSel).toHaveValue(other.cr_id)
 })
 

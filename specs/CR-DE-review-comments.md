@@ -130,3 +130,28 @@ cp-ranges:9) were each revealed 1.5–3.0 s after Save. Render keeps no request 
 7. **Redaction gap (R3):** `_run()` returns `str(e)` of a failed connect as `message`, and `_db_error` returns
    `str(e)`; psycopg's conninfo errors include the full URL with password, so a malformed `DATABASE_URL` would
    send it to the browser. Step 0's own ad-hoc query printed one such error to the session output.
+
+---
+
+## Smoke + wrap (2026-10-27)
+
+Servers: `CR_SMOKE_REVIEW_READONLY=1 scripts/cr_cc_smoke_backend.py` (port 8061; review connections read-only,
+checked `SHOW default_transaction_read_only` = on), branch frontend on 5172, origin/main (`4db4173`) frontend on 5177.
+`setup_reviews` held 10 rows (0 post-reveal, 2 with a comment) before and after every run: nothing was written.
+
+| Suite | Result |
+|---|---|
+| API `test_routes` (mocked + `CR_CC_DB_TESTS=1` on TEMP tables) | 21 / 21 |
+| Frontend unit (`node --test tests/unit`) | 17 / 17 |
+| Playwright `cr-de` on the final code | 7 / 7 (5 in one run, the 2 set-list tests re-run with 120 s waits) |
+| Playwright `cr-db` (5) + read-only `cr-cc` (5) + `cr-de` (7), run 2 | 16 / 17; the failure was the list race below, fixed in step 4b |
+| Same 17, runs 3–4 (after step 4b) | timeouts throughout: network RTT to Render 38–253 ms (avg 113), list call 14–23 s, bars 49 s; environmental, not re-run to a clean pass |
+
+Deltas found during smoke (step 4b, no spec change needed beyond this note):
+- The set default touches only the Set; CR stays "all CRs". Defaulting the CR too hid other CRs' sets from the Set
+  list (broke cr-cc's set selection, and would have hidden sets from Ryan).
+- Stale list responses are ignored (sequence guard): the first-load default and a quick set change raced, and the
+  slower response could overwrite the list.
+- Save / Reveal are usable as soon as the card refreshes; the queue reload is not awaited. After reveal, the next
+  note can be written while the card refreshes (stale card refreshes ignored).
+- The two cr-cc tests that save / reveal on `cc:fixture` were not run (B8).
