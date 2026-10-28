@@ -105,3 +105,95 @@ actively defended, not one-way selling. The strip must show both sides.
 - An edge break moves the edge: strip and header still agree after it.
 - An approximate-data session: no strip; chip tooltip explains.
 - Existing cr-dc / cr-df / cr-dg specs green.
+
+## Step 0 findings (read-only: one DB connection via `scripts/cr_di_step0/dump_cells.py`, no server)
+
+Payloads: `/flow/cells` for 2026-10-28 RTH, built by `flow_v3.build_cells_payload` with until 07:40, 08:09 and live
+(last bar 08:24 PT, dumped 15:24 UTC). The series come from `scripts/cr_di_step0/series.mjs`, which runs the shipped
+`flattenBars` + `edgeReadout`. Outputs are in `scripts/logs/cr-di/step0/` (git-ignored).
+
+### 0a — the rule behind the header's edge counts (`flowV3.edgeReadout`, `react_price_preview/src/flowV3.js`)
+
+Quoted from the function's comment:
+
+> "The edges start at the anchor minute's close; a later close > EDGE_BREAK_PTS beyond an edge is a break and the
+> edge moves to it, a close within EDGE_BREAK_PTS is a test (edge unchanged). Contracts: aggressor volume of cells
+> since the anchor within EDGE_NEAR_PTS of the current edge (buys at the top, sells at the bottom), only when every
+> bar since the anchor is on an exact segment (else null and `exact` false)."
+
+What the code does:
+
+- **Which edge price applies to which minute: the current (final) edge, for every minute.**
+  - The loop first ratchets `top` / `bottom` over all closes from the anchor bar to the last bar.
+  - Only then does it sum cells in `[t0, t1]` (anchor bar start → last bar start, inclusive) against that one final
+    price.
+  - The edge as it stood at the time is never used.
+- **Band: within 1 pt, inclusive, two-sided.**
+  - `Math.abs(p − round(edge / 0.25)) <= 4` in ticks (`EDGE_NEAR_PTS / TICK`).
+  - So the band is edge − 1.00 … edge + 1.00 inclusive: 9 price cells.
+  - Trades more than 1 pt beyond the edge (wicks) are not counted.
+- **On a break the counts are recomputed from the anchor against the new edge.**
+  - Minutes that were near the old edge drop out if they are more than 1 pt from the new one.
+  - Minutes near the new edge count even if they came before the break.
+  - Measured live: at the 08:16 PT top break (7769.25 → 7772.25, its third), the header top went from 16.4k buyers
+    (08:09) to 4.5k (08:24).
+- **Consequence for the strip (spec item 3).**
+  - The main bars computed per minute against the current edge sum to the header at every moment.
+  - Also, after a break the strip redraws: earlier visits at the old edge shrink or vanish, as the header does.
+  - This follows from "reuse that code path" and is not a separate choice.
+
+### 0b — 2026-10-28, anchor 07:00 PT
+
+| until (last bar) | Top edge | header buyers | Σ strip top buy | Σ top sell | Bottom edge | header sellers | Σ strip bottom sell | Σ bottom buy |
+|---|---|---|---|---|---|---|---|---|
+| 07:40 (07:39) | 7769.25 | 15,421 | 15,421 | 14,160 | 7762.00 | 5,287 | 5,287 | 4,903 |
+| 08:09 (08:08) | 7769.25 | 16,446 (16.4k) | 16,446 | 15,041 | 7762.00 | 16,613 (16.6k) | 16,613 | 15,437 |
+| live (08:24) | 7772.25 (broke 08:16) | 4,526 | 4,526 | 4,276 | 7762.00 | 16,613 | 16,613 | 15,437 |
+
+- **The main sides equal the header at every until.**
+- **Ryan's 16.4k / 16.9k** at 08:09 reproduces exactly with the anchor at **06:58 PT**, not 07:00:
+  - Top 7769.25 · 16,446; Bottom 7762.00 · 16,931.
+  - The bottom started at the 06:58 close and broke to 7762.00 at 07:00. The extra 318 sellers traded 06:58–06:59
+    near 7762.
+  - With the anchor at 07:00 the bottom is 16.6k.
+  - Other anchors give other bottoms: 06:59 → 16.6k, 06:57 → 11.4k (edge 7761.50), 07:01 → 21.1k (edge 7763.00).
+  - So the anchor Ryan used was most likely 06:58 (to confirm with Ryan; it changes nothing in the build).
+- **Chat's fixed bands** (≥ 7768.25 / ≤ 7763, same minutes 07:00–08:08) give 17,335 / 17,550 (17.3k / 17.6k):
+  - The gap is the wicks. A one-sided band also counts trades more than 1 pt beyond the edge, which the two-sided
+    ±1 pt rule drops.
+  - Top buys at 7770.50–7771.25: 889 = 17,335 − 16,446.
+  - Bottom sells at 7759.25–7760.75: 937 = 17,550 − 16,613.
+  - Chat's ~17.6k on the top likely ran a minute or two further; at 08:08 it is 17.3k.
+  - The same wick effect explains chat's "10.7k" bottom visit at 07:49–08:02, against 9.8k by the rule.
+
+**Per-visit totals.** A visit is a run of minutes with a non-zero main bar, joined across up to 2 empty minutes.
+Shown as main / opposite:
+
+| until | Edge | Visit (PT) | Main | Opposite | Label | Net (buy − sell) |
+|---|---|---|---|---|---|---|
+| 08:09, anchor 07:00 | top | 07:04–07:06 | 2,502 buy | 2,275 sell | 2.5k / 2.3k | +227 |
+| | top | 07:13–07:24 | 8,602 | 7,776 | 8.6k / 7.8k | +826 |
+| | top | 07:28–07:36 | 4,317 | 4,109 | 4.3k / 4.1k | +208 |
+| | top | 08:05–08:07 | 1,025 | 881 | 1.0k / 881 | +144 |
+| | bottom | 07:00–07:02 | 3,259 sell | 3,167 buy | 3.3k / 3.2k | −92 |
+| | bottom | 07:11–07:12 | 1,679 | 1,554 | 1.7k / 1.6k | −125 |
+| | bottom | 07:39–07:41 | 1,909 | 1,226 | 1.9k / 1.2k | −683 |
+| | bottom | 07:49–08:02 | 9,766 | 9,490 | 9.8k / 9.5k | −276 |
+| 08:09, anchor 06:58 | bottom | 06:58–07:02 | 3,577 | 3,393 | 3.6k / 3.4k | −184 |
+| | (others as anchor 07:00) | | | | | |
+| live 08:24, anchor 07:00 | top (7772.25) | 07:34 | 9 | 0 | 9 / 0 | +9 |
+| | top | 08:14–08:24 | 4,517 | 4,276 | 4.5k / 4.3k | +241 |
+| | bottom | as 08:09 | | | | |
+
+Visits sum to the header: top 2,502 + 8,602 + 4,317 + 1,025 = 16,446; bottom 3,259 + 1,679 + 1,909 + 9,766 = 16,613.
+
+The per-minute series (all four, plus all-price buy / sell) is in `scripts/logs/cr-di/step0/series_0809.txt`.
+
+### 0c — payload
+
+- No backend change is needed. The cells payload already has, per segment, `cells.t` (minute start, UTC), `cells.p`
+  (price in ticks), `cells.buy` and `cells.sell` (aggressor contracts), plus `exact` and `bars`.
+- `edgeReadout` already reads exactly these.
+- The strip is computed client-side by the same function, extended to return the per-minute arrays. The header
+  numbers become the sums of those arrays, so there is one code path.
+- Replay `until` already truncates the payload server-side.
