@@ -13,6 +13,7 @@ import {
   coerceGexMinAbsB,
   resolveInitialGexMinAbsB,
 } from './gexMinAbsB'
+import { GEX_LEVELS_MODE_STORAGE_KEY, resolveInitialGexLevelsMode } from './gexLevelsMode'
 
 
 const FLOW_HEIGHT_STORAGE_KEY = 'ib-react-flow-panel-height'
@@ -29,7 +30,6 @@ const FLOW_V3_SETTINGS_STORAGE_KEY = 'ib-react-flow-v3-settings'
 const FLOW_V3_LAYERS_STORAGE_KEY = 'ib-react-flow-v3-layers'
 // CR-DF adds levels / edges; a stored CR-DC object keeps its heat / marks values (now switched in ⚙).
 const FLOW_V3_LAYERS_OFF = { heat: false, profile: false, marks: false, levels: false, edges: false }
-const GEX_LEVELS_MODE_STORAGE_KEY = 'ib-react-gex-levels-mode'
 // CR-CK — Overview panel "Stickiness" rows; off unless the user turns them on in settings.
 const SKEW_STICKINESS_STORAGE_KEY = 'ib-react-skew-stickiness'
 const GEX_LANDSCAPE_SPOT_MODE_KEY = 'GEX_LANDSCAPE_SPOT_MODE'
@@ -635,14 +635,8 @@ export default function App() {
     }
   })
 
-  // CR-BT: GEX level placement — 'current' (discounted_level) or 'corrected'.
-  const [gexLevelsMode, setGexLevelsMode] = useState(() => {
-    try {
-      return window.localStorage.getItem(GEX_LEVELS_MODE_STORAGE_KEY) === 'corrected' ? 'corrected' : 'current'
-    } catch (err) {
-      return 'current'
-    }
-  })
+  // CR-BT: GEX level placement — 'current' (discounted_level) or 'corrected' (default, CR-DH).
+  const [gexLevelsMode, setGexLevelsMode] = useState(() => resolveInitialGexLevelsMode(() => window.localStorage))
 
   // CR-CK: Stickiness rows under the Overview skew table (off by default).
   const [stickinessOn, setStickinessOn] = useState(() => {
