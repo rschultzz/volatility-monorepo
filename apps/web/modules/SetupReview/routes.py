@@ -15,7 +15,8 @@ Endpoints (all JSON):
 
 DB errors are mapped, not raised (A1.5): a missing privilege returns 403 with
 `error: "permission"` and the connected role; missing tables return 503; the
-insert-only guard trigger returns 409.
+insert-only guard trigger returns 409. Every DB error message that is returned or
+logged goes through `redact()`, so a connection string never leaves (CR-DE R3).
 """
 from __future__ import annotations
 
@@ -25,6 +26,8 @@ import threading
 
 import psycopg
 from flask import jsonify, request
+
+from packages.shared.redact import redact
 
 from . import service
 
@@ -85,9 +88,9 @@ def _db_error(e: Exception, conn=None):
         return jsonify({"ok": False, "error": "missing_tables",
                         "message": "setup review tables are not installed (scripts/cr_cc_ddl.sql)"}), 503
     if isinstance(e, psycopg.errors.RaiseException):
-        return jsonify({"ok": False, "error": "insert_only", "message": str(e).splitlines()[0]}), 409
-    log.exception("setup-review DB error")
-    return jsonify({"ok": False, "error": "db", "message": str(e)}), 500
+        return jsonify({"ok": False, "error": "insert_only", "message": redact(str(e).splitlines()[0])}), 409
+    log.error("setup-review DB error (%s): %s", type(e).__name__, redact(e))
+    return jsonify({"ok": False, "error": "db", "message": redact(e)}), 500
 
 
 def _run(fn, *, write=False):
@@ -95,7 +98,8 @@ def _run(fn, *, write=False):
     try:
         conn = _conn()
     except Exception as e:
-        return jsonify({"ok": False, "error": "db_connect", "message": str(e)}), 500
+        log.error("setup-review DB connect failed (%s): %s", type(e).__name__, redact(e))
+        return jsonify({"ok": False, "error": "db_connect", "message": redact(e)}), 500
     try:
         out = fn(conn)
         if write:

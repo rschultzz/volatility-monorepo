@@ -118,6 +118,60 @@ class TestRoutesMocked(unittest.TestCase):
         self.conn.commit.assert_called_once()
 
 
+SECRET = "s3cretPw0rd"
+
+
+class TestRedaction(unittest.TestCase):
+    """CR-DE R3: no DB error that is returned or logged carries the connection string."""
+
+    def test_redact_forms(self):
+        from packages.shared.redact import redact
+        msg = (f'invalid connection option "postgresql+psycopg://user:{SECRET}@db.example.com/x?sslmode" '
+               f"and postgres://u:{SECRET}@h:5432/d and host=h password={SECRET} dbname=d")
+        out = redact(msg)
+        self.assertNotIn(SECRET, out)
+        self.assertIn("<postgres-url>", out)
+
+    def test_redact_env_value(self):
+        from packages.shared.redact import redact
+        url = f"postgresql+psycopg://user:{SECRET}@db.example.com/x"
+        with patch.dict(os.environ, {"DATABASE_URL": url}):
+            self.assertEqual(redact(f"bad: {url}"), "bad: <DATABASE_URL>")
+
+    def _assert_clean(self, r, logs):
+        self.assertEqual(r.status_code, 500)
+        self.assertEqual(r.get_json()["error"], "db_connect")
+        self.assertNotIn(SECRET, r.get_data(as_text=True))
+        self.assertNotIn(SECRET, "\n".join(logs.output))
+
+    def test_failing_connection_output_has_no_password(self):
+        # a real psycopg connect that fails: nothing listens on port 1
+        url = f"postgresql://dash_user:{SECRET}@127.0.0.1:1/curve?connect_timeout=2"
+        with patch.dict(os.environ, {"DATABASE_URL": url}), self.assertLogs(routes.log, "ERROR") as logs:
+            r = _app().get(f"{P}/candidates")
+        self._assert_clean(r, logs)
+
+    def test_malformed_url_error_has_no_password(self):
+        # psycopg echoes the whole conninfo when it cannot parse it (the Step 0 leak)
+        url = f"postgresql+psycopg://dash_user:{SECRET}@db.example.com/curve"
+        with patch.dict(os.environ, {"DATABASE_URL": url}), \
+                patch.object(routes, "_normalize_db_url", side_effect=lambda u: u), \
+                self.assertLogs(routes.log, "ERROR") as logs:
+            r = _app().get(f"{P}/candidates")
+        self._assert_clean(r, logs)
+
+    def test_query_error_message_has_no_password(self):
+        conn = MagicMock()
+        err = psycopg.OperationalError(f"server closed: postgresql://u:{SECRET}@h/d")
+        with patch.object(routes, "_conn", return_value=conn), \
+                patch.object(service, "list_candidates", side_effect=err), \
+                self.assertLogs(routes.log, "ERROR") as logs:
+            r = _app().get(f"{P}/candidates")
+        self.assertEqual(r.status_code, 500)
+        self.assertNotIn(SECRET, r.get_data(as_text=True))
+        self.assertNotIn(SECRET, "\n".join(logs.output))
+
+
 # TEMP copies of the CR-CC tables (scripts/cr_cc_ddl.sql) that shadow the real ones on the
 # test connection (pg_temp is searched first), with the same insert-only guard trigger.
 _TEMP_DDL = """
