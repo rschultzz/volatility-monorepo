@@ -372,3 +372,49 @@ export class EdgeLinesPrimitive extends BasePrimitive {
     ctx.restore()
   }
 }
+
+// CR-DI — Edge effort strip, drawn in its own pane of the Flow v3 chart (on a transparent carrier series): per
+// candle, the top edge upward from the middle (aggressive buys = main, blue; sells = thinner, lighter grey beside
+// it) and the bottom edge downward (sells = main, grey; buys = thinner, lighter blue). Palette only (C1).
+// data: { times (shifted candle times), cols: Map idx -> [top buy, top sell, bottom sell, bottom buy], max }.
+export const EDGE_STRIP_LABEL_PX = 11
+export class EdgeEffortPrimitive extends BasePrimitive {
+  zOrder() {
+    return 'normal'
+  }
+
+  paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }, chart, series, d) {
+    const H = bitmapSize.height / vr
+    const mid = H / 2
+    ctx.fillStyle = 'rgba(148,163,184,0.25)'
+    ctx.fillRect(0, Math.round(mid * vr), bitmapSize.width, Math.max(1, Math.round(vr)))
+    const range = visibleIndexRange(chart, d.times)
+    if (!range || !(d.max > 0)) return
+    const ts = chart.timeScale()
+    const spacing = Number(ts.options().barSpacing) || 6
+    const w = Math.max(1.5, spacing * 0.86)
+    const wMain = Math.max(1, w * 0.62)
+    const wOpp = Math.max(1, w - wMain)
+    const half = Math.max(4, mid - EDGE_STRIP_LABEL_PX - 1)
+    const hpx = (v) => (v > 0 ? Math.max(1, (v / d.max) * half) : 0)
+    const bar = (rgba, x, wd, y0, h) => {
+      if (!(h > 0)) return
+      ctx.fillStyle = rgba
+      ctx.fillRect(Math.round(x * hr), Math.round(y0 * vr), Math.max(1, Math.round(wd * hr)), Math.max(1, Math.round(h * vr)))
+    }
+    for (let i = range[0]; i <= range[1]; i += 1) {
+      const c = d.cols.get(i)
+      if (!c) continue
+      const x = ts.timeToCoordinate(d.times[i])
+      if (x == null) continue
+      const left = x - w / 2
+      const [tb, tsl, bs, bb] = c
+      let h = hpx(tb)
+      bar(`rgba(${BUY_RGB},0.85)`, left, wMain, mid - h, h)
+      h = hpx(tsl)
+      bar(`rgba(${SELL_RGB},0.38)`, left + wMain, wOpp, mid - h, h)
+      bar(`rgba(${SELL_RGB},0.72)`, left, wMain, mid + 1, hpx(bs))
+      bar(`rgba(${BUY_RGB},0.38)`, left + wMain, wOpp, mid + 1, hpx(bb))
+    }
+  }
+}

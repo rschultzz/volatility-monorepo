@@ -7,7 +7,7 @@
 // edges (C1 deviation approved by Ryan, CR-DF); orange = sellers-absorbed levels (C1 deviation approved by Ryan,
 // CR-DG). Every element is a visual aid, untested as a signal.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { createChart, CrosshairMode, ColorType, BaselineSeries, HistogramSeries } from 'lightweight-charts'
+import { createChart, CrosshairMode, ColorType, BaselineSeries, HistogramSeries, LineSeries } from 'lightweight-charts'
 import {
   FlowModeToggle,
   coordinateForLinkedCrosshair,
@@ -25,6 +25,7 @@ import {
   anchoredCvd,
   anchorReadout,
   edgeEffortBlock,
+  edgeStripColumns,
   edgeText,
   kfmt,
   lastSwingAnchor,
@@ -32,10 +33,11 @@ import {
   rollingDelta,
   sessionOpenAnchor,
 } from '../flowV3'
-import { ORANGE_RGB } from './flowV3Primitives'
+import { EdgeEffortPrimitive, ORANGE_RGB } from './flowV3Primitives'
 
 const BG_COLOR = '#1f2937'
 const MIN_PANEL_HEIGHT = 140
+const EDGE_STRIP_HEIGHT = 64 // CR-DI: the Edge effort pane (pane 1), only while the strip is drawn
 const BUY_RGBA = (alpha) => `rgba(96,165,250,${alpha})`
 const SELL_RGBA = (alpha) => `rgba(229,231,235,${alpha})`
 const SLATE_RGBA = (alpha) => `rgba(148,163,184,${alpha})`
@@ -261,6 +263,8 @@ export default function AggressorFlowV3Panel({
   const notes = useMemo(() => [...new Set((payloads || []).flatMap((p) => p?.notes || []))], [payloads])
   const hasValues = aligned.some((r) => Number.isFinite(r.delta))
   const edgeEffortWhy = edgeEffortBlock(layers.edges, anchor, edges)
+  const stripOn = Boolean(edgeEffortOn && !edgeEffortWhy && edges?.exact && edges?.minutes)
+  const strip = useMemo(() => (stripOn ? edgeStripColumns(edges.minutes, candleTimes, shift) : null), [stripOn, edges, candleTimes, shift])
   const anyLayer = layers.heat || layers.profile || layers.marks || layers.levels || layers.edges
 
   useEffect(() => { candleTimesRef.current = candleTimes }, [candleTimes])
@@ -333,6 +337,7 @@ export default function AggressorFlowV3Panel({
       const w = stageRef.current.clientWidth
       const h = stageRef.current.clientHeight
       if (w > 0 && h > 0) chart.applyOptions({ width: w, height: Math.max(h, MIN_PANEL_HEIGHT) })
+      if (seriesRef.current.strip) chart.panes()[1]?.setHeight(EDGE_STRIP_HEIGHT)
       requestAnimationFrame(refreshDecorations)
     }
     const onRange = () => requestAnimationFrame(refreshDecorations)
@@ -383,6 +388,35 @@ export default function AggressorFlowV3Panel({
     }
     requestAnimationFrame(() => refreshDecorationsRef.current())
   }, [aligned, rolling, cvd, candleTimes, visibleLogicalRange])
+
+  // CR-DI: the strip's pane exists only while the strip is drawn, so with it off the chart is origin/main's.
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    const s = seriesRef.current
+    if (strip && !s.strip) {
+      const carrier = chart.addSeries(LineSeries, {
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, color: 'rgba(0,0,0,0)',
+        lineWidth: 1, priceScaleId: 'edgeEffort',
+      }, 1)
+      chart.priceScale('edgeEffort', 1).applyOptions({ visible: false })
+      const prim = new EdgeEffortPrimitive()
+      carrier.attachPrimitive(prim)
+      chart.panes()[1]?.setHeight(EDGE_STRIP_HEIGHT)
+      seriesRef.current = { ...s, strip: carrier, stripPrim: prim }
+    } else if (!strip && s.strip) {
+      chart.removeSeries(s.strip)
+      if (chart.panes().length > 1) chart.removePane(1)
+      const { strip: _c, stripPrim: _p, ...rest } = s
+      seriesRef.current = rest
+    }
+    const cur = seriesRef.current
+    if (strip && cur.strip) {
+      cur.strip.setData(aligned.map((r) => ({ time: r.time })))
+      cur.stripPrim.setData({ times: candleTimes, cols: strip.cols, max: strip.max })
+    }
+    requestAnimationFrame(() => refreshDecorationsRef.current())
+  }, [strip, aligned, candleTimes])
 
   useEffect(() => {
     const chart = chartRef.current

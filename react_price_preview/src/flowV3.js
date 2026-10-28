@@ -394,6 +394,9 @@ export function flattenBars(payload) {
 // EDGE_NEAR_PTS of the current edge (buys at the top, sells at the bottom), only when every bar since the anchor is
 // on an exact segment (else null and `exact` false). First touch: the first minute since the anchor whose high
 // (top) / low (bottom) came within EDGE_NEAR_PTS of the edge. Null without an anchor or bars.
+// CR-DI: the contracts are summed from `minutes`, the same cells per minute (UTC minute start) with both sides at
+// each edge: topBuy / bottomSell are the header's sides, topSell / bottomBuy the opposite ones. Like the header, the
+// whole series is counted against the current edge, so a break re-counts every minute since the anchor.
 export function edgeReadout(payload, bars, anchorShifted, shift) {
   if (anchorShifted == null || !bars?.t?.length) return null
   let i0 = -1
@@ -434,14 +437,14 @@ export function edgeReadout(payload, bars, anchorShifted, shift) {
   for (let i = i0; i <= last; i += 1) if (!bars.exact[i]) exact = false
   let buys = null
   let sells = null
+  let minutes = null
   if (exact) {
-    buys = 0
-    sells = 0
     const t0 = bars.t[i0]
     const t1 = bars.t[last]
     const near = EDGE_NEAR_PTS / TICK
     const topT = Math.round(top / TICK)
     const botT = Math.round(bottom / TICK)
+    const per = new Map() // minute -> [top buy, top sell, bottom sell, bottom buy]
     for (const s of Array.isArray(payload?.segments) ? payload.segments : []) {
       const c = s?.cells || {}
       const n = Array.isArray(c.t) ? c.t.length : 0
@@ -449,18 +452,104 @@ export function edgeReadout(payload, bars, anchorShifted, shift) {
         const t = Number(c.t[i])
         if (t < t0 || t > t1) continue
         const p = Number(c.p[i])
-        if (Math.abs(p - topT) <= near) buys += Number(c.buy[i]) || 0
-        if (Math.abs(p - botT) <= near) sells += Number(c.sell[i]) || 0
+        const atTop = Math.abs(p - topT) <= near
+        const atBottom = Math.abs(p - botT) <= near
+        if (!atTop && !atBottom) continue
+        let m = per.get(t)
+        if (!m) {
+          m = [0, 0, 0, 0]
+          per.set(t, m)
+        }
+        const b = Number(c.buy[i]) || 0
+        const sl = Number(c.sell[i]) || 0
+        if (atTop) {
+          m[0] += b
+          m[1] += sl
+        }
+        if (atBottom) {
+          m[2] += sl
+          m[3] += b
+        }
       }
     }
+    const ts = [...per.keys()].sort((a, b) => a - b)
+    const col = (k) => ts.map((t) => per.get(t)[k])
+    minutes = { t: ts, topBuy: col(0), topSell: col(1), bottomSell: col(2), bottomBuy: col(3) }
+    buys = minutes.topBuy.reduce((a, v) => a + v, 0)
+    sells = minutes.bottomSell.reduce((a, v) => a + v, 0)
   }
   const tLast = bars.t[last]
   const held = (touch) => (touch == null ? null : Math.round((tLast - touch) / 60))
   return {
-    from: bars.t[i0], to: tLast, exact,
+    from: bars.t[i0], to: tLast, exact, minutes,
     top: { price: top, contracts: buys, firstTouch: topTouch, heldMin: held(topTouch), brokeAt: topBreak, breaks: topBreaks },
     bottom: { price: bottom, contracts: sells, firstTouch: bottomTouch, heldMin: held(bottomTouch), brokeAt: bottomBreak, breaks: bottomBreaks },
   }
+}
+
+// CR-DI visits: at each edge, a run of minutes with a non-zero main bar (top buy / bottom sell), joined across up
+// to `gap` empty minutes. Each visit sums both sides over its minutes [start, end] (the opposite side includes the
+// visit's quiet minutes). `of[e][i]` = visit index of minute i at edge e (or -1); `run[e][i]` = [main, opp] summed
+// from the visit's start through minute i. Input: edgeReadout(...).minutes.
+export const VISIT_GAP_MIN = 2
+export function edgeVisits(minutes, gap = VISIT_GAP_MIN) {
+  const t = Array.isArray(minutes?.t) ? minutes.t : []
+  const one = (main, opp) => {
+    const visits = []
+    let cur = null
+    for (let i = 0; i < t.length; i += 1) {
+      if (!(main[i] > 0)) continue
+      if (cur && t[i] - t[cur.j1] <= (gap + 1) * 60) cur.j1 = i
+      else {
+        cur = { j0: i, j1: i }
+        visits.push(cur)
+      }
+    }
+    const of = new Array(t.length).fill(-1)
+    const run = new Array(t.length).fill(null)
+    const out = visits.map((v, k) => {
+      let a = 0
+      let b = 0
+      for (let i = v.j0; i <= v.j1; i += 1) {
+        a += main[i]
+        b += opp[i]
+        of[i] = k
+        run[i] = [a, b]
+      }
+      return { start: t[v.j0], end: t[v.j1], main: a, opp: b }
+    })
+    return { visits: out, of, run }
+  }
+  const top = one(minutes?.topBuy || [], minutes?.topSell || [])
+  const bottom = one(minutes?.bottomSell || [], minutes?.bottomBuy || [])
+  return { top: top.visits, bottom: bottom.visits, of: { top: top.of, bottom: bottom.of }, run: { top: top.run, bottom: bottom.run } }
+}
+
+// CR-DI strip columns: edgeReadout(...).minutes bucketed onto the pane's candles (shifted times; one minute per
+// candle on the 1-minute chart). cols: Map candle idx -> [top buy, top sell, bottom sell, bottom buy]; idxOf[i] =
+// candle idx of minute i (or -1); max = the largest single bar, the strip's scale.
+export function edgeStripColumns(minutes, candleTimes, shift) {
+  const t = Array.isArray(minutes?.t) ? minutes.t : []
+  const times = Array.isArray(candleTimes) ? candleTimes : []
+  const cols = new Map()
+  const idxOf = new Array(t.length).fill(-1)
+  for (let i = 0; i < t.length; i += 1) {
+    const idx = floorIndex(times, shift(t[i]))
+    if (idx < 0) continue
+    idxOf[i] = idx
+    let c = cols.get(idx)
+    if (!c) {
+      c = [0, 0, 0, 0]
+      cols.set(idx, c)
+    }
+    c[0] += minutes.topBuy[i]
+    c[1] += minutes.topSell[i]
+    c[2] += minutes.bottomSell[i]
+    c[3] += minutes.bottomBuy[i]
+  }
+  let max = 0
+  for (const c of cols.values()) for (const v of c) if (v > max) max = v
+  return { cols, idxOf, max }
 }
 
 // CR-DI: why the Edge effort chip can't act (its tooltip), or '' when it can.
