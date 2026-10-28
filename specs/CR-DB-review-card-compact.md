@@ -141,3 +141,31 @@ narrow and short viewport (e.g. 900 × 600), where the panel is the same width a
 7. Panel width stays 340 (`PANEL_WIDTH`, also read by `PriceChart` for its right offset); no `App.jsx` change needed.
 
 Gate: no spec amendment needed beyond the Q1–Q3 rulings already frozen.
+
+---
+
+## Smoke + wrap (2026-10-27)
+
+Servers: `scripts/cr_cc_smoke_backend.py` (8061), `scripts/cr_cd_smoke_backend.py` (8062), branch frontend 5176,
+`origin/main` `0fdcd6d` frontend 5177 (detached scratch worktree).
+
+| Test | Result |
+|---|---|
+| `cr-db` card 1440 × 900 and 900 × 600 — direction label, edge + limit, six key facts, details collapsed; Take / Skip / Unsure, Save and both CR-CZ chips inside the viewport and panel, no page or panel scroll; details open → `entry_rule` a full-width paragraph, Save still in view | pass |
+| `cr-db` keys T / S / U → `aria-pressed`; Save posts `{label: take, reasons: [both chips], comment: ''}` (intercepted); the card's reviews unchanged in the DB | pass |
+| `cr-db` chart: `fade edge` = box top / `continuation edge` = box bottom on a short card, blue / light grey | pass |
+| `cr-db` pixel: price chart with the panel closed, branch = `origin/main` byte for byte (branch = branch repeat) | pass |
+| `cr-cc` read-only: replay, revealed view, A2 read-only, A3 round-2 (opens details first), A3 round-1 | 5 pass |
+| `cr-cd` A3 replay fit, `cr-cd-a5` replay | 2 pass |
+| `cr-cc` "label → reveal", "A2: smile capped" | **not run** (they write `setup_reviews`; Step 0 item 5) |
+
+The smoke backend's log shows no POST during any run: no review was written.
+
+Deltas from the frozen design:
+- Skip is slate-400 `#94a3b8`, not slate-500: slate-500 read as disabled on the footer (Step 0 item 3 updated).
+- The saved-review line and the post-reveal outcome sit at the top of the scrolling card body (the cr-cc tests read
+  them inside `review-active`), not in the footer.
+- Comment box is one row tall by default (still resizable), to keep the footer short at 600 px.
+
+Deferred / not in scope: the chart's red `stop` line and the orange review banner are outside the panel (C1 not
+applied there); the "fixture smoke reason" chip in the reason list comes from CR-CC smoke runs on `cc:fixture`.
