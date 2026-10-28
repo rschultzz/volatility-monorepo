@@ -6,6 +6,10 @@ Endpoints (all JSON):
     GET  /api/setup-review/candidates/<id>
          detail; `outcome` only once the candidate has a review
     POST /api/setup-review/candidates/<id>/review   {label, reasons[], comment}
+         insert-only. Before reveal: the blind label (label required, first save only;
+         409 label_locked after). After reveal: a post_reveal note (label optional, copies
+         the blind label when absent). Readers of labels use the FIRST pre-reveal review
+         per candidate; post-reveal rows are notes only (CR-DE).
     POST /api/setup-review/candidates/<id>/reveal   sets revealed_at, returns the outcome
     GET  /api/setup-review/summary?cr=&set=
 
@@ -99,7 +103,7 @@ def _run(fn, *, write=False):
         return out
     except service.ReviewError as e:
         conn.rollback()
-        return jsonify({"ok": False, "error": "bad_request", "message": str(e)}), e.status
+        return jsonify({"ok": False, "error": e.code, "message": str(e)}), e.status
     except psycopg.Error as e:
         return _db_error(e, conn)
     finally:
