@@ -556,7 +556,7 @@ export function edgeStripColumns(minutes, candleTimes, shift) {
 export function edgeEffortBlock(edgesOn, anchor, edges) {
   if (!edgesOn) return 'Edge effort needs Edges on'
   if (anchor == null) return 'Edge effort needs an anchor (📍 set anchor, session open or last swing)'
-  if (edges && !edges.exact) return 'Edge effort is drawn on exact data only: this session has approximate (1-s) cells, which place each second\'s selling at its low and buying at its high'
+  if (edges && !edges.exact) return 'Edge effort is drawn on exact data only: the bars since the anchor include approximate (1-s) cells, which place each second\'s selling at its low and buying at its high'
   return ''
 }
 
