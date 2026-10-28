@@ -416,5 +416,29 @@ export class EdgeEffortPrimitive extends BasePrimitive {
       bar(`rgba(${SELL_RGB},0.72)`, left, wMain, mid + 1, hpx(bs))
       bar(`rgba(${BUY_RGB},0.38)`, left + wMain, wOpp, mid + 1, hpx(bb))
     }
+    // Visit labels "main / opposite", centred on the visit: above the top bars, below the bottom ones. Larger visits
+    // are placed first; a label that would overlap one already placed on its edge is dropped (the hover has it).
+    if (!d.labels) return
+    ctx.font = `${Math.round(10 * vr)}px sans-serif`
+    ctx.fillStyle = 'rgba(203,213,225,0.85)'
+    ctx.textBaseline = 'alphabetic'
+    const plotW = bitmapSize.width / hr
+    for (const [edge, y] of [['top', EDGE_STRIP_LABEL_PX - 2], ['bottom', H - 2]]) {
+      const placed = []
+      const list = [...(d.labels[edge] || [])].sort((a, b) => b.main - a.main)
+      for (const v of list) {
+        if (v.i1 < range[0] || v.i0 > range[1]) continue
+        const xa = ts.timeToCoordinate(d.times[v.i0])
+        const xb = ts.timeToCoordinate(d.times[v.i1])
+        if (xa == null && xb == null) continue
+        const cx = ((xa ?? xb) + (xb ?? xa)) / 2
+        const tw = ctx.measureText(v.text).width / hr
+        const x0 = Math.min(Math.max(0, cx - tw / 2), plotW - tw)
+        const box = [x0 - 3, x0 + tw + 3]
+        if (placed.some((q) => !(box[1] < q[0] || box[0] > q[1]))) continue
+        placed.push(box)
+        ctx.fillText(v.text, Math.round(x0 * hr), Math.round(y * vr))
+      }
+    }
   }
 }

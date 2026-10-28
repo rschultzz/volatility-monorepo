@@ -27,6 +27,8 @@ import {
   edgeEffortBlock,
   edgeStripColumns,
   edgeText,
+  edgeVisits,
+  floorIndex,
   kfmt,
   lastSwingAnchor,
   makeShifter,
@@ -265,6 +267,16 @@ export default function AggressorFlowV3Panel({
   const edgeEffortWhy = edgeEffortBlock(layers.edges, anchor, edges)
   const stripOn = Boolean(edgeEffortOn && !edgeEffortWhy && edges?.exact && edges?.minutes)
   const strip = useMemo(() => (stripOn ? edgeStripColumns(edges.minutes, candleTimes, shift) : null), [stripOn, edges, candleTimes, shift])
+  // Visit labels (main first) placed on candle indexes; the primitive drops the smaller of two colliding labels.
+  const visits = useMemo(() => {
+    if (!strip) return null
+    const v = edgeVisits(edges.minutes)
+    const place = (list) => list.map((x) => ({
+      ...x, i0: floorIndex(candleTimes, shift(x.start)), i1: floorIndex(candleTimes, shift(x.end)),
+      text: `${kfmt(x.main)} / ${kfmt(x.opp)}`,
+    })).filter((x) => x.i0 >= 0)
+    return { ...v, labels: { top: place(v.top), bottom: place(v.bottom) } }
+  }, [strip, edges, candleTimes, shift])
   const anyLayer = layers.heat || layers.profile || layers.marks || layers.levels || layers.edges
 
   useEffect(() => { candleTimesRef.current = candleTimes }, [candleTimes])
@@ -343,7 +355,7 @@ export default function AggressorFlowV3Panel({
     const onRange = () => requestAnimationFrame(refreshDecorations)
     const onMove = (param) => {
       const t = param?.time
-      setHover(t == null ? null : { time: t, x: param.point?.x ?? 0 })
+      setHover(t == null ? null : { time: t, x: param.point?.x ?? 0, pane: param.paneIndex ?? 0 })
     }
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(handleResize) : null
     if (ro) ro.observe(stage)
@@ -400,6 +412,7 @@ export default function AggressorFlowV3Panel({
         lineWidth: 1, priceScaleId: 'edgeEffort',
       }, 1)
       chart.priceScale('edgeEffort', 1).applyOptions({ visible: false })
+      chart.applyOptions({ layout: { panes: { separatorColor: 'rgba(148, 163, 184, 0.18)', separatorHoverColor: 'rgba(148, 163, 184, 0.18)', enableResize: false } } })
       const prim = new EdgeEffortPrimitive()
       carrier.attachPrimitive(prim)
       chart.panes()[1]?.setHeight(EDGE_STRIP_HEIGHT)
@@ -413,10 +426,10 @@ export default function AggressorFlowV3Panel({
     const cur = seriesRef.current
     if (strip && cur.strip) {
       cur.strip.setData(aligned.map((r) => ({ time: r.time })))
-      cur.stripPrim.setData({ times: candleTimes, cols: strip.cols, max: strip.max })
+      cur.stripPrim.setData({ times: candleTimes, cols: strip.cols, max: strip.max, labels: visits?.labels })
     }
     requestAnimationFrame(() => refreshDecorationsRef.current())
-  }, [strip, aligned, candleTimes])
+  }, [strip, visits, aligned, candleTimes])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -442,7 +455,22 @@ export default function AggressorFlowV3Panel({
     requestAnimationFrame(() => refreshDecorationsRef.current())
   }, [linkedCrosshair, candleTimes])
 
-  const hoverIdx = hover ? aligned.findIndex((r) => r.time === hover.time) : -1
+  const hoverIdx = hover && hover.pane !== 1 ? aligned.findIndex((r) => r.time === hover.time) : -1
+  // CR-DI strip hover: the candle's four sums, and the visit (running so far / total) of its last minute at each edge.
+  const stripHover = useMemo(() => {
+    if (!hover || hover.pane !== 1 || !strip || !visits) return null
+    const idx = floorIndex(candleTimes, hover.time)
+    if (idx < 0 || candleTimes[idx] !== hover.time) return null
+    const c = strip.cols.get(idx) || [0, 0, 0, 0]
+    let last = -1
+    for (let i = 0; i < strip.idxOf.length; i += 1) if (strip.idxOf[i] === idx) last = i
+    const visit = (e) => {
+      if (last < 0) return null
+      const k = visits.of[e][last]
+      return k < 0 ? null : { ...visits[e][k], run: visits.run[e][last] }
+    }
+    return { time: hover.time, x: hover.x, c, top: visit('top'), bottom: visit('bottom') }
+  }, [hover, strip, visits, candleTimes])
   const hoverRow = hoverIdx >= 0 ? aligned[hoverIdx] : null
   const setAnchorTo = (t) => {
     onAnchorArmedChange?.(false)
@@ -548,6 +576,26 @@ export default function AggressorFlowV3Panel({
             borderRadius: 8, padding: '6px 8px', fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4,
           }}>
             {formatShiftedHHMM(hoverRow.time)} · Δ {sfmt(hoverRow.delta)} · {settings.rollingMin}-min {rolling[hoverIdx] == null ? '–' : sfmt(rolling[hoverIdx])} · CVD {cvd[hoverIdx] == null ? '–' : sfmt(cvd[hoverIdx])}
+          </div>
+        )}
+        {stripHover && (
+          <div data-testid="flow-v3-edge-effort-tooltip" style={{
+            position: 'absolute', bottom: 70, left: Math.min(Math.max(0, stripHover.x + 12), (stageRef.current?.clientWidth || 600) - 330),
+            maxWidth: 320, pointerEvents: 'none', zIndex: 5, background: 'rgba(2,6,23,0.92)', border: '1px solid #334155',
+            borderRadius: 8, padding: '6px 8px', fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4,
+          }}>
+            {(() => {
+              const [tb, tsl, bs, bb] = stripHover.c
+              const hm = (t) => formatShiftedHHMM(shift(t))
+              const vis = (v, a, b) => (v ? ` · visit ${hm(v.start)}–${hm(v.end)}: so far ${kfmt(v.run[0])} ${a} / ${kfmt(v.run[1])} ${b} of ${kfmt(v.main)} / ${kfmt(v.opp)}` : '')
+              return (
+                <>
+                  <div style={{ fontWeight: 700 }}>{formatShiftedHHMM(stripHover.time)} · edge effort</div>
+                  <div>Top {edges.top.price.toFixed(2)}: buyers {kfmt(tb)} / sellers {kfmt(tsl)} / net {sfmt(tb - tsl)}{vis(stripHover.top, 'buyers', 'sellers')}</div>
+                  <div>Bottom {edges.bottom.price.toFixed(2)}: sellers {kfmt(bs)} / buyers {kfmt(bb)} / net {sfmt(bb - bs)}{vis(stripHover.bottom, 'sellers', 'buyers')}</div>
+                </>
+              )
+            })()}
           </div>
         )}
         {(loading || error || candleTimes.length < 2 || !hasValues) && (
