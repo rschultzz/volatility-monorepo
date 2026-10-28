@@ -1,9 +1,10 @@
 // CR-DC — Flow v3 pane: anchored CVD, rolling net delta and the v2 delta histogram, bar-aligned with the
 // price chart like Flow v2 (same slot, height, time-scale sync, crosshair link, session bands). Its series
 // come from the v2 payloads (/api/ironbeam/flow?mode=v2&effort=1 — the legs give "anchor = last swing");
-// the header switches the price-pane layers (Heatmap, Profile, Absorbed) drawn from /api/ironbeam/flow/cells.
-// Palette (C1): blue = buyers, light grey = sellers, slate = neutral / marks. Every element is a visual aid,
-// untested as a signal.
+// the header switches the price-pane layers drawn from /api/ironbeam/flow/cells: Absorption levels and
+// Profile, plus the edge readout (CR-DF); Heatmap (cells) and Absorbed (marks) moved into ⚙ (CR-DF item 3, DF1).
+// Palette (C1): blue = buyers, light grey = sellers, slate = neutral / marks; magenta = absorption levels and
+// edges (C1 deviation approved by Ryan, CR-DF). Every element is a visual aid, untested as a signal.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createChart, CrosshairMode, ColorType, BaselineSeries, HistogramSeries } from 'lightweight-charts'
 import {
@@ -22,6 +23,7 @@ import {
   ROLLING_CHOICES,
   anchoredCvd,
   anchorReadout,
+  edgeText,
   kfmt,
   lastSwingAnchor,
   makeShifter,
@@ -34,6 +36,7 @@ const MIN_PANEL_HEIGHT = 140
 const BUY_RGBA = (alpha) => `rgba(96,165,250,${alpha})`
 const SELL_RGBA = (alpha) => `rgba(229,231,235,${alpha})`
 const SLATE_RGBA = (alpha) => `rgba(148,163,184,${alpha})`
+const MAGENTA_RGBA = (alpha) => `rgba(232,121,249,${alpha})`
 const SOURCE_LABEL = { databento: 'Databento', ironbeam: 'Ironbeam' }
 
 const chipStyle = (active) => ({
@@ -89,19 +92,21 @@ function GuideBody() {
       <div><span style={sw(BUY_RGBA(0.7))} /><span style={sw(SELL_RGBA(0.6))} /><b>Rolling net delta</b> (middle bars): buying minus selling over the last N minutes (⚙: 5 / 10 / 15).{tag}</div>
       <div><b>Delta per bar</b> (bottom bars): the Flow v2 histogram, so this pane stands alone.{tag}</div>
       <div style={h}>On the price chart</div>
-      <div><span style={sw(SELL_RGBA(0.6))} /><span style={sw(BUY_RGBA(0.6))} /><b>Heatmap</b> (behind the candles): for each 1-minute bar and 0.25 pt (0.5 pt when zoomed out), aggressive selling (market sells hitting the bid, grey, left half) and aggressive buying (market buys lifting the offer, blue, right half). Darker = a bigger cell for that session. Either layer can be switched off in ⚙.{tag}</div>
+      <div><span style={sw(MAGENTA_RGBA(0.9))} /><b>Absorption levels</b> (magenta lines): a price where aggressive selling ("sellers absorbed") or buying ("buyers absorbed") hit the Absorbed rule below. The line starts at the minute the volume built up, appears once the hold window has passed, and ends when price trades through it (else it runs to now). Thicker = more contracts absorbed; it fades from full to 25 % over 60 minutes. At most 8 are drawn, the largest after fading. The label says side, contracts and minutes held; hover for start, opposite-side contracts and where it broke. Exact data only.{tag}</div>
+      <div><span style={{ ...sw('transparent'), borderTop: `2px dashed ${MAGENTA_RGBA(0.8)}`, height: 0 }} /><b>Edge readout</b> (header, with an anchor; dashed magenta lines): the box is the highest and lowest 1-minute close since the anchor. A close up to 2 pts beyond an edge is a test and the edge stays; a close more than 2 pts beyond is a break ("broke hh:mm") and the edge moves to that close (as CR-CP's close box). For each edge: aggressive contracts traded within 1 pt of it since the anchor (buyers at the top, sellers at the bottom; exact data only) and minutes since price first came within 1 pt of it.{tag}</div>
+      <div><span style={sw(SELL_RGBA(0.6))} /><span style={sw(BUY_RGBA(0.6))} /><b>Heatmap (cells)</b> (⚙, behind the candles): for each 1-minute bar and 0.25 pt (0.5 pt when zoomed out), aggressive selling (market sells hitting the bid, grey, left half) and aggressive buying (market buys lifting the offer, blue, right half). Darker = a bigger cell for that session. Either layer can be switched off in ⚙.{tag}</div>
       <div><b>Profile</b> (right edge): the same volume summed per price from the anchor (or the session open) to now, selling grey and buying blue.{tag}</div>
-      <div><b>Absorbed</b> (slate triangles): ▲ "sellers absorbed" — aggressive selling at one price at least K× the session's typical cell (median so far), and nothing traded more than 1 tick below it for that minute and the next M minutes. ▼ "buyers absorbed" is the mirror. The slate line runs until price trades through. Hover for the numbers. K and M (default 3 and 3) are display defaults, not tested thresholds.{tag}</div>
+      <div><b>Absorbed (marks)</b> (⚙, slate triangles): ▲ "sellers absorbed" — aggressive selling at one price at least K× the session's typical cell (median so far), and nothing traded more than 1 tick below it for that minute and the next M minutes. ▼ "buyers absorbed" is the mirror. The slate line runs until price trades through. Hover for the numbers. K and M (default 3 and 3) are display defaults, not tested thresholds.{tag}</div>
       <div style={h}>Data</div>
       <div><b>exact: trades</b> / <b>exact: es_flow_price_1m</b> — each trade at its own price and side. Ironbeam keeps raw trades for about 2 days, so this is usually only the live and previous session.</div>
-      <div><b>approximate: 1-s data</b> — older sessions: each second's selling is placed at that second's low and its buying at its high. About 61 % of volume trades in seconds wider than 1 tick, so cells are off by a tick or two and selling leans toward lows, buying toward highs. <b>Absorbed marks are not drawn on approximate data</b>, because that lean manufactures them.</div>
+      <div><b>approximate: 1-s data</b> — older sessions: each second's selling is placed at that second's low and its buying at its high. About 61 % of volume trades in seconds wider than 1 tick, so cells are off by a tick or two and selling leans toward lows, buying toward highs. <b>Absorption levels, Absorbed marks and edge contracts are not drawn on approximate data</b>, because that lean manufactures them.</div>
       <div>Sessions through 2026-06-05 use Databento for RTH; later sessions use Ironbeam, which misses about 6 % of volume and understates buy − sell by about 30 %.</div>
     </div>
   )
 }
 
-function Settings({ value, onApply, onClose }) {
-  const [draft, setDraft] = useState({ ...value })
+function Settings({ value, layers, onApply, onClose }) {
+  const [draft, setDraft] = useState({ ...value, heat: Boolean(layers?.heat), marks: Boolean(layers?.marks) })
   const input = { width: '100%', background: '#020617', color: '#e2e8f0', border: '1px solid #334155', borderRadius: '10px', padding: '8px 10px', fontSize: '14px' }
   const apply = (e) => {
     e.preventDefault()
@@ -109,7 +114,7 @@ function Settings({ value, onApply, onClose }) {
       const v = Number(draft[k])
       return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d
     }
-    onApply({
+    onApply({ heat: Boolean(draft.heat), marks: Boolean(draft.marks) }, {
       ...value,
       rollingMin: ROLLING_CHOICES.includes(Number(draft.rollingMin)) ? Number(draft.rollingMin) : DEFAULT_V3_SETTINGS.rollingMin,
       k: n('k', 0.5, 50, DEFAULT_V3_SETTINGS.k),
@@ -139,6 +144,14 @@ function Settings({ value, onApply, onClose }) {
           <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>Display defaults (3 and 3), not tested thresholds.</div>
         </label>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+          <input type="checkbox" aria-label="Heatmap (cells)" data-testid="flow-v3-heatmap-toggle" checked={Boolean(draft.heat)} onChange={(e) => setDraft((d) => ({ ...d, heat: e.target.checked }))} />
+          Heatmap (cells) — behind the candles
+        </label>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+          <input type="checkbox" aria-label="Absorbed (marks)" data-testid="flow-v3-absorbed-toggle" checked={Boolean(draft.marks)} onChange={(e) => setDraft((d) => ({ ...d, marks: e.target.checked }))} />
+          Absorbed (marks) — slate triangles
+        </label>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
           <input type="checkbox" aria-label="Sell heat layer" checked={Boolean(draft.sellLayer)} onChange={(e) => setDraft((d) => ({ ...d, sellLayer: e.target.checked }))} />
           Heatmap: sell layer (grey)
         </label>
@@ -147,7 +160,7 @@ function Settings({ value, onApply, onClose }) {
           Heatmap: buy layer (blue)
         </label>
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', marginTop: '14px' }}>
-          <button type="button" style={chipStyle(false)} onClick={() => setDraft({ ...DEFAULT_V3_SETTINGS })}>Defaults</button>
+          <button type="button" style={chipStyle(false)} onClick={() => setDraft({ ...DEFAULT_V3_SETTINGS, heat: false, marks: false })}>Defaults</button>
           <div style={{ display: 'flex', gap: '6px' }}>
             <button type="button" style={chipStyle(false)} onClick={onClose}>Cancel</button>
             <button type="submit" style={{ ...chipStyle(true), fontWeight: 700 }}>Apply</button>
@@ -174,8 +187,9 @@ export default function AggressorFlowV3Panel({
   onFlowModeChange,
   settings = DEFAULT_V3_SETTINGS,
   onSettingsChange,
-  layers = { heat: false, profile: false, marks: false },
+  layers = { heat: false, profile: false, marks: false, levels: false, edges: false },
   onLayersChange,
+  edges = null, // CR-DF: flowV3.edgeReadout (App), null without an anchor or with the readout off
   anchor = null,
   onAnchorChange,
   anchorArmed = false,
@@ -235,9 +249,10 @@ export default function AggressorFlowV3Panel({
     const rth = (cellsPayload?.segments || []).find((s) => s.name === 'rth')
     return rth && !Array.isArray(rth.marks) ? rth.marks_note : null
   }, [cellsPayload])
+  const edgeLine = useMemo(() => (edges ? edgeText(edges, (t) => formatShiftedHHMM(shift(t))) : ''), [edges, shift])
   const notes = useMemo(() => [...new Set((payloads || []).flatMap((p) => p?.notes || []))], [payloads])
   const hasValues = aligned.some((r) => Number.isFinite(r.delta))
-  const anyLayer = layers.heat || layers.profile || layers.marks
+  const anyLayer = layers.heat || layers.profile || layers.marks || layers.levels || layers.edges
 
   useEffect(() => { candleTimesRef.current = candleTimes }, [candleTimes])
   useEffect(() => { linkedCrosshairRef.current = linkedCrosshair || null }, [linkedCrosshair])
@@ -405,17 +420,13 @@ export default function AggressorFlowV3Panel({
             {SOURCE_LABEL[s] || s}
           </span>
         ))}
-        <button type="button" style={chipStyle(layers.heat)} aria-pressed={layers.heat} data-testid="flow-v3-heatmap-toggle"
-          onClick={() => onLayersChange?.((l) => ({ ...l, heat: !l.heat }))} title="Aggressor-side volume heatmap behind the candles — visual aid, untested">
-          Heatmap {layers.heat ? 'on' : 'off'}
+        <button type="button" style={chipStyle(layers.levels)} aria-pressed={Boolean(layers.levels)} data-testid="flow-v3-levels-toggle"
+          onClick={() => onLayersChange?.((l) => ({ ...l, levels: !l.levels }))} title="Absorption levels (exact data only) — visual aid, untested">
+          Absorption levels {layers.levels ? 'on' : 'off'}
         </button>
         <button type="button" style={chipStyle(layers.profile)} aria-pressed={layers.profile} data-testid="flow-v3-profile-toggle"
           onClick={() => onLayersChange?.((l) => ({ ...l, profile: !l.profile }))} title="Volume profile at the right edge, from the anchor (or session open) — visual aid, untested">
           Profile {layers.profile ? 'on' : 'off'}
-        </button>
-        <button type="button" style={chipStyle(layers.marks)} aria-pressed={layers.marks} data-testid="flow-v3-absorbed-toggle"
-          onClick={() => onLayersChange?.((l) => ({ ...l, marks: !l.marks }))} title="Absorption marks (exact data only) — visual aid, untested">
-          Absorbed {layers.marks ? 'on' : 'off'}
         </button>
         <span style={{ width: 1, height: 16, background: 'rgba(148,163,184,0.25)', flex: '0 0 auto' }} />
         <button type="button" style={chipStyle(anchorArmed)} aria-pressed={anchorArmed} data-testid="flow-v3-anchor-pick"
@@ -434,6 +445,15 @@ export default function AggressorFlowV3Panel({
           onClick={() => { onAnchorArmedChange?.(false); onAnchorChange?.(null) }}>
           clear
         </button>
+        <button type="button" style={chipStyle(layers.edges)} aria-pressed={Boolean(layers.edges)} data-testid="flow-v3-edges-toggle"
+          onClick={() => onLayersChange?.((l) => ({ ...l, edges: !l.edges }))} title="Edge readout from the anchor: close box, contracts at each edge, held / broke — visual aid, untested">
+          Edges {layers.edges ? 'on' : 'off'}
+        </button>
+        {layers.edges && (
+          <span data-testid="flow-v3-edge-readout" style={{ fontSize: '11px', color: edges ? '#f5d0fe' : '#94a3b8', whiteSpace: 'nowrap', flex: '0 0 auto' }}>
+            {anchor == null ? 'edges: set an anchor' : edges ? edgeLine : cellsLoading ? 'edges: loading…' : 'edges: no bars since the anchor'}
+          </span>
+        )}
         {anyLayer && cellBadges.map((b) => (
           <span key={b.label} data-testid="flow-v3-cells-badge" title={b.exact ? 'each trade at its own price and side' : 'each second: sells at its low, buys at its high'}
             style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '999px', border: `1px solid ${b.exact ? 'rgba(96,165,250,0.45)' : 'rgba(148,163,184,0.35)'}`, color: '#cbd5e1', whiteSpace: 'nowrap' }}>
@@ -442,12 +462,13 @@ export default function AggressorFlowV3Panel({
         ))}
         {anyLayer && cellsLoading && <span style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>loading cells…</span>}
         {anyLayer && cellsError && <span style={{ fontSize: '11px', color: '#cbd5e1', whiteSpace: 'nowrap' }} title={cellsError}>cells failed</span>}
-        {layers.marks && marksNote && <span data-testid="flow-v3-marks-note" style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>{marksNote}</span>}
+        {(layers.marks || layers.levels) && marksNote && <span data-testid="flow-v3-marks-note" style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>{marksNote}</span>}
         <button type="button" style={iconStyle} title="How to read Flow v3" aria-label="How to read Flow v3" onClick={() => setGuideOpen(true)}>?</button>
       </div>
       {guideOpen && <Modal title="How to read Flow v3" onClose={() => setGuideOpen(false)}><GuideBody /></Modal>}
       {settingsOpen && (
-        <Settings value={settings} onClose={() => setSettingsOpen(false)} onApply={(v) => { onSettingsChange?.(v); setSettingsOpen(false) }} />
+        <Settings value={settings} layers={layers} onClose={() => setSettingsOpen(false)}
+          onApply={(lay, v) => { onLayersChange?.((l) => ({ ...l, ...lay })); onSettingsChange?.(v); setSettingsOpen(false) }} />
       )}
       <div ref={stageRef} className="flow-stage" style={{ width: '100%' }}>
         <div ref={hostRef} className="flow-host" style={{ width: '100%', height: '100%' }} />

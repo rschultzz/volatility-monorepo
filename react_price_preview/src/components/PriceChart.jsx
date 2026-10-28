@@ -25,8 +25,8 @@ import {
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { buildHeatColumns, chartMarks, flattenCells, kfmt, makeShifter, mergeRows, profileTotals } from '../flowV3'
-import { AbsorbMarksPrimitive, HeatmapPrimitive, ProfilePrimitive } from './flowV3Primitives'
+import { absorptionLevels, buildHeatColumns, chartMarks, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals } from '../flowV3'
+import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive } from './flowV3Primitives'
 
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
@@ -835,7 +835,7 @@ export default function PriceChart({
   // bar), position, shape, color, text, size }]; null while Effort is off.
   effortMarkers = null,
   // CR-DC — Flow v3 on the price pane: { payload (/api/ironbeam/flow/cells), heat, sellLayer, buyLayer,
-  // marks, profile, profileFrom (shifted PT epoch) }, memoised by App; null while v3 is off, and then no
+  // marks, profile, profileFrom (shifted PT epoch), levels, edges (CR-DF: flowV3.edgeReadout) }, memoised by App; null while v3 is off, and then no
   // primitive is attached (the chart is exactly as before). While `anchorPickArmed`, the next bar click
   // is consumed and reported to `onAnchorPick(shifted time)` instead of toggling a timeslice (DC3).
   flowV3 = null,
@@ -2566,15 +2566,30 @@ export default function PriceChart({
     const mx = (rows) => rows.reduce((m, r) => Math.max(m, r.buy + r.sell), 0)
     return { rows: { 1: r1, 2: r2 }, max: { 1: mx(r1), 2: mx(r2) } }
   }, [v3ProfileOn, v3Flat, v3ProfileFrom])
+  // CR-DF — absorption levels (exact marks as fading magenta lines) and the edge readout's dashed lines.
+  const v3LevelsOn = Boolean(flowV3?.levels && v3Payload)
+  const v3Levels = useMemo(() => (v3LevelsOn ? absorptionLevels(v3Payload, v3Times, v3Shift) : null), [v3LevelsOn, v3Payload, v3Times, v3Shift])
+  const v3EdgeReadout = flowV3?.edges || null
+  const v3Edges = useMemo(() => {
+    if (!v3EdgeReadout || !v3Times.length) return null
+    const snap = (utc) => {
+      const i = floorIndex(v3Times, v3Shift(utc))
+      return i < 0 ? null : v3Times[i]
+    }
+    const from = snap(v3EdgeReadout.from)
+    const to = snap(v3EdgeReadout.to)
+    return from == null || to == null ? null : { from, to, top: v3EdgeReadout.top.price, bottom: v3EdgeReadout.bottom.price }
+  }, [v3EdgeReadout, v3Times, v3Shift])
   const v3SellLayer = flowV3?.sellLayer !== false
   const v3BuyLayer = flowV3?.buyLayer !== false
-  const v3PrimRef = useRef({ series: null, heat: null, marks: null, profile: null })
+  const v3PrimRef = useRef({ series: null, heat: null, marks: null, profile: null, levels: null, edges: null })
   const [v3Hover, setV3Hover] = useState(null)
+  const [v3LevelHover, setV3LevelHover] = useState(null)
   useEffect(() => {
     const series = seriesRef.current
     if (!series) return
     const reg = v3PrimRef.current
-    if (reg.series !== series) v3PrimRef.current = { series, heat: null, marks: null, profile: null }
+    if (reg.series !== series) v3PrimRef.current = { series, heat: null, marks: null, profile: null, levels: null, edges: null }
     const r = v3PrimRef.current
     const feed = (key, make, data) => {
       if (!data && !r[key]) return
@@ -2588,8 +2603,12 @@ export default function PriceChart({
     feed('marks', () => new AbsorbMarksPrimitive((mark, pt) => setV3Hover(mark ? { mark, pt } : null)),
       v3Marks ? { marks: v3Marks, times: v3Times } : null)
     feed('profile', () => new ProfilePrimitive(), v3Profile)
+    feed('levels', () => new AbsorptionLevelsPrimitive((level, pt) => setV3LevelHover(level ? { level, pt } : null)),
+      v3Levels ? { levels: v3Levels, times: v3Times } : null)
+    feed('edges', () => new EdgeLinesPrimitive(), v3Edges)
     if (!v3Marks) setV3Hover(null)
-  }, [v3Columns, v3Marks, v3Profile, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
+    if (!v3Levels) setV3LevelHover(null)
+  }, [v3Columns, v3Marks, v3Profile, v3Levels, v3Edges, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
 
   // CR-CD A3 — when a candidate loads in replay (not yet revealed), fit the price axis to the
   // setup zone/range (range box, zone band, level, extreme, entry, stop) ± max(25 pts, 0.5·IM) instead of the full GEX-line
@@ -3497,6 +3516,24 @@ export default function PriceChart({
               <div style={{ fontWeight: 700 }}>{v3Hover.mark.kind === 'sellers_absorbed' ? 'Sellers absorbed' : 'Buyers absorbed'} · {Number(v3Hover.mark.price).toFixed(2)}</div>
               <div>{formatShiftedHHMM(v3Hover.mark.candleTime)} · aggressor {kfmt(Number(v3Hover.mark.aggressor))} · opposite {kfmt(Number(v3Hover.mark.opposite))}</div>
               <div>held {v3Hover.mark.held_min} min · {v3Hover.mark.break_time != null ? `broke at ${formatShiftedHHMM(v3Shift(v3Hover.mark.break_time))}` : 'not broken'}</div>
+              <div style={{ color: '#94a3b8' }}>visual aid — untested</div>
+            </div>
+          )}
+
+          {v3LevelHover && (
+            <div
+              data-testid="flow-v3-level-tooltip"
+              style={{
+                position: 'absolute',
+                left: Math.max(0, (hostRef.current?.offsetLeft || 0) + v3LevelHover.pt.x + 12),
+                top: Math.max(0, (hostRef.current?.offsetTop || 0) + v3LevelHover.pt.y - 10),
+                zIndex: 6, pointerEvents: 'none', background: 'rgba(2,6,23,0.92)', border: '1px solid #86198f',
+                borderRadius: 8, padding: '6px 8px', fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4, maxWidth: 280,
+              }}
+            >
+              <div style={{ fontWeight: 700, color: '#f0abfc' }}>{v3LevelHover.level.kind === 'sellers_absorbed' ? 'Sellers absorbed' : 'Buyers absorbed'} · {Number(v3LevelHover.level.price).toFixed(2)}</div>
+              <div>from {formatShiftedHHMM(v3LevelHover.level.startShifted)} · {kfmt(v3LevelHover.level.contracts)} contracts · opposite {kfmt(v3LevelHover.level.opposite)}</div>
+              <div>held {v3LevelHover.level.heldMin} min · {v3LevelHover.level.broken ? `broke at ${formatShiftedHHMM(v3LevelHover.level.endShifted)}` : 'not broken'}</div>
               <div style={{ color: '#94a3b8' }}>visual aid — untested</div>
             </div>
           )}

@@ -247,3 +247,114 @@ export class ProfilePrimitive extends BasePrimitive {
     }
   }
 }
+
+// CR-DF — absorption levels and the edge lines, in magenta (C1 deviation approved by Ryan in the kickoff:
+// distinct from candles, heat and GEX lines; still no red / green).
+const MAGENTA_RGB = '232,121,249' // #e879f9
+
+// Absorption levels: one horizontal line per level from its start minute to its break bar or now, width from
+// contracts absorbed, opacity from age, with its label at the right end. data: { levels (flowV3.absorptionLevels),
+// times }. Hover: `onHover(level | null, point)` within 5 px of a line.
+export class AbsorptionLevelsPrimitive extends BasePrimitive {
+  constructor(onHover) {
+    super()
+    this._onHover = onHover
+    this._hit = []
+    this._move = (param) => {
+      const pt = param?.point
+      let best = null
+      let bestD = 6
+      if (pt) {
+        for (const h of this._hit) {
+          if (pt.x < h.x0 - 3 || pt.x > h.x1 + 3) continue
+          const dd = Math.abs(pt.y - h.y)
+          if (dd < bestD) {
+            bestD = dd
+            best = h
+          }
+        }
+      }
+      this._onHover?.(best ? best.level : null, best ? { x: pt.x, y: best.y } : null)
+    }
+  }
+
+  attached(param) {
+    super.attached(param)
+    param.chart.subscribeCrosshairMove(this._move)
+  }
+
+  detached() {
+    this._chart?.unsubscribeCrosshairMove(this._move)
+    this._onHover?.(null, null)
+    super.detached()
+  }
+
+  zOrder() {
+    return 'top'
+  }
+
+  paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }, chart, series, d) {
+    this._hit = []
+    const range = visibleIndexRange(chart, d.times)
+    if (!range || !d.levels?.length) return
+    const ts = chart.timeScale()
+    const plotW = bitmapSize.width / hr
+    ctx.font = `${Math.round(10 * vr)}px sans-serif`
+    ctx.textBaseline = 'bottom'
+    for (const lv of d.levels) {
+      if (lv.endIdx < range[0] || lv.idx > range[1]) continue
+      const y = series.priceToCoordinate(lv.price)
+      if (y == null) continue
+      const x0raw = ts.timeToCoordinate(d.times[lv.idx])
+      const x1raw = ts.timeToCoordinate(d.times[lv.endIdx])
+      const x0 = x0raw == null ? 0 : x0raw
+      const x1 = x1raw == null ? plotW : x1raw
+      const lw = Math.max(1, Math.round(lv.width * vr))
+      const yy = Math.round(y * vr) + (lw % 2 ? 0.5 : 0)
+      ctx.strokeStyle = `rgba(${MAGENTA_RGB},${lv.alpha})`
+      ctx.lineWidth = lw
+      ctx.beginPath()
+      ctx.moveTo(Math.round(x0 * hr), yy)
+      ctx.lineTo(Math.round(Math.max(x1, x0 + 2) * hr), yy)
+      ctx.stroke()
+      ctx.fillStyle = `rgba(${MAGENTA_RGB},${Math.max(0.55, lv.alpha)})`
+      const tw = ctx.measureText(lv.label).width / hr
+      const lx = Math.min(x1 + 4, plotW - tw - 2)
+      ctx.fillText(lv.label, Math.round(lx * hr), Math.round((y - lv.width / 2 - 2) * vr))
+      this._hit.push({ x0, x1, y, level: lv })
+    }
+  }
+}
+
+// Edge lines (DF4): thin dashed magenta lines at the readout's top and bottom from the anchor to the last bar.
+// data: { from, to (shifted epochs), top, bottom (prices) }.
+export class EdgeLinesPrimitive extends BasePrimitive {
+  zOrder() {
+    return 'top'
+  }
+
+  paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }, chart, series, d) {
+    const ts = chart.timeScale()
+    const plotW = bitmapSize.width / hr
+    const vrange = ts.getVisibleRange?.()
+    if (!vrange || d.to < Number(vrange.from) || d.from > Number(vrange.to)) return
+    const xa = ts.timeToCoordinate(d.from)
+    const xb = ts.timeToCoordinate(d.to)
+    const x0 = xa == null ? 0 : xa
+    const x1 = xb == null ? plotW : xb
+    ctx.save()
+    ctx.strokeStyle = `rgba(${MAGENTA_RGB},0.8)`
+    ctx.lineWidth = Math.max(1, Math.round(hr))
+    ctx.setLineDash([Math.round(4 * hr), Math.round(3 * hr)])
+    for (const p of [d.top, d.bottom]) {
+      const y = series.priceToCoordinate(p)
+      if (y == null) continue
+      const yy = Math.round(y * vr) + 0.5
+      ctx.beginPath()
+      ctx.moveTo(Math.round(x0 * hr), yy)
+      ctx.lineTo(Math.round(Math.max(x1, x0 + 2) * hr), yy)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+}

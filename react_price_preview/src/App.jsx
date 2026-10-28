@@ -3,7 +3,7 @@ import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
 import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS, effortChartMarkers } from './components/AggressorFlowV2Panel'
 import AggressorFlowV3Panel from './components/AggressorFlowV3Panel'
-import { DEFAULT_V3_SETTINGS } from './flowV3'
+import { DEFAULT_V3_SETTINGS, edgeReadout, flattenBars, makeShifter } from './flowV3'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import { PANEL_WIDTH as ANALOGUES_PANEL_WIDTH } from './components/AnaloguesPanel'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
@@ -27,7 +27,8 @@ const FLOW_V2_EFFORT_STORAGE_KEY = 'ib-react-flow-v2-effort'
 const FLOW_V3_STORAGE_KEY = 'ib-react-flow-mode-v3'
 const FLOW_V3_SETTINGS_STORAGE_KEY = 'ib-react-flow-v3-settings'
 const FLOW_V3_LAYERS_STORAGE_KEY = 'ib-react-flow-v3-layers'
-const FLOW_V3_LAYERS_OFF = { heat: false, profile: false, marks: false }
+// CR-DF adds levels / edges; a stored CR-DC object keeps its heat / marks values (now switched in ⚙).
+const FLOW_V3_LAYERS_OFF = { heat: false, profile: false, marks: false, levels: false, edges: false }
 const GEX_LEVELS_MODE_STORAGE_KEY = 'ib-react-gex-levels-mode'
 // CR-CK — Overview panel "Stickiness" rows; off unless the user turns them on in settings.
 const SKEW_STICKINESS_STORAGE_KEY = 'ib-react-skew-stickiness'
@@ -1928,7 +1929,7 @@ export default function App() {
 
   // CR-DC: price cells + absorption marks for the selected session, only while v3 has a price-pane layer
   // on (DC13); live sessions refresh with the v2 cadence and pause during chart interaction (DC14).
-  const flowV3AnyLayer = flowV3 && (flowV3Layers.heat || flowV3Layers.profile || flowV3Layers.marks)
+  const flowV3AnyLayer = flowV3 && (flowV3Layers.heat || flowV3Layers.profile || flowV3Layers.marks || flowV3Layers.levels || flowV3Layers.edges)
   const flowCellsDate = selectedSessionTradeDateKey || tradeDate
   const flowCellsUrl = useMemo(() => {
     if (!flowEnabled || !flowV3AnyLayer || !flowCellsDate) return null
@@ -1976,6 +1977,15 @@ export default function App() {
     }
   }, [flowCellsUrl, loadingCenter, error, isLiveTradeDate])
 
+  // CR-DF: the edge readout (DF4) from the anchor, on the cells payload's 1-minute bars; shared by the v3
+  // header (text) and the price chart (dashed lines).
+  const flowV3Shift = useMemo(() => makeShifter((t) => utcEpochShowingZoneTime(t, 'America/Los_Angeles')), [])
+  const flowCellsBars = useMemo(() => (flowCells ? flattenBars(flowCells) : null), [flowCells])
+  const flowV3Edges = useMemo(() => {
+    if (!flowV3 || !flowV3Layers.edges || !flowCells || flowAnchor == null) return null
+    return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift)
+  }, [flowV3, flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift])
+
   // One object per real change (CR-CH): the chart's primitives recompute only when this changes.
   const flowV3Chart = useMemo(() => {
     if (!flowV3AnyLayer || !flowCells) return null
@@ -1984,11 +1994,13 @@ export default function App() {
       heat: flowV3Layers.heat,
       profile: flowV3Layers.profile,
       marks: flowV3Layers.marks,
+      levels: flowV3Layers.levels,
+      edges: flowV3Edges,
       sellLayer: flowV3Settings.sellLayer,
       buyLayer: flowV3Settings.buyLayer,
       profileFrom: flowAnchor,
     }
-  }, [flowV3AnyLayer, flowCells, flowV3Layers, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowAnchor])
+  }, [flowV3AnyLayer, flowCells, flowV3Layers, flowV3Edges, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowAnchor])
   const flowV3SessionPayload = useMemo(() => {
     if (!flowV3) return null
     const hit = flowV2Payloads.find((p) => p.dateStr === flowCellsDate) || flowV2Payloads.find((p) => p.dateStr === tradeDate)
@@ -2545,6 +2557,7 @@ export default function App() {
                       onSettingsChange={setFlowV3Settings}
                       layers={flowV3Layers}
                       onLayersChange={setFlowV3Layers}
+                      edges={flowV3Edges}
                       anchor={flowAnchor}
                       onAnchorChange={setFlowAnchor}
                       anchorArmed={flowAnchorArmed}
