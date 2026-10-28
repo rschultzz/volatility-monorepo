@@ -106,3 +106,27 @@ Display and data-entry CR; it tests nothing.
 3. Panel: notes, feedback, comment box, set filter, chip list.
 4. Playwright `cr-de` (intercepted) + existing read-only review tests.
 5. Smoke + wrap.
+
+---
+
+## Step 0 findings (2026-10-27, read-only)
+
+DB (read-only transaction): `setup_reviews` holds 10 rows; 2 carry a comment (both CR-CC smoke on `cc:fixture`);
+0 are `post_reveal`; no card has two pre-reveal rows. Ryan's recent reviews (rows 20–24, CR-CB round-1/2, CR-CZ
+cp-ranges:9) were each revealed 1.5–3.0 s after Save. Render keeps no request logs for these routes.
+
+1. **Post-reveal saves never reach the API — the request is never sent.** `reveal()` calls `resetForm()`, which
+   sets `label` to null; Save is `disabled={!label || busy}`. After Reveal the button reads "Save post-reveal
+   review" but stays greyed until a label key is pressed, with no hint why. The API would accept it.
+2. **No pre-reveal comment was lost.** With Save → Reveal in 2–3 s, no comment was typed between them; the
+   comments were typed after Reveal and blocked by (1). The code does send `comment` with the label; the CR-DB
+   test only asserted `comment: ''`, so CR-DE adds an end-to-end check with text.
+3. **No confirmation exists**; errors show only in a small grey line in the footer.
+4. **"fixture smoke reason"** comes from `known_reasons()`: the default list plus every reason in any review,
+   fixture sets included (CR-CC smoke, row 10 on `cc:fixture:2`).
+5. **Label rule:** the service used the *latest* pre-reveal review (`_STATE_LATERAL`, `summary`, `reveal`). The
+   kickoff's rule is the *first*; with no multi-row cards the switch changes no existing number.
+6. **Not run:** the two cr-cc tests that save / reveal on `cc:fixture` write to the real tables (B8).
+7. **Redaction gap (R3):** `_run()` returns `str(e)` of a failed connect as `message`, and `_db_error` returns
+   `str(e)`; psycopg's conninfo errors include the full URL with password, so a malformed `DATABASE_URL` would
+   send it to the browser. Step 0's own ad-hoc query printed one such error to the session output.
