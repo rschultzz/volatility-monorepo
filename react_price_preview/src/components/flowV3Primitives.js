@@ -340,34 +340,75 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
   }
 }
 
-// Edge lines (DF4): thin dashed magenta lines at the readout's top and bottom from the anchor to the last bar.
-// data: { from, to (shifted epochs), top, bottom (prices) }.
+// Edge lines (DF4): thin dashed magenta lines at each box's top and bottom. CR-DI amendment 9: frozen boxes (broken)
+// are drawn at lower opacity from their start to the break minute; the current box from its start to the last bar.
+// data: { boxes: [{ from, to (shifted epochs), top, bottom (prices), frozen, box }] }. Hover: `onHover(box | null, pt)`
+// within 5 px of a frozen box's line (the current box is the header's).
+export const FROZEN_EDGE_ALPHA = 0.35
 export class EdgeLinesPrimitive extends BasePrimitive {
+  constructor(onHover) {
+    super()
+    this._onHover = onHover
+    this._hit = []
+    this._move = (param) => {
+      const pt = param?.point
+      let best = null
+      let bestD = 6
+      if (pt) {
+        for (const h of this._hit) {
+          if (pt.x < h.x0 - 3 || pt.x > h.x1 + 3) continue
+          const dd = Math.abs(pt.y - h.y)
+          if (dd < bestD) {
+            bestD = dd
+            best = h
+          }
+        }
+      }
+      this._onHover?.(best ? best.box : null, best ? { x: pt.x, y: best.y } : null)
+    }
+  }
+
+  attached(param) {
+    super.attached(param)
+    param.chart.subscribeCrosshairMove(this._move)
+  }
+
+  detached() {
+    this._chart?.unsubscribeCrosshairMove(this._move)
+    this._onHover?.(null, null)
+    super.detached()
+  }
+
   zOrder() {
     return 'top'
   }
 
   paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }, chart, series, d) {
+    this._hit = []
     const ts = chart.timeScale()
     const plotW = bitmapSize.width / hr
     const vrange = ts.getVisibleRange?.()
-    if (!vrange || d.to < Number(vrange.from) || d.from > Number(vrange.to)) return
-    const xa = ts.timeToCoordinate(d.from)
-    const xb = ts.timeToCoordinate(d.to)
-    const x0 = xa == null ? 0 : xa
-    const x1 = xb == null ? plotW : xb
+    if (!vrange) return
     ctx.save()
-    ctx.strokeStyle = `rgba(${MAGENTA_RGB},0.8)`
     ctx.lineWidth = Math.max(1, Math.round(hr))
     ctx.setLineDash([Math.round(4 * hr), Math.round(3 * hr)])
-    for (const p of [d.top, d.bottom]) {
-      const y = series.priceToCoordinate(p)
-      if (y == null) continue
-      const yy = Math.round(y * vr) + 0.5
-      ctx.beginPath()
-      ctx.moveTo(Math.round(x0 * hr), yy)
-      ctx.lineTo(Math.round(Math.max(x1, x0 + 2) * hr), yy)
-      ctx.stroke()
+    for (const b of d.boxes || []) {
+      if (b.to < Number(vrange.from) || b.from > Number(vrange.to)) continue
+      const xa = ts.timeToCoordinate(b.from)
+      const xb = ts.timeToCoordinate(b.to)
+      const x0 = xa == null ? 0 : xa
+      const x1 = xb == null ? plotW : xb
+      ctx.strokeStyle = `rgba(${MAGENTA_RGB},${b.frozen ? FROZEN_EDGE_ALPHA : 0.8})`
+      for (const p of [b.top, b.bottom]) {
+        const y = series.priceToCoordinate(p)
+        if (y == null) continue
+        const yy = Math.round(y * vr) + 0.5
+        ctx.beginPath()
+        ctx.moveTo(Math.round(x0 * hr), yy)
+        ctx.lineTo(Math.round(Math.max(x1, x0 + 2) * hr), yy)
+        ctx.stroke()
+        if (b.frozen) this._hit.push({ x0, x1, y, box: b.box })
+      }
     }
     ctx.restore()
   }

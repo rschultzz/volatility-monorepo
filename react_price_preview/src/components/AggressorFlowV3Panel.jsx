@@ -20,14 +20,17 @@ import {
 } from './AggressorFlowPanel'
 import { alignV2ToCandles } from './AggressorFlowV2Panel'
 import {
+  BOX_HOLD_MIN_RANGE,
   DEFAULT_V3_SETTINGS,
   ROLLING_CHOICES,
   anchoredCvd,
   anchorReadout,
   edgeEffortBlock,
+  edgeEffortSeries,
   edgeStripColumns,
   edgeText,
   edgeVisits,
+  dirArrow,
   floorIndex,
   kfmt,
   lastSwingAnchor,
@@ -101,8 +104,10 @@ function GuideBody() {
       <div><b>Delta per bar</b> (bottom bars): the Flow v2 histogram, so this pane stands alone.{tag}</div>
       <div style={h}>On the price chart</div>
       <div><span style={sw(ORANGE_RGBA(0.9))} /><span style={sw(MAGENTA_RGBA(0.9))} /><b>Absorption levels</b> (orange and magenta lines): a price where aggressive selling ("sellers absorbed", a floor, orange) or buying ("buyers absorbed", a ceiling, magenta) hit the Absorbed rule below. The line starts at the minute the volume built up, appears once the hold window has passed, and ends when price trades through it (else it runs to now). Thicker = more contracts absorbed; it fades from full to 25 % over 60 minutes. At most 8 are drawn, the largest after fading. The label says side, contracts and minutes held; hover for start, opposite-side contracts and where it broke. Exact data only.{tag}</div>
-      <div><span style={{ ...sw('transparent'), borderTop: `2px dashed ${MAGENTA_RGBA(0.8)}`, height: 0 }} /><b>Edge readout</b> (header, with an anchor; dashed magenta lines): the box is the highest and lowest 1-minute close since the anchor. A close up to 2 pts beyond an edge is a test and the edge stays; a close more than 2 pts beyond is a break ("broke hh:mm") and the edge moves to that close (as CR-CP's close box). For each edge: aggressive contracts traded within 1 pt of it since the anchor (buyers at the top, sellers at the bottom; exact data only) and minutes since price first came within 1 pt of it.{tag}</div>
-      <div><span style={sw(BUY_RGBA(0.85))} /><span style={sw(SELL_RGBA(0.38))} /><span style={sw(SELL_RGBA(0.72))} /><span style={sw(BUY_RGBA(0.38))} /><b>Edge effort</b> (header chip, needs Edges and an anchor; a strip under the delta bars): per minute since the anchor, the same aggressive contracts the edge readout counts, within 1 pt of each edge, both sides. Top edge, drawn up: buyers (blue) with sellers beside them (thinner, lighter grey). Bottom edge, drawn down: sellers (grey) with buyers beside them (thinner, lighter blue). The blue bars at the top and the grey bars at the bottom add up to the header's numbers; when an edge breaks and moves, the whole strip is re-counted against the new edge, as the header is. A visit is a run of minutes with bars at that edge, allowing gaps of up to 2 minutes; its label says main side / other side (top buyers / sellers, bottom sellers / buyers). Hover a minute for both sides, the net and the visit's running totals. Exact data only. Visit sizes are effort, not a tested signal; Ironbeam live data understates volume.{tag}
+      <div><span style={{ ...sw('transparent'), borderTop: `2px dashed ${MAGENTA_RGBA(0.8)}`, height: 0 }} /><b>Edge readout</b> (header, with an anchor; dashed magenta lines): the box starts at the anchor minute's close. A close up to 2 pts beyond an edge is a test and the edge stays; a close more than 2 pts beyond moves the edge or breaks the box (below). For each edge: aggressive contracts traded within 1 pt of it since the box started (buyers at the top, sellers at the bottom; exact data only) and minutes since price first came within 1 pt of it.{tag}
+        <div style={{ marginTop: '4px' }}><b>Restart on a break</b> (CR-DI): while an edge is younger than N minutes (⚙, default 15) a close more than 2 pts beyond it moves the edge out ("moved hh:mm") and the box grows. Once the edge has held N minutes, such a close is a break: the box freezes (drawn faded, ending at the break minute; hover it for its edges, contracts on both sides, minutes held and "broke hh:mm ↑/↓"), and a new box starts at the break bar from that bar's close. The header ("Box from hh:mm ↑") and the Edge effort strip use the current box. The last 4 frozen boxes are drawn. Clearing or moving the anchor removes all boxes. N is a display default, not a tested threshold.</div>
+      </div>
+      <div><span style={sw(BUY_RGBA(0.85))} /><span style={sw(SELL_RGBA(0.38))} /><span style={sw(SELL_RGBA(0.72))} /><span style={sw(BUY_RGBA(0.38))} /><b>Edge effort</b> (header chip, needs Edges and an anchor; a strip under the delta bars): per minute since the anchor, the same aggressive contracts the edge readout counts, within 1 pt of each edge, both sides. Top edge, drawn up: buyers (blue) with sellers beside them (thinner, lighter grey). Bottom edge, drawn down: sellers (grey) with buyers beside them (thinner, lighter blue). Each minute is counted against the box it belongs to (the drawn boxes: the last 4 frozen and the current one). Over the current box, the blue bars at the top and the grey bars at the bottom add up to the header's numbers; when an edge of the current box moves, its minutes are re-counted against the new edge, as the header is. A visit is a run of minutes with bars at that edge, allowing gaps of up to 2 minutes, and never crosses a break; its label says main side / other side (top buyers / sellers, bottom sellers / buyers). Hover a minute for both sides, the net and the visit's running totals. Exact data only. Visit sizes are effort, not a tested signal; Ironbeam live data understates volume.{tag}
         <div style={{ marginTop: '4px', color: '#cbd5e1' }}><i>How to read, untested</i> (bottom edge; mirror it for the top):
           <ul style={{ margin: '2px 0 0 18px', padding: 0 }}>
             <li>heavy aggressive selling at the low, CVD falls, price holds = passive defense (resting bids absorb);</li>
@@ -139,6 +144,7 @@ function Settings({ value, layers, onApply, onClose }) {
       m: Math.round(n('m', 1, 30, DEFAULT_V3_SETTINGS.m)),
       sellLayer: Boolean(draft.sellLayer),
       buyLayer: Boolean(draft.buyLayer),
+      boxHoldMin: Math.round(n('boxHoldMin', BOX_HOLD_MIN_RANGE[0], BOX_HOLD_MIN_RANGE[1], DEFAULT_V3_SETTINGS.boxHoldMin)),
     })
   }
   const label = (text) => <div style={{ fontSize: '12px', color: '#cbd5e1', marginBottom: '4px' }}>{text}</div>
@@ -160,6 +166,12 @@ function Settings({ value, layers, onApply, onClose }) {
           {label('Absorbed: M minutes held')}
           <input type="number" step={1} min={1} aria-label="Absorbed M" value={draft.m} style={input} onChange={(e) => setDraft((d) => ({ ...d, m: e.target.value }))} />
           <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>Display defaults (3 and 3), not tested thresholds.</div>
+        </label>
+        <label style={{ display: 'block', marginBottom: '10px' }}>
+          {label('Box edge must hold N min before a break freezes it')}
+          <input type="number" step={1} min={BOX_HOLD_MIN_RANGE[0]} max={BOX_HOLD_MIN_RANGE[1]} aria-label="Box hold minutes" data-testid="flow-v3-box-hold"
+            value={draft.boxHoldMin ?? DEFAULT_V3_SETTINGS.boxHoldMin} style={input} onChange={(e) => setDraft((d) => ({ ...d, boxHoldMin: e.target.value }))} />
+          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>Edges box, 5–60 (default 15). A display default, not a tested threshold: ranges are measured against the prior move, not a fixed time (A2); this only decides when the drawn box restarts.</div>
         </label>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
           <input type="checkbox" aria-label="Heatmap (cells)" data-testid="flow-v3-heatmap-toggle" checked={Boolean(draft.heat)} onChange={(e) => setDraft((d) => ({ ...d, heat: e.target.checked }))} />
@@ -276,17 +288,19 @@ export default function AggressorFlowV3Panel({
   const hasValues = aligned.some((r) => Number.isFinite(r.delta))
   const edgeEffortWhy = edgeEffortBlock(layers.edges, anchor, edges)
   const stripOn = Boolean(edgeEffortOn && !edgeEffortWhy && edges?.exact && edges?.minutes)
-  const strip = useMemo(() => (stripOn ? edgeStripColumns(edges.minutes, candleTimes, shift) : null), [stripOn, edges, candleTimes, shift])
+  // Amendment 9: the strip draws the drawn boxes (last 4 frozen + current), each minute against its own box.
+  const series = useMemo(() => (stripOn ? edgeEffortSeries(edges) : null), [stripOn, edges])
+  const strip = useMemo(() => (series ? edgeStripColumns(series, candleTimes, shift) : null), [series, candleTimes, shift])
   // Visit labels (main first) placed on candle indexes; the primitive drops the smaller of two colliding labels.
   const visits = useMemo(() => {
     if (!strip) return null
-    const v = edgeVisits(edges.minutes)
+    const v = edgeVisits(series)
     const place = (list) => list.map((x) => ({
       ...x, i0: floorIndex(candleTimes, shift(x.start)), i1: floorIndex(candleTimes, shift(x.end)),
       text: `${kfmt(x.main)} / ${kfmt(x.opp)}`,
     })).filter((x) => x.i0 >= 0)
     return { ...v, labels: { top: place(v.top), bottom: place(v.bottom) } }
-  }, [strip, edges, candleTimes, shift])
+  }, [strip, series, candleTimes, shift])
   const anyLayer = layers.heat || layers.profile || layers.marks || layers.levels || layers.edges
 
   useEffect(() => { candleTimesRef.current = candleTimes }, [candleTimes])
@@ -479,8 +493,9 @@ export default function AggressorFlowV3Panel({
       const k = visits.of[e][last]
       return k < 0 ? null : { ...visits[e][k], run: visits.run[e][last] }
     }
-    return { time: hover.time, x: hover.x, c, top: visit('top'), bottom: visit('bottom') }
-  }, [hover, strip, visits, candleTimes])
+    const box = series.boxes.find((b) => shift(b.from) <= hover.time && hover.time <= shift(b.breakAt ?? b.to)) || null
+    return { time: hover.time, x: hover.x, c, top: visit('top'), bottom: visit('bottom'), box }
+  }, [hover, strip, series, visits, candleTimes, shift])
   const hoverRow = hoverIdx >= 0 ? aligned[hoverIdx] : null
   const setAnchorTo = (t) => {
     onAnchorArmedChange?.(false)
@@ -600,9 +615,9 @@ export default function AggressorFlowV3Panel({
               const vis = (v, a, b) => (v ? ` · visit ${hm(v.start)}–${hm(v.end)}: so far ${kfmt(v.run[0])} ${a} / ${kfmt(v.run[1])} ${b} of ${kfmt(v.main)} / ${kfmt(v.opp)}` : '')
               return (
                 <>
-                  <div style={{ fontWeight: 700 }}>{formatShiftedHHMM(stripHover.time)} · edge effort</div>
-                  <div>Top {edges.top.price.toFixed(2)}: buyers {kfmt(tb)} / sellers {kfmt(tsl)} / net {sfmt(tb - tsl)}{vis(stripHover.top, 'buyers', 'sellers')}</div>
-                  <div>Bottom {edges.bottom.price.toFixed(2)}: sellers {kfmt(bs)} / buyers {kfmt(bb)} / net {sfmt(bb - bs)}{vis(stripHover.bottom, 'sellers', 'buyers')}</div>
+                  <div style={{ fontWeight: 700 }}>{formatShiftedHHMM(stripHover.time)} · edge effort{stripHover.box?.breakAt ? ` · box ${hm(stripHover.box.from)}–${hm(stripHover.box.breakAt)} (broke ${dirArrow(stripHover.box.dir)})` : ''}</div>
+                  <div>Top {(stripHover.box || edges).top.price.toFixed(2)}: buyers {kfmt(tb)} / sellers {kfmt(tsl)} / net {sfmt(tb - tsl)}{vis(stripHover.top, 'buyers', 'sellers')}</div>
+                  <div>Bottom {(stripHover.box || edges).bottom.price.toFixed(2)}: sellers {kfmt(bs)} / buyers {kfmt(bb)} / net {sfmt(bb - bs)}{vis(stripHover.bottom, 'sellers', 'buyers')}</div>
                 </>
               )
             })()}

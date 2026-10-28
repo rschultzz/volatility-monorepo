@@ -2,7 +2,7 @@
 // Run: npm --prefix react_price_preview run test:unit
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { edgeEffortBlock, edgeReadout, edgeStripColumns, edgeVisits, flattenBars } from '../../src/flowV3.js'
+import { drawnBoxes, edgeEffortBlock, edgeEffortSeries, edgeReadout, edgeStripColumns, edgeText, edgeVisits, flattenBars } from '../../src/flowV3.js'
 
 const T0 = 1_777_642_200 // a UTC minute
 const id = (t) => t
@@ -92,4 +92,59 @@ test('strip columns bucket minutes onto the candles (5-minute chart) and scale t
   assert.deepEqual(s.cols.get(1), [3, 6, 9, 0])
   assert.deepEqual(s.idxOf, [0, 0, 1])
   assert.equal(s.max, 9)
+})
+
+// CR-DI amendment 9 — the box restarts on a break once the broken edge has held N minutes.
+const flat = (n, c) => new Array(n).fill(c)
+test('box: a close > 2 pts beyond a young edge grows the box; after N minutes it freezes the box and a new one starts', () => {
+  // minutes 0-4 at 100, 5: 103 (top young -> grows to 103), 6-24 at 102, 25: 106 (top set at 5, held 20 >= 15 -> break)
+  const closes = [...flat(5, 100), 103, ...flat(19, 102), 106, 105, 106.5]
+  const cells = [[5, 103, 50, 40], [10, 102.5, 7, 3], [25, 106, 9, 1], [27, 106.5, 11, 2], [3, 100, 4, 6]]
+  const p = payload(closes, cells)
+  const r = edgeReadout(p, flattenBars(p), T0, id, 15)
+  assert.equal(r.frozen.length, 1)
+  const f = r.frozen[0]
+  assert.deepEqual([f.from, f.to, f.breakAt, f.dir], [T0, T0 + 24 * 60, T0 + 25 * 60, 'up'])
+  assert.deepEqual([f.bottom.price, f.top.price], [100, 103])
+  assert.equal(f.top.contracts, 50 + 7) // 103 and 102.5 within 1 pt of 103, minutes 0-24 only
+  assert.equal(f.top.opposite, 40 + 3)
+  assert.equal(f.bottom.contracts, 6)
+  assert.equal(f.heldMin, 25)
+  // current box from the break bar: top = bottom = 106, 106.5 is a test (within 2 pts)
+  assert.deepEqual([r.from, r.top.price, r.bottom.price, r.startDir], [T0 + 25 * 60, 106, 106, 'up'])
+  assert.equal(r.top.contracts, 9 + 11)
+  assert.equal(r.top.contracts, sum(r.minutes.topBuy))
+  assert.equal(r.bottom.contracts, sum(r.minutes.bottomSell))
+  assert.match(edgeText(r, () => '07:25'), /^Box from 07:25 ↑ · Top 106\.00/)
+  // a longer hold keeps it one growing box (today's ratchet)
+  const one = edgeReadout(p, flattenBars(p), T0, id, 30)
+  assert.equal(one.frozen.length, 0)
+  assert.equal(one.top.price, 106)
+})
+
+test('box: drawn boxes keep the last 4 frozen; the strip series and visits stay inside each box', () => {
+  // a break every 6 minutes with N = 5: closes step up 3 pts every 6 minutes
+  const closes = []
+  for (let k = 0; k < 7; k += 1) closes.push(...flat(6, 100 + 3 * k))
+  const cells = closes.map((c, i) => [i, c, 1, 1])
+  const p = payload(closes, cells)
+  const r = edgeReadout(p, flattenBars(p), T0, id, 5)
+  assert.equal(r.frozen.length, 6)
+  const { boxes, dropped } = drawnBoxes(r)
+  assert.equal(boxes.length, 5)
+  assert.equal(dropped, 2)
+  assert.equal(boxes[4], r)
+  const s = edgeEffortSeries(r)
+  assert.equal(s.dropped, 2)
+  assert.equal(s.t[0], r.frozen[2].from) // dropped boxes' minutes are not drawn
+  const v = edgeVisits(s)
+  // each box is 6 minutes of continuous bars; consecutive boxes touch (gap 0) but visits must not join
+  assert.equal(v.top.length, 5)
+  for (const x of v.top) assert.equal((x.end - x.start) / 60, 5)
+})
+
+test('edgeText uses "moved" for growth and no box prefix without a break', () => {
+  const p = payload([100, 103, 103], [])
+  const r = edgeReadout(p, flattenBars(p), T0, id)
+  assert.equal(edgeText(r, () => '07:01'), 'Top 103.00 · 0 buyers · held 1 m · moved 07:01 | Bottom 100.00 · 0 sellers · held 2 m')
 })
