@@ -137,3 +137,51 @@ off by default; the existing sell / buy layer switches and K / M stay. Stored la
    hover, "?" guides; layer-key carry-over.
 4. Smoke: Playwright (Current / v2 pixel identity vs `origin/main`; 2026-05-01 and live with levels and readout on;
    defaults off; replay `until`); headed Chrome 10-min drag / zoom with all v3 layers on, heap samples; PR.
+
+---
+
+## Step 0 findings (2026-10-27, read-only)
+
+**Method.** `scripts/cr_df_step0/q_levels.py` (output `q_levels.out.json`): the real cells builder
+(`flow_v3.build_cells_payload`, RTH, K 3 / M 3) on `BACKFILL_DATABASE_URL` with `default_transaction_read_only = on`
+and the role asserted. Sessions: every 10th train session with Databento `es_flow_price_1m` rows (11 sessions,
+2026-01-06 → 06-01) and the forward session 2026-10-27 (Ironbeam). Mechanical counts only (levels, sizes, timing) —
+no direction, outcome or feature statistic.
+
+**B4 disclosure.** The script's first run also included **2026-10-26** (a retained Ironbeam session, which is in
+the frozen holdout 2026-06-06 → 10-26). It computed the same mechanical counts only (11 marks, sizes, timing); the
+script was then changed to exclude the holdout and re-run, and the numbers below and the stored output do not use
+2026-10-26. Nothing was read from it beyond those counts, and nothing in the design depends on it.
+
+| session | tier | marks (levels) | sellers | contracts p50 / max | held p50 (min) | broken | minutes with > 8 confirmed | max levels < 60 min old |
+|---|---|---|---|---|---|---|---|---|
+| 2026-01-06 | price_1m (Databento) | 19 | 11 | 484 / 1,399 | 10 | 84 % | 30 % | 8 |
+| 2026-01-21 | price_1m | 5 | 1 | 317 / 379 | 45 | 60 % | 0 | 3 |
+| 2026-02-04 | price_1m | 0 | 0 | – | – | – | 0 | 0 |
+| 2026-02-19 | price_1m | 8 | 4 | 252 / 343 | 14 | 50 % | 0 | 4 |
+| 2026-03-05 | price_1m | 1 | 1 | 231 / 231 | 13 | 0 | 0 | 1 |
+| 2026-03-19 (roll week) | price_1m | 17 | 13 | 32 / 170 | 32 | 71 % | 42 % | 6 |
+| 2026-04-02 | price_1m | 6 | 2 | 259 / 992 | 6.5 | 67 % | 0 | 3 |
+| 2026-04-17 | price_1m | 3 | 1 | 371 / 619 | 12 | 100 % | 0 | 1 |
+| 2026-05-01 | price_1m | 5 | 4 | 296 / 509 | 11 | 100 % | 0 | 5 |
+| 2026-05-15 | price_1m | 6 | 4 | 316 / 419 | 9 | 83 % | 0 | 3 |
+| 2026-06-01 | price_1m | 20 | 11 | 339 / 1,426 | 12 | 65 % | 31 % | 9 |
+| 2026-10-27 | price_1m (Ironbeam) | 17 | 6 | 425 / 851 | 11 | 71 % | 18 % | 6 |
+
+Pooled contracts per level (n 107): p10 39, p25 259, **p50 350**, p75 444, p90 656, p99 1,375, max 1,426.
+
+**What this fixes (readings, within DF1–DF4):**
+- **Thickness scale (DF2):** width px = clamp(1, 5, 1 + 4 × ln(contracts / 50) / ln(30)) — 1 px at ≤ 50 contracts,
+  ≈ 3.3 px at the median (350), 5 px at ≥ 1,500 (cap, above the observed max). Log, capped, as the brief.
+- **The 8-cap (DF3)** binds on 4 of 12 sessions for 18–42 % of the session (all confirmed levels count, since a
+  level never disappears, it fades to 25 %); levels under 60 min old exceed 8 on one minute in one session, so the
+  cap mostly removes faded old levels, as intended.
+- **Most levels break** (median ≈ 70 %) after a median ≈ 11 min, so the line usually ends well before now; the label
+  sits at the line's right end (the break bar or now / `until`).
+- **The 2026-03-19 roll week** shows small levels (p50 32): the RTH contract chosen by v2's bar match (A1.4) is the
+  thin one there, which is CR-DC's existing behaviour, not changed here.
+- **Bars for the edge readout:** the segment minutes v2 already picks (`_segment_minutes`: `o, h, l, c, …` indexed
+  by minute start, cut at now / `until`) have 390 minutes on every RTH session above, the same as the minutes with
+  cells. Adding `bars: {t, h, l, c}` per segment is ≈ 390 × 4 numbers per segment.
+
+**Gate.** No ruling changes and no stop. Implementation proceeds in the frozen order.
