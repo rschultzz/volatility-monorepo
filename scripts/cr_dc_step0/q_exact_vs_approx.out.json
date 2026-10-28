@@ -1,0 +1,25 @@
+{
+ "session": "2026-10-27",
+ "trades": 279515,
+ "seconds": 20451,
+ "trade_vol": 1069166.0,
+ "flow_1s_vol": 1069166.0,
+ "cell_overlap_share": {
+  "SELL_0.25_extreme": 0.7738,
+  "SELL_0.25_close": 0.8341,
+  "SELL_0.25_vwap": 0.8745,
+  "SELL_0.5_extreme": 0.8413,
+  "SELL_0.5_close": 0.9047,
+  "SELL_0.5_vwap": 0.9316,
+  "SELL_extreme_err_mean_pts": -0.1613,
+  "SELL_extreme_err_share_exact": 0.557,
+  "BUY_0.25_extreme": 0.7705,
+  "BUY_0.25_close": 0.8354,
+  "BUY_0.25_vwap": 0.872,
+  "BUY_0.5_extreme": 0.8466,
+  "BUY_0.5_close": 0.904,
+  "BUY_0.5_vwap": 0.9316,
+  "BUY_extreme_err_mean_pts": 0.1663,
+  "BUY_extreme_err_share_exact": 0.5411
+ }
+}

@@ -1,0 +1,51 @@
+{
+ "aggressor_side": [
+  [
+   "BUY",
+   "445589",
+   "1484726"
+  ],
+  [
+   "SELL",
+   "438286",
+   "1466119"
+  ],
+  [
+   "0",
+   "2",
+   "110"
+  ]
+ ],
+ "databento_2026_train_rth": {
+  "seconds": 2485353,
+  "sec_gt_1tick": 0.30971415328124413,
+  "vol_in_gt_1tick": 0.6123720637867287,
+  "sec_gt_2tick": 0.11978901990984782,
+  "vol_in_gt_2tick": 0.3594464176955306,
+  "sec_single_price": 0.2872513481988273
+ },
+ "databento_2024R_a_rth": {
+  "seconds": 4277133,
+  "sec_gt_1tick": 0.17903067311678172,
+  "vol_in_gt_1tick": 0.4677635640999024,
+  "sec_gt_2tick": 0.052065717853524776,
+  "vol_in_gt_2tick": 0.22846249266195265,
+  "sec_single_price": 0.4078187421340417
+ },
+ "databento_2026-05-01_rth": {
+  "seconds": 21602,
+  "sec_gt_1tick": 0.20410147208591797,
+  "vol_in_gt_1tick": 0.508960918277179,
+  "sec_gt_2tick": 0.049902786779001944,
+  "vol_in_gt_2tick": 0.2509552990460398,
+  "sec_single_price": 0.3365892047032682
+ },
+ "ironbeam_2026_train_rth": {
+  "seconds": 2285469,
+  "sec_gt_1tick": 0.2919742074821404,
+  "vol_in_gt_1tick": 0.5777039919114949,
+  "sec_gt_2tick": 0.11008287576860591,
+  "vol_in_gt_2tick": 0.32562974930316463,
+  "sec_single_price": 0.29557871929131396
+ }
+}

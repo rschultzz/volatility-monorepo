@@ -25,6 +25,8 @@ import {
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
+import { buildHeatColumns, chartMarks, flattenCells, kfmt, makeShifter, mergeRows, profileTotals } from '../flowV3'
+import { AbsorbMarksPrimitive, HeatmapPrimitive, ProfilePrimitive } from './flowV3Primitives'
 
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
@@ -832,6 +834,13 @@ export default function PriceChart({
   // CR-CD A5 — swing effort labels from Flow v2 (Effort on): [{ time (shifted PT epoch of the leg's end
   // bar), position, shape, color, text, size }]; null while Effort is off.
   effortMarkers = null,
+  // CR-DC — Flow v3 on the price pane: { payload (/api/ironbeam/flow/cells), heat, sellLayer, buyLayer,
+  // marks, profile, profileFrom (shifted PT epoch) }, memoised by App; null while v3 is off, and then no
+  // primitive is attached (the chart is exactly as before). While `anchorPickArmed`, the next bar click
+  // is consumed and reported to `onAnchorPick(shifted time)` instead of toggling a timeslice (DC3).
+  flowV3 = null,
+  anchorPickArmed = false,
+  onAnchorPick = null,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -1850,6 +1859,11 @@ export default function PriceChart({
     }
 
     const handleClick = (param) => {
+      // CR-DC DC3: an armed anchor pick takes this one click (no GEX popup, no timeslice toggle).
+      if (anchorPickArmedRef.current && param?.time != null) {
+        onAnchorPickRef.current?.(Number(param.time))
+        return
+      }
       // GEX line hit-test first: if the click landed near a GEX horizontal line,
       // show the per-expiration popup and short-circuit before toggling a timeslice.
       if (param?.point && gexSeriesRefs.current.length > 0) {
@@ -2497,6 +2511,12 @@ export default function PriceChart({
   // leg's end bar. Their own markers primitive, attached only once there are labels to draw, so with
   // Effort off the chart is exactly as before.
   const effortMarkersRef = useRef(null)
+  const anchorPickArmedRef = useRef(false)
+  const onAnchorPickRef = useRef(null)
+  useEffect(() => {
+    anchorPickArmedRef.current = Boolean(anchorPickArmed)
+    onAnchorPickRef.current = onAnchorPick
+  }, [anchorPickArmed, onAnchorPick])
   useEffect(() => {
     const series = seriesRef.current
     if (!series) return
@@ -2513,6 +2533,63 @@ export default function PriceChart({
     markers.sort((a, b) => a.time - b.time)
     effortMarkersRef.current.api.setMarkers(markers)
   }, [effortMarkers, displayCandles])
+
+  // CR-DC — Flow v3 heatmap, absorption marks and profile: one primitive each, attached on first use and
+  // fed inputs computed once per data change (payload / candle times / toggles), never per render.
+  const v3Shift = useMemo(() => makeShifter((t) => utcEpochShowingZoneTime(t, 'America/Los_Angeles')), [])
+  const v3Payload = flowV3?.payload || null
+  const v3Times = useMemo(() => {
+    const out = []
+    for (const c of shiftedCandles) {
+      const t = Number(c.time)
+      if (Number.isFinite(t) && (!out.length || t > out[out.length - 1])) out.push(t)
+    }
+    return out
+  }, [shiftedCandles])
+  const v3Step = useMemo(() => {
+    const d = []
+    for (let i = 1; i < v3Times.length && d.length < 24; i += 1) d.push(v3Times[i] - v3Times[i - 1])
+    d.sort((a, b) => a - b)
+    return d.length ? d[Math.floor(d.length / 2)] : 60
+  }, [v3Times])
+  const v3Flat = useMemo(() => (v3Payload ? flattenCells(v3Payload, v3Shift) : null), [v3Payload, v3Shift])
+  const v3HeatOn = Boolean(flowV3?.heat && v3Flat)
+  const v3Columns = useMemo(() => (v3HeatOn ? buildHeatColumns(v3Flat, v3Times, v3Step) : null), [v3HeatOn, v3Flat, v3Times, v3Step])
+  const v3MarksOn = Boolean(flowV3?.marks && v3Payload)
+  const v3Marks = useMemo(() => (v3MarksOn ? chartMarks(v3Payload, v3Times, v3Shift) : null), [v3MarksOn, v3Payload, v3Times, v3Shift])
+  const v3ProfileOn = Boolean(flowV3?.profile && v3Flat)
+  const v3ProfileFrom = flowV3?.profileFrom ?? null
+  const v3Profile = useMemo(() => {
+    if (!v3ProfileOn) return null
+    const r1 = profileTotals(v3Flat, v3ProfileFrom == null ? -Infinity : v3ProfileFrom)
+    const r2 = mergeRows(r1, 2)
+    const mx = (rows) => rows.reduce((m, r) => Math.max(m, r.buy + r.sell), 0)
+    return { rows: { 1: r1, 2: r2 }, max: { 1: mx(r1), 2: mx(r2) } }
+  }, [v3ProfileOn, v3Flat, v3ProfileFrom])
+  const v3SellLayer = flowV3?.sellLayer !== false
+  const v3BuyLayer = flowV3?.buyLayer !== false
+  const v3PrimRef = useRef({ series: null, heat: null, marks: null, profile: null })
+  const [v3Hover, setV3Hover] = useState(null)
+  useEffect(() => {
+    const series = seriesRef.current
+    if (!series) return
+    const reg = v3PrimRef.current
+    if (reg.series !== series) v3PrimRef.current = { series, heat: null, marks: null, profile: null }
+    const r = v3PrimRef.current
+    const feed = (key, make, data) => {
+      if (!data && !r[key]) return
+      if (!r[key]) {
+        r[key] = make()
+        series.attachPrimitive(r[key])
+      }
+      r[key].setData(data)
+    }
+    feed('heat', () => new HeatmapPrimitive(), v3Columns ? { columns: v3Columns, times: v3Times, sell: v3SellLayer, buy: v3BuyLayer } : null)
+    feed('marks', () => new AbsorbMarksPrimitive((mark, pt) => setV3Hover(mark ? { mark, pt } : null)),
+      v3Marks ? { marks: v3Marks, times: v3Times } : null)
+    feed('profile', () => new ProfilePrimitive(), v3Profile)
+    if (!v3Marks) setV3Hover(null)
+  }, [v3Columns, v3Marks, v3Profile, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
 
   // CR-CD A3 — when a candidate loads in replay (not yet revealed), fit the price axis to the
   // setup zone/range (range box, zone band, level, extreme, entry, stop) ± max(25 pts, 0.5·IM) instead of the full GEX-line
@@ -3403,6 +3480,24 @@ export default function PriceChart({
                   }}
                 />
               )}
+            </div>
+          )}
+
+          {v3Hover && (
+            <div
+              data-testid="flow-v3-mark-tooltip"
+              style={{
+                position: 'absolute',
+                left: Math.max(0, (hostRef.current?.offsetLeft || 0) + v3Hover.pt.x + 12),
+                top: Math.max(0, (hostRef.current?.offsetTop || 0) + v3Hover.pt.y - 10),
+                zIndex: 6, pointerEvents: 'none', background: 'rgba(2,6,23,0.92)', border: '1px solid #334155',
+                borderRadius: 8, padding: '6px 8px', fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4, maxWidth: 280,
+              }}
+            >
+              <div style={{ fontWeight: 700 }}>{v3Hover.mark.kind === 'sellers_absorbed' ? 'Sellers absorbed' : 'Buyers absorbed'} · {Number(v3Hover.mark.price).toFixed(2)}</div>
+              <div>{formatShiftedHHMM(v3Hover.mark.candleTime)} · aggressor {kfmt(Number(v3Hover.mark.aggressor))} · opposite {kfmt(Number(v3Hover.mark.opposite))}</div>
+              <div>held {v3Hover.mark.held_min} min · {v3Hover.mark.break_time != null ? `broke at ${formatShiftedHHMM(v3Shift(v3Hover.mark.break_time))}` : 'not broken'}</div>
+              <div style={{ color: '#94a3b8' }}>visual aid — untested</div>
             </div>
           )}
 

@@ -41,6 +41,7 @@ from packages.shared.trading_calendar import prev_trading_day
 from modules.Ironbeam.routes import register_gex_landscape_route
 from modules.Ironbeam.skew_stickiness import register_skew_stickiness_route
 from modules.Ironbeam import flow_v2
+from modules.Ironbeam import flow_v3
 
 # Import skew helpers for the React API
 from modules.Skew.callbacks import (
@@ -1611,6 +1612,31 @@ def _build_react_flow_v2_route_payload(
                 "trade_date": str(trade_date), "effective_trade_date": session_date.isoformat()}, 500
 
 
+def _build_react_flow_cells_payload(
+        trade_date: str | None,
+        *,
+        session: str | None,
+        until_pt: dt.datetime | None,
+        args,
+) -> tuple[dict, int]:
+    """CR-DC: `/api/ironbeam/flow/cells` (modules/Ironbeam/flow_v3.py)."""
+    if not trade_date:
+        return {"error": "trade_date is required", "mode": "cells", "segments": []}, 400
+    try:
+        selected_date = dt.datetime.strptime(str(trade_date), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return {"error": "Invalid trade date", "mode": "cells", "segments": []}, 400
+    session_date, session_note = _effective_trade_date(selected_date, ZoneInfo("America/Los_Angeles"))
+    try:
+        return flow_v3.build_cells_payload(
+            engine, trade_date, session=session, until_pt=until_pt, params=flow_v3.parse_absorb_params(args),
+            session_date=session_date, session_note=session_note,
+        )
+    except Exception as e:
+        return {"error": f"Database error when loading flow cells: {e}", "mode": "cells", "segments": [],
+                "trade_date": str(trade_date), "effective_trade_date": session_date.isoformat()}, 500
+
+
 def _build_react_flow_payload(
         trade_date: str | None,
         *,
@@ -3151,6 +3177,27 @@ def register_ironbeam_callbacks(app):
                 return resp, status
 
             app.server._ironbeam_react_flow_route_registered = True
+
+        if not getattr(app.server, "_ironbeam_react_flow_cells_route_registered", False):
+
+            @app.server.route("/api/ironbeam/flow/cells", methods=["GET"])
+            def ironbeam_react_flow_cells_api():
+                # CR-DC: Flow v3 price cells + absorption marks (modules/Ironbeam/flow_v3.py); read-only.
+                payload, status = _build_react_flow_cells_payload(
+                    request.args.get("trade_date"),
+                    session=request.args.get("session", FLOW_SESSION),
+                    until_pt=_parse_until_pt(request.args.get("until"), ZoneInfo("America/Los_Angeles")),
+                    args=request.args,
+                )
+                resp = jsonify(payload)
+                origin = request.headers.get("Origin")
+                if origin in {"http://localhost:5173", "http://127.0.0.1:5173", "http://0.0.0.0:5173"}:
+                    resp.headers["Access-Control-Allow-Origin"] = origin
+                    resp.headers["Access-Control-Allow-Credentials"] = "true"
+                    resp.headers["Vary"] = "Origin"
+                return resp, status
+
+            app.server._ironbeam_react_flow_cells_route_registered = True
 
         if not getattr(app.server, "_ironbeam_react_skew_data_route_registered", False):
             @app.server.route("/api/ironbeam/skew-data", methods=["GET"])
