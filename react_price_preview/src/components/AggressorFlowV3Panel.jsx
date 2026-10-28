@@ -197,6 +197,8 @@ export default function AggressorFlowV3Panel({
   onAnchorChange,
   anchorArmed = false,
   onAnchorArmedChange,
+  effortOn = false, // CR-DG item 4: the Flow v2 Effort switch (same state), labels on the price chart
+  onEffortChange,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -466,6 +468,11 @@ export default function AggressorFlowV3Panel({
         {anyLayer && cellsLoading && <span style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>loading cells…</span>}
         {anyLayer && cellsError && <span style={{ fontSize: '11px', color: '#cbd5e1', whiteSpace: 'nowrap' }} title={cellsError}>cells failed</span>}
         {(layers.marks || layers.levels) && marksNote && <span data-testid="flow-v3-marks-note" style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>{marksNote}</span>}
+        <button type="button" style={chipStyle(effortOn)} aria-pressed={effortOn} data-testid="flow-v3-effort-toggle"
+          onClick={() => onEffortChange?.(!effortOn)}
+          title="Label each confirmed swing on the price chart: points · volume · contracts per point · × the previous swing the same way (the Flow v2 Effort switch)">
+          Effort {effortOn ? 'on' : 'off'}
+        </button>
         <button type="button" style={iconStyle} title="How to read Flow v3" aria-label="How to read Flow v3" onClick={() => setGuideOpen(true)}>?</button>
       </div>
       {guideOpen && <Modal title="How to read Flow v3" onClose={() => setGuideOpen(false)}><GuideBody /></Modal>}

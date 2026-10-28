@@ -1560,7 +1560,7 @@ export default function App() {
       url.searchParams.set('m_fade', String(flowMarkerSettings.fade))
       url.searchParams.set('m_gap', String(flowMarkerSettings.gap))
       if (reviewUntil) url.searchParams.set('until', reviewUntil)
-      // CR-DC: v3 asks for the legs too ("anchor = last swing"); the chart labels stay v2-only.
+      // CR-DC: v3 asks for the legs too ("anchor = last swing"; CR-DG: and the effort labels when Effort is on).
       if (flowEffort || flowV3) url.searchParams.set('effort', '1')
       return url
     },
@@ -1574,9 +1574,9 @@ export default function App() {
   const flowV2PanePayloads = useMemo(() => flowV2Payloads.map((p) => p.payload), [flowV2Payloads])
 
   // CR-CD A5: swing effort labels for the price chart — only while Flow v2 is shown with Effort on
-  // (null otherwise, so the chart draws nothing extra).
+  // (null otherwise, so the chart draws nothing extra). CR-DG item 4: also in Flow v3, on the same switch.
   const flowEffortLegs = useMemo(() => {
-    if (!flowEnabled || flowMode !== 'v2' || flowV3 || !flowEffort) return null
+    if (!flowEnabled || !flowEffort || (!flowV3 && flowMode !== 'v2')) return null
     return flowV2Payloads.flatMap((p) => (Array.isArray(p.payload?.legs) ? p.payload.legs : []))
   }, [flowEnabled, flowMode, flowV3, flowEffort, flowV2Payloads])
   const effortMarkers = useMemo(
@@ -2565,6 +2565,8 @@ export default function App() {
                       onAnchorChange={setFlowAnchor}
                       anchorArmed={flowAnchorArmed}
                       onAnchorArmedChange={setFlowAnchorArmed}
+                      effortOn={flowEffort}
+                      onEffortChange={setFlowEffort}
                     />
                   ) : flowMode === 'v2' ? (
                     <AggressorFlowV2Panel
