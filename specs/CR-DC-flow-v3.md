@@ -207,3 +207,20 @@ design most; the rest are operational readings that stand unless Ryan objects).
 4. Frontend: heatmap, absorbed marks and profile primitives (DC7–DC10, DC15, DC16), ⚙, "?" guides, badges.
 5. Smoke: Playwright (pixel identity vs `origin/main`, v3 on 2026-05-01 and live, defaults off, replay `until`),
    headed Chrome 155 10-min drag/zoom with heap samples, exact vs approximate mark counts on a retained session; PR.
+
+---
+
+## Amendment A1 (Ryan, 2026-10-27, after Step 0) — rulings on DC1–DC16, new DC17
+
+| # | Ruling |
+|---|---|
+| A1.1 | **Accepted as recommended:** DC1 (a), DC3 (a), DC4 (b, "anchor = last swing"), and the operational readings DC2, DC5–DC10, DC12–DC16 as written. |
+| A1.2 (DC11, **changed**) | The 1-s low/high rule stays for the **heat layers and the profile**, with the "approximate: 1-s data" badge. **Absorption marks are NOT drawn on approximate data** (Step 0 Q3: the rule shifts sells to lows and buys to highs, which manufactures "sellers absorbed" at lows). **Marks only on exact data.** On an approximate segment the payload carries no marks and the pane says "Absorbed: exact data only". |
+| A1.3 (DC17, **new**) | The cells endpoint reads, per segment, in this order: **(1)** a new exact table **`es_flow_price_1m`** (minute × 0.25-pt price × aggressor side; being built by CR-DD), schema `(minute_utc, symbol, price, buy_vol, sell_vol, trade_count, source)`; **(2)** `ironbeam_es_trades`; **(3)** the 1-s fallback. Coded against that name and schema; **until the table exists the endpoint skips it** (`to_regclass`, re-checked as v2's 1-minute tables are). Exact sources (1) and (2) carry marks; (3) does not. |
+
+### A1 operational readings (Claude Code, fixed before implementation)
+
+- **`es_flow_price_1m` use (A1.3).** `source` must be the segment's source by the v2 rules: `databento` only for RTH of sessions ≤ 2026-06-05 (B4, A1.1 of CR-CD); `ironbeam` otherwise. `symbol` = the segment's contract chosen as v2 (A1.4 bar match). The table **covers** a segment when its distinct minutes for that symbol and source are ≥ 99 % of the minutes with ≥ 1 trade in the segment's 1-minute flow (`es_flow_1m_databento` / `ironbeam_es_flow_1m`, via v2's `fetch_flow_minutes`); otherwise it is skipped for that segment. Its `price` is taken as the 0.25-pt cell floor; rows off the 0.25 grid are floored.
+- **`ironbeam_es_trades` use.** Covers a segment when its oldest row (cached 60 s) ≤ the segment start and the segment's symbol is present. `aggressor_side` `BUY` → buy, `SELL` → sell; anything else (e.g. `0`) is not drawn.
+- **Hold / break extremes for marks** come from the segment's 1-minute flow highs and lows (the same trades as the exact cells for Ironbeam; the same feed for Databento).
+- **Badge per segment:** `exact: es_flow_price_1m` / `exact: trades` / `approximate: 1-s data`, plus the source.
