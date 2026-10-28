@@ -124,3 +124,36 @@ only; PUBLIC nothing); (2) live aggregator + backfill as specified, backfill fro
 `es_flow_price_1m` created; PK (minute_utc, symbol, price, source); CHECK source ∈ {ironbeam, databento}.
 ACL `{rschultz=arwdDxtm/rschultz, dash_backfill_writer=ar/rschultz}`: the backfill role has SELECT + INSERT
 only; no PUBLIC entry.
+
+## Implementation and results (2026-10-28)
+
+| Step | Commit content |
+|---|---|
+| 1 | `packages/shared/flow_price_1m.py` (cell rule, DD4 hold, live SQL) + tests; `scripts/cron_flow_price_1m.py` (live cron) |
+| 2 | `scripts/cr_dd_backfill.py` (Databento train backfill from the CR-CA raw files) |
+| 3 | `scripts/cr_dd_check_live.py` (check 4b) |
+| 4 | `render.yaml` documentation entry for the cron; this section |
+
+- **DD4 SQL = Python:** with `now` = 2026-10-27 21:30 UTC the pending set holds minutes 20:40–20:44 and
+  holds back 20:45–20:59. At 22:00 UTC (18:00 ET) it releases them. Unit tests cover EDT and EST.
+- **Backfill** (run `9154637c-2b2a-4aa7-b4d4-741993be061e`, `backfill_run('CR-DD')`, completed): **663,288 rows**,
+  105 sessions, 115 session-contracts (ESH6 / ESM6, both contracts in the 10 roll-week sessions), 0 off-grid prices,
+  DB rows = built = inserted. **No download**: all ticks came from the CR-CA files on disk. Spend $0.
+  (The 365 k projection was based on one quiet session.)
+- **Check 4a** vs `es_flow_1m_databento` (tolerance 1 % of the minute's volume): **PASS, and exact** on all three sessions:
+
+  | session | minutes | Σ volume (cells = flow 1m) | Σ(buy − sell) (cells = flow 1m) | minutes exact |
+  |---|---|---|---|---|
+  | 2026-01-06 | 405 | 950,406 | +10,274 | 405 / 405 |
+  | 2026-03-16 (roll week, 2 contracts) | 810 | 1,400,926 | −10,072 | 810 / 810 |
+  | 2026-05-15 | 405 | 1,381,961 | +23,541 | 405 / 405 |
+
+  No minute is in one table only. (`N` side is 0 on these days, so buy + sell = `volume`.)
+- **Live, first run** from the laptop as `dash_backfill_writer` (2026-10-28 03:27 UTC, run
+  `014491cb-4f1d-43db-8a54-789d80d39a91`): 21,826 rows over 2,698 minutes (2026-10-26 04:27 → 10-28 03:24 UTC).
+  The in-run re-sum vs trades was equal. A second run 9 s later found **0 pending** (idempotent).
+- **Check 4b (DD8), Globex day 2026-10-27** [10-26 18:00, 10-27 17:00 EDT), trades retained from 10-26 01:01 UTC:
+  **EXACT MATCH**. 10,507 cells over 1,380 minutes, all equal on buy / sell / count; none in one side only;
+  buy 722,830, sell 705,636, prints 420,969 on both sides. Mechanical only (B4).
+  Caveat: this run came after the fact, so the 43-min-late closing print was already in the table. Live, DD4 would
+  have caught it too: it arrived 21:42 UTC, before the 22:00 UTC release.
