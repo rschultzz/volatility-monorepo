@@ -174,8 +174,11 @@ test('unchanged: Current and v2 are pixel-identical to origin/main (toggle aside
         expect(Buffer.compare(sb, sm), `v2 header element ${i} right of the toggle`).toBe(0)
       }
     }
-    expect(b.toggleW).toBeGreaterThan(m.toggleW) // DC1: the one visible change is the extra "v3" button
+    // DC1 added the "v3" button; since CR-DC merged, origin/main has it too, so the toggles are the same width
+    // (CR-DG: was toBeGreaterThan, a known failure on every branch off main after CR-DC).
+    expect(b.toggleW).toBe(m.toggleW)
     await expect(b.page.getByTestId('flow-mode-v3')).toBeVisible()
+    await expect(m.page.getByTestId('flow-mode-v3')).toBeVisible()
     expect(await b.page.evaluate(() => window.localStorage.getItem('ib-react-flow-mode-v3'))).toBeNull()
     await b.ctx.close()
     await m.ctx.close()

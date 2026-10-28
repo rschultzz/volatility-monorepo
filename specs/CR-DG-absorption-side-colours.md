@@ -169,3 +169,35 @@ Commits: one commit for item 4, after this amendment.
 
 Smoke (item 4): 2026-10-27 in v3 — Effort off → no labels (price chart identical to before); on → the same labels as
 v2 for the same settings; the switch carries between v2 and v3. Existing specs stay green.
+
+---
+
+## Smoke + wrap (2026-10-28)
+
+Servers: `scripts/cr_dg_smoke_backend.py` (8064, read-only, pool 3 + 2 — the only DB-backed local server; CR-DE's idle
+smoke server was stopped first with Ryan's OK), this branch on 5181, origin/main on 5180. Logs: `scripts/logs/cr-dg/`.
+
+| Check | Result |
+|---|---|
+| Unit (`npm run test:unit`) | 30/30 |
+| `cr-dg.spec.js` | 5 passed, 1 skipped (live, deferred — below) |
+| `cr-df.spec.js` | 6/6 |
+| `cr-dc.spec.js` | 6/6 (the superseded "unchanged" width assertion updated — below) |
+| Build | clean |
+
+- **Item 1, 2026-10-27 FULL:** every drawn level samples its side's colour on the canvas — 7 buyers-absorbed magenta
+  (including the 12:48 / 12:49 / 12:55 stack), sellers absorbed 7762.25 (from 12:19) orange. Asset
+  `specs/assets/cr-dg/levels-2026-10-27.png`.
+- **Item 2:**
+  - Unbroken levels' held runs to the payload end: 13:00 for the complete session, 12:55 with `until` 12:55.
+  - The level and mark hovers on the 12:55 level both read "held 5 min · not broken".
+  - Unit test: a refresh from T to T + 2 min takes held n → n + 2 in the label and the marks hover, and an open hover updates with the pointer still.
+- **Item 2, live: deferred to Ryan's first live use** (Ryan's ruling). From 06:11 to 06:56 PT one mark formed (buyers 7773, 06:35), and it broke before it confirmed at 06:39. What to look for: hold the pointer on an unbroken level; its hover "held N min" and its label rise as each new 1-minute bar lands; the same on an Absorbed (marks) triangle.
+- **Item 3:** the cursor on the 07:22 candle reads `10/27 07:22:00 PT` at three spots across the bar: 1-min, 1-min with a day either side, and 5-min (07:20). **origin/main reads 07:23** with a day either side (bug reproduced).
+- **Item 4, 2026-10-27 in v3:**
+  - Effort off: the price chart is pixel-identical to origin/main's v3.
+  - Effort on: the price chart is pixel-identical to v2 with Effort on, and differs from Effort off.
+  - The switch carries v2 → v3 (on) and v3 → v2 (off); `ib-react-flow-v2-effort` is "1" then "0".
+  - Assets `effort-v3-{on,off}-2026-10-27.png`.
+- **cr-dc "unchanged" (test only, no visible change):** DC1's `toggleW > main` assumed main had no "v3" button. Since CR-DC merged, it has, so the test failed on every branch. It now asserts equal widths and the v3 button visible on both builds. Every other check is unchanged.
+- **cr-df / cr-dc assets:** the runs rewrite their tracked screenshots. The rewritten copies are kept in the logs, and the committed ones were restored.
