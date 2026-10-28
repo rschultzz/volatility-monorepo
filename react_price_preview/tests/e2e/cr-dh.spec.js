@@ -94,7 +94,8 @@ async function loadDash(page, day) {
 
 const dashFigure = (page) => page.evaluate(() => {
   const gd = document.querySelector('#GEX_GRAPH .js-plotly-plot')
-  return gd && gd.data ? { data: gd.data.map((t) => ({ name: t.name, x: Array.from(t.x), y: Array.from(t.y) })), layout: gd.layout } : null
+  // Plotly 6 keeps base64 {dtype, bdata} arrays in gd.data; _fullData holds the decoded ones.
+  return gd && gd._fullData ? { data: gd._fullData.map((t) => ({ name: t.name, x: Array.from(t.x), y: Array.from(t.y) })), layout: gd.layout } : null
 })
 
 const dashTitle = async (page) => {
@@ -103,7 +104,11 @@ const dashTitle = async (page) => {
   return (t && (t.text || t)) || ''
 }
 
-const dashRadio = (page) => page.locator('#gex-levels-mode input:checked').getAttribute('value')
+// Dash 3 radios carry no value attribute: read the checked option's label.
+const dashRadio = async (page) => {
+  const label = page.locator('#gex-levels-mode label', { has: page.locator('input:checked') })
+  return (await label.count()) ? (await label.innerText()).trim().toLowerCase() : null
+}
 
 async function setDashMode(page, label, day) {
   await page.locator('#gex-levels-mode label', { hasText: label }).click()

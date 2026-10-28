@@ -178,3 +178,35 @@ the session note's open questions.
   becomes `calc(100% - 26px)`. The **figure** (title, axes, traces, ranges, ES 15:01 zoom, live line) stays
   byte-identical to origin/main in Current; the plot is 26 px shorter in both modes. Smoke compares the Current
   figure JSON byte-for-byte against origin/main and screenshots both. **Approved by Ryan in chat 2026-10-28.**
+
+## Smoke (2026-10-28, rebased on origin/main `24a8f6f`, CR-DG merged)
+
+Servers: one DB-backed server only, `scripts/cr_dh_smoke_backend.py` on :8067 (backfill role,
+`default_transaction_read_only=on`, engine 3 + 2). It serves the real `gex_block()` and `render_gex` at `/`, the
+price chart API, and origin/main's `render_gex` at `/smoke/origin-figure`. Frontends: branch vite :5186 and an
+origin/main baseline vite :5187 (`../volatility-monorepo-cr-dh-base`). Before starting: Ryan's :8060 Dash and CR-DG's
+:8064 smoke servers were already gone, and nothing else DB-backed was listening. Logs are in `scripts/logs/cr-dh/`
+(machine-local); screenshots are in `specs/assets/cr-dh/`.
+
+| Check | Result |
+|---|---|
+| Fresh profile: price chart opens on Corrected (request `levels=corrected`, radio, v2 key stored) | pass |
+| Price chart: Current → reload → Current (no `levels` param); back to Corrected | pass |
+| Old key `'current'` only → price chart opens on Corrected the first time; old key left untouched | pass |
+| Fresh profile: Dashboard opens on Corrected, title `GEX by Corrected Level — 2026-10-27 (SPX)` | pass |
+| Dashboard Current → reload → Current; traces, title, axis titles and ranges equal origin/main's figure on the live DB | pass (bytes: unit test `test_levels_mode`, 3 dates vs `git show origin/main` goldens) |
+| 2026-10-27: every price-chart corrected line (50 at Min \|GEX\| 40) equals the Dashboard Corrected bar at that level (put, call) | pass |
+| 2024-03-15: Dashboard shows `GEX by Discounted Level (corrected unavailable: pre-forward era) — 2024-03-15 (SPX)` with origin/main's levels | pass |
+| Unit: gamma 6/6, Ironbeam 102/102, frontend 34/34 | pass |
+| Playwright, all 12 existing specs + `cr-dh` | **64 passed, 0 failed, 3 skipped** (data-dependent skips: cr-cc ×2 need unreviewed / revealed fixture candidates; cr-dg live needs an unbroken RTH level, which didn't exist at 07:xx PT) |
+
+**Spec changes to existing Playwright specs.** These are setup changes only: no assertion was edited. Each change
+seeds Levels `'current'` (old and v2 keys) as the precondition the spec already assumed.
+- `cr-bv`, `cr-cc`, `cr-db`, `cr-de`: these already seeded the old key with `'current'`. They now also seed the v2 key.
+- `cr-cd-a5`, `cr-ck`, `cr-dc`, `cr-df`, `cr-dg`: their "unchanged vs origin/main" pixel / request tests relied on
+  both builds defaulting to Current. On the first full run, 5 tests failed because the branch drew corrected
+  lines and main drew current ones. Seeding `'current'` on both sides makes them compare like with like; all pass.
+
+**Observation (not changed; visible-change discipline):** at the Dashboard's GEX block width the long fallback
+title runs under the legend. origin/main's Current title is already clipped the same way. Listed in the session
+note.
