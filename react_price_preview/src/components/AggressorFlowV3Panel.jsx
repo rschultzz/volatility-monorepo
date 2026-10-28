@@ -24,6 +24,7 @@ import {
   ROLLING_CHOICES,
   anchoredCvd,
   anchorReadout,
+  edgeEffortBlock,
   edgeText,
   kfmt,
   lastSwingAnchor,
@@ -199,6 +200,8 @@ export default function AggressorFlowV3Panel({
   onAnchorArmedChange,
   effortOn = false, // CR-DG item 4: the Flow v2 Effort switch (same state), labels on the price chart
   onEffortChange,
+  edgeEffortOn = false, // CR-DI: the Edge effort strip (stored per viewer); draws only with Edges on, an anchor and exact data
+  onEdgeEffortChange,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -257,6 +260,7 @@ export default function AggressorFlowV3Panel({
   const edgeLine = useMemo(() => (edges ? edgeText(edges, (t) => formatShiftedHHMM(shift(t))) : ''), [edges, shift])
   const notes = useMemo(() => [...new Set((payloads || []).flatMap((p) => p?.notes || []))], [payloads])
   const hasValues = aligned.some((r) => Number.isFinite(r.delta))
+  const edgeEffortWhy = edgeEffortBlock(layers.edges, anchor, edges)
   const anyLayer = layers.heat || layers.profile || layers.marks || layers.levels || layers.edges
 
   useEffect(() => { candleTimesRef.current = candleTimes }, [candleTimes])
@@ -459,6 +463,12 @@ export default function AggressorFlowV3Panel({
             {anchor == null ? 'edges: set an anchor' : edges ? edgeLine : cellsLoading ? 'edges: loading…' : 'edges: no bars since the anchor'}
           </span>
         )}
+        <button type="button" style={{ ...chipStyle(edgeEffortOn && !edgeEffortWhy), opacity: edgeEffortWhy ? 0.5 : 1, cursor: edgeEffortWhy ? 'default' : 'pointer' }}
+          aria-pressed={Boolean(edgeEffortOn)} data-testid="flow-v3-edge-effort-toggle" disabled={Boolean(edgeEffortWhy)}
+          onClick={() => onEdgeEffortChange?.(!edgeEffortOn)}
+          title={edgeEffortWhy || 'Edge effort strip: aggressive contracts within 1 pt of each edge per minute, both sides — visual aid, untested'}>
+          Edge effort {edgeEffortOn ? 'on' : 'off'}
+        </button>
         {anyLayer && cellBadges.map((b) => (
           <span key={b.label} data-testid="flow-v3-cells-badge" title={b.exact ? 'each trade at its own price and side' : 'each second: sells at its low, buys at its high'}
             style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '999px', border: `1px solid ${b.exact ? 'rgba(96,165,250,0.45)' : 'rgba(148,163,184,0.35)'}`, color: '#cbd5e1', whiteSpace: 'nowrap' }}>

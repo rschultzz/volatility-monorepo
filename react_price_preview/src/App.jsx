@@ -30,6 +30,8 @@ const FLOW_V3_SETTINGS_STORAGE_KEY = 'ib-react-flow-v3-settings'
 const FLOW_V3_LAYERS_STORAGE_KEY = 'ib-react-flow-v3-layers'
 // CR-DF adds levels / edges; a stored CR-DC object keeps its heat / marks values (now switched in ⚙).
 const FLOW_V3_LAYERS_OFF = { heat: false, profile: false, marks: false, levels: false, edges: false }
+// CR-DI: the Edge effort strip in the Flow v3 pane (off by default, '1' while on), per viewer.
+const FLOW_V3_EDGE_EFFORT_STORAGE_KEY = 'ib-react-flow-v3-edge-effort'
 // CR-CK — Overview panel "Stickiness" rows; off unless the user turns them on in settings.
 const SKEW_STICKINESS_STORAGE_KEY = 'ib-react-skew-stickiness'
 const GEX_LANDSCAPE_SPOT_MODE_KEY = 'GEX_LANDSCAPE_SPOT_MODE'
@@ -581,6 +583,13 @@ export default function App() {
   }
   const [flowV3Settings, setFlowV3Settings] = useState(() => readStoredObject(FLOW_V3_SETTINGS_STORAGE_KEY, DEFAULT_V3_SETTINGS))
   const [flowV3Layers, setFlowV3Layers] = useState(() => readStoredObject(FLOW_V3_LAYERS_STORAGE_KEY, FLOW_V3_LAYERS_OFF))
+  const [flowEdgeEffort, setFlowEdgeEffort] = useState(() => {
+    try {
+      return window.localStorage.getItem(FLOW_V3_EDGE_EFFORT_STORAGE_KEY) === '1'
+    } catch (err) {
+      return false
+    }
+  })
   const [flowAnchor, setFlowAnchor] = useState(null)
   const [flowAnchorArmed, setFlowAnchorArmed] = useState(false)
   const [flowCellsLoaded, setFlowCellsLoaded] = useState({ url: null, payload: null })
@@ -1238,6 +1247,15 @@ export default function App() {
       // ignore
     }
   }, [flowV3, flowV3Settings, flowV3Layers])
+
+  useEffect(() => {
+    try {
+      if (flowEdgeEffort) window.localStorage.setItem(FLOW_V3_EDGE_EFFORT_STORAGE_KEY, '1')
+      else window.localStorage.removeItem(FLOW_V3_EDGE_EFFORT_STORAGE_KEY)
+    } catch (err) {
+      // ignore
+    }
+  }, [flowEdgeEffort])
 
   const flowPaneMode = flowV3 ? 'v3' : flowMode
   const flowV2Data = flowV3 || flowMode === 'v2'
@@ -2561,6 +2579,8 @@ export default function App() {
                       onAnchorArmedChange={setFlowAnchorArmed}
                       effortOn={flowEffort}
                       onEffortChange={setFlowEffort}
+                      edgeEffortOn={flowEdgeEffort}
+                      onEdgeEffortChange={setFlowEdgeEffort}
                     />
                   ) : flowMode === 'v2' ? (
                     <AggressorFlowV2Panel

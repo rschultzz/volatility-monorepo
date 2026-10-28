@@ -463,6 +463,14 @@ export function edgeReadout(payload, bars, anchorShifted, shift) {
   }
 }
 
+// CR-DI: why the Edge effort chip can't act (its tooltip), or '' when it can.
+export function edgeEffortBlock(edgesOn, anchor, edges) {
+  if (!edgesOn) return 'Edge effort needs Edges on'
+  if (anchor == null) return 'Edge effort needs an anchor (📍 set anchor, session open or last swing)'
+  if (edges && !edges.exact) return 'Edge effort is drawn on exact data only: this session has approximate (1-s) cells, which place each second\'s selling at its low and buying at its high'
+  return ''
+}
+
 // "Top 7724.75 · 1.8k buyers · held 9 m | Bottom 7715.25 · 4.1k sellers · held 6 m" (+ " · broke hh:mm").
 export function edgeText(r, hhmm) {
   if (!r) return ''
