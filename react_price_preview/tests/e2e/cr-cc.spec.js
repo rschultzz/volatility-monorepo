@@ -40,6 +40,7 @@ async function openReview(page, setName = SET) {
     try {
       window.localStorage.setItem('ib-react-gex-min-abs-b', '40')
       window.localStorage.setItem('ib-react-gex-levels-mode', 'current')
+      window.localStorage.setItem('ib-react-gex-levels-mode-v2', 'current') // CR-DH key
     } catch (e) { /* ignore */ }
   })
   await page.goto(`/?trade_date=2026-10-23&interval=1min&api_base=${encodeURIComponent(API_BASE)}`)
