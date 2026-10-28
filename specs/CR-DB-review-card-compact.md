@@ -103,3 +103,41 @@ narrow and short viewport (e.g. 900 × 600), where the panel is the same width a
   chart has the two edge lines. Never Save / Reveal (B8).
 - Existing `cr-cc.spec.js` and other review specs pass (selectors adjusted only if they reference removed markup).
 - Pixel check: screenshot of the price chart with the panel closed on `main` and on this branch, compared.
+
+---
+
+## Step 0 — findings (before code)
+
+1. **Where the card lives.** `SetupReviewPanel.jsx` renders the active card (`review-active`) as one block above the
+   queue: a 4-column `KV` grid (cell, level, net / gross, entry, stop, extreme, frame) into which `ReviewMeta` spills
+   every meta field with `display: contents`. Scalars land in the `1fr` value column of an `auto 1fr auto 1fr` grid at
+   10 px, so `entry_rule` / `box_basis` (≈ 90 chars) wrap word by word in a ~100 px column. The action controls follow
+   the grid in the same block, so on a cr-cz card they sit below ~30 rows of meta. Confirms the problem as reported.
+2. **cr-cz meta** (`scripts/cr_cz_build_gallery.py`): `range {top, bottom, height, formed_ts_pt, qualified_ts_pt}`,
+   `zone {lo, hi}` (= the box), `approach`, `approach_*_ts_pt`, `approach_start_px`, `approach_extreme_px`,
+   `approach_pts`, `swing_pts`, `range_in_session`, `delta_share_pct`, `progress_pts`, `cpp_up`, `cpp_down`,
+   `cpp_ratio`, `box_basis`, `entry_rule`, `cell`. Candidate columns: `direction`, `entry_ts_pt` (decision bar),
+   `entry_price` (D4 limit = edge ∓ 1), `extreme_price`, `confirm_ts_pt`; no level / stop. No `edge_touch_ts_pt`, so
+   the existing range box is not drawn on cr-cz (CR-CZ decision) — the zone band is. The new edge lines need only
+   `range.top` / `bottom`, so they don't imply a touch.
+3. **Colours (C1).** `LABELS` Take `#34d399` / Skip `#f87171` / Unsure `#fbbf24`; queue arrows `#34d399` / `#f87171`;
+   `ReviewMeta` `RULE_COLOR` fade `#34d399` / break `#f87171`; error text `#f87171`. Dash palette used elsewhere in the
+   panel: blue `#93c5fd` / `#38bdf8`, slate `#64748b` / `#334155`, light grey `#cbd5e1`. New: Take `#60a5fa` (blue),
+   Skip `#64748b` (slate), Unsure `#cbd5e1` (light grey); arrows long `#60a5fa` / short `#94a3b8`; rule chips fade blue /
+   break slate. Action-error text (`#f87171`) becomes light grey `#e2e8f0` on a slate background. (The chart's red
+   `stop` line is outside the panel and stays — not in scope.)
+4. **Existing tests that depend on the old markup.** `cr-cc.spec.js` "A3 round-2" reads meta labels (`flow`, `rules`,
+   `skew`, `named`, `range`, `zone`, `cluster`), the `show raw` buttons and `review-rules` inside `review-active`, and
+   counts `cell` once. With details collapsed these need one added click on the details toggle; no other change.
+   `review-active` must keep containing the candidate id (`activate()` helper). Test ids `review-label-*`,
+   `review-save`, `review-reveal`, `review-outcome` are kept.
+5. **Tests that write.** `cr-cc` "label → reveal" and "A2: smile capped …" Save and Reveal on `cc:fixture` (insert-only
+   `setup_reviews`, consumes fixtures). The kickoff says no DB writes, so those two are **not run** in this CR. The
+   Save / Reveal wiring is unchanged code (same callbacks); the new `cr-db` test covers Save by intercepting the POST in
+   the browser (`page.route`) and checking the body, so nothing reaches the DB. All read-only review tests are run.
+6. **Pixel check.** Same method as CR-CK: an `origin/main` frontend on a second port against the same backend,
+   screenshot of the price chart with the review panel closed on both, byte-compared (plus a branch-vs-branch repeat to
+   show the capture is deterministic).
+7. Panel width stays 340 (`PANEL_WIDTH`, also read by `PriceChart` for its right offset); no `App.jsx` change needed.
+
+Gate: no spec amendment needed beyond the Q1–Q3 rulings already frozen.
