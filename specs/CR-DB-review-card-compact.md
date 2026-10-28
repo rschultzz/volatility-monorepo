@@ -123,7 +123,7 @@ narrow and short viewport (e.g. 900 × 600), where the panel is the same width a
 3. **Colours (C1).** `LABELS` Take `#34d399` / Skip `#f87171` / Unsure `#fbbf24`; queue arrows `#34d399` / `#f87171`;
    `ReviewMeta` `RULE_COLOR` fade `#34d399` / break `#f87171`; error text `#f87171`. Dash palette used elsewhere in the
    panel: blue `#93c5fd` / `#38bdf8`, slate `#64748b` / `#334155`, light grey `#cbd5e1`. New: Take `#60a5fa` (blue),
-   Skip `#64748b` (slate), Unsure `#cbd5e1` (light grey); arrows long `#60a5fa` / short `#94a3b8`; rule chips fade blue /
+   Skip `#94a3b8` (slate), Unsure `#cbd5e1` (light grey); arrows long `#60a5fa` / short `#94a3b8`; rule chips fade blue /
    break slate. Action-error text (`#f87171`) becomes light grey `#e2e8f0` on a slate background. (The chart's red
    `stop` line is outside the panel and stays — not in scope.)
 4. **Existing tests that depend on the old markup.** `cr-cc.spec.js` "A3 round-2" reads meta labels (`flow`, `rules`,

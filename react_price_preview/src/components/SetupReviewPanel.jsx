@@ -31,7 +31,7 @@ export const PANEL_WIDTH = 340
 // CR-DB / C1: Dash palette — Take blue, Skip slate, Unsure light grey; `ink` is the text on the filled button.
 const LABELS = [
   { key: 'take', text: 'Take', hotkey: 'T', color: '#60a5fa', ink: '#020617' },
-  { key: 'skip', text: 'Skip', hotkey: 'S', color: '#64748b', ink: '#f8fafc' },
+  { key: 'skip', text: 'Skip', hotkey: 'S', color: '#94a3b8', ink: '#020617' },
   { key: 'unsure', text: 'Unsure', hotkey: 'U', color: '#cbd5e1', ink: '#020617' },
 ]
 const LABEL_COLOR = Object.fromEntries(LABELS.map((l) => [l.key, l.color]))
