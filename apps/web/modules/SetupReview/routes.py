@@ -6,12 +6,17 @@ Endpoints (all JSON):
     GET  /api/setup-review/candidates/<id>
          detail; `outcome` only once the candidate has a review
     POST /api/setup-review/candidates/<id>/review   {label, reasons[], comment}
+         insert-only. Before reveal: the blind label (label required, first save only;
+         409 label_locked after). After reveal: a post_reveal note (label optional, copies
+         the blind label when absent). Readers of labels use the FIRST pre-reveal review
+         per candidate; post-reveal rows are notes only (CR-DE).
     POST /api/setup-review/candidates/<id>/reveal   sets revealed_at, returns the outcome
     GET  /api/setup-review/summary?cr=&set=
 
 DB errors are mapped, not raised (A1.5): a missing privilege returns 403 with
 `error: "permission"` and the connected role; missing tables return 503; the
-insert-only guard trigger returns 409.
+insert-only guard trigger returns 409. Every DB error message that is returned or
+logged goes through `redact()`, so a connection string never leaves (CR-DE R3).
 """
 from __future__ import annotations
 
@@ -21,6 +26,8 @@ import threading
 
 import psycopg
 from flask import jsonify, request
+
+from packages.shared.redact import redact
 
 from . import service
 
@@ -81,9 +88,9 @@ def _db_error(e: Exception, conn=None):
         return jsonify({"ok": False, "error": "missing_tables",
                         "message": "setup review tables are not installed (scripts/cr_cc_ddl.sql)"}), 503
     if isinstance(e, psycopg.errors.RaiseException):
-        return jsonify({"ok": False, "error": "insert_only", "message": str(e).splitlines()[0]}), 409
-    log.exception("setup-review DB error")
-    return jsonify({"ok": False, "error": "db", "message": str(e)}), 500
+        return jsonify({"ok": False, "error": "insert_only", "message": redact(str(e).splitlines()[0])}), 409
+    log.error("setup-review DB error (%s): %s", type(e).__name__, redact(e))
+    return jsonify({"ok": False, "error": "db", "message": redact(e)}), 500
 
 
 def _run(fn, *, write=False):
@@ -91,7 +98,8 @@ def _run(fn, *, write=False):
     try:
         conn = _conn()
     except Exception as e:
-        return jsonify({"ok": False, "error": "db_connect", "message": str(e)}), 500
+        log.error("setup-review DB connect failed (%s): %s", type(e).__name__, redact(e))
+        return jsonify({"ok": False, "error": "db_connect", "message": redact(e)}), 500
     try:
         out = fn(conn)
         if write:
@@ -99,7 +107,7 @@ def _run(fn, *, write=False):
         return out
     except service.ReviewError as e:
         conn.rollback()
-        return jsonify({"ok": False, "error": "bad_request", "message": str(e)}), e.status
+        return jsonify({"ok": False, "error": e.code, "message": str(e)}), e.status
     except psycopg.Error as e:
         return _db_error(e, conn)
     finally:

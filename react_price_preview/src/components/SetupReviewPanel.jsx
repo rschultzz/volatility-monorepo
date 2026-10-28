@@ -21,6 +21,14 @@
 // (every other field), the saved review and the outcome scroll in their own
 // region above the queue; the actions (Take / Skip / Unsure, reason chips,
 // comment, Save / Reveal) are a footer pinned to the bottom of the panel.
+//
+// CR-DE: the card's label is its FIRST pre-reveal review and locks once saved
+// (the API answers 409 label_locked to a second one). After Reveal every Save
+// inserts a post-reveal note (comment, reasons, optional changed label; with
+// no label picked the API copies the blind label); notes list under the
+// outcome, newest first. Every save shows a confirmation or a visible error.
+// The comment box is 5 lines and resizable; Cmd / Ctrl+Enter saves. The CR / set
+// filter is remembered in localStorage, defaulting to the latest-loaded set.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReviewMeta from './ReviewMeta'
@@ -75,6 +83,39 @@ function fmtSigned(v, digits = 2) {
 
 function hhmm(ts) {
   return ts ? String(ts).slice(11, 16) : '—'
+}
+
+// reviewed_at is a UTC timestamp; notes show it in PT
+function fmtPt(ts) {
+  if (!ts) return '—'
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return String(ts)
+  return `${d.toLocaleString('en-US', {
+    timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+  })} PT`
+}
+
+const SET_STORAGE_KEY = 'dash.review.set'
+
+function readStoredSet() {
+  try {
+    const v = JSON.parse(window.localStorage.getItem(SET_STORAGE_KEY) || 'null')
+    return v && typeof v.cr === 'string' && typeof v.set === 'string' ? v : null
+  } catch {
+    return null
+  }
+}
+
+function storeSet(cr, set) {
+  try {
+    window.localStorage.setItem(SET_STORAGE_KEY, JSON.stringify({ cr, set }))
+  } catch { /* storage unavailable: the choice just isn't remembered */ }
+}
+
+function latestSet(sets) {
+  let best = null
+  for (const s of sets) if (s.loaded_at && (!best || s.loaded_at > best.loaded_at)) best = s
+  return best
 }
 
 function isTypingTarget(el) {
@@ -136,6 +177,31 @@ function Row({ cand, active, onClick }) {
         {cand.revealed ? ' ✓' : ''}
       </span>
     </button>
+  )
+}
+
+function NoteHistory({ notes, blindLabel }) {
+  if (!notes.length) return null
+  return (
+    <div data-testid="review-notes" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ fontSize: 10, color: '#64748b' }}>Notes ({notes.length})</div>
+      {notes.map((n) => (
+        <div
+          key={n.id}
+          data-testid="review-note"
+          style={{ fontSize: 11, padding: '4px 6px', borderRadius: 4, background: '#0f172a', border: '1px solid #1e293b' }}
+        >
+          <div style={{ fontSize: 10, color: '#94a3b8' }}>
+            {fmtPt(n.reviewed_at)}
+            {n.label && n.label !== blindLabel && (
+              <span> · label → <b style={{ color: LABEL_COLOR[n.label] }}>{n.label.toUpperCase()}</b></span>
+            )}
+            {n.reasons?.length ? ` · ${n.reasons.join(', ')}` : ''}
+          </div>
+          {n.comment && <div style={{ color: '#e2e8f0', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{n.comment}</div>}
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -206,7 +272,11 @@ export default function SetupReviewPanel({
   onClose,
   rightOffset = 0,
 }) {
-  const [filters, setFilters] = useState({ cr: '', set: '', cell: '', status: 'all' })
+  const [filters, setFilters] = useState(() => {
+    const stored = readStoredSet()
+    return { cr: stored?.cr || '', set: stored?.set || '', cell: '', status: 'all' }
+  })
+  const setDefaultedRef = useRef(false)
   const [candidates, setCandidates] = useState([])
   const [sets, setSets] = useState([])
   const [reasonOptions, setReasonOptions] = useState([])
@@ -221,6 +291,7 @@ export default function SetupReviewPanel({
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState('')
+  const [notice, setNotice] = useState('')
   const [detailsOpen, setDetailsOpen] = useState(false)
 
   const base = `${apiBase}/api/setup-review`
@@ -230,9 +301,24 @@ export default function SetupReviewPanel({
     () => (activeCandidate?.reviews || []).filter((r) => !r.post_reveal),
     [activeCandidate]
   )
+  const blindReview = savedPreReveal[0] || null
+  const locked = !revealed && Boolean(blindReview)
+  const notes = useMemo(
+    () => (activeCandidate?.reviews || []).filter((r) => r.post_reveal).slice().reverse(),
+    [activeCandidate]
+  )
   const canReveal = Boolean(activeCandidate) && !revealed && savedPreReveal.length > 0
+  const canSave = Boolean(activeId) && !busy && (
+    revealed
+      ? Boolean(comment.trim() || chosenReasons.length || (label && label !== blindReview?.label))
+      : Boolean(label) && !locked
+  )
 
+  // Filters can change while a list request is in flight (e.g. the first-load set default);
+  // only the latest request's response is applied
+  const listSeqRef = useRef(0)
   const loadList = useCallback(async () => {
+    const seq = ++listSeqRef.current
     setListLoading(true)
     setListError('')
     try {
@@ -242,14 +328,31 @@ export default function SetupReviewPanel({
       if (filters.cell) url.searchParams.set('cell', filters.cell)
       url.searchParams.set('status', filters.status)
       const body = await fetchJson(url.toString())
+      if (seq !== listSeqRef.current) return
       setCandidates(body.candidates || [])
       setSets(body.sets || [])
       setReasonOptions(body.reasons || [])
+      // First load: keep a stored set that still exists, else default to the latest-loaded set
+      if (!setDefaultedRef.current) {
+        setDefaultedRef.current = true
+        const all = body.sets || []
+        const stored = readStoredSet()
+        const valid = stored && (stored.cr === '' || all.some((x) => x.cr_id === stored.cr)) &&
+          (stored.set === '' || all.some((x) => x.set_name === stored.set && (stored.cr === '' || x.cr_id === stored.cr)))
+        if (!valid) {
+          const latest = latestSet(all)
+          // only the set: CR stays on "all CRs" so every set remains in the Set list
+          if (latest && latest.set_name !== filters.set) {
+            setFilters((f) => ({ ...f, cr: '', set: latest.set_name, cell: '' }))
+          }
+        }
+      }
     } catch (err) {
+      if (seq !== listSeqRef.current) return
       setCandidates([])
       setListError(err.message)
     } finally {
-      setListLoading(false)
+      if (seq === listSeqRef.current) setListLoading(false)
     }
   }, [base, filters])
 
@@ -280,6 +383,7 @@ export default function SetupReviewPanel({
     setNewReason('')
     setComment('')
     setActionError('')
+    setNotice('')
   }, [])
 
   const activate = useCallback(async (id) => {
@@ -297,10 +401,13 @@ export default function SetupReviewPanel({
     }
   }, [base, onActivate, resetForm])
 
+  // Saves may follow each other faster than the card refreshes; only the latest refresh is applied
+  const refreshSeqRef = useRef(0)
   const refreshActive = useCallback(async () => {
     if (!activeId) return
+    const seq = ++refreshSeqRef.current
     const body = await fetchJson(`${base}/candidates/${encodeURIComponent(activeId)}`)
-    onActivate?.(body.candidate)
+    if (seq === refreshSeqRef.current) onActivate?.(body.candidate)
   }, [activeId, base, onActivate])
 
   const step = useCallback((delta) => {
@@ -312,23 +419,42 @@ export default function SetupReviewPanel({
   }, [activate, activeId, candidates])
 
   const save = useCallback(async () => {
-    if (!activeId || !label || busy) return
+    if (!canSave) return
     setBusy(true)
     setActionError('')
+    setNotice('')
+    // After reveal the label is optional: omitted, the API copies the blind label (R1)
+    const payload = revealed
+      ? { ...(label ? { label } : {}), reasons: chosenReasons, comment }
+      : { label, reasons: chosenReasons, comment }
     try {
       await fetchJson(`${base}/candidates/${encodeURIComponent(activeId)}/review`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label, reasons: chosenReasons, comment }),
+        body: JSON.stringify(payload),
       })
-      await refreshActive()
-      await loadList()
     } catch (err) {
-      setActionError(err.message)
-    } finally {
+      setActionError(`Not saved: ${err.message}`)
       setBusy(false)
+      return
     }
-  }, [activeId, base, busy, chosenReasons, comment, label, loadList, refreshActive])
+    setNotice(revealed ? 'Note saved ✓' : 'Saved ✓ — label locked')
+    setComment('')
+    setChosenReasons([])
+    setNewReason('')
+    if (revealed) setLabel(null)
+    // After reveal the next note can be written while the card refreshes; before reveal Save
+    // stays busy until the refreshed card shows the locked label
+    if (revealed) setBusy(false)
+    try {
+      await refreshActive()
+    } catch (err) {
+      setActionError(`Saved, but the card did not refresh: ${err.message}`)
+    } finally {
+      if (!revealed) setBusy(false)
+    }
+    loadList()   // the queue's label column; not awaited, so the card is usable meanwhile
+  }, [activeId, base, canSave, chosenReasons, comment, label, loadList, refreshActive, revealed])
 
   const reveal = useCallback(async () => {
     if (!canReveal || busy) return
@@ -336,19 +462,23 @@ export default function SetupReviewPanel({
     setActionError('')
     try {
       await fetchJson(`${base}/candidates/${encodeURIComponent(activeId)}/reveal`, { method: 'POST' })
-      resetForm()
+      // A comment typed while the label was locked stays in the box, to be saved as a note
+      setLabel(null)
+      setChosenReasons([])
+      setNotice('')
       await refreshActive()
-      await loadList()
     } catch (err) {
-      setActionError(err.message)
-    } finally {
+      setActionError(`Reveal failed: ${err.message}`)
       setBusy(false)
+      return
     }
-  }, [activeId, base, busy, canReveal, loadList, refreshActive, resetForm])
+    setBusy(false)
+    loadList()
+  }, [activeId, base, busy, canReveal, loadList, refreshActive])
 
   // Keyboard: N/P, T/S/U, R. Ignored while typing in a field.
   const keyStateRef = useRef({})
-  keyStateRef.current = { step, reveal, activeId }
+  keyStateRef.current = { step, reveal, activeId, locked }
   useEffect(() => {
     const onKey = (e) => {
       if (e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target)) return
@@ -357,10 +487,11 @@ export default function SetupReviewPanel({
       if (k === 'n') st.step(1)
       else if (k === 'p') st.step(-1)
       else if (!st.activeId) return
+      else if (k === 'r') st.reveal()
+      else if (st.locked && (k === 't' || k === 's' || k === 'u')) return
       else if (k === 't') setLabel('take')
       else if (k === 's') setLabel('skip')
       else if (k === 'u') setLabel('unsure')
-      else if (k === 'r') st.reveal()
       else return
       e.preventDefault()
     }
@@ -393,6 +524,7 @@ export default function SetupReviewPanel({
   }, [sets, filters.cr, filters.set])
 
   const outcome = revealed ? activeCandidate?.outcome : null
+  const shownLabel = locked ? blindReview.label : label
 
   return (
     <div
@@ -447,12 +579,12 @@ export default function SetupReviewPanel({
       {/* Filters */}
       <div style={{ padding: '6px 10px', borderBottom: '1px solid #1e293b', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 4 }}>
         <select aria-label="CR" value={filters.cr} style={selectStyle}
-          onChange={(e) => setFilters((f) => ({ ...f, cr: e.target.value, set: '', cell: '' }))}>
+          onChange={(e) => { storeSet(e.target.value, ''); setFilters((f) => ({ ...f, cr: e.target.value, set: '', cell: '' })) }}>
           <option value="">all CRs</option>
           {crOptions.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
         <select aria-label="Set" value={filters.set} style={selectStyle}
-          onChange={(e) => setFilters((f) => ({ ...f, set: e.target.value, cell: '' }))}>
+          onChange={(e) => { storeSet(filters.cr, e.target.value); setFilters((f) => ({ ...f, set: e.target.value, cell: '' })) }}>
           <option value="">all sets</option>
           {setOptions.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
@@ -485,19 +617,12 @@ export default function SetupReviewPanel({
                 <CardHeader cand={activeCandidate} />
               </div>
               <div data-testid="review-card-body" style={{ overflowY: 'auto', minHeight: 0, padding: '6px 10px 8px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {savedPreReveal.length > 0 && (
-                  <div style={{ fontSize: 10, color: '#94a3b8' }}>
+                {blindReview && (
+                  <div data-testid="review-saved" style={{ fontSize: 10, color: '#94a3b8', overflowWrap: 'anywhere' }}>
                     Saved:{' '}
-                    {(() => {
-                      const r = savedPreReveal[savedPreReveal.length - 1]
-                      return (
-                        <span>
-                          <b style={{ color: LABEL_COLOR[r.label] }}>{r.label.toUpperCase()}</b>
-                          {r.reasons?.length ? ` · ${r.reasons.join(', ')}` : ''}
-                          {r.comment ? ` · “${r.comment}”` : ''}
-                        </span>
-                      )
-                    })()}
+                    <b style={{ color: LABEL_COLOR[blindReview.label] }}>{blindReview.label.toUpperCase()}</b>
+                    {blindReview.reasons?.length ? ` · ${blindReview.reasons.join(', ')}` : ''}
+                    {blindReview.comment && <span style={{ whiteSpace: 'pre-wrap' }}>{` · “${blindReview.comment}”`}</span>}
                   </div>
                 )}
 
@@ -508,13 +633,10 @@ export default function SetupReviewPanel({
                     {outcome.result ? ` · ${outcome.result}` : ''}
                     {outcome.exit_ts_pt ? ` · exit ${hhmm(outcome.exit_ts_pt)}` : ''}
                     {outcome.exit_price != null ? ` @ ${fmtNum(outcome.exit_price)}` : ''}
-                    {(activeCandidate.reviews || []).some((r) => r.post_reveal) && (
-                      <div style={{ marginTop: 2, color: '#a5b4fc', fontSize: 10 }}>
-                        post-reveal reviews: {(activeCandidate.reviews || []).filter((r) => r.post_reveal).map((r) => r.label).join(', ')}
-                      </div>
-                    )}
                   </div>
                 )}
+
+                {revealed && <NoteHistory notes={notes} blindLabel={blindReview?.label} />}
 
                 <KeyFacts cand={activeCandidate} />
 
@@ -555,87 +677,113 @@ export default function SetupReviewPanel({
             )}
           </div>
 
-          {/* Actions: pinned to the bottom of the panel (CR-DB) */}
+          {/* Actions: pinned to the bottom of the panel (CR-DB). CR-DE: the chips and the comment box
+              scroll in a capped region, so the label row and Save / Reveal stay in view at 900 × 600. */}
           {activeCandidate && (
             <div
               data-testid="review-actions"
               style={{ flex: 'none', borderTop: '1px solid #334155', background: '#020617', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}
             >
               <div style={{ display: 'flex', gap: 6 }}>
-                {LABELS.map((l) => (
-                  <button
-                    key={l.key}
-                    type="button"
-                    data-testid={`review-label-${l.key}`}
-                    aria-pressed={label === l.key}
-                    onClick={() => setLabel(l.key)}
-                    style={{
-                      ...buttonBase,
-                      flex: 1,
-                      color: label === l.key ? l.ink : l.color,
-                      background: label === l.key ? l.color : '#0f172a',
-                      borderColor: l.color,
-                    }}
-                  >
-                    {l.text} <span style={{ opacity: 0.6, fontWeight: 500 }}>({l.hotkey})</span>
-                  </button>
-                ))}
-              </div>
-
-              <div data-testid="review-reasons" style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                {reasonOptions.map((r) => {
-                  const on = chosenReasons.includes(r)
+                {LABELS.map((l) => {
+                  const on = shownLabel === l.key
                   return (
                     <button
-                      key={r}
+                      key={l.key}
                       type="button"
+                      data-testid={`review-label-${l.key}`}
                       aria-pressed={on}
-                      onClick={() => toggleReason(r)}
+                      disabled={locked}
+                      onClick={() => setLabel(revealed && label === l.key ? null : l.key)}
+                      title={revealed ? 'Optional: a changed label for this note' : undefined}
                       style={{
                         ...buttonBase,
-                        padding: '2px 7px',
-                        fontSize: 10,
-                        fontWeight: 600,
-                        borderRadius: 10,
-                        color: on ? '#020617' : '#94a3b8',
-                        background: on ? '#93c5fd' : 'transparent',
-                        borderColor: on ? '#93c5fd' : '#334155',
+                        flex: 1,
+                        color: on ? l.ink : l.color,
+                        background: on ? l.color : '#0f172a',
+                        borderColor: l.color,
+                        cursor: locked ? 'default' : 'pointer',
+                        opacity: locked && !on ? 0.5 : 1,
                       }}
                     >
-                      {r}
+                      {l.text} <span style={{ opacity: 0.6, fontWeight: 500 }}>({l.hotkey})</span>
                     </button>
                   )
                 })}
               </div>
-              <div style={{ display: 'flex', gap: 4 }}>
-                <input
-                  aria-label="Add reason"
-                  value={newReason}
-                  placeholder="add reason"
-                  onChange={(e) => setNewReason(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addReason() } }}
-                  style={{ ...selectStyle, flex: 1, fontSize: 11, padding: '4px 6px' }}
+              {(locked || revealed) && (
+                <div data-testid="review-mode-hint" style={{ fontSize: 10, color: '#94a3b8' }}>
+                  {locked
+                    ? 'Label locked after Save. Reveal (R) to add notes; anything typed below is kept for the first note.'
+                    : 'Notes: each Save adds a note. Label optional (a changed label); none picked keeps the saved label.'}
+                </div>
+              )}
+
+              <div data-testid="review-form-scroll" style={{ overflowY: 'auto', maxHeight: '32vh', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div data-testid="review-reasons" style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {reasonOptions.map((r) => {
+                    const on = chosenReasons.includes(r)
+                    return (
+                      <button
+                        key={r}
+                        type="button"
+                        aria-pressed={on}
+                        disabled={locked}
+                        onClick={() => toggleReason(r)}
+                        style={{
+                          ...buttonBase,
+                          padding: '2px 7px',
+                          fontSize: 10,
+                          fontWeight: 600,
+                          borderRadius: 10,
+                          color: on ? '#020617' : '#94a3b8',
+                          background: on ? '#93c5fd' : 'transparent',
+                          borderColor: on ? '#93c5fd' : '#334155',
+                          opacity: locked ? 0.5 : 1,
+                          cursor: locked ? 'default' : 'pointer',
+                        }}
+                      >
+                        {r}
+                      </button>
+                    )
+                  })}
+                </div>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <input
+                    aria-label="Add reason"
+                    value={newReason}
+                    placeholder="add reason"
+                    disabled={locked}
+                    onChange={(e) => setNewReason(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addReason() } }}
+                    style={{ ...selectStyle, flex: 1, fontSize: 11, padding: '4px 6px' }}
+                  />
+                  <button type="button" onClick={addReason} disabled={locked} style={{ ...buttonBase, padding: '3px 8px' }}>+</button>
+                </div>
+                <textarea
+                  aria-label="Comment"
+                  data-testid="review-comment"
+                  value={comment}
+                  placeholder={revealed ? 'note (Cmd/Ctrl+Enter saves)' : 'comment (Cmd/Ctrl+Enter saves)'}
+                  onChange={(e) => setComment(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save() }
+                  }}
+                  rows={5}
+                  style={{ ...selectStyle, fontSize: 11, lineHeight: 1.35, padding: '4px 6px', resize: 'vertical', minHeight: 72, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', flex: 'none' }}
                 />
-                <button type="button" onClick={addReason} style={{ ...buttonBase, padding: '3px 8px' }}>+</button>
               </div>
-              <textarea
-                aria-label="Comment"
-                value={comment}
-                placeholder="comment"
-                onChange={(e) => setComment(e.target.value)}
-                rows={1}
-                style={{ ...selectStyle, fontSize: 11, padding: '4px 6px', resize: 'vertical' }}
-              />
 
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <button
                   type="button"
                   data-testid="review-save"
                   onClick={save}
-                  disabled={!label || busy}
-                  style={{ ...buttonBase, flex: 1, opacity: !label || busy ? 0.5 : 1, borderColor: '#60a5fa', color: '#e2e8f0' }}
+                  disabled={!canSave}
+                  title={locked ? 'Label locked — Reveal to add notes' : revealed ? 'Save a note (Cmd/Ctrl+Enter)' : 'Save the label (Cmd/Ctrl+Enter)'}
+                  style={{ ...buttonBase, flex: 1, opacity: canSave ? 1 : 0.5, borderColor: '#60a5fa', color: '#e2e8f0' }}
                 >
-                  {revealed ? 'Save post-reveal review' : 'Save'}
+                  {revealed ? 'Save note' : locked ? 'Saved' : 'Save'}
                 </button>
                 <button
                   type="button"
@@ -649,7 +797,16 @@ export default function SetupReviewPanel({
                 </button>
               </div>
 
-              {actionError && <div style={{ fontSize: 10, color: '#e2e8f0', background: '#1e293b', borderRadius: 4, padding: '3px 6px' }}>{actionError}</div>}
+              {notice && !actionError && (
+                <div data-testid="review-notice" role="status" style={{ fontSize: 11, fontWeight: 700, color: '#020617', background: '#93c5fd', borderRadius: 4, padding: '3px 6px' }}>
+                  {notice}
+                </div>
+              )}
+              {actionError && (
+                <div data-testid="review-action-error" role="alert" style={{ fontSize: 11, fontWeight: 700, color: '#020617', background: '#cbd5e1', border: '1px solid #f8fafc', borderRadius: 4, padding: '3px 6px' }}>
+                  ⚠ {actionError}
+                </div>
+              )}
             </div>
           )}
         </>

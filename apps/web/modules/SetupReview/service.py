@@ -5,10 +5,14 @@ owns the transaction. `outcome` leaves the database only through `get_candidate`
 (when the candidate has at least one review), `reveal` (which requires one) and
 `summary` (revealed candidates only). `list_candidates` never selects it.
 
-Label semantics: a candidate's label is its latest pre-reveal review
-(post_reveal = false). A candidate is revealed when any of its reviews carries
-revealed_at. Reviews written after reveal are flagged post_reveal and excluded
-from the Take / Skip / Unsure outcome stats.
+Label semantics (CR-DE): a candidate's blind label is its FIRST pre-reveal review
+(post_reveal = false; earliest reviewed_at, then lowest id). Any code that reads
+labels for analysis must use that row. The label locks once it is saved: a second
+pre-reveal review is rejected (409 label_locked). A candidate is revealed when any
+of its reviews carries revealed_at. Rows written after reveal are notes only: each
+POST inserts a post_reveal row (comment, reasons, optional changed label; with no
+new label the row copies the blind label, since label is NOT NULL). Post-reveal
+rows never move the Take / Skip / Unsure outcome stats.
 """
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ DEFAULT_REASONS = (
     "other",
 )
 STATUSES = ("unreviewed", "reviewed", "all")
+FIXTURE_SET_SUFFIX = ":fixture"   # CR-CC smoke sets; their reasons are not offered as chips
 
 _CANDIDATE_COLS = (
     "c.id, c.cr_id, c.set_name, c.session_date, c.cell, c.direction, "
@@ -39,14 +44,14 @@ _CANDIDATE_COLS = (
     "c.stop_price, c.extreme_price, c.test_ts_pt, c.confirm_ts_pt, c.retest_ts_pt, c.meta"
 )
 
-# Review state per candidate: latest pre-reveal label, review count, revealed flag.
+# Review state per candidate: first pre-reveal label (the blind label), review count, revealed flag.
 _STATE_LATERAL = """
     LEFT JOIN LATERAL (
         SELECT
             count(*)                                   AS n_reviews,
             bool_or(r.revealed_at IS NOT NULL)         AS revealed,
             max(r.revealed_at)                         AS revealed_at,
-            (array_agg(r.label ORDER BY r.reviewed_at DESC, r.id DESC)
+            (array_agg(r.label ORDER BY r.reviewed_at, r.id)
                 FILTER (WHERE NOT r.post_reveal))[1]   AS label
         FROM setup_reviews r
         WHERE r.candidate_id = c.id
@@ -100,20 +105,26 @@ def list_candidates(conn, *, cr=None, set_name=None, cell=None, status="all") ->
 
 
 def list_sets(conn) -> list[dict]:
-    """(cr_id, set_name) pairs with candidate counts, for the panel's filters."""
+    """(cr_id, set_name) pairs with candidate counts and latest loaded_at, for the panel's filters
+    (CR-DE: the panel defaults to the most recently loaded set)."""
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             "SELECT cr_id, set_name, count(*) AS n, array_agg(DISTINCT cell) "
-            "FILTER (WHERE cell IS NOT NULL) AS cells "
+            "FILTER (WHERE cell IS NOT NULL) AS cells, max(loaded_at) AS loaded_at "
             "FROM setup_candidates GROUP BY cr_id, set_name ORDER BY cr_id, set_name"
         )
-        return [dict(r) for r in cur.fetchall()]
+        return [_clean(dict(r)) for r in cur.fetchall()]
 
 
 def known_reasons(conn) -> list[str]:
-    """The default chips plus every reason used in a saved review (L7)."""
+    """The default chips plus every reason used in a saved review (L7), except reviews on
+    fixture sets (CR-DE: smoke-test reasons such as "fixture smoke reason" are not chips)."""
     with conn.cursor() as cur:
-        cur.execute("SELECT DISTINCT unnest(reasons) FROM setup_reviews")
+        cur.execute(
+            "SELECT DISTINCT unnest(r.reasons) FROM setup_reviews r "
+            "JOIN setup_candidates c ON c.id = r.candidate_id WHERE c.set_name NOT LIKE %s",
+            (f"%{FIXTURE_SET_SUFFIX}",),
+        )
         used = {r[0] for r in cur.fetchall() if r[0]}
     extra = sorted(used - set(DEFAULT_REASONS))
     return list(DEFAULT_REASONS) + extra
@@ -172,15 +183,21 @@ def implied_move(conn, session_date, entry_ts_pt) -> float | None:
 class ReviewError(ValueError):
     """Bad review input or a state conflict; `status` is the HTTP status."""
 
-    def __init__(self, message: str, status: int = 400):
+    def __init__(self, message: str, status: int = 400, code: str = "bad_request"):
         super().__init__(message)
         self.status = status
+        self.code = code
 
 
 def add_review(conn, candidate_id: str, body: dict) -> dict:
-    """Insert a review (insert-only). Flagged post_reveal when the candidate is revealed."""
-    label = str(body.get("label") or "").strip().lower()
-    if label not in LABELS:
+    """Insert a review (insert-only; nothing is updated).
+
+    Before reveal: the blind label, `label` required, first save only (409 label_locked after).
+    After reveal: a note, flagged post_reveal; `label` optional and copies the blind label when
+    absent (R1); a note needs a comment, a reason or a changed label.
+    """
+    label = str(body.get("label") or "").strip().lower() or None
+    if label is not None and label not in LABELS:
         raise ReviewError(f"label must be one of {LABELS}")
     reasons_raw = body.get("reasons") or []
     if not isinstance(reasons_raw, list):
@@ -197,23 +214,38 @@ def add_review(conn, candidate_id: str, body: dict) -> dict:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             "SELECT EXISTS (SELECT 1 FROM setup_candidates WHERE id = %s) AS found, "
-            "EXISTS (SELECT 1 FROM setup_reviews WHERE candidate_id = %s AND revealed_at IS NOT NULL) AS revealed",
-            (candidate_id, candidate_id),
+            "EXISTS (SELECT 1 FROM setup_reviews WHERE candidate_id = %s AND revealed_at IS NOT NULL) AS revealed, "
+            "(SELECT label FROM setup_reviews WHERE candidate_id = %s AND NOT post_reveal "
+            " ORDER BY reviewed_at, id LIMIT 1) AS blind_label",
+            (candidate_id, candidate_id, candidate_id),
         )
         st = cur.fetchone()
         if not st["found"]:
             raise ReviewError("candidate not found", 404)
+        revealed = bool(st["revealed"])
+        if not revealed:
+            if st["blind_label"] is not None:
+                raise ReviewError("label is locked after the first save; reveal to add notes", 409, "label_locked")
+            if label is None:
+                raise ReviewError(f"label must be one of {LABELS}")
+        else:
+            if label is None or label == st["blind_label"]:
+                if not comment and not reasons:
+                    raise ReviewError("a note needs a comment, a reason or a changed label")
+                label = label or st["blind_label"]
+            if label is None:
+                raise ReviewError(f"label must be one of {LABELS}")
         cur.execute(
             "INSERT INTO setup_reviews (candidate_id, label, reasons, comment, post_reveal) "
             "VALUES (%s, %s, %s, %s, %s) "
             "RETURNING id, label, reasons, comment, reviewed_at, revealed_at, post_reveal",
-            (candidate_id, label, reasons, comment, bool(st["revealed"])),
+            (candidate_id, label, reasons, comment, revealed),
         )
         return _clean(dict(cur.fetchone()))
 
 
 def reveal(conn, candidate_id: str) -> dict:
-    """Set revealed_at on the latest pre-reveal review and return the outcome (L8).
+    """Set revealed_at on the blind-label (first pre-reveal) review and return the outcome (L8).
 
     Requires a saved review. Idempotent: a revealed candidate returns its outcome and
     the original revealed_at without another UPDATE.
@@ -231,15 +263,15 @@ def reveal(conn, candidate_id: str) -> dict:
         if revealed_at is None:
             cur.execute(
                 "SELECT id FROM setup_reviews WHERE candidate_id = %s AND NOT post_reveal "
-                "ORDER BY reviewed_at DESC, id DESC LIMIT 1",
+                "ORDER BY reviewed_at, id LIMIT 1",
                 (candidate_id,),
             )
-            latest = cur.fetchone()
-            if latest is None:
+            first = cur.fetchone()
+            if first is None:
                 raise ReviewError("save a review before reveal", 409)
             cur.execute(
                 "UPDATE setup_reviews SET revealed_at = now() WHERE id = %s RETURNING revealed_at",
-                (latest["id"],),
+                (first["id"],),
             )
             revealed_at = cur.fetchone()["revealed_at"]
     return {"id": candidate_id, "revealed_at": _iso(revealed_at), "outcome": cand["outcome"]}
@@ -261,7 +293,7 @@ def summary(conn, *, cr=None, set_name=None) -> list[dict]:
                    CASE WHEN s.revealed THEN (c.outcome->>'pnl_pts')::double precision END AS pnl,
                    (SELECT r.reasons FROM setup_reviews r
                      WHERE r.candidate_id = c.id AND NOT r.post_reveal
-                     ORDER BY r.reviewed_at DESC, r.id DESC LIMIT 1) AS reasons
+                     ORDER BY r.reviewed_at, r.id LIMIT 1) AS reasons
             FROM setup_candidates c {_STATE_LATERAL}
             {('WHERE ' + ' AND '.join(where)) if where else ''}
         )
@@ -277,7 +309,7 @@ def summary(conn, *, cr=None, set_name=None) -> list[dict]:
             SELECT c.cr_id, c.set_name, s.label,
                    (SELECT r.reasons FROM setup_reviews r
                      WHERE r.candidate_id = c.id AND NOT r.post_reveal
-                     ORDER BY r.reviewed_at DESC, r.id DESC LIMIT 1) AS reasons
+                     ORDER BY r.reviewed_at, r.id LIMIT 1) AS reasons
             FROM setup_candidates c {_STATE_LATERAL}
             {('WHERE ' + ' AND '.join(where)) if where else ''}
         )
