@@ -148,7 +148,7 @@ test('edge contracts are null ("exact data only") when the window touches an app
   assert.equal(r.exact, false)
   assert.equal(r.top.contracts, null)
   assert.equal(edgeText(r, () => '07:00'),
-    'Top 7003.00 · exact data only · held 1 m · broke 07:00 | Bottom 7000.00 · exact data only · held 3 m')
+    'Top 7003.00 · exact data only · held 1 m · moved 07:00 | Bottom 7000.00 · exact data only · held 3 m') // CR-DI: growth = "moved"
   const r2 = edgeReadout(p, flattenBars(p), T0 + 120, id)
   assert.equal(r2.exact, true)
 })
@@ -158,7 +158,7 @@ test('edge text format', () => {
     top: { price: 7724.75, contracts: 1800, heldMin: 9, brokeAt: null },
     bottom: { price: 7715.25, contracts: 4100, heldMin: 6, brokeAt: T0 },
   }
-  assert.equal(edgeText(r, () => '07:12'), 'Top 7724.75 · 1.8k buyers · held 9 m | Bottom 7715.25 · 4.1k sellers · held 6 m · broke 07:12')
+  assert.equal(edgeText(r, () => '07:12'), 'Top 7724.75 · 1.8k buyers · held 9 m | Bottom 7715.25 · 4.1k sellers · held 6 m · moved 07:12') // CR-DI
   assert.equal(edgeReadout(payload([]), flattenBars(payload([])), T0, id), null)
   assert.equal(edgeReadout(payload([]), bars([1]), null, id), null)
 })

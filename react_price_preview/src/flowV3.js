@@ -8,7 +8,10 @@ export const ALPHA_MIN = 0.08
 export const ALPHA_SPAN = 0.62
 export const CROWDED_TICK_PX = 3 // DC7: one tick shorter than this -> 0.5-pt cells
 export const ROLLING_CHOICES = [5, 10, 15]
-export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true }
+export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15 }
+// CR-DI amendment 9: an Edges box edge must hold this many minutes before a close beyond it freezes the box (⚙; a display
+// default, not a tested threshold).
+export const BOX_HOLD_MIN_RANGE = [5, 60]
 
 // utc epoch -> shifted PT epoch. The PT offset is looked up once per UTC hour (offsets only change on the
 // hour), not per timestamp: building an Intl.DateTimeFormat per value is what made CR-CH's re-renders costly.
@@ -388,13 +391,97 @@ export function flattenBars(payload) {
   }
 }
 
-// DF4 edge readout from the anchor (shifted candle time) to the last bar. The edges start at the anchor
-// minute's close; a later close > EDGE_BREAK_PTS beyond an edge is a break and the edge moves to it, a close
-// within EDGE_BREAK_PTS is a test (edge unchanged). Contracts: aggressor volume of cells since the anchor within
-// EDGE_NEAR_PTS of the current edge (buys at the top, sells at the bottom), only when every bar since the anchor is
-// on an exact segment (else null and `exact` false). First touch: the first minute since the anchor whose high
-// (top) / low (bottom) came within EDGE_NEAR_PTS of the edge. Null without an anchor or bars.
-export function edgeReadout(payload, bars, anchorShifted, shift) {
+// Cells of [t0, t1] (UTC minute starts, inclusive) within EDGE_NEAR_PTS of `top` / `bottom`, per minute, both sides
+// at each edge: topBuy / bottomSell are the readout's sides, topSell / bottomBuy the opposite ones (CR-DI).
+export function edgeCounts(payload, t0, t1, top, bottom) {
+  const near = EDGE_NEAR_PTS / TICK
+  const topT = Math.round(top / TICK)
+  const botT = Math.round(bottom / TICK)
+  const per = new Map() // minute -> [top buy, top sell, bottom sell, bottom buy]
+  for (const s of Array.isArray(payload?.segments) ? payload.segments : []) {
+    const c = s?.cells || {}
+    const n = Array.isArray(c.t) ? c.t.length : 0
+    for (let i = 0; i < n; i += 1) {
+      const t = Number(c.t[i])
+      if (t < t0 || t > t1) continue
+      const p = Number(c.p[i])
+      const atTop = Math.abs(p - topT) <= near
+      const atBottom = Math.abs(p - botT) <= near
+      if (!atTop && !atBottom) continue
+      let m = per.get(t)
+      if (!m) {
+        m = [0, 0, 0, 0]
+        per.set(t, m)
+      }
+      const b = Number(c.buy[i]) || 0
+      const sl = Number(c.sell[i]) || 0
+      if (atTop) {
+        m[0] += b
+        m[1] += sl
+      }
+      if (atBottom) {
+        m[2] += sl
+        m[3] += b
+      }
+    }
+  }
+  const ts = [...per.keys()].sort((x, y) => x - y)
+  const col = (k) => ts.map((t) => per.get(t)[k])
+  return { t: ts, topBuy: col(0), topSell: col(1), bottomSell: col(2), bottomBuy: col(3) }
+}
+
+const total = (a) => a.reduce((x, v) => x + v, 0)
+
+// One box over bars [j0, j1]: edges from j0's close, moved by closes > EDGE_BREAK_PTS beyond (growth); first touch
+// within EDGE_NEAR_PTS; contracts from edgeCounts against the final edges (null when not exact).
+function boxStats(payload, bars, j0, j1, exact) {
+  let top = bars.c[j0]
+  let bottom = bars.c[j0]
+  let topMoved = null
+  let bottomMoved = null
+  let topMoves = 0
+  let bottomMoves = 0
+  for (let i = j0 + 1; i <= j1; i += 1) {
+    const c = bars.c[i]
+    if (c > top + EDGE_BREAK_PTS + 1e-9) {
+      top = c
+      topMoved = bars.t[i]
+      topMoves += 1
+    }
+    if (c < bottom - EDGE_BREAK_PTS - 1e-9) {
+      bottom = c
+      bottomMoved = bars.t[i]
+      bottomMoves += 1
+    }
+  }
+  let topTouch = null
+  let bottomTouch = null
+  for (let i = j0; i <= j1 && (topTouch == null || bottomTouch == null); i += 1) {
+    if (topTouch == null && bars.h[i] >= top - EDGE_NEAR_PTS - 1e-9) topTouch = bars.t[i]
+    if (bottomTouch == null && bars.l[i] <= bottom + EDGE_NEAR_PTS + 1e-9) bottomTouch = bars.t[i]
+  }
+  const minutes = exact ? edgeCounts(payload, bars.t[j0], bars.t[j1], top, bottom) : null
+  const sum = (k) => (minutes ? total(minutes[k]) : null)
+  return {
+    from: bars.t[j0], to: bars.t[j1], minutes,
+    top: { price: top, contracts: sum('topBuy'), opposite: sum('topSell'), firstTouch: topTouch, brokeAt: topMoved, breaks: topMoves },
+    bottom: { price: bottom, contracts: sum('bottomSell'), opposite: sum('bottomBuy'), firstTouch: bottomTouch, brokeAt: bottomMoved, breaks: bottomMoves },
+  }
+}
+
+// DF4 edge readout from the anchor (shifted candle time) to the last bar, as a box. The edges start at the box's
+// first minute's close; a close up to EDGE_BREAK_PTS beyond an edge is a test (edge unchanged). CR-DI amendment 9:
+// a close more than EDGE_BREAK_PTS beyond an edge moves that edge to it (the box grows) while the edge has stood
+// less than `holdMin` minutes since it was set; once it has stood `holdMin` minutes, such a close is a break: the box
+// freezes (`frozen`, oldest first, each with `breakAt` and `dir` 'up' / 'down') and a new box starts at the break bar
+// with top = bottom = its close (both edges set there). A box spans its first bar to the bar before its break, so no
+// minute is counted twice. The returned object is the current box: contracts = aggressor volume of cells within
+// EDGE_NEAR_PTS of its edges since it started (buys at the top, sells at the bottom; `opposite` = the other side),
+// only when every bar since the anchor is on an exact segment (else null and `exact` false); `minutes` are the same
+// cells per minute (CR-DI strip), so the contracts are their sums. First touch: the first minute of the box whose high
+// (top) / low (bottom) came within EDGE_NEAR_PTS of the edge; `brokeAt` / `breaks` on an edge = its growth moves.
+// `holdMin` is a display default (⚙), not a tested threshold. Null without an anchor or bars.
+export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAULT_V3_SETTINGS.boxHoldMin) {
   if (anchorShifted == null || !bars?.t?.length) return null
   let i0 = -1
   for (let i = 0; i < bars.t.length; i += 1) {
@@ -405,72 +492,182 @@ export function edgeReadout(payload, bars, anchorShifted, shift) {
   }
   if (i0 < 0) return null
   const last = bars.t.length - 1
-  let top = bars.c[i0]
-  let bottom = bars.c[i0]
-  let topBreak = null
-  let bottomBreak = null
-  let topBreaks = 0
-  let bottomBreaks = 0
-  for (let i = i0 + 1; i <= last; i += 1) {
-    const c = bars.c[i]
-    if (c > top + EDGE_BREAK_PTS + 1e-9) {
-      top = c
-      topBreak = bars.t[i]
-      topBreaks += 1
-    }
-    if (c < bottom - EDGE_BREAK_PTS - 1e-9) {
-      bottom = c
-      bottomBreak = bars.t[i]
-      bottomBreaks += 1
-    }
-  }
-  let topTouch = null
-  let bottomTouch = null
-  for (let i = i0; i <= last && (topTouch == null || bottomTouch == null); i += 1) {
-    if (topTouch == null && bars.h[i] >= top - EDGE_NEAR_PTS - 1e-9) topTouch = bars.t[i]
-    if (bottomTouch == null && bars.l[i] <= bottom + EDGE_NEAR_PTS + 1e-9) bottomTouch = bars.t[i]
-  }
   let exact = true
   for (let i = i0; i <= last; i += 1) if (!bars.exact[i]) exact = false
-  let buys = null
-  let sells = null
-  if (exact) {
-    buys = 0
-    sells = 0
-    const t0 = bars.t[i0]
-    const t1 = bars.t[last]
-    const near = EDGE_NEAR_PTS / TICK
-    const topT = Math.round(top / TICK)
-    const botT = Math.round(bottom / TICK)
-    for (const s of Array.isArray(payload?.segments) ? payload.segments : []) {
-      const c = s?.cells || {}
-      const n = Array.isArray(c.t) ? c.t.length : 0
-      for (let i = 0; i < n; i += 1) {
-        const t = Number(c.t[i])
-        if (t < t0 || t > t1) continue
-        const p = Number(c.p[i])
-        if (Math.abs(p - topT) <= near) buys += Number(c.buy[i]) || 0
-        if (Math.abs(p - botT) <= near) sells += Number(c.sell[i]) || 0
-      }
+  const hold = Math.max(0, Number(holdMin) || 0) * 60
+  const spans = [] // [first bar, last bar, dir of the break that ended it]
+  let j0 = i0
+  let top = bars.c[i0]
+  let bottom = bars.c[i0]
+  let topSet = bars.t[i0]
+  let bottomSet = bars.t[i0]
+  for (let i = i0 + 1; i <= last; i += 1) {
+    const c = bars.c[i]
+    const up = c > top + EDGE_BREAK_PTS + 1e-9
+    const down = c < bottom - EDGE_BREAK_PTS - 1e-9
+    if ((up && bars.t[i] - topSet >= hold) || (down && bars.t[i] - bottomSet >= hold)) {
+      spans.push([j0, i - 1, up ? 'up' : 'down'])
+      j0 = i
+      top = c
+      bottom = c
+      topSet = bars.t[i]
+      bottomSet = bars.t[i]
+      continue
+    }
+    if (up) {
+      top = c
+      topSet = bars.t[i]
+    }
+    if (down) {
+      bottom = c
+      bottomSet = bars.t[i]
     }
   }
   const tLast = bars.t[last]
-  const held = (touch) => (touch == null ? null : Math.round((tLast - touch) / 60))
+  const frozen = spans.map(([a, z, dir]) => {
+    const box = boxStats(payload, bars, a, z, exact)
+    const end = bars.t[z + 1]
+    const held = (e) => (e.firstTouch == null ? null : Math.round((end - e.firstTouch) / 60))
+    return {
+      ...box, breakAt: end, dir, heldMin: Math.round((end - box.from) / 60),
+      top: { ...box.top, heldMin: held(box.top) }, bottom: { ...box.bottom, heldMin: held(box.bottom) },
+    }
+  })
+  const cur = boxStats(payload, bars, j0, last, exact)
+  const held = (e) => (e.firstTouch == null ? null : Math.round((tLast - e.firstTouch) / 60))
   return {
-    from: bars.t[i0], to: tLast, exact,
-    top: { price: top, contracts: buys, firstTouch: topTouch, heldMin: held(topTouch), brokeAt: topBreak, breaks: topBreaks },
-    bottom: { price: bottom, contracts: sells, firstTouch: bottomTouch, heldMin: held(bottomTouch), brokeAt: bottomBreak, breaks: bottomBreaks },
+    ...cur, anchor: bars.t[i0], exact, holdMin: Number(holdMin), frozen,
+    startDir: frozen.length ? frozen[frozen.length - 1].dir : null,
+    top: { ...cur.top, heldMin: held(cur.top) }, bottom: { ...cur.bottom, heldMin: held(cur.bottom) },
   }
 }
 
-// "Top 7724.75 · 1.8k buyers · held 9 m | Bottom 7715.25 · 4.1k sellers · held 6 m" (+ " · broke hh:mm").
+// CR-DI: the boxes the chart draws (the last FROZEN_BOXES_MAX frozen + the current), oldest first, and how many
+// older frozen boxes were dropped from the drawing.
+export const FROZEN_BOXES_MAX = 4
+export function drawnBoxes(r, max = FROZEN_BOXES_MAX) {
+  if (!r) return { boxes: [], dropped: 0 }
+  const frozen = Array.isArray(r.frozen) ? r.frozen : []
+  const kept = frozen.slice(Math.max(0, frozen.length - max))
+  return { boxes: [...kept, r], dropped: frozen.length - kept.length }
+}
+
+// CR-DI strip series: the per-minute cells of the drawn boxes, each against its own box, concatenated in time with
+// `box` = the box's index in `boxes`. Null when not exact.
+export function edgeEffortSeries(r, max = FROZEN_BOXES_MAX) {
+  if (!r?.exact) return null
+  const { boxes, dropped } = drawnBoxes(r, max)
+  const out = { t: [], topBuy: [], topSell: [], bottomSell: [], bottomBuy: [], box: [], boxes, dropped }
+  boxes.forEach((bx, k) => {
+    const m = bx.minutes
+    if (!m) return
+    for (let i = 0; i < m.t.length; i += 1) {
+      out.t.push(m.t[i])
+      out.topBuy.push(m.topBuy[i])
+      out.topSell.push(m.topSell[i])
+      out.bottomSell.push(m.bottomSell[i])
+      out.bottomBuy.push(m.bottomBuy[i])
+      out.box.push(k)
+    }
+  })
+  return out
+}
+
+// CR-DI visits: at each edge, a run of minutes with a non-zero main bar (top buy / bottom sell), joined across up
+// to `gap` empty minutes. Each visit sums both sides over its minutes [start, end] (the opposite side includes the
+// visit's quiet minutes). `of[e][i]` = visit index of minute i at edge e (or -1); `run[e][i]` = [main, opp] summed
+// from the visit's start through minute i. Input: edgeReadout(...).minutes or edgeEffortSeries(...) (its `box` keeps
+// visits inside one box).
+export const VISIT_GAP_MIN = 2
+export function edgeVisits(minutes, gap = VISIT_GAP_MIN) {
+  const t = Array.isArray(minutes?.t) ? minutes.t : []
+  const box = Array.isArray(minutes?.box) ? minutes.box : null // CR-DI amendment 9: visits never join across a break
+  const one = (main, opp) => {
+    const visits = []
+    let cur = null
+    for (let i = 0; i < t.length; i += 1) {
+      if (!(main[i] > 0)) continue
+      const sameBox = !box || box[i] === box[cur?.j1]
+      if (cur && sameBox && t[i] - t[cur.j1] <= (gap + 1) * 60) cur.j1 = i
+      else {
+        cur = { j0: i, j1: i }
+        visits.push(cur)
+      }
+    }
+    const of = new Array(t.length).fill(-1)
+    const run = new Array(t.length).fill(null)
+    const out = visits.map((v, k) => {
+      let a = 0
+      let b = 0
+      for (let i = v.j0; i <= v.j1; i += 1) {
+        a += main[i]
+        b += opp[i]
+        of[i] = k
+        run[i] = [a, b]
+      }
+      return { start: t[v.j0], end: t[v.j1], main: a, opp: b }
+    })
+    return { visits: out, of, run }
+  }
+  const top = one(minutes?.topBuy || [], minutes?.topSell || [])
+  const bottom = one(minutes?.bottomSell || [], minutes?.bottomBuy || [])
+  return { top: top.visits, bottom: bottom.visits, of: { top: top.of, bottom: bottom.of }, run: { top: top.run, bottom: bottom.run } }
+}
+
+// CR-DI strip columns: edgeReadout(...).minutes bucketed onto the pane's candles (shifted times; one minute per
+// candle on the 1-minute chart). cols: Map candle idx -> [top buy, top sell, bottom sell, bottom buy]; idxOf[i] =
+// candle idx of minute i (or -1); max = the largest single bar, the strip's scale.
+export function edgeStripColumns(minutes, candleTimes, shift) {
+  const t = Array.isArray(minutes?.t) ? minutes.t : []
+  const times = Array.isArray(candleTimes) ? candleTimes : []
+  const cols = new Map()
+  const idxOf = new Array(t.length).fill(-1)
+  for (let i = 0; i < t.length; i += 1) {
+    const idx = floorIndex(times, shift(t[i]))
+    if (idx < 0) continue
+    idxOf[i] = idx
+    let c = cols.get(idx)
+    if (!c) {
+      c = [0, 0, 0, 0]
+      cols.set(idx, c)
+    }
+    c[0] += minutes.topBuy[i]
+    c[1] += minutes.topSell[i]
+    c[2] += minutes.bottomSell[i]
+    c[3] += minutes.bottomBuy[i]
+  }
+  let max = 0
+  for (const c of cols.values()) for (const v of c) if (v > max) max = v
+  return { cols, idxOf, max }
+}
+
+// CR-DI: the strip is drawn (and, amendment 2, the Flow v3 pane grows by EDGE_STRIP_HEIGHT) only with the chip on,
+// Edges on, an anchor and an exact readout. One condition for App (pane height) and the panel (the strip's chart pane).
+export const EDGE_STRIP_HEIGHT = 64
+export function edgeStripDrawn(edgeEffortOn, edgesOn, anchor, edges) {
+  return Boolean(edgeEffortOn && !edgeEffortBlock(edgesOn, anchor, edges) && edges?.exact && edges?.minutes)
+}
+
+// CR-DI: why the Edge effort chip can't act (its tooltip), or '' when it can.
+export function edgeEffortBlock(edgesOn, anchor, edges) {
+  if (!edgesOn) return 'Edge effort needs Edges on'
+  if (anchor == null) return 'Edge effort needs an anchor (📍 set anchor, session open or last swing)'
+  if (edges && !edges.exact) return 'Edge effort is drawn on exact data only: the bars since the anchor include approximate (1-s) cells, which place each second\'s selling at its low and buying at its high'
+  return ''
+}
+
+export const dirArrow = (dir) => (dir === 'up' ? '↑' : '↓')
+
+// "Top 7724.75 · 1.8k buyers · held 9 m | Bottom 7715.25 · 4.1k sellers · held 6 m" (+ " · moved hh:mm" for an edge's
+// last growth move). CR-DI: after a break, prefixed "Box from hh:mm ↑ · " (the current box only).
 export function edgeText(r, hhmm) {
   if (!r) return ''
   const one = (name, e, who) => {
     const vol = e.contracts == null ? 'exact data only' : `${kfmt(e.contracts)} ${who}`
     const held = e.heldMin == null ? '' : ` · held ${e.heldMin} m`
-    const broke = e.brokeAt == null ? '' : ` · broke ${hhmm(e.brokeAt)}`
-    return `${name} ${e.price.toFixed(2)} · ${vol}${held}${broke}`
+    const moved = e.brokeAt == null ? '' : ` · moved ${hhmm(e.brokeAt)}`
+    return `${name} ${e.price.toFixed(2)} · ${vol}${held}${moved}`
   }
-  return `${one('Top', r.top, 'buyers')} | ${one('Bottom', r.bottom, 'sellers')}`
+  const box = r.frozen?.length ? `Box from ${hhmm(r.from)} ${dirArrow(r.startDir)} · ` : ''
+  return `${box}${one('Top', r.top, 'buyers')} | ${one('Bottom', r.bottom, 'sellers')}`
 }

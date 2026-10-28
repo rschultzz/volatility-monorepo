@@ -7,7 +7,7 @@
 // edges (C1 deviation approved by Ryan, CR-DF); orange = sellers-absorbed levels (C1 deviation approved by Ryan,
 // CR-DG). Every element is a visual aid, untested as a signal.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { createChart, CrosshairMode, ColorType, BaselineSeries, HistogramSeries } from 'lightweight-charts'
+import { createChart, CrosshairMode, ColorType, BaselineSeries, HistogramSeries, LineSeries } from 'lightweight-charts'
 import {
   FlowModeToggle,
   coordinateForLinkedCrosshair,
@@ -20,20 +20,30 @@ import {
 } from './AggressorFlowPanel'
 import { alignV2ToCandles } from './AggressorFlowV2Panel'
 import {
+  BOX_HOLD_MIN_RANGE,
   DEFAULT_V3_SETTINGS,
   ROLLING_CHOICES,
   anchoredCvd,
   anchorReadout,
+  EDGE_STRIP_HEIGHT,
+  edgeEffortBlock,
+  edgeEffortSeries,
+  edgeStripDrawn,
+  edgeStripColumns,
   edgeText,
+  edgeVisits,
+  dirArrow,
+  floorIndex,
   kfmt,
   lastSwingAnchor,
   makeShifter,
   rollingDelta,
   sessionOpenAnchor,
 } from '../flowV3'
-import { ORANGE_RGB } from './flowV3Primitives'
+import { EdgeEffortPrimitive, ORANGE_RGB } from './flowV3Primitives'
 
 const BG_COLOR = '#1f2937'
+const PANE_SEPARATOR_PX = 1 // CR-DI: the strip's 64 px include the 1-px pane separator, so pane 0 keeps its height
 const MIN_PANEL_HEIGHT = 140
 const BUY_RGBA = (alpha) => `rgba(96,165,250,${alpha})`
 const SELL_RGBA = (alpha) => `rgba(229,231,235,${alpha})`
@@ -96,13 +106,25 @@ function GuideBody() {
       <div><b>Delta per bar</b> (bottom bars): the Flow v2 histogram, so this pane stands alone.{tag}</div>
       <div style={h}>On the price chart</div>
       <div><span style={sw(ORANGE_RGBA(0.9))} /><span style={sw(MAGENTA_RGBA(0.9))} /><b>Absorption levels</b> (orange and magenta lines): a price where aggressive selling ("sellers absorbed", a floor, orange) or buying ("buyers absorbed", a ceiling, magenta) hit the Absorbed rule below. The line starts at the minute the volume built up, appears once the hold window has passed, and ends when price trades through it (else it runs to now). Thicker = more contracts absorbed; it fades from full to 25 % over 60 minutes. At most 8 are drawn, the largest after fading. The label says side, contracts and minutes held; hover for start, opposite-side contracts and where it broke. Exact data only.{tag}</div>
-      <div><span style={{ ...sw('transparent'), borderTop: `2px dashed ${MAGENTA_RGBA(0.8)}`, height: 0 }} /><b>Edge readout</b> (header, with an anchor; dashed magenta lines): the box is the highest and lowest 1-minute close since the anchor. A close up to 2 pts beyond an edge is a test and the edge stays; a close more than 2 pts beyond is a break ("broke hh:mm") and the edge moves to that close (as CR-CP's close box). For each edge: aggressive contracts traded within 1 pt of it since the anchor (buyers at the top, sellers at the bottom; exact data only) and minutes since price first came within 1 pt of it.{tag}</div>
+      <div><span style={{ ...sw('transparent'), borderTop: `2px dashed ${MAGENTA_RGBA(0.8)}`, height: 0 }} /><b>Edge readout</b> (header, with an anchor; dashed magenta lines): the box starts at the anchor minute's close. A close up to 2 pts beyond an edge is a test and the edge stays; a close more than 2 pts beyond moves the edge or breaks the box (below). For each edge: aggressive contracts traded within 1 pt of it since the box started (buyers at the top, sellers at the bottom; exact data only) and minutes since price first came within 1 pt of it.{tag}
+        <div style={{ marginTop: '4px' }}><b>Restart on a break</b> (CR-DI): while an edge is younger than N minutes (⚙, default 15) a close more than 2 pts beyond it moves the edge out ("moved hh:mm") and the box grows. Once the edge has held N minutes, such a close is a break: the box freezes (drawn faded, ending at the break minute; hover it for its edges, contracts on both sides, minutes held and "broke hh:mm ↑/↓"), and a new box starts at the break bar from that bar's close. The header ("Box from hh:mm ↑") and the Edge effort strip use the current box. The last 4 frozen boxes are drawn. Clearing or moving the anchor removes all boxes. N is a display default, not a tested threshold.</div>
+      </div>
+      <div><span style={sw(BUY_RGBA(0.85))} /><span style={sw(SELL_RGBA(0.38))} /><span style={sw(SELL_RGBA(0.72))} /><span style={sw(BUY_RGBA(0.38))} /><b>Edge effort</b> (header chip, needs Edges and an anchor; a strip under the delta bars): per minute since the anchor, the same aggressive contracts the edge readout counts, within 1 pt of each edge, both sides. Top edge, drawn up: buyers (blue) with sellers beside them (thinner, lighter grey). Bottom edge, drawn down: sellers (grey) with buyers beside them (thinner, lighter blue). Each minute is counted against the box it belongs to (the drawn boxes: the last 4 frozen and the current one). Over the current box, the blue bars at the top and the grey bars at the bottom add up to the header's numbers; when an edge of the current box moves, its minutes are re-counted against the new edge, as the header is. A visit is a run of minutes with bars at that edge, allowing gaps of up to 2 minutes, and never crosses a break; its label says main side / other side (top buyers / sellers, bottom sellers / buyers). Hover a minute for both sides, the net and the visit's running totals. Exact data only. Visit sizes are effort, not a tested signal; Ironbeam live data understates volume.{tag}
+        <div style={{ marginTop: '4px', color: '#cbd5e1' }}><i>How to read, untested</i> (bottom edge; mirror it for the top):
+          <ul style={{ margin: '2px 0 0 18px', padding: 0 }}>
+            <li>heavy aggressive selling at the low, CVD falls, price holds = passive defense (resting bids absorb);</li>
+            <li>heavy aggressive selling at the low, CVD flat, price holds = active defense (buyers lift offers as hard as sellers hit bids);</li>
+            <li>heavy selling, CVD falls, price falls = sellers winning;</li>
+            <li>balanced flow, CVD flat, price falls = bids pulled / thin book.</li>
+          </ul>
+        </div>
+      </div>
       <div><span style={sw(SELL_RGBA(0.6))} /><span style={sw(BUY_RGBA(0.6))} /><b>Heatmap (cells)</b> (⚙, behind the candles): for each 1-minute bar and 0.25 pt (0.5 pt when zoomed out), aggressive selling (market sells hitting the bid, grey, left half) and aggressive buying (market buys lifting the offer, blue, right half). Darker = a bigger cell for that session. Either layer can be switched off in ⚙.{tag}</div>
       <div><b>Profile</b> (right edge): the same volume summed per price from the anchor (or the session open) to now, selling grey and buying blue.{tag}</div>
       <div><b>Absorbed (marks)</b> (⚙, slate triangles): ▲ "sellers absorbed" — aggressive selling at one price at least K× the session's typical cell (median so far), and nothing traded more than 1 tick below it for that minute and the next M minutes. ▼ "buyers absorbed" is the mirror. The slate line runs until price trades through. Hover for the numbers. K and M (default 3 and 3) are display defaults, not tested thresholds.{tag}</div>
       <div style={h}>Data</div>
       <div><b>exact: trades</b> / <b>exact: es_flow_price_1m</b> — each trade at its own price and side. Ironbeam keeps raw trades for about 2 days, so this is usually only the live and previous session.</div>
-      <div><b>approximate: 1-s data</b> — older sessions: each second's selling is placed at that second's low and its buying at its high. About 61 % of volume trades in seconds wider than 1 tick, so cells are off by a tick or two and selling leans toward lows, buying toward highs. <b>Absorption levels, Absorbed marks and edge contracts are not drawn on approximate data</b>, because that lean manufactures them.</div>
+      <div><b>approximate: 1-s data</b> — older sessions: each second's selling is placed at that second's low and its buying at its high. About 61 % of volume trades in seconds wider than 1 tick, so cells are off by a tick or two and selling leans toward lows, buying toward highs. <b>Absorption levels, Absorbed marks, edge contracts and the Edge effort strip are not drawn on approximate data</b>, because that lean manufactures them.</div>
       <div>Sessions through 2026-06-05 use Databento for RTH; later sessions use Ironbeam, which misses about 6 % of volume and understates buy − sell by about 30 %.</div>
     </div>
   )
@@ -124,6 +146,7 @@ function Settings({ value, layers, onApply, onClose }) {
       m: Math.round(n('m', 1, 30, DEFAULT_V3_SETTINGS.m)),
       sellLayer: Boolean(draft.sellLayer),
       buyLayer: Boolean(draft.buyLayer),
+      boxHoldMin: Math.round(n('boxHoldMin', BOX_HOLD_MIN_RANGE[0], BOX_HOLD_MIN_RANGE[1], DEFAULT_V3_SETTINGS.boxHoldMin)),
     })
   }
   const label = (text) => <div style={{ fontSize: '12px', color: '#cbd5e1', marginBottom: '4px' }}>{text}</div>
@@ -145,6 +168,12 @@ function Settings({ value, layers, onApply, onClose }) {
           {label('Absorbed: M minutes held')}
           <input type="number" step={1} min={1} aria-label="Absorbed M" value={draft.m} style={input} onChange={(e) => setDraft((d) => ({ ...d, m: e.target.value }))} />
           <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>Display defaults (3 and 3), not tested thresholds.</div>
+        </label>
+        <label style={{ display: 'block', marginBottom: '10px' }}>
+          {label('Box edge must hold N min before a break freezes it')}
+          <input type="number" step={1} min={BOX_HOLD_MIN_RANGE[0]} max={BOX_HOLD_MIN_RANGE[1]} aria-label="Box hold minutes" data-testid="flow-v3-box-hold"
+            value={draft.boxHoldMin ?? DEFAULT_V3_SETTINGS.boxHoldMin} style={input} onChange={(e) => setDraft((d) => ({ ...d, boxHoldMin: e.target.value }))} />
+          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>Edges box, 5–60 (default 15). A display default, not a tested threshold: ranges are measured against the prior move, not a fixed time (A2); this only decides when the drawn box restarts.</div>
         </label>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
           <input type="checkbox" aria-label="Heatmap (cells)" data-testid="flow-v3-heatmap-toggle" checked={Boolean(draft.heat)} onChange={(e) => setDraft((d) => ({ ...d, heat: e.target.checked }))} />
@@ -199,6 +228,8 @@ export default function AggressorFlowV3Panel({
   onAnchorArmedChange,
   effortOn = false, // CR-DG item 4: the Flow v2 Effort switch (same state), labels on the price chart
   onEffortChange,
+  edgeEffortOn = false, // CR-DI: the Edge effort strip (stored per viewer); draws only with Edges on, an anchor and exact data
+  onEdgeEffortChange,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -257,6 +288,21 @@ export default function AggressorFlowV3Panel({
   const edgeLine = useMemo(() => (edges ? edgeText(edges, (t) => formatShiftedHHMM(shift(t))) : ''), [edges, shift])
   const notes = useMemo(() => [...new Set((payloads || []).flatMap((p) => p?.notes || []))], [payloads])
   const hasValues = aligned.some((r) => Number.isFinite(r.delta))
+  const edgeEffortWhy = edgeEffortBlock(layers.edges, anchor, edges)
+  const stripOn = edgeStripDrawn(edgeEffortOn, layers.edges, anchor, edges)
+  // Amendment 9: the strip draws the drawn boxes (last 4 frozen + current), each minute against its own box.
+  const series = useMemo(() => (stripOn ? edgeEffortSeries(edges) : null), [stripOn, edges])
+  const strip = useMemo(() => (series ? edgeStripColumns(series, candleTimes, shift) : null), [series, candleTimes, shift])
+  // Visit labels (main first) placed on candle indexes; the primitive drops the smaller of two colliding labels.
+  const visits = useMemo(() => {
+    if (!strip) return null
+    const v = edgeVisits(series)
+    const place = (list) => list.map((x) => ({
+      ...x, i0: floorIndex(candleTimes, shift(x.start)), i1: floorIndex(candleTimes, shift(x.end)),
+      text: `${kfmt(x.main)} / ${kfmt(x.opp)}`,
+    })).filter((x) => x.i0 >= 0)
+    return { ...v, labels: { top: place(v.top), bottom: place(v.bottom) } }
+  }, [strip, series, candleTimes, shift])
   const anyLayer = layers.heat || layers.profile || layers.marks || layers.levels || layers.edges
 
   useEffect(() => { candleTimesRef.current = candleTimes }, [candleTimes])
@@ -329,12 +375,13 @@ export default function AggressorFlowV3Panel({
       const w = stageRef.current.clientWidth
       const h = stageRef.current.clientHeight
       if (w > 0 && h > 0) chart.applyOptions({ width: w, height: Math.max(h, MIN_PANEL_HEIGHT) })
+      if (seriesRef.current.strip) chart.panes()[1]?.setHeight(EDGE_STRIP_HEIGHT - PANE_SEPARATOR_PX)
       requestAnimationFrame(refreshDecorations)
     }
     const onRange = () => requestAnimationFrame(refreshDecorations)
     const onMove = (param) => {
       const t = param?.time
-      setHover(t == null ? null : { time: t, x: param.point?.x ?? 0 })
+      setHover(t == null ? null : { time: t, x: param.point?.x ?? 0, pane: param.paneIndex ?? 0 })
     }
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(handleResize) : null
     if (ro) ro.observe(stage)
@@ -380,6 +427,53 @@ export default function AggressorFlowV3Panel({
     requestAnimationFrame(() => refreshDecorationsRef.current())
   }, [aligned, rolling, cvd, candleTimes, visibleLogicalRange])
 
+  // CR-DI amendment 2: the pane (App) grows by EDGE_STRIP_HEIGHT with the strip, so size the chart to the stage and
+  // the strip pane to its height now and on the next frame, before a ResizeObserver pass could split the new height
+  // proportionally (which would shrink CVD / rolling / delta).
+  const fitToStage = () => {
+    const fit = () => {
+      const chart = chartRef.current
+      const st = stageRef.current
+      if (!chart || !st) return
+      const h = Math.max(st.clientHeight || MIN_PANEL_HEIGHT, MIN_PANEL_HEIGHT)
+      if (chart.options().height !== h) chart.applyOptions({ height: h })
+      if (seriesRef.current.strip) chart.panes()[1]?.setHeight(EDGE_STRIP_HEIGHT - PANE_SEPARATOR_PX)
+    }
+    fit()
+    requestAnimationFrame(fit)
+  }
+
+  // CR-DI: the strip's pane exists only while the strip is drawn, so with it off the chart is origin/main's.
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    const s = seriesRef.current
+    if (strip && !s.strip) {
+      const carrier = chart.addSeries(LineSeries, {
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, color: 'rgba(0,0,0,0)',
+        lineWidth: 1, priceScaleId: 'edgeEffort',
+      }, 1)
+      chart.priceScale('edgeEffort', 1).applyOptions({ visible: false })
+      chart.applyOptions({ layout: { panes: { separatorColor: 'rgba(148, 163, 184, 0.18)', separatorHoverColor: 'rgba(148, 163, 184, 0.18)', enableResize: false } } })
+      const prim = new EdgeEffortPrimitive()
+      carrier.attachPrimitive(prim)
+      seriesRef.current = { ...s, strip: carrier, stripPrim: prim }
+      fitToStage()
+    } else if (!strip && s.strip) {
+      chart.removeSeries(s.strip)
+      if (chart.panes().length > 1) chart.removePane(1)
+      const { strip: _c, stripPrim: _p, ...rest } = s
+      seriesRef.current = rest
+      fitToStage()
+    }
+    const cur = seriesRef.current
+    if (strip && cur.strip) {
+      cur.strip.setData(aligned.map((r) => ({ time: r.time })))
+      cur.stripPrim.setData({ times: candleTimes, cols: strip.cols, max: strip.max, labels: visits?.labels })
+    }
+    requestAnimationFrame(() => refreshDecorationsRef.current())
+  }, [strip, visits, aligned, candleTimes])
+
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
@@ -404,7 +498,23 @@ export default function AggressorFlowV3Panel({
     requestAnimationFrame(() => refreshDecorationsRef.current())
   }, [linkedCrosshair, candleTimes])
 
-  const hoverIdx = hover ? aligned.findIndex((r) => r.time === hover.time) : -1
+  const hoverIdx = hover && hover.pane !== 1 ? aligned.findIndex((r) => r.time === hover.time) : -1
+  // CR-DI strip hover: the candle's four sums, and the visit (running so far / total) of its last minute at each edge.
+  const stripHover = useMemo(() => {
+    if (!hover || hover.pane !== 1 || !strip || !visits) return null
+    const idx = floorIndex(candleTimes, hover.time)
+    if (idx < 0 || candleTimes[idx] !== hover.time) return null
+    const c = strip.cols.get(idx) || [0, 0, 0, 0]
+    let last = -1
+    for (let i = 0; i < strip.idxOf.length; i += 1) if (strip.idxOf[i] === idx) last = i
+    const visit = (e) => {
+      if (last < 0) return null
+      const k = visits.of[e][last]
+      return k < 0 ? null : { ...visits[e][k], run: visits.run[e][last] }
+    }
+    const box = series.boxes.find((b) => shift(b.from) <= hover.time && hover.time <= shift(b.breakAt ?? b.to)) || null
+    return { time: hover.time, x: hover.x, c, top: visit('top'), bottom: visit('bottom'), box }
+  }, [hover, strip, series, visits, candleTimes, shift])
   const hoverRow = hoverIdx >= 0 ? aligned[hoverIdx] : null
   const setAnchorTo = (t) => {
     onAnchorArmedChange?.(false)
@@ -459,6 +569,12 @@ export default function AggressorFlowV3Panel({
             {anchor == null ? 'edges: set an anchor' : edges ? edgeLine : cellsLoading ? 'edges: loading…' : 'edges: no bars since the anchor'}
           </span>
         )}
+        <button type="button" style={{ ...chipStyle(edgeEffortOn && !edgeEffortWhy), opacity: edgeEffortWhy ? 0.5 : 1, cursor: edgeEffortWhy ? 'default' : 'pointer' }}
+          aria-pressed={Boolean(edgeEffortOn)} data-testid="flow-v3-edge-effort-toggle" disabled={Boolean(edgeEffortWhy)}
+          onClick={() => onEdgeEffortChange?.(!edgeEffortOn)}
+          title={edgeEffortWhy || 'Edge effort strip: aggressive contracts within 1 pt of each edge per minute, both sides — visual aid, untested'}>
+          Edge effort {edgeEffortOn ? 'on' : 'off'}
+        </button>
         {anyLayer && cellBadges.map((b) => (
           <span key={b.label} data-testid="flow-v3-cells-badge" title={b.exact ? 'each trade at its own price and side' : 'each second: sells at its low, buys at its high'}
             style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '999px', border: `1px solid ${b.exact ? 'rgba(96,165,250,0.45)' : 'rgba(148,163,184,0.35)'}`, color: '#cbd5e1', whiteSpace: 'nowrap' }}>
@@ -504,6 +620,26 @@ export default function AggressorFlowV3Panel({
             borderRadius: 8, padding: '6px 8px', fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4,
           }}>
             {formatShiftedHHMM(hoverRow.time)} · Δ {sfmt(hoverRow.delta)} · {settings.rollingMin}-min {rolling[hoverIdx] == null ? '–' : sfmt(rolling[hoverIdx])} · CVD {cvd[hoverIdx] == null ? '–' : sfmt(cvd[hoverIdx])}
+          </div>
+        )}
+        {stripHover && (
+          <div data-testid="flow-v3-edge-effort-tooltip" style={{
+            position: 'absolute', bottom: 70, left: Math.min(Math.max(0, stripHover.x + 12), (stageRef.current?.clientWidth || 600) - 330),
+            maxWidth: 320, pointerEvents: 'none', zIndex: 5, background: 'rgba(2,6,23,0.92)', border: '1px solid #334155',
+            borderRadius: 8, padding: '6px 8px', fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4,
+          }}>
+            {(() => {
+              const [tb, tsl, bs, bb] = stripHover.c
+              const hm = (t) => formatShiftedHHMM(shift(t))
+              const vis = (v, a, b) => (v ? ` · visit ${hm(v.start)}–${hm(v.end)}: so far ${kfmt(v.run[0])} ${a} / ${kfmt(v.run[1])} ${b} of ${kfmt(v.main)} / ${kfmt(v.opp)}` : '')
+              return (
+                <>
+                  <div style={{ fontWeight: 700 }}>{formatShiftedHHMM(stripHover.time)} · edge effort{stripHover.box?.breakAt ? ` · box ${hm(stripHover.box.from)}–${hm(stripHover.box.breakAt)} (broke ${dirArrow(stripHover.box.dir)})` : ''}</div>
+                  <div>Top {(stripHover.box || edges).top.price.toFixed(2)}: buyers {kfmt(tb)} / sellers {kfmt(tsl)} / net {sfmt(tb - tsl)}{vis(stripHover.top, 'buyers', 'sellers')}</div>
+                  <div>Bottom {(stripHover.box || edges).bottom.price.toFixed(2)}: sellers {kfmt(bs)} / buyers {kfmt(bb)} / net {sfmt(bb - bs)}{vis(stripHover.bottom, 'sellers', 'buyers')}</div>
+                </>
+              )
+            })()}
           </div>
         )}
         {(loading || error || candleTimes.length < 2 || !hasValues) && (

@@ -184,7 +184,8 @@ async function levelsAndReadout(page, day, tag) {
   expect(anchor).not.toBeNull()
   await expect.poll(async () => (await page.getByTestId('flow-v3-edge-readout').innerText()) === textFor(anchor), { timeout: 20_000 }).toBeTruthy()
   const want = textFor(anchor)
-  expect(want).toMatch(/^Top \d+\.\d{2} · (\S+ buyers|exact data only)( · held \d+ m)?( · broke \d{2}:\d{2})? \| Bottom \d+\.\d{2} · (\S+ sellers|exact data only)( · held \d+ m)?( · broke \d{2}:\d{2})?$/)
+  // CR-DI amendment 9: an edge's growth move reads "moved"; after a break the current box is prefixed "Box from hh:mm ↑/↓ · "
+  expect(want).toMatch(/^(Box from \d{2}:\d{2} [↑↓] · )?Top \d+\.\d{2} · (\S+ buyers|exact data only)( · held \d+ m)?( · moved \d{2}:\d{2})? \| Bottom \d+\.\d{2} · (\S+ sellers|exact data only)( · held \d+ m)?( · moved \d{2}:\d{2})?$/)
   out.anchor = hhmm(anchor)
   out.readout = want
   // an anchor inside RTH on an exact session gives contracts (no "exact data only")

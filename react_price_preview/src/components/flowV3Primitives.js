@@ -340,35 +340,146 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
   }
 }
 
-// Edge lines (DF4): thin dashed magenta lines at the readout's top and bottom from the anchor to the last bar.
-// data: { from, to (shifted epochs), top, bottom (prices) }.
+// Edge lines (DF4): thin dashed magenta lines at each box's top and bottom. CR-DI amendment 9: frozen boxes (broken)
+// are drawn at lower opacity from their start to the break minute; the current box from its start to the last bar.
+// data: { boxes: [{ from, to (shifted epochs), top, bottom (prices), frozen, box }] }. Hover: `onHover(box | null, pt)`
+// within 5 px of a frozen box's line (the current box is the header's).
+export const FROZEN_EDGE_ALPHA = 0.35
 export class EdgeLinesPrimitive extends BasePrimitive {
+  constructor(onHover) {
+    super()
+    this._onHover = onHover
+    this._hit = []
+    this._move = (param) => {
+      const pt = param?.point
+      let best = null
+      let bestD = 6
+      if (pt) {
+        for (const h of this._hit) {
+          if (pt.x < h.x0 - 3 || pt.x > h.x1 + 3) continue
+          const dd = Math.abs(pt.y - h.y)
+          if (dd < bestD) {
+            bestD = dd
+            best = h
+          }
+        }
+      }
+      this._onHover?.(best ? best.box : null, best ? { x: pt.x, y: best.y } : null)
+    }
+  }
+
+  attached(param) {
+    super.attached(param)
+    param.chart.subscribeCrosshairMove(this._move)
+  }
+
+  detached() {
+    this._chart?.unsubscribeCrosshairMove(this._move)
+    this._onHover?.(null, null)
+    super.detached()
+  }
+
   zOrder() {
     return 'top'
   }
 
   paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }, chart, series, d) {
+    this._hit = []
     const ts = chart.timeScale()
     const plotW = bitmapSize.width / hr
     const vrange = ts.getVisibleRange?.()
-    if (!vrange || d.to < Number(vrange.from) || d.from > Number(vrange.to)) return
-    const xa = ts.timeToCoordinate(d.from)
-    const xb = ts.timeToCoordinate(d.to)
-    const x0 = xa == null ? 0 : xa
-    const x1 = xb == null ? plotW : xb
+    if (!vrange) return
     ctx.save()
-    ctx.strokeStyle = `rgba(${MAGENTA_RGB},0.8)`
     ctx.lineWidth = Math.max(1, Math.round(hr))
     ctx.setLineDash([Math.round(4 * hr), Math.round(3 * hr)])
-    for (const p of [d.top, d.bottom]) {
-      const y = series.priceToCoordinate(p)
-      if (y == null) continue
-      const yy = Math.round(y * vr) + 0.5
-      ctx.beginPath()
-      ctx.moveTo(Math.round(x0 * hr), yy)
-      ctx.lineTo(Math.round(Math.max(x1, x0 + 2) * hr), yy)
-      ctx.stroke()
+    for (const b of d.boxes || []) {
+      if (b.to < Number(vrange.from) || b.from > Number(vrange.to)) continue
+      const xa = ts.timeToCoordinate(b.from)
+      const xb = ts.timeToCoordinate(b.to)
+      const x0 = xa == null ? 0 : xa
+      const x1 = xb == null ? plotW : xb
+      ctx.strokeStyle = `rgba(${MAGENTA_RGB},${b.frozen ? FROZEN_EDGE_ALPHA : 0.8})`
+      for (const p of [b.top, b.bottom]) {
+        const y = series.priceToCoordinate(p)
+        if (y == null) continue
+        const yy = Math.round(y * vr) + 0.5
+        ctx.beginPath()
+        ctx.moveTo(Math.round(x0 * hr), yy)
+        ctx.lineTo(Math.round(Math.max(x1, x0 + 2) * hr), yy)
+        ctx.stroke()
+        if (b.frozen) this._hit.push({ x0, x1, y, box: b.box })
+      }
     }
     ctx.restore()
+  }
+}
+
+// CR-DI — Edge effort strip, drawn in its own pane of the Flow v3 chart (on a transparent carrier series): per
+// candle, the top edge upward from the middle (aggressive buys = main, blue; sells = thinner, lighter grey beside
+// it) and the bottom edge downward (sells = main, grey; buys = thinner, lighter blue). Palette only (C1).
+// data: { times (shifted candle times), cols: Map idx -> [top buy, top sell, bottom sell, bottom buy], max }.
+export const EDGE_STRIP_LABEL_PX = 11
+export class EdgeEffortPrimitive extends BasePrimitive {
+  zOrder() {
+    return 'normal'
+  }
+
+  paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }, chart, series, d) {
+    const H = bitmapSize.height / vr
+    const mid = H / 2
+    ctx.fillStyle = 'rgba(148,163,184,0.25)'
+    ctx.fillRect(0, Math.round(mid * vr), bitmapSize.width, Math.max(1, Math.round(vr)))
+    const range = visibleIndexRange(chart, d.times)
+    if (!range || !(d.max > 0)) return
+    const ts = chart.timeScale()
+    const spacing = Number(ts.options().barSpacing) || 6
+    const w = Math.max(1.5, spacing * 0.86)
+    const wMain = Math.max(1, w * 0.62)
+    const wOpp = Math.max(1, w - wMain)
+    const half = Math.max(4, mid - EDGE_STRIP_LABEL_PX - 1)
+    const hpx = (v) => (v > 0 ? Math.max(1, (v / d.max) * half) : 0)
+    const bar = (rgba, x, wd, y0, h) => {
+      if (!(h > 0)) return
+      ctx.fillStyle = rgba
+      ctx.fillRect(Math.round(x * hr), Math.round(y0 * vr), Math.max(1, Math.round(wd * hr)), Math.max(1, Math.round(h * vr)))
+    }
+    for (let i = range[0]; i <= range[1]; i += 1) {
+      const c = d.cols.get(i)
+      if (!c) continue
+      const x = ts.timeToCoordinate(d.times[i])
+      if (x == null) continue
+      const left = x - w / 2
+      const [tb, tsl, bs, bb] = c
+      let h = hpx(tb)
+      bar(`rgba(${BUY_RGB},0.85)`, left, wMain, mid - h, h)
+      h = hpx(tsl)
+      bar(`rgba(${SELL_RGB},0.38)`, left + wMain, wOpp, mid - h, h)
+      bar(`rgba(${SELL_RGB},0.72)`, left, wMain, mid + 1, hpx(bs))
+      bar(`rgba(${BUY_RGB},0.38)`, left + wMain, wOpp, mid + 1, hpx(bb))
+    }
+    // Visit labels "main / opposite", centred on the visit: above the top bars, below the bottom ones. Larger visits
+    // are placed first; a label that would overlap one already placed on its edge is dropped (the hover has it).
+    if (!d.labels) return
+    ctx.font = `${Math.round(10 * vr)}px sans-serif`
+    ctx.fillStyle = 'rgba(203,213,225,0.85)'
+    ctx.textBaseline = 'alphabetic'
+    const plotW = bitmapSize.width / hr
+    for (const [edge, y] of [['top', EDGE_STRIP_LABEL_PX - 2], ['bottom', H - 2]]) {
+      const placed = []
+      const list = [...(d.labels[edge] || [])].sort((a, b) => b.main - a.main)
+      for (const v of list) {
+        if (v.i1 < range[0] || v.i0 > range[1]) continue
+        const xa = ts.timeToCoordinate(d.times[v.i0])
+        const xb = ts.timeToCoordinate(d.times[v.i1])
+        if (xa == null && xb == null) continue
+        const cx = ((xa ?? xb) + (xb ?? xa)) / 2
+        const tw = ctx.measureText(v.text).width / hr
+        const x0 = Math.min(Math.max(0, cx - tw / 2), plotW - tw)
+        const box = [x0 - 3, x0 + tw + 3]
+        if (placed.some((q) => !(box[1] < q[0] || box[0] > q[1]))) continue
+        placed.push(box)
+        ctx.fillText(v.text, Math.round(x0 * hr), Math.round(y * vr))
+      }
+    }
   }
 }

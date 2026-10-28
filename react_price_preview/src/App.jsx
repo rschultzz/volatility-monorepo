@@ -3,7 +3,7 @@ import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
 import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS, effortChartMarkers } from './components/AggressorFlowV2Panel'
 import AggressorFlowV3Panel from './components/AggressorFlowV3Panel'
-import { DEFAULT_V3_SETTINGS, edgeReadout, flattenBars, makeShifter } from './flowV3'
+import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, edgeReadout, edgeStripDrawn, flattenBars, makeShifter } from './flowV3'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import { PANEL_WIDTH as ANALOGUES_PANEL_WIDTH } from './components/AnaloguesPanel'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
@@ -30,6 +30,8 @@ const FLOW_V3_SETTINGS_STORAGE_KEY = 'ib-react-flow-v3-settings'
 const FLOW_V3_LAYERS_STORAGE_KEY = 'ib-react-flow-v3-layers'
 // CR-DF adds levels / edges; a stored CR-DC object keeps its heat / marks values (now switched in ⚙).
 const FLOW_V3_LAYERS_OFF = { heat: false, profile: false, marks: false, levels: false, edges: false }
+// CR-DI: the Edge effort strip in the Flow v3 pane (off by default, '1' while on), per viewer.
+const FLOW_V3_EDGE_EFFORT_STORAGE_KEY = 'ib-react-flow-v3-edge-effort'
 // CR-CK — Overview panel "Stickiness" rows; off unless the user turns them on in settings.
 const SKEW_STICKINESS_STORAGE_KEY = 'ib-react-skew-stickiness'
 const GEX_LANDSCAPE_SPOT_MODE_KEY = 'GEX_LANDSCAPE_SPOT_MODE'
@@ -581,6 +583,13 @@ export default function App() {
   }
   const [flowV3Settings, setFlowV3Settings] = useState(() => readStoredObject(FLOW_V3_SETTINGS_STORAGE_KEY, DEFAULT_V3_SETTINGS))
   const [flowV3Layers, setFlowV3Layers] = useState(() => readStoredObject(FLOW_V3_LAYERS_STORAGE_KEY, FLOW_V3_LAYERS_OFF))
+  const [flowEdgeEffort, setFlowEdgeEffort] = useState(() => {
+    try {
+      return window.localStorage.getItem(FLOW_V3_EDGE_EFFORT_STORAGE_KEY) === '1'
+    } catch (err) {
+      return false
+    }
+  })
   const [flowAnchor, setFlowAnchor] = useState(null)
   const [flowAnchorArmed, setFlowAnchorArmed] = useState(false)
   const [flowCellsLoaded, setFlowCellsLoaded] = useState({ url: null, payload: null })
@@ -1238,6 +1247,15 @@ export default function App() {
       // ignore
     }
   }, [flowV3, flowV3Settings, flowV3Layers])
+
+  useEffect(() => {
+    try {
+      if (flowEdgeEffort) window.localStorage.setItem(FLOW_V3_EDGE_EFFORT_STORAGE_KEY, '1')
+      else window.localStorage.removeItem(FLOW_V3_EDGE_EFFORT_STORAGE_KEY)
+    } catch (err) {
+      // ignore
+    }
+  }, [flowEdgeEffort])
 
   const flowPaneMode = flowV3 ? 'v3' : flowMode
   const flowV2Data = flowV3 || flowMode === 'v2'
@@ -1980,8 +1998,13 @@ export default function App() {
   const flowCellsBars = useMemo(() => (flowCells ? flattenBars(flowCells) : null), [flowCells])
   const flowV3Edges = useMemo(() => {
     if (!flowV3 || !flowV3Layers.edges || !flowCells || flowAnchor == null) return null
-    return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift)
-  }, [flowV3, flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift])
+    return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin)
+  }, [flowV3, flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin])
+
+  // CR-DI amendment 2: while the Edge effort strip is drawn the Flow v3 pane grows by its height (the price pane
+  // above gives it up), so the pane's other series keep their heights; otherwise the pane is unchanged.
+  const flowPaneExtra = flowPaneMode === 'v3' && edgeStripDrawn(flowEdgeEffort, flowV3Layers.edges, flowAnchor, flowV3Edges)
+    ? EDGE_STRIP_HEIGHT : 0
 
   // One object per real change (CR-CH): the chart's primitives recompute only when this changes.
   const flowV3Chart = useMemo(() => {
@@ -2532,7 +2555,7 @@ export default function App() {
                       ? `calc(100% - ${(landscapeOpen ? LANDSCAPE_PANEL_WIDTH : 0) + (reviewOpen ? REVIEW_PANEL_WIDTH : 0)}px)`
                       : '100%',
                     minWidth: 0,
-                    height: `${flowPanelHeight}px`,
+                    height: `${flowPanelHeight + flowPaneExtra}px`,
                   }}
                 >
                   {flowPaneMode === 'v3' ? (
@@ -2544,7 +2567,7 @@ export default function App() {
                       cellsError={flowCellsError}
                       candles={mergedBarsWithLiveTimeline}
                       visibleLogicalRange={sharedLogicalRange}
-                      height={flowPanelHeight}
+                      height={flowPanelHeight + flowPaneExtra}
                       loading={flowV2Loading}
                       error={flowV2Error}
                       linkedCrosshair={linkedCrosshair}
@@ -2561,6 +2584,8 @@ export default function App() {
                       onAnchorArmedChange={setFlowAnchorArmed}
                       effortOn={flowEffort}
                       onEffortChange={setFlowEffort}
+                      edgeEffortOn={flowEdgeEffort}
+                      onEdgeEffortChange={setFlowEdgeEffort}
                     />
                   ) : flowMode === 'v2' ? (
                     <AggressorFlowV2Panel

@@ -25,7 +25,7 @@ import {
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { absorptionLevels, buildHeatColumns, chartMarks, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
+import { absorptionLevels, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
 import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive } from './flowV3Primitives'
 
 const ETH_BG_COLOR = '#1f2937'
@@ -2581,15 +2581,24 @@ export default function PriceChart({
       const i = floorIndex(v3Times, v3Shift(utc))
       return i < 0 ? null : v3Times[i]
     }
-    const from = snap(v3EdgeReadout.from)
-    const to = snap(v3EdgeReadout.to)
-    return from == null || to == null ? null : { from, to, top: v3EdgeReadout.top.price, bottom: v3EdgeReadout.bottom.price }
+    // CR-DI amendment 9: the last 4 frozen boxes (faded, to their break minute) and the current box.
+    const { boxes, dropped } = drawnBoxes(v3EdgeReadout)
+    const out = []
+    for (const b of boxes) {
+      const frozen = b !== v3EdgeReadout
+      const from = snap(b.from)
+      const to = snap(frozen ? b.breakAt : b.to)
+      if (from == null || to == null) continue
+      out.push({ from, to, top: b.top.price, bottom: b.bottom.price, frozen, box: frozen ? { ...b, dropped } : null })
+    }
+    return out.length ? { boxes: out } : null
   }, [v3EdgeReadout, v3Times, v3Shift])
   const v3SellLayer = flowV3?.sellLayer !== false
   const v3BuyLayer = flowV3?.buyLayer !== false
   const v3PrimRef = useRef({ series: null, heat: null, marks: null, profile: null, levels: null, edges: null })
   const [v3Hover, setV3Hover] = useState(null)
   const [v3LevelHover, setV3LevelHover] = useState(null)
+  const [v3BoxHover, setV3BoxHover] = useState(null)
   useEffect(() => {
     const series = seriesRef.current
     if (!series) return
@@ -2610,11 +2619,15 @@ export default function PriceChart({
     feed('profile', () => new ProfilePrimitive(), v3Profile)
     feed('levels', () => new AbsorptionLevelsPrimitive((level, pt) => setV3LevelHover(level ? { level, pt } : null)),
       v3Levels ? { levels: v3Levels, times: v3Times } : null)
-    feed('edges', () => new EdgeLinesPrimitive(), v3Edges)
+    feed('edges', () => new EdgeLinesPrimitive((box, pt) => setV3BoxHover(box ? { box, pt } : null)), v3Edges)
     // CR-DG: an open hover re-reads its mark / level from the new payload, so held minutes update on a refresh
     // while the pointer is still (gone from the new list = hover closed).
     setV3Hover((h) => relinkHover(h, 'mark', v3Marks, 'time'))
     setV3LevelHover((h) => relinkHover(h, 'level', v3Levels, 'start'))
+    setV3BoxHover((h) => {
+      const hit = h && v3Edges?.boxes.find((b) => b.frozen && b.box.from === h.box.from)
+      return hit ? { ...h, box: hit.box } : null
+    })
   }, [v3Columns, v3Marks, v3Profile, v3Levels, v3Edges, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
 
   // CR-CD A3 — when a candidate loads in replay (not yet revealed), fit the price axis to the
@@ -3542,6 +3555,34 @@ export default function PriceChart({
               <div>from {formatShiftedHHMM(v3LevelHover.level.startShifted)} · {kfmt(v3LevelHover.level.contracts)} contracts · opposite {kfmt(v3LevelHover.level.opposite)}</div>
               <div>held {v3LevelHover.level.heldMin} min · {v3LevelHover.level.broken ? `broke at ${formatShiftedHHMM(v3LevelHover.level.endShifted)}` : 'not broken'}</div>
               <div style={{ color: '#94a3b8' }}>visual aid — untested</div>
+            </div>
+          )}
+
+          {v3BoxHover && (
+            <div
+              data-testid="flow-v3-box-tooltip"
+              style={{
+                position: 'absolute',
+                left: Math.max(0, (hostRef.current?.offsetLeft || 0) + v3BoxHover.pt.x + 12),
+                top: Math.max(0, (hostRef.current?.offsetTop || 0) + v3BoxHover.pt.y - 10),
+                zIndex: 6, pointerEvents: 'none', background: 'rgba(2,6,23,0.92)', border: '1px solid #86198f',
+                borderRadius: 8, padding: '6px 8px', fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4, maxWidth: 300,
+              }}
+            >
+              {(() => {
+                const b = v3BoxHover.box
+                const hm = (t) => formatShiftedHHMM(v3Shift(t))
+                const n = (v) => (v == null ? 'exact data only' : kfmt(v))
+                return (
+                  <>
+                    <div style={{ fontWeight: 700, color: '#f0abfc' }}>Box {hm(b.from)}–{hm(b.breakAt)} · broke {hm(b.breakAt)} {dirArrow(b.dir)}</div>
+                    <div>Top {b.top.price.toFixed(2)}: buyers {n(b.top.contracts)} / sellers {n(b.top.opposite)}</div>
+                    <div>Bottom {b.bottom.price.toFixed(2)}: sellers {n(b.bottom.contracts)} / buyers {n(b.bottom.opposite)}</div>
+                    <div>held {b.heldMin} min{b.dropped ? ` · ${b.dropped} older box${b.dropped === 1 ? '' : 'es'} not drawn` : ''}</div>
+                    <div style={{ color: '#94a3b8' }}>visual aid — untested</div>
+                  </>
+                )
+              })()}
             </div>
           )}
 
