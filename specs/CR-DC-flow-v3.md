@@ -224,3 +224,76 @@ design most; the rest are operational readings that stand unless Ryan objects).
 - **`ironbeam_es_trades` use.** Covers a segment when its oldest row (cached 60 s) ≤ the segment start and the segment's symbol is present. `aggressor_side` `BUY` → buy, `SELL` → sell; anything else (e.g. `0`) is not drawn.
 - **Hold / break extremes for marks** come from the segment's 1-minute flow highs and lows (the same trades as the exact cells for Ironbeam; the same feed for Databento).
 - **Badge per segment:** `exact: es_flow_price_1m` / `exact: trades` / `approximate: 1-s data`, plus the source.
+
+### Readings fixed during implementation (Claude Code; within A1, no ruling changed)
+
+- **Heat cell layout (section 3).** With both layers on, each cell is split: sell (grey) left half, buy (blue) right half (bid × ask, footprint order); with one layer on, it fills the cell. Cells are 0.92 × bar spacing wide and centred on the price. Candle bodies are opaque and drawn on top, so most of each cell sits behind the body; the heat shows at the cell edges and beyond the wicks (see Smoke, "Observations").
+- **Cells only for the selected session** (DC5's anchor scope); extra `days_either_side` sessions show no heat.
+- **Layers and ⚙ remembered** per viewer (`ib-react-flow-v3-layers`, `ib-react-flow-v3-settings`), off by default; the v3 key is removed when Current / v2 is chosen.
+- **Mixed sources.** An anchor in ETH sums Ironbeam ETH delta with Databento RTH delta on sessions ≤ 2026-06-05; the readout then says "mixed sources (Ironbeam + Databento)".
+- **The "v3" button is 30 px wide** (a whole number), so the chips after the toggle shift by whole pixels and render the same pixels (DC1 identity check).
+- **Narrow header.** The v3 header scrolls horizontally when narrow (review panel open); its title and mode toggle never shrink.
+- **Price cell shifting.** UTC → PT wall-clock uses one `Intl` offset per UTC hour (`makeShifter`), not one per value (the CR-CH deferred `partsForZone` cost); Current's helpers are untouched.
+
+---
+
+## Implementation and smoke (2026-10-27/28)
+
+| step | commit | what |
+|---|---|---|
+| freeze | `3a414a0` | kickoff verbatim, rulings table, DC1–DC16 |
+| Step 0 | `973a3de` | retention, 1-s range share, exact vs 1-s |
+| A1 | `08f91ab` | Ryan's rulings; DC11 changed; DC17 |
+| 1 | `b07e065` | `packages/shared/flow_heat.py` + 16 tests |
+| 2 | `fd5db28` | `GET /api/ironbeam/flow/cells` (`flow_v3.py`) + 13 tests |
+| 3 | `3703595` | toggle, v3 pane, anchors, cells fetch; `flowV3.js` + 13 unit tests |
+| 4 | `14fe5d2` | heatmap / marks / profile primitives; armed anchor click |
+| merge | `806734a` | `origin/main` (CR-DB `51c0287`) merged so the pixel baseline is current main |
+| fixes | `0fb4f78` | whole-pixel v3 button; narrow header; functional layer updates |
+| harness | `b532160` | Playwright `cr-dc.spec.js`, smoke backend, headed driver, mark counts |
+
+### Tests
+
+- **Python:** `flow_heat` 16/16 (1-s assignment, exact cells, absorption rule incl. hold / break / merge / mirror / `until`, causality on every prefix of 4 random and 3 recorded Databento sessions); `test_flow_cells` 13/13 (sources and tiers, B4 — no Databento read after 2026-06-05, `until`, `es_flow_price_1m` first and partial-coverage fall-through, params, live incremental cache); Ironbeam suite 99/99 incl. the v2 golden and CR-CC Current goldens byte-identical; shared flow suites 42/42.
+- **Frontend unit:** 17/17 (`flowV3.test.js`: anchored CVD, readout incl. mixed sources, rolling delta, heat columns / percentiles / 0.5-pt merge / 5-min sums, profile, marks, anchors).
+- **Playwright `cr-dc.spec.js` 6/6** (branch dev server vs `origin/main` `51c0287` dev server, read-only backend):
+  - *unchanged:* Current and v2 on 2026-05-01 — same flow requests, no cells request; price chart, flow plot and header left of the toggle byte-identical; Current header right of the toggle byte-identical; v2's chips right of the toggle identical in DOM and in element pixels; the toggle group wider by the one "v3" button (DC1).
+  - *v3 defaults:* Heatmap / Profile / Absorbed off, no cells request, price chart byte-identical to Current's; keys `ib-react-flow-mode-v3 = '1'`, `ib-react-flow-mode` unchanged; survives a reload; guide shows "Visual aid — untested." on every element; back to Current removes the key.
+  - *2026-05-01:* layers on → cells request (`a_k=3&a_m=3`); RTH served **exact from `es_flow_price_1m`** (see below), ETH approximate; anchor pick, readout, Esc, last swing.
+  - *exact marks 2026-10-27:* 17 marks (6 sellers, 11 buyers), hover tooltip.
+  - *live 2026-10-28:* exact cells (trades) for the live ETH segment.
+  - *replay:* CR-CC fixture 5 in review (until 07:39) — every cell, bar and mark before `until`; the narrow header keeps the mode toggle.
+- **Existing Playwright suites on the branch:** cr-cd, cr-ch, cr-bv 14/14. Their committed screenshots re-render differently (environmental drift, as CR-CH recorded) and were restored as committed.
+
+### `es_flow_price_1m` appeared during the smoke (DC17)
+
+CR-DD created the table while this CR ran: schema exactly as A1.3 (PK `(minute_utc, symbol, price, source)`), no off-grid prices; Databento 2026-01-06 → 2026-06-05 (105 sessions, train only), Ironbeam partial from 2026-10-26. The endpoint picked it up unchanged: 2026-05-01 RTH is now exact (`exact: es_flow_price_1m`) and carries marks; ETH stays approximate. CR-DD owns the table's field-conventions row.
+
+### DC11 measured: marks on exact vs approximate cells (K 3, M 3, RTH)
+
+`scripts/cr_dc_step0/q_marks_exact_vs_approx.py` (read-only; mechanical — counts and position agreement of a display mark only):
+
+| session | exact source | marks exact (S / B) | marks on 1-s rule (S / B) | 1-s marks matching an exact one (±1 min, ±1 tick) |
+|---|---|---|---|---|
+| 2026-01-06 | `es_flow_price_1m` | 19 (11 / 8) | 29 (17 / 12) | 14 |
+| 2026-03-02 | `es_flow_price_1m` | 2 (0 / 2) | 19 (10 / 9) | 2 |
+| 2026-04-01 | `es_flow_price_1m` | 10 (3 / 7) | 29 (12 / 17) | 8 |
+| 2026-05-01 | `es_flow_price_1m` | 5 (4 / 1) | 20 (10 / 10) | 2 |
+| 2026-10-27 | trades | 17 (6 / 11) | 26 (9 / 17) | 11 |
+
+Cell volume exact ÷ 1-s = 1.000 on every session. The 1-s rule draws 1.5–10× as many marks, most of them with no exact counterpart — Ryan's A1.2 (marks on exact data only) is borne out.
+
+### Headed Chrome, CR-CH-style 10-min drag / zoom
+
+`scripts/cr_dc_headed/headed_v3.mjs` (CR-CH's `headed.mjs` + forced-GC heap samples) against the full Dash app locally (`scripts/cr_dc_headed/dash_app.py`, read-only, production build of this branch), cell **v3all** = Flow v3 + Heatmap + Profile + Absorbed on, live session 2026-10-28, date → 2026-05-01 at 300 s and back at 420 s, the same seeded wheel-zoom / pan / price-axis / time-axis / reset sequence.
+
+- **Google Chrome 156.0.8078.48** — the installed Chrome auto-updated past 155; the kickoff's 155 was not available without a download (left for Ryan).
+- **Result: no crash, 600 s, 2,496 interactions**; no page errors. The only console errors are the outer Dash page's `GEX_GRAPH` callback (DB connection slots exhausted, see below), not the price chart.
+- **JS heap after a forced GC every 30 s (MB):** live 65.6 → 64.3 → 62.5 → 61.1 → 61.5 → 61.6 → 60.9 → 58.9; 2026-05-01 52.6 → 81.8 → 84.5 → 88.5; live again 63.0 → 76.6 → 79.1 → 84.3 → 76.5 → 73.3. The heap follows the session loaded (2026-05-01 carries a full Databento + exact day) and falls back on each switch — no monotonic growth over the run. Raw samples: `scripts/logs/cr_dc/heap-v3all.json`.
+
+**DB connections (incident).** At 2026-10-28 04:00:31–04:01:31 UTC the Render Postgres (max_connections 103) refused new connections: this CR's local servers (smoke backend + full Dash app, ~20 pooled connections each) plus other sessions' backfill-role clients filled it. The deployed "Dash - MonoRepo" logged refused queries (ATM IV, skew, term structure) for that minute; the trades-ws worker, the 1-s aggregator and the crons logged none. Stopping the smoke backend at ~04:02 cleared it; both local servers were stopped after the run.
+
+### Observations (not changed; Ryan's call)
+
+- Opaque candle bodies cover most of each heat cell at normal zoom; the heat reads at the cell edges and past the wicks. A "hollow candles while Heatmap is on" option would be a visible change.
+- Since `es_flow_price_1m` exists, 2026-01-06 → 2026-06-05 RTH is exact and gets marks; ETH (Ironbeam beyond retention) and other dates stay approximate.
