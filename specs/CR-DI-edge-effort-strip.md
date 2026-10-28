@@ -64,6 +64,9 @@ actively defended, not one-way selling. The strip must show both sides.
 | C2 — new display features off by default, existing views unchanged | honoured | chip off by default; with it off Flow v3 and the price chart are pixel-identical to origin/main |
 | A19 — in-range confirmation, both sides | n/a (context) | the strip shows effort at the edges; it is not a confirmation rule |
 | A20 — trade the range edges | n/a (context) | display only; no entry logic |
+| A2 — a range is measured against the prior move, no fixed duration | n/a (display simplification) | amendment 9's hold time N is a ⚙ drawing default (15 min, 5–60), not a range definition or a tested threshold (Ryan, chat 2026-10-28) |
+| C2 (amendment 9) — the Edges box restarts on a break | **deviates — APPROVED** by Ryan in chat 2026-10-28 | an existing view's behaviour changes (Edges box, header readout); change-log line added to `standing-rulings.md` |
+| C1 (amendment 9) | honoured | frozen boxes use the existing dashed magenta at lower opacity |
 | all other A* / B* rulings | n/a | no research claim, no outcome, no threshold |
 
 - Visible change in scope (the chip, the strip, the legend entry), approved by Ryan in chat 2026-10-28.
@@ -197,3 +200,90 @@ The per-minute series (all four, plus all-price buy / sell) is in `scripts/logs/
 - The strip is computed client-side by the same function, extended to return the per-minute arrays. The header
   numbers become the sums of those arrays, so there is one code path.
 - Replay `until` already truncates the payload server-side.
+
+## Amendment 1 (Ryan, chat 2026-10-28) — box restarts on a break
+
+Received after the four item-group commits and before the smoke. Nothing that depends on edges is implemented
+under it until this amendment is committed.
+
+9. **Box restarts on a break.**
+   - Today a close more than 2 pts beyond an edge moves that edge out and keeps the box, so a held range and the
+     range after its break merge.
+   - On 2026-10-28, 7762–7769.25 held 07:04 → the 08:16 break, and the box became 7762–7775 by 08:39.
+   - New behaviour:
+     - a. On a break, the current box **freezes**:
+       - it is drawn faded (same dashed magenta at lower opacity), ending at the break minute;
+       - its hover gives its own stats: top / bottom, counts per edge and side, minutes held, "broke hh:mm ↑/↓".
+     - b. A **new box starts at the break bar**, with top = bottom = that bar's close, growing by the existing test /
+       break rule (as ruled below).
+     - c. The **header readout and the Edge effort strip use the current box only**.
+       - The strip draws each box's bars in its own time span.
+       - Visits never join across a break.
+     - d. At most the **last 4 frozen boxes** are drawn; older ones are dropped from the drawing (the hover shows the
+       count dropped).
+     - e. Clearing or moving the anchor removes all boxes, as today.
+10. Step 0a must also answer: do the header's edge counts reset when an edge moves, or recount at the new price since
+    the anchor? (2026-10-28: top showed 16.4k buyers before the break and 8.7k at 7775 after it.)
+
+Rulings:
+- **C2 deviation approved** by Ryan in chat 2026-10-28 (the Edges box behaviour changes); change-log line added to
+  `standing-rulings.md`.
+- C1 honoured (existing magenta at lower opacity).
+- The Edges legend text is updated to describe restart-on-break.
+- Smoke addition: 2026-10-28 anchor 07:00 shows a frozen box ending at the first break of 7762–7769.25 (↑), then
+  later boxes; the header matches the current box only.
+
+### Amendment Step 0 (read-only, `scripts/cr_di_step0/box_rules.mjs` on the 09:07 PT live dump; output in `scripts/logs/cr-di/step0/box_rules.txt`)
+
+**9b as written can't grow a box.**
+- A new box has top = bottom = the break close, and under the test / break rule a close up to 2 pts beyond is a test
+  (no change) while one more than 2 pts beyond is a break.
+- Every move of more than 2 pts would therefore restart it. On 2026-10-28 anchor 07:00 that is **32 boxes**, none
+  wider than one price.
+- Today the only way an edge moves *is* a break, so "growing" and "breaking" were the same event.
+
+**The first box breaks at 08:16, not 08:39.**
+- With today's 2-pt rule, 08:16 closed 7772.25 > 7769.25 + 2.
+- 08:39 (close 7775) is the second break of the top: 7772.25 → 7775.
+
+**Ruling (Ryan, chat 2026-10-28): hold time N.**
+- A close more than 2 pts beyond an edge **grows** the box (the edge moves to the close, today's ratchet) while that
+  edge has stood less than N minutes since it was set.
+- Once the edge has stood ≥ N minutes, such a close is a **break**: the box freezes and a new one starts at the
+  break bar.
+- N is a **⚙ setting**: "Box edge must hold N min before a break freezes it", default **15**, range **5–60**.
+- Labelled a display default, not a tested threshold.
+- A2 measures ranges against the prior move, not fixed time, so N is a simplification for the drawing only.
+- Both edges of a new box count as set at its first bar.
+
+Candidates measured on 2026-10-28, anchor 07:00 (bars to 09:07 PT):
+
+| Rule | Boxes |
+|---|---|
+| literal 9b | 32 |
+| only tested edges break | 13 (long box 07:11–08:16) |
+| N = 5 | 8 |
+| N = 10 | 07:00–08:16 7762–7769.25 ↑ · 08:16–08:29 7772.25 ↓ · 08:29– current |
+| **N = 15 (default)** | **07:00–08:16 7762.00–7769.25 ↑ · 08:16–08:39 7769.75–7772.25 ↑ · 08:39– current 7770.25–7775.00** |
+| N = 30 | 07:00–08:16 ↑ · 08:16– current 7769.75–7775 |
+
+**Smoke expectation (replaces "frozen box 07:00–08:39").** At N = 15:
+- frozen 07:00–08:16 (7762.00–7769.25, broke 08:16 ↑);
+- frozen 08:16–08:39 (broke 08:39 ↑);
+- current box from 08:39;
+- the header matches the current box only.
+
+**Item 10 (answered by Step 0a): they recount; they don't reset.**
+- `edgeReadout` counts all cells since the anchor against the current edge price.
+- When the top moved 7769.25 → 7772.25 at 08:16, the top count went 16.4k (08:09) → 4.5k (08:24): only cells within
+  1 pt of 7772.25 since 07:00.
+- Ryan's 8.7k at 7775 is the same recount at the 08:39 edge.
+- Under amendment 9 the counts instead start at the current box's first bar.
+
+**Counting per box (implementation rule).**
+- A box spans its first bar to the bar before its break. The break bar opens the next box, so no minute is counted
+  twice.
+- Within a box, cells are counted against that box's final edges with the unchanged ±1 pt inclusive rule, through
+  one shared function. So the strip's main bars over the current box still sum to the header.
+- The strip draws the minutes of the drawn boxes (the last 4 frozen + current), each against its own box. Visits
+  are computed per box.
