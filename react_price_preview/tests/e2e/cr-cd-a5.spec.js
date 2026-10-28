@@ -45,6 +45,9 @@ async function open(page, day, { base = '', storage = {}, api = API_BASE } = {})
           window.localStorage.removeItem(k)
         }
         window.localStorage.setItem('ib-react-gex-min-abs-b', '40')
+        // CR-DH: origin/main defaults Levels to Current; compare like with like
+        window.localStorage.setItem('ib-react-gex-levels-mode', 'current')
+        window.localStorage.setItem('ib-react-gex-levels-mode-v2', 'current')
         for (const [k, v] of Object.entries(init)) window.localStorage.setItem(k, v)
         window.sessionStorage.setItem('crcd-a5-init', '1')
       }

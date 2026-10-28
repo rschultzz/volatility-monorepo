@@ -43,6 +43,7 @@ async function openCard(page, c, viewport) {
     try {
       window.localStorage.setItem('ib-react-gex-min-abs-b', '40')
       window.localStorage.setItem('ib-react-gex-levels-mode', 'current')
+      window.localStorage.setItem('ib-react-gex-levels-mode-v2', 'current') // CR-DH key
     } catch (e) { /* ignore */ }
   })
   await page.goto(`${BRANCH_URL}/?trade_date=2026-10-23&interval=1min&api_base=${encodeURIComponent(API_BASE)}`)
@@ -174,6 +175,7 @@ test('pixel: price chart with the review panel closed is identical to origin/mai
       try {
         window.localStorage.setItem('ib-react-gex-min-abs-b', '40')
         window.localStorage.setItem('ib-react-gex-levels-mode', 'current')
+        window.localStorage.setItem('ib-react-gex-levels-mode-v2', 'current') // CR-DH key
       } catch (e) { /* ignore */ }
     })
     await page.goto(`${base}/?trade_date=2026-10-23&interval=1min&days_either_side=0&api_base=${encodeURIComponent(API_BASE)}`)

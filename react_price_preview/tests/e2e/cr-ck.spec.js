@@ -27,6 +27,9 @@ async function open(page, base) {
     try {
       if (!window.sessionStorage.getItem('crck-init')) {
         window.localStorage.clear()
+        // CR-DH: origin/main defaults Levels to Current; compare like with like
+        window.localStorage.setItem('ib-react-gex-levels-mode', 'current')
+        window.localStorage.setItem('ib-react-gex-levels-mode-v2', 'current')
         window.sessionStorage.setItem('crck-init', '1')
       }
     } catch (e) { /* ignore */ }

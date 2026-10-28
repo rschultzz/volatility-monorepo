@@ -24,7 +24,10 @@ const MODES = ['current', 'corrected']
 async function openChart(page, { date, mode, size }) {
   await page.setViewportSize(size)
   await page.addInitScript((m) => {
-    try { window.localStorage.setItem('ib-react-gex-levels-mode', m) } catch (e) { /* ignore */ }
+    try {
+      window.localStorage.setItem('ib-react-gex-levels-mode', m)
+      window.localStorage.setItem('ib-react-gex-levels-mode-v2', m) // CR-DH key
+    } catch (e) { /* ignore */ }
   }, mode)
   await page.goto(`/?trade_date=${date}&api_base=${encodeURIComponent(API_BASE)}&interval=1min`)
   await page.locator('.tv-lightweight-charts').first().waitFor()

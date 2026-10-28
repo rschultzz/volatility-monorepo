@@ -71,6 +71,7 @@ async function openApp(page, viewport, { storage = 'set' } = {}) {
     try {
       window.localStorage.setItem('ib-react-gex-min-abs-b', '40')
       window.localStorage.setItem('ib-react-gex-levels-mode', 'current')
+      window.localStorage.setItem('ib-react-gex-levels-mode-v2', 'current') // CR-DH key
       if (storage === 'set' && !window.sessionStorage.getItem('crde-init')) {
         window.localStorage.setItem('dash.review.set', JSON.stringify({ cr: '', set: 'cr-cz:cp-ranges' }))
       }
