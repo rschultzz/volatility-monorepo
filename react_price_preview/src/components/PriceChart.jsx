@@ -25,7 +25,7 @@ import {
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { absorptionLevels, buildHeatColumns, chartMarks, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals } from '../flowV3'
+import { absorptionLevels, buildHeatColumns, chartMarks, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
 import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive } from './flowV3Primitives'
 
 const ETH_BG_COLOR = '#1f2937'
@@ -1820,7 +1820,11 @@ export default function PriceChart({
           ? formatter.format(price)
           : price.toFixed(2)
 
-      const timeText = formatShiftedTimestamp(shiftedEpoch)
+      // CR-DG: the time is the bar the crosshair snaps to (`param.time`, the one the axis label shows). The logical
+      // index counts every series' time points (GEX segment ends too), so it is not an index into the candles.
+      // Outside the data (`param.time` undefined) it falls back to the interpolated position.
+      const snappedEpoch = Number(param.time)
+      const timeText = formatShiftedTimestamp(Number.isFinite(snappedEpoch) ? snappedEpoch : shiftedEpoch)
       showTooltipAtPoint(x, y, priceText, timeText)
       reportLinkedCrosshair({ logical: clampedLogical, shiftedTime: shiftedEpoch })
     }
@@ -2566,7 +2570,8 @@ export default function PriceChart({
     const mx = (rows) => rows.reduce((m, r) => Math.max(m, r.buy + r.sell), 0)
     return { rows: { 1: r1, 2: r2 }, max: { 1: mx(r1), 2: mx(r2) } }
   }, [v3ProfileOn, v3Flat, v3ProfileFrom])
-  // CR-DF — absorption levels (exact marks as fading magenta lines) and the edge readout's dashed lines.
+  // CR-DF — absorption levels (exact marks as fading lines: magenta buyers absorbed, orange sellers absorbed, CR-DG)
+  // and the edge readout's dashed lines.
   const v3LevelsOn = Boolean(flowV3?.levels && v3Payload)
   const v3Levels = useMemo(() => (v3LevelsOn ? absorptionLevels(v3Payload, v3Times, v3Shift) : null), [v3LevelsOn, v3Payload, v3Times, v3Shift])
   const v3EdgeReadout = flowV3?.edges || null
@@ -2606,8 +2611,10 @@ export default function PriceChart({
     feed('levels', () => new AbsorptionLevelsPrimitive((level, pt) => setV3LevelHover(level ? { level, pt } : null)),
       v3Levels ? { levels: v3Levels, times: v3Times } : null)
     feed('edges', () => new EdgeLinesPrimitive(), v3Edges)
-    if (!v3Marks) setV3Hover(null)
-    if (!v3Levels) setV3LevelHover(null)
+    // CR-DG: an open hover re-reads its mark / level from the new payload, so held minutes update on a refresh
+    // while the pointer is still (gone from the new list = hover closed).
+    setV3Hover((h) => relinkHover(h, 'mark', v3Marks, 'time'))
+    setV3LevelHover((h) => relinkHover(h, 'level', v3Levels, 'start'))
   }, [v3Columns, v3Marks, v3Profile, v3Levels, v3Edges, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
 
   // CR-CD A3 — when a candidate loads in replay (not yet revealed), fit the price axis to the
@@ -3515,7 +3522,7 @@ export default function PriceChart({
             >
               <div style={{ fontWeight: 700 }}>{v3Hover.mark.kind === 'sellers_absorbed' ? 'Sellers absorbed' : 'Buyers absorbed'} · {Number(v3Hover.mark.price).toFixed(2)}</div>
               <div>{formatShiftedHHMM(v3Hover.mark.candleTime)} · aggressor {kfmt(Number(v3Hover.mark.aggressor))} · opposite {kfmt(Number(v3Hover.mark.opposite))}</div>
-              <div>held {v3Hover.mark.held_min} min · {v3Hover.mark.break_time != null ? `broke at ${formatShiftedHHMM(v3Shift(v3Hover.mark.break_time))}` : 'not broken'}</div>
+              <div>held {v3Hover.mark.heldMin} min · {v3Hover.mark.break_time != null ? `broke at ${formatShiftedHHMM(v3Shift(v3Hover.mark.break_time))}` : 'not broken'}</div>
               <div style={{ color: '#94a3b8' }}>visual aid — untested</div>
             </div>
           )}

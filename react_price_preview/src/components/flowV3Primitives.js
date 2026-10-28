@@ -251,6 +251,10 @@ export class ProfilePrimitive extends BasePrimitive {
 // CR-DF — absorption levels and the edge lines, in magenta (C1 deviation approved by Ryan in the kickoff:
 // distinct from candles, heat and GEX lines; still no red / green).
 const MAGENTA_RGB = '232,121,249' // #e879f9
+// CR-DG — "sellers absorbed" (floor) levels in orange (C1 deviation approved by Ryan, chat 2026-10-28; still no
+// red / green). "Buyers absorbed" (ceiling) levels and the edge lines stay magenta.
+export const ORANGE_RGB = '251,146,60' // #fb923c
+const levelRgb = (kind) => (kind === 'sellers_absorbed' ? ORANGE_RGB : MAGENTA_RGB)
 
 // Absorption levels: one horizontal line per level from its start minute to its break bar or now, width from
 // contracts absorbed, opacity from age, with its label at the right end. data: { levels (flowV3.absorptionLevels),
@@ -313,13 +317,14 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
       const x1 = x1raw == null ? plotW : x1raw
       const lw = Math.max(1, Math.round(lv.width * vr))
       const yy = Math.round(y * vr) + (lw % 2 ? 0.5 : 0)
-      ctx.strokeStyle = `rgba(${MAGENTA_RGB},${lv.alpha})`
+      const rgb = levelRgb(lv.kind)
+      ctx.strokeStyle = `rgba(${rgb},${lv.alpha})`
       ctx.lineWidth = lw
       ctx.beginPath()
       ctx.moveTo(Math.round(x0 * hr), yy)
       ctx.lineTo(Math.round(Math.max(x1, x0 + 2) * hr), yy)
       ctx.stroke()
-      ctx.fillStyle = `rgba(${MAGENTA_RGB},${Math.max(0.55, lv.alpha)})`
+      ctx.fillStyle = `rgba(${rgb},${Math.max(0.55, lv.alpha)})`
       const tw = ctx.measureText(lv.label).width / hr
       const lx = Math.min(x1 + 4, plotW - tw - 2)
       const base = y - lv.width / 2 - 2

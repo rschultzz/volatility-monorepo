@@ -3,12 +3,14 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   absorptionLevels,
+  chartMarks,
   edgeReadout,
   edgeText,
   flattenBars,
   levelAlpha,
   levelWidth,
   payloadNow,
+  relinkHover,
 } from '../../src/flowV3.js'
 
 const T0 = 1_777_642_200 // a UTC minute
@@ -159,4 +161,52 @@ test('edge text format', () => {
   assert.equal(edgeText(r, () => '07:12'), 'Top 7724.75 · 1.8k buyers · held 9 m | Bottom 7715.25 · 4.1k sellers · held 6 m · broke 07:12')
   assert.equal(edgeReadout(payload([]), flattenBars(payload([])), T0, id), null)
   assert.equal(edgeReadout(payload([]), bars([1]), null, id), null)
+})
+
+// CR-DG item 2: held minutes for unbroken levels / marks run to the payload's last bar, and grow with it.
+test('held minutes: unbroken run to the last bar and grow on refresh; broken stay start to break', () => {
+  const marks = [mark('sellers_absorbed', 2, 7000, { held_min: 388 }), mark('buyers_absorbed', 5, 7010, { break_time: T0 + 60 * 12, held_min: 7 })]
+  const at = (n) => payload([seg(bars(new Array(n).fill(7000)), marks)])
+  const lv20 = absorptionLevels(at(20), minutes(30), id)
+  const lv25 = absorptionLevels(at(25), minutes(30), id)
+  assert.deepEqual(lv20.map((l) => l.heldMin), [18, 7])
+  assert.deepEqual(lv25.map((l) => l.heldMin), [23, 7])
+  assert.equal(lv25[0].label, 'sellers absorbed 400 · 23 min')
+  // marks hover: client-side, not the server's held_min (which stops at the segment end, 13:00 PT live)
+  const mk20 = chartMarks(at(20), minutes(30), id)
+  const mk25 = chartMarks(at(25), minutes(30), id)
+  assert.deepEqual(mk20.map((m) => m.heldMin), [18, 7])
+  assert.deepEqual(mk25.map((m) => m.heldMin), [23, 7])
+  assert.equal(mk25[0].held_min, 388) // payload field untouched
+})
+
+// CR-DG item 2 (live check deferred): the payload's last bar moves from T to T + 2 min. Unbroken held minutes go from
+// n to n + 2 in the level label and the marks hover, and an open hover (pointer still) picks up the new object.
+test('refresh T -> T+2 min: held n -> n+2 (label, marks hover); an open hover updates without a pointer move', () => {
+  const marks = [mark('buyers_absorbed', 3, 7010)]
+  const at = (n) => payload([seg(bars(new Array(n).fill(7000)), marks)])
+  const lvA = absorptionLevels(at(20), minutes(30), id)[0]
+  const lvB = absorptionLevels(at(22), minutes(30), id)[0]
+  assert.equal(lvA.heldMin, 17)
+  assert.equal(lvB.heldMin, 19)
+  assert.equal(lvA.label, 'buyers absorbed 400 · 17 min')
+  assert.equal(lvB.label, 'buyers absorbed 400 · 19 min')
+  const mkA = chartMarks(at(20), minutes(30), id)[0]
+  const mkB = chartMarks(at(22), minutes(30), id)[0]
+  assert.equal(mkA.heldMin, 17)
+  assert.equal(mkB.heldMin, 19)
+  // open hovers captured on the first payload, then the refresh arrives with the pointer still
+  const pt = { x: 100, y: 50 }
+  const levelHover = relinkHover({ level: lvA, pt }, 'level', [lvB], 'start')
+  assert.equal(levelHover.level, lvB)
+  assert.equal(levelHover.level.heldMin, 19)
+  assert.equal(levelHover.pt, pt) // same place: no pointer move needed
+  const markHover = relinkHover({ mark: mkA, pt }, 'mark', [mkB], 'time')
+  assert.equal(markHover.mark.heldMin, 19)
+  // same object -> same hover (no re-render); gone from the new list or no list -> closed
+  const same = { level: lvB, pt }
+  assert.equal(relinkHover(same, 'level', [lvB], 'start'), same)
+  assert.equal(relinkHover({ level: lvA, pt }, 'level', [], 'start'), null)
+  assert.equal(relinkHover({ level: lvA, pt }, 'level', null, 'start'), null)
+  assert.equal(relinkHover(null, 'level', [lvB], 'start'), null)
 })
