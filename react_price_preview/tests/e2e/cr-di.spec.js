@@ -11,7 +11,7 @@ import { test, expect } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { edgeEffortSeries, edgeReadout, edgeText, edgeVisits, flattenBars, kfmt, makeShifter } from '../../src/flowV3.js'
+import { dirArrow, drawnBoxes, edgeEffortSeries, edgeReadout, edgeText, edgeVisits, flattenBars, kfmt, makeShifter } from '../../src/flowV3.js'
 
 const API_BASE = process.env.CRDF_API_BASE || 'http://127.0.0.1:8064'
 const BASELINE = process.env.CRDF_BASELINE_URL || 'http://localhost:5184'
@@ -286,8 +286,14 @@ for (const until of [`${TODAY}T07:40`, `${TODAY}T08:09`, null]) {
       expect(res.frozen[0]).toMatchObject({ from: '07:00', broke: '08:16', dir: 'up', bottom: 7762, top: 7769.25 })
       expect(res.frozen[1]).toMatchObject({ from: '08:16', broke: '08:39', dir: 'up' })
       expect(want).toMatch(/^Box from \d{2}:\d{2} [↑↓] · /)
-      // the frozen box is drawn faded on the price chart, and its hover gives its stats
-      await frame(page, shifted(`${TODAY}T06:50`), shifted(`${TODAY}T09:00`))
+      // the oldest drawn frozen box (only the last 4 are drawn: on a live day later breaks push the 07:00 box out)
+      // is drawn faded on the price chart, and its hover gives its stats and how many older boxes were dropped
+      const { boxes, dropped } = drawnBoxes(r)
+      const fb = boxes[0]
+      res.drawn_frozen = boxes.length - 1
+      res.dropped = dropped
+      const span = (fb.breakAt - fb.from) / 60
+      await frame(page, ptShift(fb.from) - 10 * 60, ptShift(fb.breakAt) + 10 * 60)
       const probe = await page.evaluate(({ a, b, price, fn }) => {
         const { priceEl, price: pc } = eval(fn) // eslint-disable-line no-eval
         const rect = priceEl.getBoundingClientRect()
@@ -305,17 +311,28 @@ for (const until of [`${TODAY}T07:40`, `${TODAY}T08:09`, null]) {
         }
         const px = []
         for (let x = x0 + 4; x < x1 - 4; x += 1) px.push([...ctx.getImageData(Math.round(x * dpr), Math.round(y * dpr), 1, 1).data].slice(0, 3))
-        return { x: rect.x + (x0 + x1) / 2, y: rect.y + y, px }
-      }, { a: shifted(`${TODAY}T07:20`), b: shifted(`${TODAY}T07:50`), price: 7769.25, fn: CHARTS_FN })
+        // hover where the dashed line is not under a candle: the first sampled x with a magenta-ish pixel
+        let hx = (x0 + x1) / 2
+        for (let k = 0; k < px.length; k += 1) {
+          const [rr, g, bb] = px[k]
+          if (rr - g > 25 && bb - g > 25) { hx = x0 + 4 + k; break }
+        }
+        return { x: rect.x + hx, y: rect.y + y, px }
+      }, { a: ptShift(fb.from), b: ptShift(fb.breakAt), price: fb.top.price, fn: CHARTS_FN })
       // faded magenta over the dark background: red and blue clearly above green
       const magentaish = probe.px.filter(([rr, g, bb]) => rr - g > 25 && bb - g > 25).length
-      res.frozen_line_magenta_px = `${magentaish} / ${probe.px.length}`
-      expect(magentaish, 'faded magenta dashes on the frozen top 7769.25').toBeGreaterThan(5)
+      res.frozen_line_magenta_px = `${magentaish} / ${probe.px.length} (box ${pt(fb.from)}–${pt(fb.breakAt)} top ${fb.top.price}, ${span} min)`
+      if (!(magentaish > 5)) {
+        log('probe-debug.json', { y: probe.y, x: probe.x, px: probe.px.slice(0, 60) })
+        fs.writeFileSync(path.join(LOGS, 'probe-debug.png'), await page.screenshot())
+      }
+      expect(magentaish, `faded magenta dashes on the oldest drawn frozen top ${fb.top.price}`).toBeGreaterThan(5)
       await page.mouse.move(probe.x, probe.y)
       const tip = page.getByTestId('flow-v3-box-tooltip')
-      await expect(tip).toContainText('Box 07:00–08:16 · broke 08:16 ↑')
-      await expect(tip).toContainText(`Top 7769.25: buyers ${kfmt(r.frozen[0].top.contracts)} / sellers ${kfmt(r.frozen[0].top.opposite)}`)
-      await expect(tip).toContainText(`Bottom 7762.00: sellers ${kfmt(r.frozen[0].bottom.contracts)} / buyers ${kfmt(r.frozen[0].bottom.opposite)}`)
+      await expect(tip).toContainText(`Box ${pt(fb.from)}–${pt(fb.breakAt)} · broke ${pt(fb.breakAt)} ${dirArrow(fb.dir)}`)
+      await expect(tip).toContainText(`Top ${fb.top.price.toFixed(2)}: buyers ${kfmt(fb.top.contracts)} / sellers ${kfmt(fb.top.opposite)}`)
+      await expect(tip).toContainText(`Bottom ${fb.bottom.price.toFixed(2)}: sellers ${kfmt(fb.bottom.contracts)} / buyers ${kfmt(fb.bottom.opposite)}`)
+      if (dropped) await expect(tip).toContainText(`${dropped} older box${dropped === 1 ? '' : 'es'} not drawn`)
       res.box_hover = await tip.innerText()
       fs.mkdirSync(ASSETS, { recursive: true })
       fs.writeFileSync(path.join(ASSETS, 'boxes-end-anchor-0700.png'), await page.screenshot())
@@ -352,12 +369,31 @@ test('chip gating and the ⚙ box hold setting', async ({ page }) => {
   await expect(chip).toHaveAttribute('title', /needs an anchor/)
   await page.getByTestId('flow-v3-anchor-open').click()
   await expect(chip).toBeEnabled({ timeout: 30_000 })
+  // amendment 2: the pane grows by the strip's 64 px and pane 0 (CVD / rolling / delta) keeps its height
+  const sizes = () => page.evaluate((fn) => {
+    const { flow } = eval(fn) // eslint-disable-line no-eval
+    const panel = document.querySelector('[data-testid=flow-v3-panel]').getBoundingClientRect().height
+    const price = document.querySelector('.react-top-pane').getBoundingClientRect().height
+    return { panel, price, pane0: flow.chart.panes()[0].getHeight(), pane1: flow.chart.panes()[1]?.getHeight() ?? null, panes: flow.chart.panes().length }
+  }, CHARTS_FN)
+  const off1 = await sizes()
   await chip.click()
   await expect(chip).toHaveText('Edge effort on')
+  await expect.poll(async () => (await sizes()).panes, { timeout: 20_000 }).toBe(2)
+  await page.waitForTimeout(800)
+  const on = await sizes()
   expect(await page.evaluate(() => localStorage.getItem('ib-react-flow-v3-edge-effort'))).toBe('1')
   await expect.poll(async () => (await stripState(page)).panes, { timeout: 20_000 }).toBe(2)
   await chip.click()
   await expect.poll(async () => (await stripState(page)).panes).toBe(1)
+  await page.waitForTimeout(800)
+  const off2 = await sizes()
+  log('pane-growth.json', { off1, on, off2 })
+  expect(on.panel - off1.panel).toBe(64)
+  expect(off1.price - on.price).toBe(64)
+  expect(on.pane0).toBe(off1.pane0)
+  expect(on.pane1).toBe(63) // + the 1-px separator = 64
+  expect(off2).toEqual(off1)
   expect(await page.evaluate(() => localStorage.getItem('ib-react-flow-v3-edge-effort'))).toBe(null)
   await page.getByRole('button', { name: 'Open Flow v3 settings' }).click()
   await expect(page.getByTestId('flow-v3-box-hold')).toHaveValue('15')

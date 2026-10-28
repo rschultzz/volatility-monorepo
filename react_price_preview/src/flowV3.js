@@ -641,6 +641,13 @@ export function edgeStripColumns(minutes, candleTimes, shift) {
   return { cols, idxOf, max }
 }
 
+// CR-DI: the strip is drawn (and, amendment 2, the Flow v3 pane grows by EDGE_STRIP_HEIGHT) only with the chip on,
+// Edges on, an anchor and an exact readout. One condition for App (pane height) and the panel (the strip's chart pane).
+export const EDGE_STRIP_HEIGHT = 64
+export function edgeStripDrawn(edgeEffortOn, edgesOn, anchor, edges) {
+  return Boolean(edgeEffortOn && !edgeEffortBlock(edgesOn, anchor, edges) && edges?.exact && edges?.minutes)
+}
+
 // CR-DI: why the Edge effort chip can't act (its tooltip), or '' when it can.
 export function edgeEffortBlock(edgesOn, anchor, edges) {
   if (!edgesOn) return 'Edge effort needs Edges on'

@@ -3,7 +3,7 @@ import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
 import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS, effortChartMarkers } from './components/AggressorFlowV2Panel'
 import AggressorFlowV3Panel from './components/AggressorFlowV3Panel'
-import { DEFAULT_V3_SETTINGS, edgeReadout, flattenBars, makeShifter } from './flowV3'
+import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, edgeReadout, edgeStripDrawn, flattenBars, makeShifter } from './flowV3'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import { PANEL_WIDTH as ANALOGUES_PANEL_WIDTH } from './components/AnaloguesPanel'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
@@ -2001,6 +2001,11 @@ export default function App() {
     return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin)
   }, [flowV3, flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin])
 
+  // CR-DI amendment 2: while the Edge effort strip is drawn the Flow v3 pane grows by its height (the price pane
+  // above gives it up), so the pane's other series keep their heights; otherwise the pane is unchanged.
+  const flowPaneExtra = flowPaneMode === 'v3' && edgeStripDrawn(flowEdgeEffort, flowV3Layers.edges, flowAnchor, flowV3Edges)
+    ? EDGE_STRIP_HEIGHT : 0
+
   // One object per real change (CR-CH): the chart's primitives recompute only when this changes.
   const flowV3Chart = useMemo(() => {
     if (!flowV3AnyLayer || !flowCells) return null
@@ -2550,7 +2555,7 @@ export default function App() {
                       ? `calc(100% - ${(landscapeOpen ? LANDSCAPE_PANEL_WIDTH : 0) + (reviewOpen ? REVIEW_PANEL_WIDTH : 0)}px)`
                       : '100%',
                     minWidth: 0,
-                    height: `${flowPanelHeight}px`,
+                    height: `${flowPanelHeight + flowPaneExtra}px`,
                   }}
                 >
                   {flowPaneMode === 'v3' ? (
@@ -2562,7 +2567,7 @@ export default function App() {
                       cellsError={flowCellsError}
                       candles={mergedBarsWithLiveTimeline}
                       visibleLogicalRange={sharedLogicalRange}
-                      height={flowPanelHeight}
+                      height={flowPanelHeight + flowPaneExtra}
                       loading={flowV2Loading}
                       error={flowV2Error}
                       linkedCrosshair={linkedCrosshair}

@@ -2,7 +2,7 @@
 // Run: npm --prefix react_price_preview run test:unit
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { drawnBoxes, edgeEffortBlock, edgeEffortSeries, edgeReadout, edgeStripColumns, edgeText, edgeVisits, flattenBars } from '../../src/flowV3.js'
+import { EDGE_STRIP_HEIGHT, drawnBoxes, edgeEffortBlock, edgeStripDrawn, edgeEffortSeries, edgeReadout, edgeStripColumns, edgeText, edgeVisits, flattenBars } from '../../src/flowV3.js'
 
 const T0 = 1_777_642_200 // a UTC minute
 const id = (t) => t
@@ -147,4 +147,17 @@ test('edgeText uses "moved" for growth and no box prefix without a break', () =>
   const p = payload([100, 103, 103], [])
   const r = edgeReadout(p, flattenBars(p), T0, id)
   assert.equal(edgeText(r, () => '07:01'), 'Top 103.00 · 0 buyers · held 1 m · moved 07:01 | Bottom 100.00 · 0 sellers · held 2 m')
+})
+
+test('amendment 2: the strip (and the pane growth) needs the chip, Edges, an anchor and an exact readout', () => {
+  const q = payload([100, 110], [[1, 110, 5, 5]])
+  const r = edgeReadout(q, flattenBars(q), T0, id)
+  assert.equal(EDGE_STRIP_HEIGHT, 64)
+  assert.equal(edgeStripDrawn(true, true, T0, r), true)
+  assert.equal(edgeStripDrawn(false, true, T0, r), false)
+  assert.equal(edgeStripDrawn(true, false, T0, r), false)
+  assert.equal(edgeStripDrawn(true, true, null, r), false)
+  assert.equal(edgeStripDrawn(true, true, T0, null), false) // cells loading: no strip, no growth yet
+  const a = payload([100, 110], [[1, 110, 5, 5]], false)
+  assert.equal(edgeStripDrawn(true, true, T0, edgeReadout(a, flattenBars(a), T0, id)), false)
 })

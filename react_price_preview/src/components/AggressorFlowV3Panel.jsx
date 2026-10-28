@@ -25,8 +25,10 @@ import {
   ROLLING_CHOICES,
   anchoredCvd,
   anchorReadout,
+  EDGE_STRIP_HEIGHT,
   edgeEffortBlock,
   edgeEffortSeries,
+  edgeStripDrawn,
   edgeStripColumns,
   edgeText,
   edgeVisits,
@@ -41,8 +43,8 @@ import {
 import { EdgeEffortPrimitive, ORANGE_RGB } from './flowV3Primitives'
 
 const BG_COLOR = '#1f2937'
+const PANE_SEPARATOR_PX = 1 // CR-DI: the strip's 64 px include the 1-px pane separator, so pane 0 keeps its height
 const MIN_PANEL_HEIGHT = 140
-const EDGE_STRIP_HEIGHT = 64 // CR-DI: the Edge effort pane (pane 1), only while the strip is drawn
 const BUY_RGBA = (alpha) => `rgba(96,165,250,${alpha})`
 const SELL_RGBA = (alpha) => `rgba(229,231,235,${alpha})`
 const SLATE_RGBA = (alpha) => `rgba(148,163,184,${alpha})`
@@ -287,7 +289,7 @@ export default function AggressorFlowV3Panel({
   const notes = useMemo(() => [...new Set((payloads || []).flatMap((p) => p?.notes || []))], [payloads])
   const hasValues = aligned.some((r) => Number.isFinite(r.delta))
   const edgeEffortWhy = edgeEffortBlock(layers.edges, anchor, edges)
-  const stripOn = Boolean(edgeEffortOn && !edgeEffortWhy && edges?.exact && edges?.minutes)
+  const stripOn = edgeStripDrawn(edgeEffortOn, layers.edges, anchor, edges)
   // Amendment 9: the strip draws the drawn boxes (last 4 frozen + current), each minute against its own box.
   const series = useMemo(() => (stripOn ? edgeEffortSeries(edges) : null), [stripOn, edges])
   const strip = useMemo(() => (series ? edgeStripColumns(series, candleTimes, shift) : null), [series, candleTimes, shift])
@@ -373,7 +375,7 @@ export default function AggressorFlowV3Panel({
       const w = stageRef.current.clientWidth
       const h = stageRef.current.clientHeight
       if (w > 0 && h > 0) chart.applyOptions({ width: w, height: Math.max(h, MIN_PANEL_HEIGHT) })
-      if (seriesRef.current.strip) chart.panes()[1]?.setHeight(EDGE_STRIP_HEIGHT)
+      if (seriesRef.current.strip) chart.panes()[1]?.setHeight(EDGE_STRIP_HEIGHT - PANE_SEPARATOR_PX)
       requestAnimationFrame(refreshDecorations)
     }
     const onRange = () => requestAnimationFrame(refreshDecorations)
@@ -425,6 +427,22 @@ export default function AggressorFlowV3Panel({
     requestAnimationFrame(() => refreshDecorationsRef.current())
   }, [aligned, rolling, cvd, candleTimes, visibleLogicalRange])
 
+  // CR-DI amendment 2: the pane (App) grows by EDGE_STRIP_HEIGHT with the strip, so size the chart to the stage and
+  // the strip pane to its height now and on the next frame, before a ResizeObserver pass could split the new height
+  // proportionally (which would shrink CVD / rolling / delta).
+  const fitToStage = () => {
+    const fit = () => {
+      const chart = chartRef.current
+      const st = stageRef.current
+      if (!chart || !st) return
+      const h = Math.max(st.clientHeight || MIN_PANEL_HEIGHT, MIN_PANEL_HEIGHT)
+      if (chart.options().height !== h) chart.applyOptions({ height: h })
+      if (seriesRef.current.strip) chart.panes()[1]?.setHeight(EDGE_STRIP_HEIGHT - PANE_SEPARATOR_PX)
+    }
+    fit()
+    requestAnimationFrame(fit)
+  }
+
   // CR-DI: the strip's pane exists only while the strip is drawn, so with it off the chart is origin/main's.
   useEffect(() => {
     const chart = chartRef.current
@@ -439,13 +457,14 @@ export default function AggressorFlowV3Panel({
       chart.applyOptions({ layout: { panes: { separatorColor: 'rgba(148, 163, 184, 0.18)', separatorHoverColor: 'rgba(148, 163, 184, 0.18)', enableResize: false } } })
       const prim = new EdgeEffortPrimitive()
       carrier.attachPrimitive(prim)
-      chart.panes()[1]?.setHeight(EDGE_STRIP_HEIGHT)
       seriesRef.current = { ...s, strip: carrier, stripPrim: prim }
+      fitToStage()
     } else if (!strip && s.strip) {
       chart.removeSeries(s.strip)
       if (chart.panes().length > 1) chart.removePane(1)
       const { strip: _c, stripPrim: _p, ...rest } = s
       seriesRef.current = rest
+      fitToStage()
     }
     const cur = seriesRef.current
     if (strip && cur.strip) {
