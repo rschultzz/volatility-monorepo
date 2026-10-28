@@ -236,8 +236,11 @@ export function mergeRows(rows, res) {
 }
 
 // Absorption marks for the chart (A1.2: present only on exact segments), snapped to their candle; the
-// slate line runs to the break bar or the segment end (now / `until`).
+// slate line runs to the break bar or the segment end (now / `until`). CR-DG: `heldMin` (the hover) runs from the
+// mark's minute to its break, else to the payload's last bar — the server's `held_min` stops at the segment end,
+// which is 13:00 PT on a live session.
 export function chartMarks(payload, candleTimes, shift) {
+  const now = payloadNow(payload)
   const out = []
   for (const s of Array.isArray(payload?.segments) ? payload.segments : []) {
     if (!Array.isArray(s.marks)) continue
@@ -247,7 +250,9 @@ export function chartMarks(payload, candleTimes, shift) {
       if (idx < 0) continue
       const endUtc = mk.break_time != null ? mk.break_time : s.end
       const endShifted = shift(endUtc)
-      out.push({ ...mk, idx, candleTime: candleTimes[idx], endShifted, endIdx: Math.max(idx, floorIndex(candleTimes, endShifted)) })
+      const stop = mk.break_time != null ? Number(mk.break_time) : now ?? Number(s.end)
+      const heldMin = Math.max(0, Math.round((stop - Number(mk.time)) / 60))
+      out.push({ ...mk, heldMin, idx, candleTime: candleTimes[idx], endShifted, endIdx: Math.max(idx, floorIndex(candleTimes, endShifted)) })
     }
   }
   return out

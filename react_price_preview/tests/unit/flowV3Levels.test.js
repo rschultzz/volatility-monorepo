@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   absorptionLevels,
+  chartMarks,
   edgeReadout,
   edgeText,
   flattenBars,
@@ -159,4 +160,21 @@ test('edge text format', () => {
   assert.equal(edgeText(r, () => '07:12'), 'Top 7724.75 · 1.8k buyers · held 9 m | Bottom 7715.25 · 4.1k sellers · held 6 m · broke 07:12')
   assert.equal(edgeReadout(payload([]), flattenBars(payload([])), T0, id), null)
   assert.equal(edgeReadout(payload([]), bars([1]), null, id), null)
+})
+
+// CR-DG item 2: held minutes for unbroken levels / marks run to the payload's last bar, and grow with it.
+test('held minutes: unbroken run to the last bar and grow on refresh; broken stay start to break', () => {
+  const marks = [mark('sellers_absorbed', 2, 7000, { held_min: 388 }), mark('buyers_absorbed', 5, 7010, { break_time: T0 + 60 * 12, held_min: 7 })]
+  const at = (n) => payload([seg(bars(new Array(n).fill(7000)), marks)])
+  const lv20 = absorptionLevels(at(20), minutes(30), id)
+  const lv25 = absorptionLevels(at(25), minutes(30), id)
+  assert.deepEqual(lv20.map((l) => l.heldMin), [18, 7])
+  assert.deepEqual(lv25.map((l) => l.heldMin), [23, 7])
+  assert.equal(lv25[0].label, 'sellers absorbed 400 · 23 min')
+  // marks hover: client-side, not the server's held_min (which stops at the segment end, 13:00 PT live)
+  const mk20 = chartMarks(at(20), minutes(30), id)
+  const mk25 = chartMarks(at(25), minutes(30), id)
+  assert.deepEqual(mk20.map((m) => m.heldMin), [18, 7])
+  assert.deepEqual(mk25.map((m) => m.heldMin), [23, 7])
+  assert.equal(mk25[0].held_min, 388) // payload field untouched
 })

@@ -2607,8 +2607,17 @@ export default function PriceChart({
     feed('levels', () => new AbsorptionLevelsPrimitive((level, pt) => setV3LevelHover(level ? { level, pt } : null)),
       v3Levels ? { levels: v3Levels, times: v3Times } : null)
     feed('edges', () => new EdgeLinesPrimitive(), v3Edges)
-    if (!v3Marks) setV3Hover(null)
-    if (!v3Levels) setV3LevelHover(null)
+    // CR-DG: an open hover re-reads its mark / level from the new payload, so held minutes update on a refresh
+    // while the pointer is still (gone from the new list = hover closed).
+    const relink = (list, old, key) => list?.find((x) => x.kind === old.kind && x[key] === old[key] && x.price === old.price)
+    setV3Hover((h) => {
+      const mark = h && relink(v3Marks, h.mark, 'time')
+      return mark ? (mark === h.mark ? h : { ...h, mark }) : null
+    })
+    setV3LevelHover((h) => {
+      const level = h && relink(v3Levels, h.level, 'start')
+      return level ? (level === h.level ? h : { ...h, level }) : null
+    })
   }, [v3Columns, v3Marks, v3Profile, v3Levels, v3Edges, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
 
   // CR-CD A3 — when a candidate loads in replay (not yet revealed), fit the price axis to the
@@ -3516,7 +3525,7 @@ export default function PriceChart({
             >
               <div style={{ fontWeight: 700 }}>{v3Hover.mark.kind === 'sellers_absorbed' ? 'Sellers absorbed' : 'Buyers absorbed'} · {Number(v3Hover.mark.price).toFixed(2)}</div>
               <div>{formatShiftedHHMM(v3Hover.mark.candleTime)} · aggressor {kfmt(Number(v3Hover.mark.aggressor))} · opposite {kfmt(Number(v3Hover.mark.opposite))}</div>
-              <div>held {v3Hover.mark.held_min} min · {v3Hover.mark.break_time != null ? `broke at ${formatShiftedHHMM(v3Shift(v3Hover.mark.break_time))}` : 'not broken'}</div>
+              <div>held {v3Hover.mark.heldMin} min · {v3Hover.mark.break_time != null ? `broke at ${formatShiftedHHMM(v3Shift(v3Hover.mark.break_time))}` : 'not broken'}</div>
               <div style={{ color: '#94a3b8' }}>visual aid — untested</div>
             </div>
           )}
