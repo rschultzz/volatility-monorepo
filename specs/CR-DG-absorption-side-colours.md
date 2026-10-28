@@ -138,3 +138,11 @@ frozen numbers are (a) and (b). Scope question put to Ryan before any item-2 cod
 `updateFloatingTooltip` (`PriceChart.jsx:1770`) formats `interpolateShiftedEpoch(clampedLogical, …)` — the
 fractional logical index under the pointer — so the time drifts between bars. `param.time` (the bar the crosshair
 snaps to, the one the axis label shows) is available in the same handler.
+
+### Step 0 rulings (Ryan, chat, 2026-10-28) — spec amendment
+
+- **Item 2 → both, client-side.** (a) The Absorbed (marks) hover shows held computed on the client from the mark's
+  start to its break, or else to the payload's last bar (`payloadNow`), not the server's `held_min`. (b) The level
+  hover re-reads its level from each new payload, so an open hover updates on refresh. The server `held_min` and
+  the CR-DC golden are unchanged. The level label is already right and is unchanged.
+- **Orange `#fb923c` confirmed** after the 25.7° / σ-band (2.1°) disclosure.
