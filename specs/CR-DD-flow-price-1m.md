@@ -55,3 +55,58 @@ Data-pipeline CR; no test, outcome or feature statistic is computed.
 | C1, C2 | n/a | no UI |
 
 Revoked / superseded R1–R7: none used.
+
+## Step 0 findings (2026-10-28 03:15 UTC, read-only)
+
+Script: `scripts/cr_dd_step0.py` (phases `cost`, `size`, `live`); output in `scripts/logs/cr_dd/step0_*.txt`
+(git-ignored). No DB writes, no Databento download (`get_cost` / `get_billable_size` only, which are free).
+
+### S1 — budget gate: PASS
+
+- `get_cost` (GLBX.MDP3 `trades`, `stype_in=raw_symbol`, CR-CA window [06:15, 13:00) PT, CR-CA `contracts_for`)
+  for 2026-01-06 → 06-05: 105 NYSE sessions, 115 session-contracts (10 roll-week sessions carry two contracts).
+  ESH6 52 windows $25.78; ESM6 63 windows $27.73. **Priced total $53.51** (2.05 GB billable). Max per session $0.854
+  (a roll-week session). **Within the $75 cap.**
+- **All 115 windows are already on disk** as CR-CA L7 raw DBN files (`data/databento/raw/` in the main checkout).
+  If they are reused, the actual new spend is **$0.00**. These are the files CR-CA downloaded; CR-DD stores no new raw ticks.
+
+### S2 — size
+
+- Databento ESH6 2026-01-06 (window): 266,264 trades, side B 138,295 / A 127,969 / N 0. 0 prices off the 0.25 grid.
+  **3,171 (minute, price) rows** over 405 minutes.
+- Backfill projection: about 365 k rows, under 0.05 GB.
+- Live: the 2026-10-27 Globex day (10-26 22:00 → 10-27 21:00 UTC) has 10,507 (minute, symbol, price) rows,
+  about 2.7 M rows a year (under 0.3 GB a year).
+- DB is 26.74 GB now.
+
+### S3 — `ironbeam_es_trades` (live source)
+
+- Retained span: 2026-10-26 01:01 → now (prune keeps 2 days: `DELETE … WHERE ts_utc < now() − 2 days`, at
+  01:00 UTC). One symbol (`XCME:ES.Z26`). 885 k rows. 0 prices off the 0.25 grid. `trade_id` is NULL on every
+  row; `trade_key` (PK) is unique.
+- `aggressor_side`: `BUY` 446 k, `SELL` 439 k, **`'0'` 2 trades / 110 contracts** (unknown).
+- **Ingest lateness** (`received_at − ts_utc`): median 0.41 s, p99 2.2 s, p99.9 5.2 s. **One trade** of 885 k
+  arrived ≥ 3 min after its minute started: **the 2026-10-27 closing print**, 20:59:59.989 UTC (4 contracts, BUY),
+  received at 21:42:56. That is 43 min late, inside the daily maintenance break. On 10-26 the 20:59 minute's
+  last receipt was 21:00:00.
+- **10-27 retention clock:** the 01:00 UTC prune on **2026-10-29** deletes trades before 2026-10-27 01:00 UTC.
+  That is the first 3 h of the 10-27 Globex day (from 10-26 22:00). Check 4b must run before then, or be
+  limited to [10-27 01:00, 21:00) UTC.
+
+### S4 — DDL
+
+`es_flow_price_1m` does not exist. `dash_backfill_writer` has no CREATE on `public`, so the owner applies the DDL
+(as the kickoff says).
+
+### Decisions (recommendation first; Ryan to rule)
+
+| # | Question | Options | Rec. |
+|---|---|---|---|
+| DD1 | Contracts in roll weeks ("front contract per session as CR-CA") | (a) CR-CA's stored set: front, plus the dying contract on its roll Monday → expiry Friday. This matches `es_flow_1m_databento`, so CR-DC's per-segment bar-match symbol always has cells. (b) Front only. | (a) |
+| DD2 | Source of the ticks | (a) Reuse the 115 CR-CA raw files on disk ($0, same bytes Databento would send). (b) Re-download ($53.51) | (a) |
+| DD3 | Unknown-side prints (Ironbeam `'0'`, Databento `N`) | (a) Counted in `trade_count` only; not in `buy_vol` / `sell_vol` (the schema has no unknown column, and CR-DC does not draw them). (b) Add `unknown_vol` (a schema change to CR-DC A1.3) | (a) |
+| DD4 | When the live minute is "completed" | (a) A minute is stored once now ≥ its start + 3 min (p99.9 lateness 5 s), **except the last 15 min before the 17:00 ET daily close, which are held until 18:00 ET** (the reopen; the "once after the close" pass). This catches the 43-min-late closing print. (b) 3 min everywhere: that closing print would be lost. Either way, a trade that arrives after its minute is stored is lost (insert-only; skip-stored minutes). | (a) |
+| DD5 | Schedule | One Render cron `*/5 * * * 0-5` (UTC). Every 5 min Sun → Fri, which covers the session, the after-close pass at 18:00 ET, and many runs before each 01:00 UTC prune (rows survive about 48 h). It is DST-safe because the hold rule is in ET. | as written |
+| DD6 | Live write role | (a) `BACKFILL_DATABASE_URL` + `assert_role_or_die` (insert-only role). One `bt_backfill_runs` row **per UTC day** (`backfill_run(conn, 'CR-DD-live')` only on the first run that writes on that day? no: the protocol context manager wraps every run). So rec. (a′): role check on every run; `backfill_run` only on the post-close pass, not 288 rows a day. (b) `backfill_run` every 5 min | (a′) |
+| DD7 | Backfill window | CR-CA's [06:15, 13:00) PT (the raw files cover only this). This matches CR-DC's `databento` use (RTH ≤ 06-05). | as written |
+| DD8 | 2026-10-27 check timing | After the owner applies the DDL, the cron script runs once from the laptop over the retained trades. The check compares it to `ironbeam_es_trades` for the whole 10-27 Globex day, before 2026-10-29 01:00 UTC. | as written |
