@@ -106,14 +106,60 @@ def _fetch_gex_grouped_by_level(trade_date: dt.date) -> pd.DataFrame:
     return df
 
 
+# ---------- CR-DH: corrected placement (Levels: Corrected) ----------
+_CORRECTED_UNAVAILABLE_LABELS = {
+    "pre_forward_era": "pre-forward era",
+    "no_es_snapshot": "no ES snapshot",
+    "no_rows": "no rows",
+}
+
+
+def _fetch_gex_corrected(trade_date: dt.date) -> tuple[pd.DataFrame | None, str | None]:
+    """
+    The price chart's corrected by-level table (CR-BT, Ironbeam `_corrected_gex_tables`,
+    bucket GEX_LEVEL_BUCKET) for one session, or (None, label) when it can't be drawn.
+    Imported lazily: the Ironbeam module is heavy and app.py imports this one first.
+    """
+    from modules.Ironbeam.callbacks import _corrected_gex_tables
+
+    try:
+        df_gex, _, reason = _corrected_gex_tables(trade_date)
+    except Exception as e:
+        print(f"[gamma] Error building corrected GEX levels: {e}")
+        return None, "error"
+    if reason is not None or df_gex is None or df_gex.empty:
+        return None, _CORRECTED_UNAVAILABLE_LABELS.get(reason or "no_rows", reason)
+    return df_gex, None
+
+
 # ---------- Figure ----------
-def _build_gex_figure(df: pd.DataFrame, trade_date_str: str, es_open_1501: float | None = None) -> go.Figure:
+def _build_gex_figure(
+        df: pd.DataFrame,
+        trade_date_str: str,
+        es_open_1501: float | None = None,
+        *,
+        corrected: bool = False,
+        fallback_reason: str | None = None,
+) -> go.Figure:
+    # CR-DH: corrected=True labels the CR-BT corrected placement; fallback_reason labels a
+    # Current chart drawn because Corrected was unavailable. Defaults = origin/main bytes.
+    if corrected:
+        title_head = "GEX by Corrected Level"
+        xaxis_title = "Gamma (Σ by corrected level)"
+        yaxis_title = "Corrected Level"
+    else:
+        title_head = "GEX by Discounted Level"
+        if fallback_reason:
+            title_head += f" (corrected unavailable: {fallback_reason})"
+        xaxis_title = "Gamma (Σ by rounded discounted_level)"
+        yaxis_title = "Discounted Level (rounded)"
+
     fig = go.Figure()
     fig.update_layout(
         template="plotly_dark",
-        title=f"GEX by Discounted Level — {trade_date_str}" + (f" ({TICKER})" if TICKER else ""),
-        xaxis_title="Gamma (Σ by rounded discounted_level)",
-        yaxis_title="Discounted Level (rounded)",
+        title=f"{title_head} — {trade_date_str}" + (f" ({TICKER})" if TICKER else ""),
+        xaxis_title=xaxis_title,
+        yaxis_title=yaxis_title,
         margin=dict(l=90, r=30, t=60, b=40),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         barmode="overlay",
@@ -268,7 +314,16 @@ def render_gex(trade_date_iso: str | None, n_intervals: int, levels_mode: str | 
         return _build_gex_figure(pd.DataFrame(), "—")
     
     trade_date = dt.date.fromisoformat(trade_date_iso)
-    df = _fetch_gex_grouped_by_level(trade_date)
+
+    # CR-DH: Corrected (default) draws the CR-BT corrected table; when it's unavailable the
+    # Current chart is drawn instead, with the reason in the title. Never both.
+    df = None
+    fallback_reason = None
+    if levels_mode != "current":
+        df, fallback_reason = _fetch_gex_corrected(trade_date)
+    corrected = df is not None
+    if df is None:
+        df = _fetch_gex_grouped_by_level(trade_date)
     
     # Fetch ES open price at 15:01 PT on prior day for zoom calculation
     es_open_1501 = _fetch_es_open_at_1501_prior_day(trade_date)
@@ -277,7 +332,7 @@ def render_gex(trade_date_iso: str | None, n_intervals: int, levels_mode: str | 
     triggered_id = ctx.triggered_id if ctx.triggered else None
     is_live_update = (triggered_id == "live-update-timer")
     
-    fig = _build_gex_figure(df, trade_date_iso, es_open_1501)
+    fig = _build_gex_figure(df, trade_date_iso, es_open_1501, corrected=corrected, fallback_reason=fallback_reason)
     
     # Preserve user's zoom/pan state if this is a live update
     if is_live_update and relayout_data:
