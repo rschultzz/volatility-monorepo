@@ -16,6 +16,8 @@ const cell = process.argv[2] || 'v3all'
 const DURATION = Number(process.argv[3] || 600)
 const STORAGE = {
   v3all: { 'ib-react-flow-mode': 'current', 'ib-react-flow-mode-v3': '1', 'ib-react-flow-v3-layers': JSON.stringify({ heat: true, profile: true, marks: true, levels: true, edges: true }) },
+  // control: CR-DC's layers only (no levels / edges), same branch, same sequence
+  v3dc: { 'ib-react-flow-mode': 'current', 'ib-react-flow-mode-v3': '1', 'ib-react-flow-v3-layers': JSON.stringify({ heat: true, profile: true, marks: true, levels: false, edges: false }) },
   v2: { 'ib-react-flow-mode': 'v2' },
 }[cell.split('@')[0]]
 Object.assign(STORAGE, JSON.parse(process.env.CRCH_EXTRA_STORAGE || '{}'))
@@ -100,10 +102,15 @@ const effortCount = (f) => f.evaluate(() => {
 
 let frame = await chartFrame()
 // CR-DF: the edge readout needs an anchor — "session open" after every load; logs the levels / readout state
+// After a date switch the previous session can still be on screen for a few seconds; a date change clears the anchor
+// (CR-DC DC5), so wait for "edges: set an anchor" before clicking, else the click lands on the old session.
 const setAnchor = async (f) => {
   try {
+    await f.waitForFunction(() => document.querySelector('[data-testid=flow-v3-edge-readout]')?.textContent === 'edges: set an anchor',
+      null, { timeout: 120_000 }).catch(() => note('anchor-reset-not-seen'))
+    await f.waitForSelector('[data-testid=flow-v3-anchor-open]:not([disabled])', { timeout: 180_000 })
     await f.click('[data-testid=flow-v3-anchor-open]', { timeout: 20_000 })
-    await page.waitForTimeout(1500)
+    await f.waitForFunction(() => { const e = document.querySelector('[data-testid=flow-v3-edge-readout]'); return !e || /^Top /.test(e.textContent) }, null, { timeout: 120_000 }).catch(() => {})
     note('anchor', JSON.stringify(await f.evaluate(() => ({
       levels: document.querySelector('[data-testid=flow-v3-levels-toggle]')?.getAttribute('aria-pressed'),
       edges: document.querySelector('[data-testid=flow-v3-edge-readout]')?.textContent || null,

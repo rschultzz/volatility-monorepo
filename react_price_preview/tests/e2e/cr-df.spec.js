@@ -328,7 +328,7 @@ test('replay: levels and edges read nothing after until', async ({ page }) => {
   await page.getByTestId('review-panel').getByLabel('Set', { exact: true }).selectOption('cc:fixture')
   const urls = track(page)
   await page.locator('[data-testid="review-row"][data-candidate-id="CR-CC:cc:fixture:5"]').click()
-  await expect(page.getByTestId('review-banner')).toContainText('Review: 2026-05-01')
+  await expect(page.getByTestId('review-banner')).toContainText('Review: 2026-05-01', { timeout: 30_000 }) // candidate detail is several DB round trips
   const want = (u) => u.includes('/flow/cells') && u.includes('until=') && u.includes('trade_date=2026-05-01')
   await expect.poll(() => urls.some(want), { timeout: 90_000 }).toBeTruthy()
   await settle(page)
