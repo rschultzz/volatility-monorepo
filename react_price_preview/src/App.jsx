@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
 import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS, effortChartMarkers } from './components/AggressorFlowV2Panel'
+import AggressorFlowV3Panel from './components/AggressorFlowV3Panel'
+import { DEFAULT_V3_SETTINGS } from './flowV3'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import { PANEL_WIDTH as ANALOGUES_PANEL_WIDTH } from './components/AnaloguesPanel'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
@@ -20,6 +22,12 @@ const FLOW_MODE_STORAGE_KEY = 'ib-react-flow-mode'
 const FLOW_V2_MARKERS_STORAGE_KEY = 'ib-react-flow-v2-markers'
 // CR-CD A5: swing effort labels (off by default), per viewer.
 const FLOW_V2_EFFORT_STORAGE_KEY = 'ib-react-flow-v2-effort'
+// CR-DC DC2: v3 is remembered in its own key ('1' while chosen); the CR-CD key keeps 'current' / 'v2', so
+// code without v3 never reads an unknown mode.
+const FLOW_V3_STORAGE_KEY = 'ib-react-flow-mode-v3'
+const FLOW_V3_SETTINGS_STORAGE_KEY = 'ib-react-flow-v3-settings'
+const FLOW_V3_LAYERS_STORAGE_KEY = 'ib-react-flow-v3-layers'
+const FLOW_V3_LAYERS_OFF = { heat: false, profile: false, marks: false }
 const GEX_LEVELS_MODE_STORAGE_KEY = 'ib-react-gex-levels-mode'
 // CR-CK — Overview panel "Stickiness" rows; off unless the user turns them on in settings.
 const SKEW_STICKINESS_STORAGE_KEY = 'ib-react-skew-stickiness'
@@ -553,6 +561,30 @@ export default function App() {
     }
   })
   const [flowV2Payloads, setFlowV2Payloads] = useState([])
+  // CR-DC: Flow v3 (off by default). v3 reads the v2 payloads (plus legs) and, while a price-pane layer
+  // is on, /api/ironbeam/flow/cells for the selected session.
+  const [flowV3, setFlowV3] = useState(() => {
+    try {
+      return window.localStorage.getItem(FLOW_V3_STORAGE_KEY) === '1'
+    } catch (err) {
+      return false
+    }
+  })
+  const readStoredObject = (key, dflt) => {
+    try {
+      const raw = JSON.parse(window.localStorage.getItem(key) || 'null')
+      return raw && typeof raw === 'object' ? { ...dflt, ...raw } : dflt
+    } catch (err) {
+      return dflt
+    }
+  }
+  const [flowV3Settings, setFlowV3Settings] = useState(() => readStoredObject(FLOW_V3_SETTINGS_STORAGE_KEY, DEFAULT_V3_SETTINGS))
+  const [flowV3Layers, setFlowV3Layers] = useState(() => readStoredObject(FLOW_V3_LAYERS_STORAGE_KEY, FLOW_V3_LAYERS_OFF))
+  const [flowAnchor, setFlowAnchor] = useState(null)
+  const [flowAnchorArmed, setFlowAnchorArmed] = useState(false)
+  const [flowCells, setFlowCells] = useState(null)
+  const [flowCellsLoading, setFlowCellsLoading] = useState(false)
+  const [flowCellsError, setFlowCellsError] = useState('')
   const [flowV2Loading, setFlowV2Loading] = useState(false)
   const [flowV2Error, setFlowV2Error] = useState('')
 
@@ -563,6 +595,8 @@ export default function App() {
   const [sharedLogicalRange, setSharedLogicalRange] = useState(null)
   const [linkedCrosshair, setLinkedCrosshair] = useState(null)
   const [isChartInteracting, setIsChartInteracting] = useState(false)
+  const isChartInteractingRef = useRef(false)
+  isChartInteractingRef.current = isChartInteracting
 
   const [skewData, setSkewData] = useState([])
   const [smileData, setSmileData] = useState(null)
@@ -1201,6 +1235,37 @@ export default function App() {
 
   useEffect(() => {
     try {
+      if (flowV3) window.localStorage.setItem(FLOW_V3_STORAGE_KEY, '1')
+      else window.localStorage.removeItem(FLOW_V3_STORAGE_KEY)
+      window.localStorage.setItem(FLOW_V3_SETTINGS_STORAGE_KEY, JSON.stringify(flowV3Settings))
+      window.localStorage.setItem(FLOW_V3_LAYERS_STORAGE_KEY, JSON.stringify(flowV3Layers))
+    } catch (err) {
+      // ignore
+    }
+  }, [flowV3, flowV3Settings, flowV3Layers])
+
+  const flowPaneMode = flowV3 ? 'v3' : flowMode
+  const flowV2Data = flowV3 || flowMode === 'v2'
+  const handleFlowModeChange = useCallback((mode) => {
+    if (mode === 'v3') {
+      setFlowV3(true)
+      return
+    }
+    setFlowV3(false)
+    setFlowMode(mode === 'v2' ? 'v2' : 'current')
+  }, [])
+  const handleAnchorPick = useCallback((t) => {
+    setFlowAnchor(Number.isFinite(Number(t)) ? Number(t) : null)
+    setFlowAnchorArmed(false)
+  }, [])
+  // DC5: the anchor belongs to the selected session and view.
+  useEffect(() => {
+    setFlowAnchor(null)
+    setFlowAnchorArmed(false)
+  }, [tradeDate, flowSession, flowV3])
+
+  useEffect(() => {
+    try {
       window.localStorage.setItem(FLOW_V2_MARKERS_STORAGE_KEY, JSON.stringify(flowMarkerSettings))
     } catch (err) {
       // ignore
@@ -1403,7 +1468,7 @@ export default function App() {
   }, [apiBase, tradeDate, interval, effectiveDaysEitherSide, loadingCenter, error, gexEnabled, gexMinAbsB, activeLevelsMode, reviewUntil])
 
   useEffect(() => {
-    if (!flowEnabled || flowMode !== 'current' || loadingCenter || error) {
+    if (!flowEnabled || flowMode !== 'current' || flowV3 || loadingCenter || error) {
       setFlowPoints([])
       setFlowError('')
       setFlowLoading(false)
@@ -1480,7 +1545,7 @@ export default function App() {
 
     loadFlow()
     return () => controller.abort()
-  }, [apiBase, tradeDate, flowEnabled, flowMode, flowSession, flowResample, flowEmaLen, loadingCenter, error, loadedFlowDates, reviewUntil])
+  }, [apiBase, tradeDate, flowEnabled, flowMode, flowV3, flowSession, flowResample, flowEmaLen, loadingCenter, error, loadedFlowDates, reviewUntil])
 
   // CR-CD: Flow v2 — one /api/ironbeam/flow?mode=v2 request per loaded session. Markers are
   // computed server-side with the viewer's settings; `until` truncates everything in a review replay.
@@ -1494,11 +1559,12 @@ export default function App() {
       url.searchParams.set('m_fade', String(flowMarkerSettings.fade))
       url.searchParams.set('m_gap', String(flowMarkerSettings.gap))
       if (reviewUntil) url.searchParams.set('until', reviewUntil)
-      if (flowEffort) url.searchParams.set('effort', '1')
+      // CR-DC: v3 asks for the legs too ("anchor = last swing"); the chart labels stay v2-only.
+      if (flowEffort || flowV3) url.searchParams.set('effort', '1')
       return url
     },
     [flowSession, flowMarkerSettings.swing, flowMarkerSettings.push, flowMarkerSettings.div,
-      flowMarkerSettings.fade, flowMarkerSettings.gap, reviewUntil, flowEffort]
+      flowMarkerSettings.fade, flowMarkerSettings.gap, reviewUntil, flowEffort, flowV3]
   )
 
   // CR-CH: one payloads array per flowV2Payloads change. A new array on every App render made the
@@ -1509,16 +1575,16 @@ export default function App() {
   // CR-CD A5: swing effort labels for the price chart — only while Flow v2 is shown with Effort on
   // (null otherwise, so the chart draws nothing extra).
   const flowEffortLegs = useMemo(() => {
-    if (!flowEnabled || flowMode !== 'v2' || !flowEffort) return null
+    if (!flowEnabled || flowMode !== 'v2' || flowV3 || !flowEffort) return null
     return flowV2Payloads.flatMap((p) => (Array.isArray(p.payload?.legs) ? p.payload.legs : []))
-  }, [flowEnabled, flowMode, flowEffort, flowV2Payloads])
+  }, [flowEnabled, flowMode, flowV3, flowEffort, flowV2Payloads])
   const effortMarkers = useMemo(
     () => (flowEffortLegs ? effortChartMarkers(flowEffortLegs, flowMarkerSettings.effortRatio) : null),
     [flowEffortLegs, flowMarkerSettings.effortRatio]
   )
 
   useEffect(() => {
-    if (!flowEnabled || flowMode !== 'v2' || loadingCenter || error) {
+    if (!flowEnabled || !flowV2Data || loadingCenter || error) {
       setFlowV2Payloads([])
       setFlowV2Error('')
       setFlowV2Loading(false)
@@ -1571,7 +1637,7 @@ export default function App() {
 
     loadFlowV2()
     return () => controller.abort()
-  }, [apiBase, tradeDate, flowEnabled, flowMode, flowV2Query, loadingCenter, error, loadedFlowDates])
+  }, [apiBase, tradeDate, flowEnabled, flowV2Data, flowV2Query, loadingCenter, error, loadedFlowDates])
 
 
   useEffect(() => {
@@ -1741,7 +1807,7 @@ export default function App() {
   }, [apiBase, tradeDate, selectedSessionTradeDateKey, interval, loadingCenter, error, isLiveTradeDate])
 
   useEffect(() => {
-    if (!isLiveTradeDate || !flowEnabled || flowMode !== 'current' || loadingCenter || error || isChartInteracting) return undefined
+    if (!isLiveTradeDate || !flowEnabled || flowMode !== 'current' || flowV3 || loadingCenter || error || isChartInteracting) return undefined
 
     let disposed = false
     let inFlight = false
@@ -1810,11 +1876,11 @@ export default function App() {
         activeController.abort()
       }
     }
-  }, [apiBase, tradeDate, selectedSessionTradeDateKey, flowEnabled, flowMode, flowSession, flowResample, flowEmaLen, loadingCenter, error, isLiveTradeDate])
+  }, [apiBase, tradeDate, selectedSessionTradeDateKey, flowEnabled, flowMode, flowV3, flowSession, flowResample, flowEmaLen, loadingCenter, error, isLiveTradeDate])
 
   // CR-CD D7: live Flow v2 refresh every 15 s (the server recomputes the session; Current keeps 3 s).
   useEffect(() => {
-    if (!isLiveTradeDate || !flowEnabled || flowMode !== 'v2' || loadingCenter || error || isChartInteracting) return undefined
+    if (!isLiveTradeDate || !flowEnabled || !flowV2Data || loadingCenter || error || isChartInteracting) return undefined
     let disposed = false
     let inFlight = false
     let activeController = null
@@ -1858,7 +1924,76 @@ export default function App() {
       window.clearInterval(timer)
       if (activeController) activeController.abort()
     }
-  }, [apiBase, tradeDate, selectedSessionTradeDateKey, flowEnabled, flowMode, flowV2Query, loadingCenter, error, isLiveTradeDate, isChartInteracting])
+  }, [apiBase, tradeDate, selectedSessionTradeDateKey, flowEnabled, flowV2Data, flowV2Query, loadingCenter, error, isLiveTradeDate, isChartInteracting])
+
+  // CR-DC: price cells + absorption marks for the selected session, only while v3 has a price-pane layer
+  // on (DC13); live sessions refresh with the v2 cadence and pause during chart interaction (DC14).
+  const flowV3AnyLayer = flowV3 && (flowV3Layers.heat || flowV3Layers.profile || flowV3Layers.marks)
+  const flowCellsDate = selectedSessionTradeDateKey || tradeDate
+  const flowCellsUrl = useMemo(() => {
+    if (!flowEnabled || !flowV3AnyLayer || !flowCellsDate) return null
+    const url = new URL(`${apiBase}/api/ironbeam/flow/cells`)
+    url.searchParams.set('trade_date', flowCellsDate)
+    url.searchParams.set('session', flowSession)
+    url.searchParams.set('a_k', String(flowV3Settings.k))
+    url.searchParams.set('a_m', String(flowV3Settings.m))
+    if (reviewUntil) url.searchParams.set('until', reviewUntil)
+    return url.toString()
+  }, [apiBase, flowEnabled, flowV3AnyLayer, flowCellsDate, flowSession, flowV3Settings.k, flowV3Settings.m, reviewUntil])
+
+  useEffect(() => {
+    if (!flowCellsUrl || loadingCenter || error) {
+      setFlowCells(null)
+      setFlowCellsError('')
+      setFlowCellsLoading(false)
+      return undefined
+    }
+    const controller = new AbortController()
+    let disposed = false
+    const load = async (initial) => {
+      try {
+        if (initial) setFlowCellsLoading(true)
+        const response = await fetch(flowCellsUrl, { method: 'GET', credentials: 'include', signal: controller.signal, cache: 'no-store' })
+        if (!response.ok) throw new Error(`Flow cells request failed: ${response.status}`)
+        const payload = await response.json()
+        if (disposed) return
+        setFlowCells(payload)
+        setFlowCellsError('')
+      } catch (err) {
+        if (err?.name === 'AbortError' || disposed) return
+        if (initial) setFlowCells(null)
+        setFlowCellsError(err?.message || 'Could not load flow cells')
+      } finally {
+        if (initial && !disposed) setFlowCellsLoading(false)
+      }
+    }
+    load(true)
+    const timer = isLiveTradeDate ? window.setInterval(() => { if (!isChartInteractingRef.current) load(false) }, FLOW_V2_LIVE_POLL_MS) : null
+    return () => {
+      disposed = true
+      if (timer) window.clearInterval(timer)
+      controller.abort()
+    }
+  }, [flowCellsUrl, loadingCenter, error, isLiveTradeDate])
+
+  // One object per real change (CR-CH): the chart's primitives recompute only when this changes.
+  const flowV3Chart = useMemo(() => {
+    if (!flowV3AnyLayer || !flowCells) return null
+    return {
+      payload: flowCells,
+      heat: flowV3Layers.heat,
+      profile: flowV3Layers.profile,
+      marks: flowV3Layers.marks,
+      sellLayer: flowV3Settings.sellLayer,
+      buyLayer: flowV3Settings.buyLayer,
+      profileFrom: flowAnchor,
+    }
+  }, [flowV3AnyLayer, flowCells, flowV3Layers, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowAnchor])
+  const flowV3SessionPayload = useMemo(() => {
+    if (!flowV3) return null
+    const hit = flowV2Payloads.find((p) => p.dateStr === flowCellsDate) || flowV2Payloads.find((p) => p.dateStr === tradeDate)
+    return hit ? hit.payload : null
+  }, [flowV3, flowV2Payloads, flowCellsDate, tradeDate])
 
   // CR-CC A2 — the times the smile/skew panel shows: the review selection while a
   // candidate is active, else Dash's time list.
@@ -2362,6 +2497,9 @@ export default function App() {
                 reviewUntil={reviewUntil}
                 onReviewTimesChange={reviewCandidate ? setReviewTimes : null}
                 effortMarkers={effortMarkers}
+                flowV3={flowV3Chart}
+                anchorPickArmed={flowV3 && flowAnchorArmed}
+                onAnchorPick={handleAnchorPick}
               />
             </div>
 
@@ -2388,7 +2526,31 @@ export default function App() {
                     height: `${flowPanelHeight}px`,
                   }}
                 >
-                  {flowMode === 'v2' ? (
+                  {flowPaneMode === 'v3' ? (
+                    <AggressorFlowV3Panel
+                      payloads={flowV2PanePayloads}
+                      sessionPayload={flowV3SessionPayload}
+                      cellsPayload={flowCells}
+                      cellsLoading={flowCellsLoading}
+                      cellsError={flowCellsError}
+                      candles={mergedBarsWithLiveTimeline}
+                      visibleLogicalRange={sharedLogicalRange}
+                      height={flowPanelHeight}
+                      loading={flowV2Loading}
+                      error={flowV2Error}
+                      linkedCrosshair={linkedCrosshair}
+                      flowMode={flowPaneMode}
+                      onFlowModeChange={handleFlowModeChange}
+                      settings={flowV3Settings}
+                      onSettingsChange={setFlowV3Settings}
+                      layers={flowV3Layers}
+                      onLayersChange={setFlowV3Layers}
+                      anchor={flowAnchor}
+                      onAnchorChange={setFlowAnchor}
+                      anchorArmed={flowAnchorArmed}
+                      onAnchorArmedChange={setFlowAnchorArmed}
+                    />
+                  ) : flowMode === 'v2' ? (
                     <AggressorFlowV2Panel
                       payloads={flowV2PanePayloads}
                       candles={mergedBarsWithLiveTimeline}
@@ -2398,7 +2560,7 @@ export default function App() {
                       error={flowV2Error}
                       linkedCrosshair={linkedCrosshair}
                       flowMode={flowMode}
-                      onFlowModeChange={setFlowMode}
+                      onFlowModeChange={handleFlowModeChange}
                       markerSettings={flowMarkerSettings}
                       onMarkerSettingsChange={setFlowMarkerSettings}
                       effortOn={flowEffort}
@@ -2418,7 +2580,7 @@ export default function App() {
                       emaMinutes={flowEmaMinutes}
                       onApplyEmaMinutes={handleFlowEmaMinutesChange}
                       flowMode={flowMode}
-                      onFlowModeChange={setFlowMode}
+                      onFlowModeChange={handleFlowModeChange}
                     />
                   )}
                 </div>

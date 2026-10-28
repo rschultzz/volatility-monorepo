@@ -86,3 +86,24 @@ services:
         sync: false
       - key: PYTHON_VERSION
         value: 3.13.4
+
+  # ── CR-DD (2026-10-28): live es_flow_price_1m from ironbeam_es_trades ─────
+  # Documentation entry; created chat-side (Render MCP / dashboard), copied from
+  # forward-log-g1down: rootDir "", branch main, starter plan, oregon.
+  # */5 UTC Sun-Fri: minutes complete 3 min after start; the last 15 min before
+  # the 17:00 ET close wait until 18:00 ET (DD4). Rows live ~48 h in
+  # ironbeam_es_trades (prune 01:00 UTC), so every minute is written long
+  # before it is pruned.
+  - type: cron
+    name: flow-price-1m
+    env: python
+    rootDir: ""
+    buildCommand: pip install -r apps/cron/requirements.txt
+    startCommand: python scripts/cron_flow_price_1m.py
+    schedule: "*/5 * * * 0-5"
+    autoDeploy: false   # dead in practice; see note above
+    envVars:
+      - key: BACKFILL_DATABASE_URL
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.13.4
