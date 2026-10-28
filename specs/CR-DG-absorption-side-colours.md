@@ -76,3 +76,65 @@ Visible changes: items 1–3 only.
 4. Item 2 — held minutes to the payload's last bar.
 5. Item 3 — cursor tooltip time snaps to the bar.
 6. Smoke + wrap.
+
+---
+
+## Step 0 — findings (2026-10-28, read-only)
+
+Scripts: `scripts/cr_dg_step0/dump_cells.py` (one read-only connection on the backfill role, no server — a CR-DE
+smoke server was already running, so no second server was started) and `scripts/cr_dg_step0/levels_held.mjs`
+(runs the shipped `flowV3.absorptionLevels` on the dumps). Logs: `scripts/logs/cr-dg/step0/`.
+
+### S0.1 — GEX line and candle colours; hue distance of `#fb923c` (hue 27.0°)
+
+The React price chart draws each GEX segment with `seg.color` from the Ironbeam backend
+(`callbacks.py:1029` `_color_for_net_gex` → `GEX_HEATMAP_COLORSCALE`, `callbacks.py:164`). Net GEX is clipped to
+±the day's 95th percentile of |net| (`GEX_COLOR_PERCENTILE` 95), so the strongest call levels are exactly the
+`1.00` stop and the strongest put levels exactly the `0.00` stop (A12). Plotly interpolates between stops in RGB.
+
+| Role | Hex | Hue | Distance from `#fb923c` |
+|---|---|---|---|
+| **yellow (call, 1.00)** | `#fef08a` | 52.8° | **25.7°** |
+| lime (0.85) | `#a3e635` | 82.7° | 55.7° |
+| green (0.70) | `#4ade80` | 141.9° | 114.9° |
+| pale green (0.55) | `#bbf7d0` | 141.0° | 114.0° |
+| neutral (0.50) | `#4b5563` | 215.0° | 172.0° |
+| pale blue (0.45) | `#bae6fd` | 200.6° | 173.6° |
+| sky (0.30) | `#38bdf8` | 198.4° | 171.4° |
+| blue (0.15) | `#1d4ed8` | 224.3° | 162.7° |
+| **indigo (put, 0.00)** | `#312e81` | 242.2° | 144.8° |
+| up candle | `#60a5fa` | 213.1° | 173.9° |
+| down candle | `#e5e7eb` | 220.0° | 167.0° |
+| (ref) buyers absorbed, magenta | `#e879f9` | 292.0° | 95.0° |
+
+Interpolated colours between 0.85 and 1.00 run 82.7° → 52.8°, so no GEX colour is nearer than the yellow end.
+**Gate: 25.7° > 25° → not a STOP**, by 0.7°. Yellow is also much paler (L 0.77) than the orange (L 0.62).
+
+Not GEX, disclosed because they can share the same chart: the condor σ-band lines `#ff6a00` (`PriceChart.jsx:3000`,
+hue 24.9°, **2.1° away**; drawn only once a condor anchor is picked), the short-strike lines `#fcd34d` (18.9°)
+and the review amber zone `#fbbf24` (16.2°). These are outside the gate as written.
+
+### S0.2 — where "held" is computed, and what is actually frozen
+
+- **Level label and level hover:** client-side, `flowV3.js:337` `absorptionLevels`:
+  `end = broken ? break_time : payloadNow(payload)`, where `payloadNow` is the end of the payload's last 1-minute
+  bar (capped at the segment end). Live: last completed minute; replay: `until`. Verified on 2026-10-27 (FULL):
+  - replay until 12:55 PT: unbroken levels 12:19 / 12:48 / 12:49 end 12:55 (36 / 7 / 6 min);
+  - complete session: unbroken levels end 13:00 (12 / 11 / 5 min).
+  So the level label already runs to the payload's last bar and is recomputed on every refresh. **It is not frozen.**
+- **What is frozen — (a) the Absorbed (marks) hover** (`PriceChart.jsx:3518`) prints the server's `held_min`
+  (`packages/shared/flow_heat.py:150`): `stop = break_time or end_epoch`, and `end_epoch` is the RTH segment end,
+  which on a live session is **13:00 PT** (`flow_v3._build`: `end = rth_b` with no `until`). So live it shows
+  start → 13:00, the same value on every refresh (the CR-DF open question). Replay is correct (end = `until`).
+- **(b) the level hover is stale while the pointer is still:** `setV3LevelHover` stores the level object captured at
+  the last crosshair move; a payload refresh rebuilds `v3Levels` but the open hover keeps the old object
+  (`PriceChart.jsx:2606–2610`) until the pointer moves.
+
+→ Item 2 as written ("label and hover … not a frozen value") targets the level label, which is already right. The
+frozen numbers are (a) and (b). Scope question put to Ryan before any item-2 code (spec amendment rule).
+
+### S0.3 — item 3 (for the record)
+
+`updateFloatingTooltip` (`PriceChart.jsx:1770`) formats `interpolateShiftedEpoch(clampedLogical, …)` — the
+fractional logical index under the pointer — so the time drifts between bars. `param.time` (the bar the crosshair
+snaps to, the one the axis label shows) is available in the same handler.
