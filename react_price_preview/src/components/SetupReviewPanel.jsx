@@ -395,10 +395,13 @@ export default function SetupReviewPanel({
     }
   }, [base, onActivate, resetForm])
 
+  // Saves may follow each other faster than the card refreshes; only the latest refresh is applied
+  const refreshSeqRef = useRef(0)
   const refreshActive = useCallback(async () => {
     if (!activeId) return
+    const seq = ++refreshSeqRef.current
     const body = await fetchJson(`${base}/candidates/${encodeURIComponent(activeId)}`)
-    onActivate?.(body.candidate)
+    if (seq === refreshSeqRef.current) onActivate?.(body.candidate)
   }, [activeId, base, onActivate])
 
   const step = useCallback((delta) => {
@@ -434,13 +437,16 @@ export default function SetupReviewPanel({
     setChosenReasons([])
     setNewReason('')
     if (revealed) setLabel(null)
+    // After reveal the next note can be written while the card refreshes; before reveal Save
+    // stays busy until the refreshed card shows the locked label
+    if (revealed) setBusy(false)
     try {
       await refreshActive()
       await loadList()
     } catch (err) {
       setActionError(`Saved, but the card did not refresh: ${err.message}`)
     } finally {
-      setBusy(false)
+      if (!revealed) setBusy(false)
     }
   }, [activeId, base, canSave, chosenReasons, comment, label, loadList, refreshActive, revealed])
 

@@ -7,6 +7,9 @@
 - /api/setup-review/* runs on DATABASE_URL (the web role) with read-only switched off for its
   own connections, because Save / Reveal write setup_reviews (insert-only; the guard trigger
   refuses every other change).
+- CR_SMOKE_REVIEW_READONLY=1 keeps the review connections read-only too (CR-DE, B8): tests that
+  intercept every Save / Reveal in the browser run against it, so a missed intercept fails
+  instead of writing a review.
 """
 import os
 import sys
@@ -37,9 +40,13 @@ cb.register_ironbeam_callbacks(app)
 register_analogues_routes(app.server)
 
 
+REVIEW_READONLY = os.environ.get("CR_SMOKE_REVIEW_READONLY") == "1"
+
+
 def _review_conn():
+    ro = "on" if REVIEW_READONLY else "off"
     return psycopg.connect(review_routes._normalize_db_url(WEB_DATABASE_URL),
-                           options="-c default_transaction_read_only=off")
+                           options=f"-c default_transaction_read_only={ro}")
 
 
 review_routes._conn = _review_conn
