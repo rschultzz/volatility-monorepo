@@ -86,4 +86,88 @@ WRAP: session note (What changed / Decisions / Open questions incl. the Step 0c 
 
 ## Step 0 findings
 
-_(appended in the Step 0 commit)_
+Script `scripts/cr_dh_step0/q_levels.py` (read-only; calls the Dashboard's `_fetch_gex_grouped_by_level`, Ironbeam's
+`_corrected_gex_tables` and `_build_react_preview_bars_payload` directly, no server). Output
+`scripts/logs/cr-dh/step0_levels.json` (machine-local).
+
+### 0a — 2026-10-27: discounted vs corrected, and the price chart's corrected lines
+
+P_target = ES 15:45 ET bar close on 2026-10-26 = 7717.25. Rows: discounted (Dashboard `ROUND(discounted_level)`) 4720 levels,
+corrected (`_corrected_gex_tables`, bucket `GEX_LEVEL_BUCKET` = 1) 4489 levels; reason None.
+
+Top 10 by |net| over **all** levels (the Dashboard draws every level; $bn):
+
+| # | discounted level | net | corrected level | net |
+|---|---|---|---|---|
+| 1 | 7655 | -252.0 | 7682 | -250.1 |
+| 2 | 8101 | +188.5 | 8029 | +188.4 |
+| 3 | 7605 | -184.6 | 7632 | -187.3 |
+| 4 | 8212 | +176.4 | 8138 | +176.5 |
+| 5 | 8162 | +172.1 | 7531 | -172.1 |
+| 6 | 7505 | -171.0 | 8088 | +171.8 |
+| 7 | 8222 | +166.1 | 8148 | +167.1 |
+| 8 | 7705 | -152.2 | 7732 | -153.0 |
+| 9 | 8111 | +145.4 | 8039 | +149.4 |
+| 10 | 8242 | +141.8 | 8168 | +141.8 |
+
+Corrected sits ≈ 27 pts above discounted below spot and ≈ 72–74 pts below it far above spot (the CR-BT shape: discounted
+over-shifts long-dated strikes upward). Price chart (Levels: Corrected, 1min, default filter) draws 63 lines on
+2026-10-27 (band = session high/low ± padding, |net| ≥ threshold, spacing); its top 10 by |net|:
+
+| # | price-chart level | net |
+|---|---|---|
+| 1 | 7682 | -250.1 |
+| 2 | 7632 | -187.3 |
+| 3 | 7732 | -153.0 |
+| 4 | 7832 | +98.8 |
+| 5 | 7696 | -92.4 |
+| 6 | 7676 | -85.9 |
+| 7 | 7848 | +84.2 |
+| 8 | 7622 | -83.5 |
+| 9 | 7581 | -80.9 |
+| 10 | 7822 | +71.9 |
+
+**Every one of the 63 price-chart lines equals the corrected table row at the same level** (level, call, put and net to
+1e-3; mismatches: none). The price chart's top three (7682 / 7632 / 7732) are the
+corrected table's #1 / #3 / #8; the far-OTM 8000+ call levels are outside the chart band. The Dashboard Corrected view
+will draw that same table (same function, no copy), so its levels equal the price chart's by construction. **Gate passed.**
+
+### 0b — what the price chart shows today in Corrected when corrected is undefined
+
+| case | date | `_corrected_gex_tables` reason | payload `levels_notes` | corrected lines | current lines |
+|---|---|---|---|---|---|
+| pre-forward-era | 2024-03-15 | pre_forward_era | `[{'session_date': '2024-03-15', 'reason': 'pre_forward_era'}]` | 0 | 59 |
+| no ES snapshot (2025-11-28 early close, no 15:45 ET bar) | 2025-12-01 | no_es_snapshot | `[{'session_date': '2025-12-01', 'reason': 'no_es_snapshot'}]` | 0 | 57 |
+
+So the price chart in Corrected draws **no GEX lines** on those days (bars, EM levels etc. unchanged). The React app
+does not read `levels_notes` (grep: no consumer in `react_price_preview/src`), so there is no on-chart label either.
+Item 7 keeps that behaviour unchanged. With the default flipping to Corrected, a pre-2024-04-03 date opened in a fresh
+browser now shows no GEX lines until the viewer picks Current — listed as an open question, not changed here.
+
+### 0c — other readers of `discounted_level` (report only; none changed)
+
+| file | purpose | live? |
+|---|---|---|
+| `apps/cron/job_orats_eod.py` | **writer**: computes `discounted_level` = strike × exp((r−q)(dte+1)/252) on ingest; also calls `compute_and_upsert_landscape` | **live** — Render cron `orats-cron` |
+| `packages/shared/gex_landscape.py` | `compute_landscape` aggregates GEX by `discounted_level` into `orats_gex_landscape` (walls, `drift_target`, frame B) | **live** — called by `job_orats_eod.py`; `compute_implied_move` etc. imported by TodaySetup / SetupV2 / Analogues / day_features |
+| `packages/shared/gex_landscape_api.py` | `/gex-landscape` endpoint rows; Current reads `discounted_level`, Corrected substitutes L into the same column (CR-BU) | **live** — registered via `modules/Ironbeam/routes.py` (app.py) |
+| `apps/web/modules/Ironbeam/callbacks.py` | price chart Current queries (`_fetch_gex_grouped_by_level[_and_expir]`) and the `discounted_level IS NOT NULL` row filter of the corrected query | **live** (app.py) |
+| `apps/web/modules/gamma/callbacks.py` | Dashboard GEX chart (this CR: becomes the Current option / fallback) | **live** (app.py) |
+| `apps/web/modules/BacktestsV2/service.py` | `_load_signed_gex_for_date`: signed / gross GEX at target levels by closest `discounted_level` (`target_level_gex_bn` colouring) | **live** (app.py imports BacktestsV2) |
+| `packages/shared/forward_math.py` | `compute_spx_strike` — inverse of the discounted formula (comment only; no column read) | **live** — TodaySetup, Proposals, options_cache pricing |
+| `packages/shared/outcomes.py` | docstring explaining why `drift_target` (frame B) compares to ES bars | live module; comment only |
+| `apps/web/modules/gamma/callbacks_replacement_autoresolve_symbols.py` | stale copy of an old Ironbeam callbacks file (header says `modules/Ironbeam/callbacks.py`) | **dead** — imported nowhere (only mentioned in specs CR-BZ / CR-CQ) |
+| `react_price_preview/src/App.jsx` | comment on the Levels mode | comment only |
+| `scripts/backfill_orats_oi_gamma.py` | **writer**: historical backfill of `orats_oi_gamma` incl. `discounted_level` | one-off backfill, not scheduled |
+| `scripts/backfill_es_minute_features_gex_walls.py` | GEX-wall features per ES minute grouped by `discounted_level` | one-off backfill, not scheduled |
+| `scripts/explore_gex_landscape.py`, `scripts/gamma_pin_study.py` | exploratory studies | not live |
+| `scripts/cr_bi_followup_placebo.py`, `cr_bi_step0b_frame_test.py`, `cr_bi_step0b_resettle.py`, `cr_bt_step0.py`, `cr_bu_step0.py`, `cr_bu_support.py`, `cr_bv_step0_q3q4.py`, `cr_cb_t0_ra_r1.py`, `cr_cm_lib.py` | past CR research (frame comparisons; `cr_cm_lib` only uses `discounted_level IS NOT NULL` as the row filter for corrected placement) | not live (completed CRs) |
+| `packages/shared/tests/test_forward_math.py`, `test_gex_landscape.py`, `test_gex_landscape_api.py` | unit tests of the above | tests |
+
+Not changed in this CR. The live frame-B readers (landscape / `drift_target`, BacktestsV2 target GEX) are listed in
+the session note's open questions.
+
+### Step 0 decisions
+
+- No circular import: `modules.Ironbeam` never imports `modules.gamma`, and app.py imports both. The Dashboard imports
+  `_corrected_gex_tables` from `modules.Ironbeam.callbacks` directly; nothing is moved or copied.
