@@ -226,6 +226,8 @@ const REVIEW_LINE_COLORS = {
   entry: '#38bdf8',
   stop: '#f87171',
   exit: '#a78bfa',
+  fadeEdge: '#60a5fa',
+  continuationEdge: '#cbd5e1',
 }
 
 function pad2(value) {
@@ -2440,6 +2442,14 @@ export default function PriceChart({
     addLine(cand.entry_price, REVIEW_LINE_COLORS.entry, 'entry', LineStyle.Dotted)
     addLine(cand.stop_price, REVIEW_LINE_COLORS.stop, 'stop', LineStyle.Dashed)
     if (outcome?.exit_price != null) addLine(outcome.exit_price, REVIEW_LINE_COLORS.exit, 'exit', LineStyle.Dotted)
+    // CR-DB: the range box's two edges, labelled. The trade's own edge (short → top,
+    // long → bottom) is the fade edge; the other is the continuation edge.
+    const rangeTop = Number(cand.meta?.range?.top)
+    const rangeBottom = Number(cand.meta?.range?.bottom)
+    if (Number.isFinite(rangeTop) && Number.isFinite(rangeBottom)) {
+      addLine(long ? rangeBottom : rangeTop, REVIEW_LINE_COLORS.fadeEdge, 'fade edge', LineStyle.Dashed)
+      addLine(long ? rangeTop : rangeBottom, REVIEW_LINE_COLORS.continuationEdge, 'continuation edge', LineStyle.Dashed)
+    }
 
     const markers = []
     const pushMarker = (iso, strict, m) => {
