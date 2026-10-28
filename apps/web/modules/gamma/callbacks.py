@@ -257,10 +257,11 @@ def _fetch_live_es_price() -> float | None:
 @callback(
     Output("GEX_GRAPH", "figure"),
     [Input("trade-date", "date"),
-     Input("live-update-timer", "n_intervals")],
+     Input("live-update-timer", "n_intervals"),
+     Input("gex-levels-mode", "value")],
     [State("GEX_GRAPH", "relayoutData")],
 )
-def render_gex(trade_date_iso: str | None, n_intervals: int, relayout_data: dict | None):
+def render_gex(trade_date_iso: str | None, n_intervals: int, levels_mode: str | None, relayout_data: dict | None):
     from dash import ctx
     
     if not trade_date_iso:
