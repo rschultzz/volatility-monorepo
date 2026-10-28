@@ -103,8 +103,8 @@ No outcome statistic was computed (no RV, premium or P&L).
 
 - **Universe.** 621 = CR-BO `keep` (S0-G1 PASS). CR-CY complete: 595.
 - **Exclusions (D2):**
-  - (a) CR-CY incomplete: 26, the expected set: 21 third-Friday t+1 + 2025-04-17 (AM collision), and 2023-05-23, 2025-01-24, 2025-05-12, 2025-05-13, 2025-11-26 (ORATS 404s).
-    - 2025-01-24 also falls under the collision rule only through a 404, and 2025-05-12/13 likewise; the count matches CR-CY's 22 + 4.
+  - (a) CR-CY incomplete: 26. From CR-CY's `missing.csv` these are **21** AM-collision nights (`am_only`: 20 third-Friday t+1 plus 2025-04-17) and **5** ORATS-404 nights (2023-05-23, 2025-01-24, 2025-05-12, 2025-05-13, 2025-11-26).
+    - **Correction:** CR-CY's notes say "22 + 4". The total of 26 was right; the split is 21 + 5.
   - (b) No valid ATM leg quote within ±2 min: 6 nights.
   - (c) V_px solve failed: 1 night (2024-04-25 → 04-26).
   - **Final n = 588; D9 population = 374** (by year of t: 2023 78, 2024 119, 2025 124, 2026 53).
