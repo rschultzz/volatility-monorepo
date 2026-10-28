@@ -10,6 +10,7 @@ import {
   levelAlpha,
   levelWidth,
   payloadNow,
+  relinkHover,
 } from '../../src/flowV3.js'
 
 const T0 = 1_777_642_200 // a UTC minute
@@ -177,4 +178,35 @@ test('held minutes: unbroken run to the last bar and grow on refresh; broken sta
   assert.deepEqual(mk20.map((m) => m.heldMin), [18, 7])
   assert.deepEqual(mk25.map((m) => m.heldMin), [23, 7])
   assert.equal(mk25[0].held_min, 388) // payload field untouched
+})
+
+// CR-DG item 2 (live check deferred): the payload's last bar moves from T to T + 2 min. Unbroken held minutes go from
+// n to n + 2 in the level label and the marks hover, and an open hover (pointer still) picks up the new object.
+test('refresh T -> T+2 min: held n -> n+2 (label, marks hover); an open hover updates without a pointer move', () => {
+  const marks = [mark('buyers_absorbed', 3, 7010)]
+  const at = (n) => payload([seg(bars(new Array(n).fill(7000)), marks)])
+  const lvA = absorptionLevels(at(20), minutes(30), id)[0]
+  const lvB = absorptionLevels(at(22), minutes(30), id)[0]
+  assert.equal(lvA.heldMin, 17)
+  assert.equal(lvB.heldMin, 19)
+  assert.equal(lvA.label, 'buyers absorbed 400 · 17 min')
+  assert.equal(lvB.label, 'buyers absorbed 400 · 19 min')
+  const mkA = chartMarks(at(20), minutes(30), id)[0]
+  const mkB = chartMarks(at(22), minutes(30), id)[0]
+  assert.equal(mkA.heldMin, 17)
+  assert.equal(mkB.heldMin, 19)
+  // open hovers captured on the first payload, then the refresh arrives with the pointer still
+  const pt = { x: 100, y: 50 }
+  const levelHover = relinkHover({ level: lvA, pt }, 'level', [lvB], 'start')
+  assert.equal(levelHover.level, lvB)
+  assert.equal(levelHover.level.heldMin, 19)
+  assert.equal(levelHover.pt, pt) // same place: no pointer move needed
+  const markHover = relinkHover({ mark: mkA, pt }, 'mark', [mkB], 'time')
+  assert.equal(markHover.mark.heldMin, 19)
+  // same object -> same hover (no re-render); gone from the new list or no list -> closed
+  const same = { level: lvB, pt }
+  assert.equal(relinkHover(same, 'level', [lvB], 'start'), same)
+  assert.equal(relinkHover({ level: lvA, pt }, 'level', [], 'start'), null)
+  assert.equal(relinkHover({ level: lvA, pt }, 'level', null, 'start'), null)
+  assert.equal(relinkHover(null, 'level', [lvB], 'start'), null)
 })

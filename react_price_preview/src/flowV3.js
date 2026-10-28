@@ -323,6 +323,17 @@ export function payloadNow(payload) {
   return now
 }
 
+// CR-DG: an open hover `{ [field]: obj, pt }` re-reads its mark / level from a new list (same kind, price and
+// `idKey`), so held minutes update on a refresh while the pointer is still. Unchanged object = same hover; gone
+// from the new list = null (hover closed).
+export function relinkHover(hover, field, list, idKey) {
+  const old = hover?.[field]
+  if (!old || !Array.isArray(list)) return null
+  const hit = list.find((x) => x.kind === old.kind && x[idKey] === old[idKey] && x.price === old.price)
+  if (!hit) return null
+  return hit === old ? hover : { ...hover, [field]: hit }
+}
+
 // DF1–DF3: one level per absorption mark that is confirmed by now; it starts at the mark's minute and ends at
 // its break bar or now; opacity fades with age; the top LEVELS_MAX by contracts x opacity are kept.
 export function absorptionLevels(payload, candleTimes, shift, max = LEVELS_MAX) {

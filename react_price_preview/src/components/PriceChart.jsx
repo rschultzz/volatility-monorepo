@@ -25,7 +25,7 @@ import {
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { absorptionLevels, buildHeatColumns, chartMarks, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals } from '../flowV3'
+import { absorptionLevels, buildHeatColumns, chartMarks, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
 import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive } from './flowV3Primitives'
 
 const ETH_BG_COLOR = '#1f2937'
@@ -2613,15 +2613,8 @@ export default function PriceChart({
     feed('edges', () => new EdgeLinesPrimitive(), v3Edges)
     // CR-DG: an open hover re-reads its mark / level from the new payload, so held minutes update on a refresh
     // while the pointer is still (gone from the new list = hover closed).
-    const relink = (list, old, key) => list?.find((x) => x.kind === old.kind && x[key] === old[key] && x.price === old.price)
-    setV3Hover((h) => {
-      const mark = h && relink(v3Marks, h.mark, 'time')
-      return mark ? (mark === h.mark ? h : { ...h, mark }) : null
-    })
-    setV3LevelHover((h) => {
-      const level = h && relink(v3Levels, h.level, 'start')
-      return level ? (level === h.level ? h : { ...h, level }) : null
-    })
+    setV3Hover((h) => relinkHover(h, 'mark', v3Marks, 'time'))
+    setV3LevelHover((h) => relinkHover(h, 'level', v3Levels, 'start'))
   }, [v3Columns, v3Marks, v3Profile, v3Levels, v3Edges, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
 
   // CR-CD A3 — when a candidate loads in replay (not yet revealed), fit the price axis to the
