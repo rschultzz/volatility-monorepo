@@ -1,0 +1,127 @@
+---
+type: cr
+cr_id: CR-DC
+title: Flow v3 — anchored CVD, aggressor-side volume heatmap, volume profile and absorption marks (display only, off by default)
+status: in-progress
+run_mode: interactive
+data_safety_class: read_only
+dependencies: [CR-CD, CR-CH]
+branch_name: feat/CR-DC-flow-v3
+tags: [dash, cr, order-flow, aggressor, price-chart, frontend, heatmap, display-only]
+---
+
+# CR-DC — Flow v3
+
+Display only, read-only DB. Branch `feat/CR-DC-flow-v3` off `origin/main` `0fdcd6d`, own worktree
+(`.claude/worktrees/cr-dc`). Kickoff: Ryan, 2026-10-27 (chat). Frozen 2026-10-27 before any code.
+
+---
+
+## Kickoff (verbatim)
+
+```
+CR-DC — Flow v3: anchored CVD, aggressor-side volume heatmap, volume profile and absorption marks
+(display only, off by default).
+
+Branch first: git checkout -b feat/CR-DC-flow-v3 off origin/main. Own worktree.
+Read CLAUDE.md (visible-change discipline), field-conventions.md, standing-rulings.md, the CR-CD spec
+(Flow v2 pane, swing labels) and the CR-CH spec (the Chrome crash and its fix — the reason for the
+performance rules below). Freeze specs/CR-DC-flow-v3.md before code; list any choice the brief doesn't
+fix (C1, C2, …) first.
+Rulings: C1 (Dash palette only: blue = buyers, light grey = sellers, slate = neutral/marks; no green/red);
+C2 (everything new is off by default; Flow Current and v2 stay pixel-identical); B4 (Databento served only
+through 2026-06-05, as v2). Every new element's '?' guide says "visual aid — untested". No research claims.
+
+1. Flow toggle: Current | v2 | v3 (default unchanged; new localStorage key).
+
+2. v3 pane (below the price chart, bar-aligned like v2):
+   - Anchored CVD: with v3 on, clicking a bar on the price chart sets the anchor (buttons: "anchor =
+     session open", "anchor = last range start"; Esc / "clear" resets). CVD is drawn from 0 at the anchor.
+     Header readout: Δ delta since anchor, Δ price since anchor, minutes since anchor, contracts per point.
+   - Rolling net delta: bars of Σ(buy − sell) over the last N minutes (⚙: 5 / 10 / 15, default 10).
+   - The v2 delta histogram underneath, so the pane stands alone.
+
+3. Aggressor-side heatmap on the price pane (v3 header toggle "Heatmap", off by default):
+   - Grid behind the candles: one cell per 1-min bar × 0.25 pt (0.5 pt if crowded). Each cell has two
+     values: aggressive SELL volume (market sells hitting the bid at that price) and aggressive BUY volume
+     (market buys lifting the offer at that price). Two layers, each toggleable: sell heat (light grey),
+     buy heat (blue). Opacity from the cell's percentile in the session's per-cell distribution.
+   - Absorption marks (aggressor side):
+     • "Sellers absorbed" at P: aggressive sell volume at P ≥ K × the session median cell volume, and no
+       trade below P − 1 tick for the next M minutes. Up-pointing marker below the cell plus a short slate
+       line at P that extends until price trades through it.
+     • "Buyers absorbed" at P: the mirror (aggressive buys; nothing prints above P + 1 tick); down-pointing
+       marker above the cell.
+     • Defaults K = 3, M = 3, both in ⚙ (display defaults, not tested thresholds).
+     • Hover: time, price, aggressor contracts, opposite-side contracts, minutes held, and whether / when
+       it later broke.
+
+4. Volume profile (v3 header toggle "Profile", off by default): horizontal histogram at the right edge of
+   the price pane, per 0.25 pt (or 0.5 pt), split by aggressor side (sell grey / buy blue), over
+   [anchor or session open → now / replay `until`].
+
+5. Data:
+   - Live session: ironbeam_es_trades, each trade at its own price with its aggressor side (exact). Check
+     the prune-ironbeam-trades schedule and report how many days are retained; dates beyond retention fall
+     back to the 1-s method.
+   - Past dates: 1-s Databento — each second's sell volume at that second's LOW, buy volume at its HIGH;
+     badge "approximate: 1-s data". In Step 0, report the share of seconds whose range is > 1 tick.
+   - REVIEW replay never uses data after `until`. B4 respected.
+   - Extend the existing flow route or add a read-only endpoint; no DB writes.
+
+6. Performance (CR-CH lesson): the heatmap, profile and marks each draw in ONE canvas primitive (no
+   series or price lines per cell); compute and draw only the visible range; memoise inputs so nothing
+   recomputes on re-render unless the data or the visible range changed.
+
+Tests: unit tests for anchored CVD, the 1-s aggressor-price assignment and the absorption rule; Playwright:
+Current and v2 pixel-identical to origin/main; v3 renders on 2026-05-01 and on the live date; Heatmap and
+Profile off by default; replay shows nothing after `until`; headed Chrome 155, CR-CH-style 10-min
+drag/zoom with v3 + Heatmap + Profile on — no crash, no heap growth. PR, don't merge; Ryan merges, chat
+deploys Dash. Session note; copy logs before removing the worktree.
+```
+
+---
+
+## Standing rulings conformance (`Dash/research/standing-rulings.md`, status current, read 2026-10-27)
+
+CR-DC is a display CR, not a research CR; the table is filled anyway because the kickoff names three rulings.
+Nothing in "Revoked / superseded" (R1–R7) is used.
+
+| ruling | status | how |
+|---|---|---|
+| A1–A4, A6–A16, A18–A21 (setup) | n/a | no setup is defined, tested or shortlisted. The "last range start" anchor (DC4) is a display anchor, not a setup |
+| A5, A17 (flow decides fade vs break; flow first) | n/a | the pane shows flow; it makes no fade/break call. Every new "?" guide says "visual aid — untested" |
+| B1–B3, B6–B8 (tests) | n/a | no test of a setup; no verdict |
+| B4 (data split) | **honoured** | Databento is served only for sessions ≤ 2026-06-05, as v2 (A1.1). Later sessions use Ironbeam (exact trades while retained, else 1-s). Step 0 value reads: Databento train only; the one Ironbeam-trades comparison (2026-10-27) is mechanical (where volume lands on the price grid), no direction, outcome or feature statistic |
+| B5 (Databento is the reference) | honoured | display only; the badge names the source; the guide repeats CR-CA's Ironbeam undercount |
+| C1 (palette) | **honoured** | sell = light grey `#e5e7eb`, buy = blue `#60a5fa`, marks / lines = slate `#94a3b8`; no green, no red |
+| C2 (off by default; existing views unchanged) | **see DC1** | everything new is off by default. The kickoff's own item 1 adds a "v3" button to the flow-mode toggle that both existing headers show — DC1 asks how that is reconciled with "pixel-identical" |
+
+---
+
+## Choices the brief does not fix (DC1 …) — Ryan to rule before implementation
+
+Numbered **DC1 …** (the kickoff says "C1, C2, …"; prefixed so they don't clash with standing rulings C1 / C2).
+Each has a recommendation; Step 0 measurements behind them are below.
+
+| # | Choice | Options | Recommendation |
+|---|---|---|---|
+| DC1 | **The "v3" toggle button vs "Current and v2 pixel-identical".** `FlowModeToggle` is shared by both existing pane headers; adding "v3" to it changes those headers by one button | (a) add "v3" to the shared toggle; pixel identity is asserted on the price pane, the flow pane's plot canvas and the header **outside the toggle group**, and the toggle group's change is the only diff (the kickoff asks for it); (b) put "v3" somewhere else (chart toggle bar) so the Current / v2 panes are byte-identical, at the cost of a split control | **(a)** |
+| DC2 | **"New localStorage key"** | (a) `ib-react-flow-mode-v3` = `'1'` while v3 is chosen; the old `ib-react-flow-mode` keeps its last `'current'` / `'v2'`, so a rollback to pre-v3 code lands on that mode, never on an unknown value; (b) store `'v3'` in a new key that replaces the old one | **(a)** |
+| DC3 | **Anchor click vs the existing click.** A click on a price bar today toggles a timeslice (published to the other panels) or opens the GEX-line popup | (a) a "📍 set anchor" button arms the next click; that click sets the anchor and is consumed (no timeslice toggle); plain clicks keep today's behaviour; (b) with v3 on, every click sets the anchor *and* still toggles the timeslice; (c) with v3 on, clicks set the anchor only (timeslices not selectable while v3 is on); (d) Alt/Option-click sets the anchor | **(a)** — the click keeps its meaning everywhere else |
+| DC4 | **"anchor = last range start" — no range detector exists in the chart.** CR-CP's range rule (`scripts/cr_cp_lib.py` `approach_legs` + `find_range`: vol-scaled approach swing, 15-min hold) lives only in a research script and needs the session implied move | (a) port CR-CP's range rule into shared code (causal; the anchor = r0 of the last *qualified* range before now / `until`; route also reads the session implied move); (b) use CR-CD A5's swing legs: the anchor = the last confirmed swing extreme (start of the current, unconfirmed leg), with the ⚙ swing, labelled **"anchor = last swing"** | **(b)** now, honestly labelled; (a) as a follow-up if Ryan wants CR-CP's range specifically |
+| DC5 | **Anchor rules** | anchor bar's CVD = 0 and accumulation starts with the next bar; Δ price = close now − close at the anchor bar; minutes = bars since anchor × interval; contracts per point = Σ volume since anchor ÷ \|Δ price\| ("–" when Δ price = 0), as A5's cpp. Bars before the anchor are blank. The anchor is per selected session; a date change or Esc / "clear" resets it to none (CVD then from the session open, as v2). "session open" = 06:30 PT in RTH view, 15:00 PT (prior day) in FULL view. Not stored | as written |
+| DC6 | **Rolling net delta on 5-min charts** | N stays in minutes (5 / 10 / 15); on a 5-min chart each candle shows the sum over the last N minutes ending at its close | as written |
+| DC7 | **"0.5 pt if crowded"** | client-side: 0.25 pt when one tick is ≥ 3 px tall at the current price scale, else 0.5 pt (two 0.25 cells summed); re-evaluated on zoom. Marks always use 0.25 pt | as written (3 px) |
+| DC8 | **Heatmap opacity distribution** | per side, over all of that side's non-zero 0.25-pt cells of the selected session up to now / `until`; opacity = 0.08 + 0.62 × percentile (so light cells stay visible but candles stay readable). Not causal within the day (a cell's shade can change later in the day); it is shading only, and replay never reads past `until` | as written |
+| DC9 | **Absorption rule details (marks).** "Session median cell volume" and the window need fixing | **Median:** the running median of the same side's non-zero 0.25-pt cells in the session **before the cell's minute** (causal; no mark until 15 cells exist). **Hold window:** the cell's own minute plus the next M minutes — the low of that window ≥ P − 1 tick (sellers; buyers: high ≤ P + 1 tick); the mark appears at the window's end. **Dedupe:** per side per minute, only the extreme qualifying price (lowest for sellers, highest for buyers); a new mark within 1 tick of an unbroken earlier mark of the same side is not drawn (its hover adds the volume). **Break:** first bar with low < P − 1 tick (sellers) / high > P + 1 tick (buyers); the slate line ends there, or at now / `until`. **Hover:** time, price, aggressor contracts, opposite-side contracts at P that minute, minutes held (to break or now / `until`), "broke at hh:mm" or "not broken". RTH only (as v2's markers, A1 D10) | as written |
+| DC10 | **Marks' own toggle** | (a) a separate v3 header toggle "Absorbed", off by default, drawn on the price pane with or without Heatmap; (b) marks are part of Heatmap | **(a)** |
+| DC11 | **1-s assignment on approximate data** — see Step 0 Q3: the extreme rule puts sells on each second's low and buys on its high, which piles sell volume onto local lows — the very pattern the "sellers absorbed" rule looks for | (a) the brief's rule as written, badge "approximate: 1-s data", and the guide says marks on approximate data lean toward lows / highs; the smoke reports mark counts exact vs approximate on a retained session; (b) as (a), but marks are hidden on approximate data; (c) a different assignment (each second's VWAP, rounded to the tick, both sides: 87 % vs 77 % same-cell, no side bias, but it loses the bid / offer split inside the second) | **(a)** — Ryan sees the caveat and the measured difference before deciding whether (b) is needed |
+| DC12 | **Sources per segment** | per session segment, like v2 (A1.4 contract by bar match): **exact** (`ironbeam_es_trades`) when the trades table covers the whole segment window (its oldest row ≤ window start); otherwise **1-s**: Databento for RTH ≤ 2026-06-05 (06:30–13:00 PT only, A1.1), Ironbeam 1-s otherwise (ETH; RTH after 2026-06-05). Before 2025-12-26 there is no ETH flow (as v2). Badge per segment: "exact: trades" / "approximate: 1-s data" + source. Opacity percentiles and the mark median are computed per segment, so Databento and Ironbeam scales are never pooled (field-conventions: Databento ≈ 1.06× volume) | as written |
+| DC13 | **Endpoint** | (a) a new read-only `GET /api/ironbeam/flow/cells` (cells + marks + per-segment source), fetched only while Heatmap, Profile or Absorbed is on; the v3 pane's series reuse the existing `mode=v2` request unchanged (CVD, delta, volume per bar), so the v2 route and its goldens are untouched; (b) `mode=v3` on `/api/ironbeam/flow` | **(a)** |
+| DC14 | **Live refresh** | cells poll with the v2 poll (15 s) and pause during interaction (as v2). Completed minutes are cached in-process; each poll reads only from the last cached minute − 2 min. On 2026-10-27 the trades table held 394 k RTH+ETH rows for the session; a full re-aggregation each poll is avoided | as written |
+| DC15 | **5-min charts** | heatmap cells are summed per candle (one column per 5-min candle); marks snap to their candle; the profile is unaffected | as written |
+| DC16 | **Profile geometry** | right edge of the plot area, inside the price pane, max bar width 18 % of the plot width, scaled to the largest price row in range; sell (grey) left of buy (blue) in one stacked bar per row; 0.25 / 0.5 pt as DC7 | as written |
+
+---
+
