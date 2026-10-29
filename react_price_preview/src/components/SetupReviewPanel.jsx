@@ -27,6 +27,8 @@
 // inserts a post-reveal note (comment, reasons, optional changed label; with
 // no label picked the API copies the blind label); notes list under the
 // outcome, newest first. Every save shows a confirmation or a visible error.
+// CR-DK: on a revealed card the blind label's comment heads the notes, tagged "before reveal", and is counted;
+// the "Saved:" line then shows the label and reasons only.
 // The comment box is 5 lines and resizable; Cmd / Ctrl+Enter saves. The CR / set
 // filter is remembered in localStorage, defaulting to the latest-loaded set.
 //
@@ -194,23 +196,28 @@ function Row({ cand, active, onClick }) {
   )
 }
 
-function NoteHistory({ notes, blindLabel }) {
-  if (!notes.length) return null
+function NoteHistory({ notes, blindReview }) {
+  const blindLabel = blindReview?.label
+  // CR-DK: the pre-reveal comment is the first entry (display only; the label stays locked)
+  const entries = blindReview?.comment ? [{ ...blindReview, beforeReveal: true }, ...notes] : notes
+  if (!entries.length) return null
   return (
     <div data-testid="review-notes" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <div style={{ fontSize: 10, color: '#64748b' }}>Notes ({notes.length})</div>
-      {notes.map((n) => (
+      <div style={{ fontSize: 10, color: '#64748b' }}>Notes ({entries.length})</div>
+      {entries.map((n) => (
         <div
           key={n.id}
           data-testid="review-note"
+          data-before-reveal={n.beforeReveal ? 'true' : undefined}
           style={{ fontSize: 11, padding: '4px 6px', borderRadius: 4, background: '#0f172a', border: '1px solid #1e293b' }}
         >
           <div style={{ fontSize: 10, color: '#94a3b8' }}>
             {fmtPt(n.reviewed_at)}
-            {n.label && n.label !== blindLabel && (
+            {n.beforeReveal && <span data-testid="review-note-before-reveal"> · before reveal</span>}
+            {!n.beforeReveal && n.label && n.label !== blindLabel && (
               <span> · label → <b style={{ color: LABEL_COLOR[n.label] }}>{n.label.toUpperCase()}</b></span>
             )}
-            {n.reasons?.length ? ` · ${reasonList(n.reasons)}` : ''}
+            {!n.beforeReveal && n.reasons?.length ? ` · ${reasonList(n.reasons)}` : ''}
           </div>
           {n.comment && <div style={{ color: '#e2e8f0', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{n.comment}</div>}
         </div>
@@ -636,7 +643,8 @@ export default function SetupReviewPanel({
                     Saved:{' '}
                     <b style={{ color: LABEL_COLOR[blindReview.label] }}>{blindReview.label.toUpperCase()}</b>
                     {blindReview.reasons?.length ? ` · ${reasonList(blindReview.reasons)}` : ''}
-                    {blindReview.comment && <span style={{ whiteSpace: 'pre-wrap' }}>{` · “${blindReview.comment}”`}</span>}
+                    {/* CR-DK: once revealed the comment is the first note, so it isn't repeated here */}
+                    {blindReview.comment && !revealed && <span style={{ whiteSpace: 'pre-wrap' }}>{` · “${blindReview.comment}”`}</span>}
                   </div>
                 )}
 
@@ -650,7 +658,7 @@ export default function SetupReviewPanel({
                   </div>
                 )}
 
-                {revealed && <NoteHistory notes={notes} blindLabel={blindReview?.label} />}
+                {revealed && <NoteHistory notes={notes} blindReview={blindReview} />}
 
                 <KeyFacts cand={activeCandidate} />
 
