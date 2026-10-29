@@ -34,3 +34,85 @@ Read first: CLAUDE.md (Unattended backfill protocol; the CR-BF patched-window co
 | C1, C2 | n/a | No UI or display-feature change. Chart prices for 2026-03-15 22:00 → 03-20 UTC change because the stored bars are corrected (the purpose of the CR). |
 | Revoked R1–R7 | none used | |
 
+## Step 0 findings (2026-10-28, read-only)
+
+### a. Roll conventions
+
+| | CR-BF patch (2026-09) | CR-CZ cards (via CR-CP `cr_cp_lib.py`) |
+|---|---|---|
+| Rule | Calendar: **Monday of expiry week** (2026-09-14, expiry Fri 09-18), "the ADR's CME roll-date rule" | Data-driven: per session, **the symbol with the most RTH-window volume** in `es_flow_1m_databento` (`SYM = vol.groupby("d")…iloc[0]`) |
+| Start boundary | Globex open before the roll Monday: **Sun 22:00 UTC** (2026-09-13 22:00) | Session-level (RTH window 06:15–13:00 PT); no ETH boundary |
+| End boundary | **Expiry Friday 20:59 UTC** (2026-09-18 20:59) — beyond the dying contract's last minute (13:29 UTC), so the whole week is one source | n/a (next session) |
+| Mechanics | Attended owner-role script `scripts/backfill_databento_es.py`: disable trigger → **DELETE** → INSERT → repopulate `es_minutes` → re-enable trigger. Not the unattended protocol (needs DELETE). Backups `*_bak_20260920` (dropped 2026-09-27). | — |
+
+A third rule exists in code: CR-CA `roll_monday()` = third Friday − 11 days = **Monday of the week before expiry week** (2026-03-09); it defines which contracts `es_flow_1s_databento` *stores*, not the front. Not used by either CR above.
+
+**The rules differ in definition but give the same date for both 2026 rolls measured:**
+
+| Roll | Expiry | Monday of expiry week (CR-BF) | Volume crossover (CR-CP) |
+|---|---|---|---|
+| H6 → M6 | Fri 2026-03-20 | 03-16 | 03-16 (03-13 H 1.39 M / M 0.16 M; 03-16 H 0.57 M / M 0.83 M) |
+| M6 → U6 | Fri 2026-06-19 | 06-15 | 06-15 (06-12 M 0.91 M / U 0.31 M; 06-15 M 0.43 M / U 0.74 M) |
+
+Per the kickoff, a differing definition is a STOP: **Ryan picks.** Recommendation: CR-BF's calendar rule (it is the existing patched-window convention and gives an ETH boundary; the volume rule agrees on both dates).
+
+### b. Windows on the dying contract
+
+**2026-03 (H6 → M6).** Ironbeam bars and flow are ESH6 until its last minute, 2026-03-20 13:29 UTC (`ironbeam_es_flow_1s` H26 to 03-20 13:29:59; the 03-20 13:30 bar jumps +41.25), then ESM6.
+
+- Dying-contract span: **2026-03-15 22:00 → 2026-03-20 13:29 UTC**: 6,326 stored minutes (both tables, identical values; `es_minutes` 6,776/6,776 equal to `ironbeam_es_1m_bars` over the full week).
+- CR-BF-style window (to Friday 20:59 UTC): **2026-03-15 22:00 → 2026-03-20 20:59 UTC**: 6,900 Globex minutes; 6,776 stored (6,326 H6 + 450 already M6), **124 missing** (03-17 PT: 91, of which 50 RTH; 03-19 PT: 33 ETH).
+- Offset (RTH window, Ironbeam − Databento ESM6 mean close): 03-16 −50.41, 03-17 −51.03, 03-18 −51.06, 03-19 −50.20. Ironbeam = ESH6 to the tick on 351–405 / 353–405 minutes per day.
+- Volume ratio Ironbeam / Databento ESM6 (RTH window): 03-16 0.687, 03-17 0.183, 03-18 0.129, 03-19 0.115; 03-20 (M6) 0.980.
+
+**2026-06 (M6 → U6).** Ironbeam switched to ESU6 at **Sun 2026-06-14 22:00 UTC** (flow U26 from 06-14 22:00; bar jump +121.75 over the weekend), i.e. exactly at the calendar roll; the volume crossover is also 06-15. 06-11 / 06-12 are on ESM6, which **is the front under both rules**. **No dying-contract window in June; nothing to patch.**
+
+**2026-12 (Z6 → H7):** expiry Fri 2026-12-18, roll Monday 12-14 — has not happened (today 2026-10-28).
+
+### c. Databento coverage and cost
+
+`es_flow_1m_databento` holds ESM6 only for the RTH window [06:15, 13:00) PT, so it does not cover the ETH minutes. Databento GLBX.MDP3 `ohlcv-1m`, `ESM6` / `raw_symbol`, 2026-03-15 22:00 → 2026-03-20 21:00 UTC (metadata calls only, nothing fetched): **6,900 records — every Globex minute of the window — cost $0.0252.** Not fetched; awaiting approval.
+
+### d. Tables holding bar prices for the window, and readers
+
+| Object | Kind | In window | Action |
+|---|---|---|---|
+| `ironbeam_es_1m_bars` | table | 6,776 rows, all `source='ironbeam'` | patch |
+| `es_minutes` | table (AFTER INSERT trigger copy) | 6,776 rows, equal to the above; RTH `bar_index` 0..n−1 per day (03-17: 340 rows, 0..339) | patch |
+| `es_minutes_with_features`, `_bt`, `_v2` | views | — | self-heal |
+| `ironbeam_es_1m_bars_repair_log` | CR-BZ log | 4 rows (2 bars × 2 tables, 03-19 19:13 / 19:58, symbol H26) | none; this CR logs its own rows |
+| Live web readers (`Ironbeam/routes`, `callbacks`, `flow_v2`, `skew_stickiness`, `Bars`, `DayBrowser`, `Analogues`, `SetupV2`, `TodaySetup`, `gamma/*`; `packages/shared/level_placement.py`, `gex_landscape_api.py`, `vol_features.py`) | read on the fly, no stored output | — | self-heal. Flow v2/v3 chooses the contract whose closes match the chart bars (A1.4, `choose_symbol`) → switches H26 → M26 after the patch. Corrected levels for 03-17 → 03-20 use the prior day's 15:45 ET bar (H6 now) → move ~50 pts with the patch. |
+| Crons `ironbeam_ingest.py`, `ironbeam_minute_snapshot.py` | writers, current minutes only | — | none |
+| `ironbeam_es_flow_1s` | table | 167,090 rows `XCME:ES.H26` (to 03-20 13:29) | none — symbol-tagged; CR-BF/CR-BG precedent leaves them |
+| `bt_daily_outcomes` | stored-derived (ES `session_*`) | **84 active rows** (21 trade dates 2025-12-19 → 03-20 × 4 feature versions) whose 60-session horizon includes a window session | **follow-up CR** (CR-BG pattern, `scripts/cr_bg_recompute_missed_roll.py`) |
+| `bt_daily_features.vol_risk_premium` | stored-derived (ES daily closes, one-off `cr_d_backfill_vol_features.py`) | 23 non-null rows 03-16 → 04-17 | **follow-up** with the above |
+| `bt_signals`, `es_minute_features` | — | 0 rows | none |
+
+### e. Cards in the window
+
+`setup_candidates` 2026-03-16 → 03-20: **12 cards, all CR-CZ / `cr-cz:cp-ranges`** (ids 49–60): 03-16 ×4 (49–52), 03-18 ×2 (53–54), 03-19 ×4 (55–58) — the kickoff's 10 on the dying contract — plus 03-20 ×2 (59–60, entries 09:26 / 09:46 PT, after Ironbeam's switch to M6; already on the chart). **0 reviews on all 12** (CR-CZ has 17 reviews in total, none in the window).
+
+Smoke reference measured now: 2026-03-18 18:00–18:15 UTC (11:00–11:15 PT), Databento ESM6 low / high **6716.5 / 6737.5**; the chart (both tables) shows 6665.25 / 6686.0.
+
+### Blockers for the "insert / update only" method
+
+1. **`dash_backfill_writer` cannot set `source`.** It has INSERT/SELECT on both tables plus column UPDATE on `open, high, low, close, volume` only (CR-BZ grant). Tagging the 6,776 existing rows `source='databento'` needs an owner grant: `GRANT UPDATE (source) ON ironbeam_es_1m_bars, es_minutes TO dash_backfill_writer;`
+2. **`es_minutes.bar_index` for the 50 inserted RTH minutes on 03-17.** The trigger gives an inserted RTH bar `MAX(bar_index)+1`, so filling a mid-session gap misorders the index. Renumbering 03-17 needs `GRANT UPDATE (bar_index) ON es_minutes TO dash_backfill_writer;` (or inserting into `es_minutes` first with explicit values, which still leaves the existing 340 rows to renumber).
+3. **No `raw_symbol` column** in either table (CR-BF recorded the contract only in docs). Proposal: record it per bar in `ironbeam_es_1m_bars_repair_log.symbol` (`'ESM6'`), with old and new OHLCV, as CR-BZ did; inserted minutes logged with NULL old values.
+4. **No DELETE needed:** Databento covers every Globex minute, so every stored minute is updated in place and the 124 missing ones are inserted.
+
+CR-BF needed DELETE and ran attended under the owner role, outside the unattended protocol.
+
+### Observation (out of scope)
+
+`ironbeam_es_1m_bars` 2026-03-23 11:05–11:16 UTC moves +118.5 / +51.5 / +22.25 … in single minutes (M26, post-window). Not checked against Databento here.
+
+### Decisions requested from Ryan
+
+- **D1 Convention:** CR-BF calendar rule (recommended) or CR-CP volume rule — same dates in 2026-03 and 2026-06.
+- **D2 Window end:** 2026-03-20 20:59 UTC (CR-BF style, one source for the week; recommended) or 13:29 UTC (dying contract only).
+- **D3 Grants** (owner applies): UPDATE (source) on both tables; UPDATE (bar_index) on `es_minutes`. Without D3, the patch can fix OHLCV only and leave `source='ironbeam'`.
+- **D4 Fetch:** $0.0252 Databento `ohlcv-1m` ESM6.
+- **D5 June:** nothing to patch; confirm.
+- **D6 Derived:** `bt_daily_outcomes` (84 rows) and `vol_risk_premium` as a follow-up CR.
+- **B4:** confirm the June contract-identity reads.
