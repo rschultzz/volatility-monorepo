@@ -248,3 +248,28 @@ The same dry run shows that CR-BZ's repair of 783 fragment minutes in 2026 (many
 - `vol_risk_premium` is unaffected (it uses no 06:30 bar).
 
 CR-BZ's repairs run to 2026-10-22, so holdout and forward-log rows are affected too. Recomputing those reads holdout bars: a B4 question for its own CR. Proposed as a vault open-question, not done here.
+
+## Write and smoke (2026-10-29)
+
+Script `scripts/cr_dl_recompute_derived.py`, `dash_backfill_writer`, `backfill_run("CR-DL")`. Logs in `scripts/logs/cr_dl/` (git-ignored): `write_dryrun.log`, `write_run.log`, `write_smoke.json`, two aborted-run logs.
+
+| run_id | status | what happened |
+|---|---|---|
+| `fc25949c-05b8-4691-bbeb-f89f8c0c053a` | aborted | Archive JSON failed on a UUID (`backfill_run_id`) before any UPDATE. Fixed in `9cdecd4`. |
+| `7ccaaa0d-ddd5-4ffb-943c-e0ef78008bab` | aborted | Archive written. The guard missed on `v0.6.1` 2026-03-16 `close_move_over_im`: psycopg reads `real` as text, so the uncast float8 guard never equals the float4 (`= 0.07837067::real` true, `::float8` false). **The whole transaction rolled back.** Fixed in the next commit: guard parameters are cast to the column type. |
+| **`9531e3de-8a14-464d-a3fc-cc25a3dce7ef`** | **completed** | Preflight OK. Archive written. **61 UPDATEs in one transaction:** 43 `bt_daily_outcomes` rows (`v0.6.1` 15, `v0.6.0-openiv` 15, `v0.5.0-rebuilt` 13, 2025-12-19 → 2026-03-19; CR-DJ columns only; `backfill_run_id` / `computed_at` stamped) and 18 `bt_daily_features.vol_risk_premium` (2026-03-16 → 04-10, not stamped). |
+
+After the two aborted runs, no row carries either run id, and `vol_risk_premium` was unchanged before run `9531e3de`.
+
+**Smoke: OK.** After the commit, the script re-ran the post recompute on all 89 rows per version:
+- Every written column equals the dry run's expected value. Float4 columns are compared at 1e-6 relative.
+- Every row's remaining stored-vs-post difference equals the dry run's, minus the written columns. Only the CR-BZ (F2) and never-filled differences remain.
+- Labels and every unwritten column equal the archive. That covers `outcome_status`, touch, close, `days_to_reach`, `max_excursion_in_direction`, horizon and positions.
+- Unplanned rows, including `v0.5.0-rebuilt` 03-11 / 03-12, are unstamped.
+- Row and active counts are unchanged per version: 743 / 816 (815 active) / 815 / 843.
+- `v0.6.0-openiv-spxcash` is untouched (`max(computed_at)` unchanged).
+- All 76 `vol_risk_premium` values equal the dry run's post (the 18) or their archive (the rest).
+
+Independent read-back: the run row is `completed`, and 13 / 15 / 15 rows carry the run id. On 2026-03-16, `session_open_t0` is 6746.75 on all three ES versions (was 6697.25), and `vol_risk_premium` is −0.03208 (was −0.03733).
+
+The `v0.6.1` row count's `max(computed_at)` before the run was 2026-10-29 13:41 UTC: the daily outcomes cron, outside the CR-DL window.
