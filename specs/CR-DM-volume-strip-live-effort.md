@@ -73,3 +73,64 @@ spec freeze → Step 0 → items 1+2 together → item 3 → smoke + wrap.
 - One DB-backed local server at a time; never stop another session's server without asking Ryan.
 - Never print connection strings (catch DB errors, print the error type only).
 - Rebase onto origin/main before the PR if anything merged. PR not merged; not deployed.
+
+## Step 0 findings (2026-10-29, read-only; `scripts/cr_dm_step0.py`, output in `scripts/logs/cr-dm/step0/`)
+
+### Q1 — the volume field
+
+- The v2 payload's bars carry `vol` per 1-minute bar (`flow_v2._bars`), alongside `buy`, `sell`, `delta`, `share`.
+  It is the same row the delta bars are drawn from: `delta = buy − sell` of the same minute.
+- `vol` is the flow table's `volume` column summed over the minute: `es_flow_1m_databento.volume` /
+  `ironbeam_es_flow_1m.volume` (read by `flow_1m.v2_select`), or `sum(volume)` of the 1-s table for minutes after
+  the 1-minute table's cutoff (`flow_v2._FLOW_SQL_1S`). Quiet minutes are 0 (`complete_minutes`).
+- **Unknown-side volume is included by construction**: the 1-s aggregator sets `volume = Σ size` of all prints and
+  `unknown_vol` = size of prints with neither BUY nor SELL (`apps/cron/ironbeam_flow_1s_aggregate.py`); Databento
+  side `N` likewise (CR-CA). So `vol = buy + sell + unknown`.
+- **Measured on RTH 06:30–13:00 PT** (1-minute tables): volume = buy + sell + unknown on every minute, and
+  unknown = 0 on every minute of all five sessions checked:
+
+  | table | session | minutes | volume | unknown |
+  |---|---|---|---|---|
+  | `es_flow_1m_databento` (ESM6) | 2026-05-01 | 390 | 1,008,323 | 0 |
+  | `es_flow_1m_databento` (ESH6) | 2026-01-06 | 390 | 941,656 | 0 |
+  | `ironbeam_es_flow_1m` | 2026-10-27 | 390 | 1,069,166 | 0 |
+  | `ironbeam_es_flow_1m` | 2026-10-28 | 380 | 1,041,671 | 0 |
+  | `ironbeam_es_flow_1m` | 2026-10-29 (to 07:32 PT) | 62 | 381,851 | 0 |
+
+  So in practice volume = buy + sell in RTH; the hover says "volume (all prints, incl. unknown side)". Delta share
+  for the minute = (buy − sell) ÷ volume, i.e. the raw per-minute share (the payload's `share` is its 3-bar EMA, so
+  the hover computes the raw value from the same row).
+- Sources as today: Databento for sessions ≤ 2026-06-05, Ironbeam after (Ironbeam undercounts ≈ 6 %, B5; the guide
+  already says so).
+
+### Q2 — the in-progress leg from `swing_legs`' own state
+
+- `swing_legs` already carries everything at the end of its loop: `dirn` (+1 = current leg is up, −1 = down,
+  0 = no extreme confirmed yet), `start_i` / `start_px` (the last confirmed leg's end = the current leg's start) and
+  the running extreme of the current direction (`hi` / `hi_i` while up, `lo` / `lo_i` while down). It just doesn't
+  return them ("The last, unconfirmed leg is not returned").
+- Plan: move the loop into `_swing_scan(H, L, swing)` returning `(legs, tail)`, where `tail` = `{dir, start_i,
+  start_px, end_i = running-extreme bar, end_px = running extreme}` or `None` while `dirn == 0`. `swing_legs` returns
+  `_swing_scan(...)[0]` — **the same loop, the same legs** (no second swing algorithm).
+- The live leg's effort = `leg_effort(legs + [tail])[-1]`: the same bars `(start_i, end_i]`, the same cpp / dpp and
+  the ratio to the previous leg in the same direction, exactly as a confirmed leg. Once the swing rule confirms it,
+  that leg *is* the next confirmed leg (same start, same extreme, same bars), so the provisional label is replaced
+  by the confirmed one with the same numbers, and a new tail (the opposite direction) starts.
+- `pane_live_leg(m, start_epoch, swing)` returns it on the same RTH bars as `pane_effort_legs` (bars ≥ the RTH open,
+  bars < `end`); the payload gets `live_leg` (only with `effort=1`) next to `legs`. In review / replay `end = until`,
+  so bars after `until` are never read — the same cut the confirmed legs already use.
+- Payload fields: times as confirmed legs (`start_time`, `end_time` = running-extreme bar), `pts`, `vol`, `delta`,
+  `cpp`, `dpp`, `ratio`, plus `prev_cpp` (the previous same-direction leg's cpp, null if none), `last_time` (the last
+  bar used) and `minutes` (= bars from the start to the running extreme, the window pts / volume cover).
+- The frontend applies (b): drawn only when |pts| ≥ M (⚙, default 4, 2–12) and a previous same-direction leg
+  exists (`prev_cpp` not null). Nothing is filtered server-side, so M changes don't refetch.
+- The live label is drawn in **Flow v3 only** (the CR's pane; ⚙ M lives in Flow v3 settings); Flow v2 with Effort on
+  is unchanged.
+
+### Q3 — confirmed effort labels are the baseline
+
+- Saved the v2 payload's confirmed legs (effort=1, swing 8 = the App default) from origin/main code:
+  2026-10-27 full session (13 legs), until 08:00 (6) and 10:15 (10); 2026-10-29 until 07:00 (8) and 07:30 (12)
+  (`legs_*.json`). After implementation the same five calls must give byte-identical `legs` (checked in the item-3
+  commit). The frontend label code (`effortChartMarkers`, `effortLabel`) is not edited; the live marker is appended
+  to the list separately.
