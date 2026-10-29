@@ -363,7 +363,7 @@ Checksums of the planned write (identical in run2 and run3):
 | `v0.6.0-openiv` | 02-25, 03-09 → 03-19 (t15 / t5 / t1 columns, as the tables above); 02-23 / 02-24 / 02-26: none |
 | `v0.5.0-rebuilt` | 02-25 `max_excursion_in_direction`; 03-09, 03-10, 03-13, 03-16 → 03-19 (t1 / t5 / t15 columns) |
 
-**Holdout / R-b overlap:** no CR-DL row is holdout (0 / 0 / 0). The 2 CR-DL rows in R-b (2025-12-19, 12-22, already written by CR-DL) differ from post **only in CR-BZ columns** (2 / 2 per version), and their CR-BZ change set is empty except for the one `v0.6.1` row in c. `all_post` for R-b: `50bc1e34f7d6a496e949cfc23928663e` / `422c9cd7d195176d5c2a2e01efa4a1ec` / `cce358ec1d21789c8c516c6d6cc05508`.
+**Holdout / R-b overlap:** no CR-DL row is holdout (0 / 0 / 0). The 2 CR-DL rows in R-b (2025-12-19, 12-22, already written by CR-DL) differ from post **only in CR-BZ columns** (2 / 2 per version; checked blind, no values). `all_post` for R-b: `50bc1e34f7d6a496e949cfc23928663e` / `422c9cd7d195176d5c2a2e01efa4a1ec` / `cce358ec1d21789c8c516c6d6cc05508`.
 
 > B4 note: CR-DL's spec printed values for two R-b rows (2025-12-19 / 12-22 `final_close_dist`, `realized_em_pct`) before the 2026-10-29 blind clause existed. They are not repeated here.
 
@@ -399,7 +399,7 @@ Checksums of the planned write (identical in run2 and run3):
    - A **second independent smoke process** re-reads and must print the same md5s.
 7. **Race with the crons:**
    - The CR-022 daily insert (13:40 UTC) writes new rows only.
-   - The CR-AA sweep (11:05 UTC) promotes `pending_history` rows in `v0.6.1`. None is in the plan (every planned row reproduces with a stored terminal status or a non-pending column set), and the guards roll back on any concurrent change.
+   - The CR-AA sweep (11:05 UTC) promotes `pending_history` rows in `v0.6.1`. Whether any planned holdout row is pending is not measured (blind). The `computed_at` + column guards roll the whole write back if the sweep touched a planned row in between.
    - Run outside 11:00–14:00 UTC.
 
 ### Decisions for Ryan
