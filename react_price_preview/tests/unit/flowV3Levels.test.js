@@ -210,3 +210,21 @@ test('refresh T -> T+2 min: held n -> n+2 (label, marks hover); an open hover up
   assert.equal(relinkHover({ level: lvA, pt }, 'level', null, 'start'), null)
   assert.equal(relinkHover(null, 'level', [lvB], 'start'), null)
 })
+
+test('CR-DN item 5c: unbroken levels are drawn fading to 50 %, broken ones as before; the selection is unchanged', () => {
+  const b = bars(new Array(200).fill(7000))
+  const marks = []
+  for (let i = 0; i < 12; i += 1) marks.push(mark('sellers_absorbed', i * 15, 6900 + i, { aggressor: 300 }))
+  marks.push(mark('buyers_absorbed', 0, 7100, { aggressor: 5000 }))
+  marks.push(mark('buyers_absorbed', 10, 7101, { aggressor: 5000, break_time: T0 + 60 * 40 }))
+  const lv = absorptionLevels(payload([seg(b, marks)]), minutes(200), id)
+  const old = lv.find((l) => l.price === 7100)
+  assert.equal(old.alpha, 0.25) // selection score unchanged (contracts x today's alpha)
+  assert.equal(old.drawAlpha, 0.5) // drawn at the unbroken floor
+  const broken = lv.find((l) => l.price === 7101)
+  assert.equal(broken.broken, true)
+  assert.equal(broken.drawAlpha, broken.alpha) // broken: today's fade
+  assert.equal(levelAlpha(30, 0.5), 0.75)
+  // the same 8 levels as with today's opacity: the score uses alpha, not drawAlpha
+  assert.deepEqual(lv.map((l) => l.score), lv.map((l) => l.contracts * l.alpha))
+})

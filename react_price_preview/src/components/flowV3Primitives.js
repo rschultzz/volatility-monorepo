@@ -8,6 +8,8 @@ import { CROWDED_TICK_PX, TICK, floorIndex } from '../flowV3.js'
 const SELL_RGB = '229,231,235'
 const BUY_RGB = '96,165,250'
 const SLATE = '#94a3b8'
+// The chart's tag background (the price chart's crosshair label colour, #1e293b), for small label pills (CR-DN).
+export const TAG_BG = (alpha) => `rgba(30,41,59,${alpha})`
 
 function visibleIndexRange(chart, times) {
   const vr = chart.timeScale().getVisibleRange?.()
@@ -258,12 +260,25 @@ const levelRgb = (kind) => (kind === 'sellers_absorbed' ? ORANGE_RGB : MAGENTA_R
 
 // Absorption levels: one horizontal line per level from its start minute to its break bar or now, width from
 // contracts absorbed, opacity from age, with its label at the right end. data: { levels (flowV3.absorptionLevels),
-// times }. Hover: `onHover(level | null, point)` within 5 px of a line.
+// times }. Hover: `onHover(level | null, point)` within 5 px of a line. CR-DN item 5: drawn above the candles
+// ('top'), opacity `drawAlpha` (unbroken levels fade to 0.5), labels on a dark pill (the chart's tag background), and a
+// price-axis tag in the side colour for each unbroken level in view (at most LEVELS_MAX: the data holds no more).
+const LEVEL_TAG_TEXT = '#0f172a'
 export class AbsorptionLevelsPrimitive extends BasePrimitive {
   constructor(onHover) {
     super()
     this._onHover = onHover
     this._hit = []
+    this._tags = []
+    const self = this
+    this._tagViews = Array.from({ length: 8 }, (_, k) => ({
+      coordinate: () => self._tagY(k),
+      text: () => (self._tags[k] ? self._tags[k].price.toFixed(2) : ''),
+      textColor: () => LEVEL_TAG_TEXT,
+      backColor: () => (self._tags[k] ? `rgb(${levelRgb(self._tags[k].kind)})` : 'rgba(0,0,0,0)'),
+      visible: () => Boolean(self._tags[k]) && self._tagY(k) != null,
+      tickVisible: () => Boolean(self._tags[k]),
+    }))
     this._move = (param) => {
       const pt = param?.point
       let best = null
@@ -297,6 +312,27 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
     return 'top'
   }
 
+  _tagY(k) {
+    const lv = this._tags[k]
+    const y = lv && this._series ? this._series.priceToCoordinate(lv.price) : null
+    return y == null ? null : y
+  }
+
+  // CR-DN item 5d: the unbroken levels in the visible time range get axis tags (recomputed on each view update).
+  updateAllViews() {
+    const chart = this._chart
+    const d = this._data
+    this._tags = []
+    if (!chart || !d?.levels?.length) return
+    const range = visibleIndexRange(chart, d.times)
+    if (!range) return
+    this._tags = d.levels.filter((lv) => !lv.broken && lv.endIdx >= range[0] && lv.idx <= range[1]).slice(0, this._tagViews.length)
+  }
+
+  priceAxisViews() {
+    return this._tagViews
+  }
+
   paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }, chart, series, d) {
     this._hit = []
     const range = visibleIndexRange(chart, d.times)
@@ -318,13 +354,13 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
       const lw = Math.max(1, Math.round(lv.width * vr))
       const yy = Math.round(y * vr) + (lw % 2 ? 0.5 : 0)
       const rgb = levelRgb(lv.kind)
-      ctx.strokeStyle = `rgba(${rgb},${lv.alpha})`
+      const alpha = lv.drawAlpha ?? lv.alpha
+      ctx.strokeStyle = `rgba(${rgb},${alpha})`
       ctx.lineWidth = lw
       ctx.beginPath()
       ctx.moveTo(Math.round(x0 * hr), yy)
       ctx.lineTo(Math.round(Math.max(x1, x0 + 2) * hr), yy)
       ctx.stroke()
-      ctx.fillStyle = `rgba(${rgb},${Math.max(0.55, lv.alpha)})`
       const tw = ctx.measureText(lv.label).width / hr
       const lx = Math.min(x1 + 4, plotW - tw - 2)
       const base = y - lv.width / 2 - 2
@@ -332,6 +368,9 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
         const box = { x0: lx, x1: lx + tw, y0: base + dy - 11, y1: base + dy }
         if (!free(box)) continue
         placed.push(box)
+        ctx.fillStyle = TAG_BG(0.85) // CR-DN item 5b: the pill, inside the collision box (placement unchanged)
+        ctx.fillRect(Math.round((lx - 2) * hr), Math.round((base + dy - 11) * vr), Math.round((tw + 4) * hr), Math.round(12 * vr))
+        ctx.fillStyle = `rgba(${rgb},${Math.max(0.55, alpha)})`
         ctx.fillText(lv.label, Math.round(lx * hr), Math.round((base + dy) * vr))
         break
       }
@@ -345,8 +384,6 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
 // data: { boxes: [{ from, to (shifted epochs), top, bottom (prices), frozen, box }] }. Hover: `onHover(box | null, pt)`
 // within 5 px of a frozen box's line (the current box is the header's).
 export const FROZEN_EDGE_ALPHA = 0.35
-// The chart's tag background (the price chart's crosshair label colour, #1e293b), for small label pills (CR-DN).
-export const TAG_BG = (alpha) => `rgba(30,41,59,${alpha})`
 // CR-DN item 2: probes (cancelled breaks) = a short magenta tick from the edge outward at the break minute, low opacity,
 // with a small "probe hh:mm" label. data.probes: [{ time (shifted), price (edge), up, label, probe }]. Hover:
 // `onProbeHover(probe | null, pt)` within 6 px of a tick.

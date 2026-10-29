@@ -354,6 +354,9 @@ export const kfmt = (v) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(1)}k` : 
 export const LEVELS_MAX = 8 // DF3
 export const LEVEL_FADE_MIN = 60 // DF2: opacity 1 at 0 min -> LEVEL_ALPHA_MIN at 60 min, then flat
 export const LEVEL_ALPHA_MIN = 0.25
+// CR-DN item 5c: an unbroken level is *drawn* fading to this floor (broken levels keep LEVEL_ALPHA_MIN). The selection
+// score keeps levelAlpha with LEVEL_ALPHA_MIN, so the drawn set of LEVELS_MAX levels is unchanged.
+export const LEVEL_ALPHA_MIN_UNBROKEN = 0.5
 export const EDGE_BREAK_PTS = 2 // DF4 (CR-CP A1.1 / A1.2): only a close > 2 pts beyond moves the edge
 export const EDGE_NEAR_PTS = 1 // contracts and first touch within 1 pt of the edge
 
@@ -364,9 +367,9 @@ export function levelWidth(contracts) {
   return Math.min(5, 1 + (4 * Math.log(c / 50)) / Math.log(30))
 }
 
-export function levelAlpha(ageMin) {
+export function levelAlpha(ageMin, floor = LEVEL_ALPHA_MIN) {
   const a = Math.max(0, Number(ageMin) || 0)
-  return 1 - (1 - LEVEL_ALPHA_MIN) * (Math.min(a, LEVEL_FADE_MIN) / LEVEL_FADE_MIN)
+  return 1 - (1 - floor) * (Math.min(a, LEVEL_FADE_MIN) / LEVEL_FADE_MIN)
 }
 
 // End of the last 1-minute bar in the payload (UTC epoch), or null.
@@ -414,6 +417,7 @@ export function absorptionLevels(payload, candleTimes, shift, max = LEVELS_MAX) 
       all.push({
         kind: mk.kind, price: Number(mk.price), start, end, broken, contracts, opposite: Number(mk.opposite),
         heldMin: held, ageMin, alpha, width: levelWidth(contracts), score: contracts * alpha,
+        drawAlpha: broken ? alpha : levelAlpha(ageMin, LEVEL_ALPHA_MIN_UNBROKEN), // CR-DN item 5c
         label: `${side} absorbed ${kfmt(contracts)} · ${held} min`,
       })
     }
