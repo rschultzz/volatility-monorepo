@@ -719,3 +719,57 @@ test('item 6, 2026-10-27: the 57k closing minute is capped at the p98; hover sho
   expect(zinfo.freshBranch.ar).toEqual(zinfo.freshMain.ar)
   for (const x of [a, b, za0, zb0]) await x.ctx.close()
 })
+
+// Amendment 4: the Flow v3 pane's right price axis has the price chart's width, so bar centres line up (±1 px) in both
+// panes. Measured in page x (chart element left + timeToCoordinate) at 06:30, 10:30 and 12:59 PT, full-day frame.
+async function barCentres(page, day) {
+  return page.evaluate(({ fn, day, hms }) => {
+    const { priceEl, flowEl, price, flow } = eval(fn) // eslint-disable-line no-eval
+    const pr = priceEl.getBoundingClientRect()
+    const fr = flowEl.getBoundingClientRect()
+    const times = new Set(flow.reg.delta.data().map((d) => d.time))
+    const at = hms.map((hm) => {
+      const t = price.series.data().find((d) => d.close != null && new Date(d.time * 1000).toISOString().slice(11, 16) === hm)?.time
+      const xp = t == null ? null : pr.x + price.chart.timeScale().timeToCoordinate(t)
+      const xf = t == null || !times.has(t) ? null : fr.x + flow.chart.timeScale().timeToCoordinate(t)
+      return { hm, t, price_x: xp, flow_x: xf, dx: xp == null || xf == null ? null : +(xf - xp).toFixed(2) }
+    })
+    return { day, price_el: [pr.x, pr.width], flow_el: [fr.x, fr.width], price_axis: price.chart.priceScale('right').width(),
+      flow_axis: flow.chart.priceScale('right').width(), price_plot: price.chart.timeScale().width(), flow_plot: flow.chart.timeScale().width(), at }
+  }, { fn: CHARTS_FN, day, hms: ['06:30', '10:30', '12:59'] })
+}
+
+for (const [side, base] of [['branch', SIDE_A], ['main', BASELINE]]) {
+  test(`amendment 4 (${side}): Flow v3 bar centres at the price chart's x (±1 px) on 2026-10-27 / 10-29 at 06:30, 10:30, 12:59`, async ({ page }) => {
+    test.skip(side === 'main' && !process.env.CRDN_MEASURE_MAIN, 'measurement of origin/main only on request')
+    test.setTimeout(300_000)
+    const out = []
+    for (const day of ['2026-10-27', D29]) {
+      await page.evaluate(() => window.sessionStorage.removeItem('crdn-init')).catch(() => {})
+      await open(page, day, { base, storage: V3 })
+      await settle(page)
+      await frame(page, shifted(`${day}T06:30`), shifted(`${day}T13:00`))
+      out.push(await barCentres(page, day))
+    }
+    // tracked: widen the price chart's axis (as longer price labels would); the flow axis follows
+    const widened = await page.evaluate(async (fn) => {
+      const { price, flow } = eval(fn) // eslint-disable-line no-eval
+      price.chart.applyOptions({ rightPriceScale: { minimumWidth: 96 } })
+      await new Promise((r) => setTimeout(r, 600))
+      return { price_axis: price.chart.priceScale('right').width(), flow_axis: flow.chart.priceScale('right').width() }
+    }, CHARTS_FN)
+    out.push({ widened })
+    log(`align-${side}.json`, out)
+    if (side === 'branch') expect(widened.flow_axis, 'flow axis follows a wider price axis').toBe(widened.price_axis)
+    if (side === 'branch') {
+      for (const r of out.filter((x) => x.day)) {
+        expect(r.flow_axis, `${r.day}: flow axis = price axis`).toBe(r.price_axis)
+        for (const a of r.at) {
+          if (r.day === D29 && a.t == null) continue // live: 12:59 not printed yet
+          expect(a.dx, `${r.day} ${a.hm}`).not.toBeNull()
+          expect(Math.abs(a.dx), `${r.day} ${a.hm}: ${a.dx} px`).toBeLessThanOrEqual(1)
+        }
+      }
+    }
+  })
+}

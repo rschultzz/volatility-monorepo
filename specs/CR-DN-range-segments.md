@@ -401,3 +401,31 @@ skipped (live), cr-dk 7/7, cr-dc 6/6, cr-de 7/7, cr-db 4/5, cr-dm 3/5, cr-dh pri
   fail identically with origin/main on both sides (`e2e-crdm-main-vs-main.txt`), so baseline, not CR-DN.
 - The run also picked up older specs (cr-bv, cr-cd, cr-cd-a5, cr-ch, cr-ck, cr-cq, cr-dh Dashboard) that need their own
   servers / ports (8062, 8064, 5176–5179, a Dash server); they time out on connection, not on CR-DN code.
+
+## Amendment 4 (Ryan, chat 2026-10-29) — item 7, axis alignment; cr-dm specs; merge
+
+7. Pin the Flow v3 pane's right price-axis width to the price chart's right price-axis width (same px, tracked if the
+   price chart's axis width changes), so the two time axes align exactly. Check 2026-10-27 and 2026-10-29 at 06:30,
+   10:30 and 12:59 PT: bar centres in both panes at the same x (±1 px). Expected to close CR-DK's open question
+   (Flow v3 bars ≈ 9 px right of the price chart); recorded in both session notes.
+8. Re-point the two cr-dm layout specs to the post-CR-DM baseline (origin/main). Test-only.
+9. Re-run cr-dn, cr-dm, cr-di, cr-dk; merge PR #122 with a merge commit; confirm on origin/main. No deploy.
+
+**Rulings (item 7).** C1 n/a (no colour). C2: a layout change to an existing view, requested by Ryan in this amendment
+(it fixes a misalignment, nothing is added); recorded here and in the session note.
+
+**Step 0 for item 7 (measured before any code, `scripts/logs/cr-dn/smoke/align-main.json` / `align-branch.json`,
+1440 × 900, full-day frame).** Both charts are 1428 px wide at x = 0 and share the logical range, so bar x differs only
+by plot width (chart width − right axis):
+
+| | price axis | flow axis | dx 06:30 | dx 10:30 | dx 12:59 |
+|---|---|---|---|---|---|
+| origin/main, 10-27 and 10-29 | 70 | 60 | +0.1 | +6.2 | +9.9 |
+| branch before item 7, 10-27 | 70 | 52 | +0.1 | +11.1 | +17.9 |
+| branch before item 7, 10-29 | 70 | 58 | +0.1 | +7.4 | +11.9 |
+
+The ≈ 9–10 px at the session's right end is CR-DK's offset; item 6 widened it on 10-27. Rule: the flow chart's
+`rightPriceScale.minimumWidth` = the price chart's right-axis width, reported by PriceChart through a ResizeObserver
+on its price-axis cell (lightweight-charts lays the axis out as a table cell), so a change in the price chart's labels
+is tracked. `minimumWidth` cannot shrink an axis; the flow axis's own labels (k-formatted, ≤ 60 px measured) are
+narrower than the price axis (70 px), and the smoke asserts equality.

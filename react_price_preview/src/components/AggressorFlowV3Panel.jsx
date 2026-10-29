@@ -237,6 +237,7 @@ function Settings({ value, layers, onApply, onClose }) {
 
 export default function AggressorFlowV3Panel({
   candles,
+  priceAxisWidth = null, // CR-DN item 7: the price chart's right axis width; this pane's right axis matches it
   payloads,
   sessionPayload = null, // the selected session's v2 payload: its segments and legs give the anchors
   cellsPayload = null,
@@ -272,6 +273,8 @@ export default function AggressorFlowV3Panel({
   const stageRef = useRef(null)
   const hostRef = useRef(null)
   const chartRef = useRef(null)
+  const priceAxisWidthRef = useRef(priceAxisWidth)
+  priceAxisWidthRef.current = priceAxisWidth
   const seriesRef = useRef({})
   const lastAppliedLogicalRef = useRef(null)
   const candleTimesRef = useRef([])
@@ -381,7 +384,7 @@ export default function AggressorFlowV3Panel({
       layout: { background: { type: ColorType.Solid, color: BG_COLOR }, textColor: '#cbd5e1', attributionLogo: false },
       localization: { locale: 'en-US', priceFormatter: (v) => kfmt(Number(v)) },
       grid: { vertLines: { color: 'rgba(148, 163, 184, 0.08)' }, horzLines: { color: 'rgba(148, 163, 184, 0.08)' } },
-      rightPriceScale: { visible: true, borderColor: 'rgba(148, 163, 184, 0.18)', scaleMargins: { top: 0.42, bottom: 0.30 } },
+      rightPriceScale: { visible: true, borderColor: 'rgba(148, 163, 184, 0.18)', scaleMargins: { top: 0.42, bottom: 0.30 }, minimumWidth: priceAxisWidthRef.current || 0 },
       timeScale: { borderColor: 'rgba(148, 163, 184, 0.18)', timeVisible: true, secondsVisible: false, tickMarkFormatter: (t) => formatShiftedHHMM(t) },
       crosshair: { mode: CrosshairMode.Normal, vertLine: { visible: false, labelVisible: false }, horzLine: { visible: false, labelVisible: false } },
       handleScroll: { mouseWheel: false, pressedMouseMove: false, horzTouchDrag: false, vertTouchDrag: false },
@@ -452,6 +455,12 @@ export default function AggressorFlowV3Panel({
       refreshDecorationsRef.current = () => {}
     }
   }, [])
+
+  // CR-DN item 7: the right axis is pinned to the price chart's, so both plots have the same width and the shared
+  // logical range puts a bar at the same x in both panes.
+  useEffect(() => {
+    chartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: priceAxisWidth || 0 } })
+  }, [priceAxisWidth])
 
   // CR-DM item 2: slot layout of pane 0 (paneSlotMargins); rolling off = the CR-DC margins with volume in the middle.
   const applySlots = () => {

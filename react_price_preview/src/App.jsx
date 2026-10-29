@@ -594,6 +594,8 @@ export default function App() {
   const [flowAnchorArmed, setFlowAnchorArmed] = useState(false)
   // CR-DN item 1: the window's end (shifted PT epoch of its last 1-minute bar), like the anchor: App state only.
   const [flowEnd, setFlowEnd] = useState(null)
+  // CR-DN item 7: the price chart's right price axis width (px); the Flow v3 pane pins its axis to it.
+  const [priceAxisWidth, setPriceAxisWidth] = useState(null)
   const [flowEndArmed, setFlowEndArmed] = useState(false)
   const flowEndPickRef = useRef({ anchor: null, last: null, step: 60 })
   const [flowCellsLoaded, setFlowCellsLoaded] = useState({ url: null, payload: null })
@@ -2582,6 +2584,7 @@ export default function App() {
                 onApplyGexLevelsMode={handleGexLevelsModeChange}
                 onApplyIntervalChange={handleIntervalChange}
                 onVisibleLogicalRangeChange={handleSharedLogicalRangeChange}
+                onPriceAxisWidthChange={setPriceAxisWidth}
                 onLinkedCrosshairChange={handleLinkedCrosshairChange}
                 onInteractionActiveChange={handleInteractionActiveChange}
                 skewData={skewData}
@@ -2647,6 +2650,7 @@ export default function App() {
                 >
                   {flowPaneMode === 'v3' ? (
                     <AggressorFlowV3Panel
+                      priceAxisWidth={priceAxisWidth}
                       payloads={flowV2PanePayloads}
                       sessionPayload={flowV3SessionPayload}
                       cellsPayload={flowCells}

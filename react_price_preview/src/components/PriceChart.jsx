@@ -839,6 +839,8 @@ export default function PriceChart({
   onApplyGexLevelsMode,
   onApplyIntervalChange,
   onVisibleLogicalRangeChange,
+  // CR-DN item 7: reports the right price axis width (px) so the Flow v3 pane can match it.
+  onPriceAxisWidthChange,
   onLinkedCrosshairChange,
   onInteractionActiveChange,
   skewData = [],
@@ -908,6 +910,8 @@ export default function PriceChart({
   const stageRef = useRef(null)
   const hostRef = useRef(null)
   const chartRef = useRef(null)
+  const onPriceAxisWidthChangeRef = useRef(onPriceAxisWidthChange)
+  onPriceAxisWidthChangeRef.current = onPriceAxisWidthChange
   const seriesRef = useRef(null)
   const liveTradeSeriesRef = useRef(null)
   const gexSeriesRefs = useRef([])
@@ -1667,6 +1671,19 @@ export default function PriceChart({
 
     chartRef.current = chart
     seriesRef.current = candleSeries
+
+    // CR-DN item 7: lightweight-charts lays the chart out as a table; the first row's last cell is the right price axis.
+    // Its width follows the tick labels, so it is observed rather than read once.
+    const axisCell = container.querySelector('.tv-lightweight-charts table tr td:last-child')
+    let lastAxisWidth = null
+    const reportAxisWidth = () => {
+      const w = Math.round(chart.priceScale('right').width())
+      if (w === lastAxisWidth) return
+      lastAxisWidth = w
+      if (typeof onPriceAxisWidthChangeRef.current === 'function') onPriceAxisWidthChangeRef.current(w)
+    }
+    const axisObserver = axisCell && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(reportAxisWidth) : null
+    if (axisObserver) axisObserver.observe(axisCell)
     liveTradeSeriesRef.current = liveTradeSeries
 
     const setManualPriceScale = () => {
@@ -2189,6 +2206,7 @@ export default function PriceChart({
       if (resizeObserver) {
         resizeObserver.disconnect()
       }
+      if (axisObserver) axisObserver.disconnect()
       stage.removeEventListener('wheel', handleWheel, { capture: true })
       stage.removeEventListener('mousedown', handleMouseDown, { capture: true })
       stage.removeEventListener('mouseleave', handleMouseLeave)
