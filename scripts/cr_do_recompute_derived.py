@@ -21,8 +21,9 @@ Unattended protocol: dash_backfill_writer, backfill_run("CR-DO").
      (CR-BZ columns ∪ D4 residual where stored now equals post) and every group's counts / md5s must
      equal Step 0's; row counts, the other feature versions, rows before 2025-09-01 and
      vol_risk_premium are unchanged (md5 computed in SQL).
-  --smoke-only RUN_ID runs step 3 again in a separate process (second-run equality) and records it
-  under smoke_test_results.smoke2.
+  --smoke-only RUN_ID --tag T runs step 3 again in a separate process (second-run equality) and
+  records it under smoke_test_results.smoke_T. Smoke 1 of run 642e0d88 failed on a definition
+  gap that resolve_written() closes (spec Amendment 3); smokes 2 and 3 are the corrected re-runs.
 
 BLIND output rule (B4): nothing this script prints, logs or stores in bt_backfill_runs contains a
 holdout / R-b / forward value, row, date or diff — counts, column names and md5 only. Error
@@ -55,7 +56,7 @@ from psycopg.types.json import Jsonb  # noqa: E402
 from packages.shared.backfill_safety import backfill_run, update_run_smoke  # noqa: E402
 from scripts.cr_do_step0_dryrun import (  # noqa: E402
     BLIND, CRBZ_RUN, FLIP_LABELS, GROUPS, LOG_DIR, OWNED, ROWS_FROM, STAMP_COLUMNS, TICKER,
-    _j, analyse, canon, column_types, connect, measure, step0_summary,
+    _j, analyse, canon, column_types, connect, md5, measure, step0_summary,
 )
 
 CR_ID = "CR-DO"
@@ -70,6 +71,58 @@ EXPECTED_VALUES = {   # Amendment 2 (exact run4 = run5): planned values per vers
 MEASURE_KEYS = ("rows", "planned_rows", "planned_values", "planned_cols", "flip_label_changes",
                 "differs_after_write", "md5_keys", "md5_before", "md5_after", "md5_all_post",
                 "md5_untouched", "md5_labels", "md5_differs_after_write")
+MAX_NULL_CANDIDATES = 4
+
+
+def resolve_written(version, rows, types, exp) -> tuple[dict, list]:
+    """Smoke: pin the written cell set from the stored state, without reading the (blind) archive.
+
+    analyse(run_id=…) re-derives the written cells as CR-BZ / D4 columns of stamped rows where stored
+    now equals post. Two classes can't be told apart from the stored state alone (Amendment 3):
+      - a planned cell whose recompute is NULL, now written NULL: it looks like a never-filled cell
+        (stored NULL); candidates = stamped-row cells with stored NULL, post NULL, pre not NULL;
+      - a reproduction-excluded CR-BZ cell that already equalled post: it looks like a written cell.
+    The set is pinned by matching Step 0's md5_keys over (any subset of the NULL candidates) ×
+    (at most one re-derived cell removed); every other checksum is then checked against Step 0.
+    r['planned'] becomes the pinned set; NULL-written cells count as filled (they were before the write).
+    """
+    notes, problems = {}, []
+    for g in GROUPS:
+        rs = {d: r for d, r in rows.items() if r["regime"] == g and r["written"]}
+        base = sorted((d, c) for d, r in rs.items() for c in r["planned"])
+        nulls = sorted((d, c) for d, r in rs.items() for c in OWNED[version]
+                       if r["stored"][c] is None and canon(r["post"][c], types[c]) == "NULL"
+                       and canon(r["pre"][c], types[c]) != "NULL")
+        key = lambda cells: md5(f"{version}|{d}|{c}" for d, c in cells)  # noqa: E731
+        found = None
+        if len(nulls) <= MAX_NULL_CANDIDATES:
+            subsets = [[x for i, x in enumerate(nulls) if mask >> i & 1] for mask in range(2 ** len(nulls))]
+            for sub in sorted(subsets, key=len, reverse=True):
+                for drop in [None] + base:
+                    cells = sorted(set(base) - {drop} | set(sub))
+                    if key(cells) == exp[g]["md5_keys"]:
+                        found = (cells, len(sub), drop is not None)
+                        break
+                if found:
+                    break
+        if not found:
+            problems.append(f"{version} {g}: written cell set cannot be matched to Step 0 md5_keys "
+                            f"(re-derived {len(base)}, NULL candidates {len(nulls)})")
+            notes[g] = {"null_written": None, "excluded_equal_post": None}
+            continue
+        cells, n_null, dropped = found
+        for d, r in rs.items():
+            r["planned"] = sorted(c for d2, c in cells if d2 == d)
+            r["filled"] = sorted(set(r["filled"]) | {c for d2, c in cells if d2 == d and r["stored"][c] is None})
+        # the planned 'before': pre for CR-BZ cells (they reproduced), Step 0's train 'from' for the D4 cells
+        detail = exp["train"]["rows_detail"] if g == "train" else {}
+        before = [f"{version}|{d}|{c}|" + (detail[str(d)]["planned"][c]["from"] if c in rows[d]["resid"]
+                                          else canon(rows[d]["pre"][c], types[c])) for d, c in cells]
+        if md5(before) != exp[g]["md5_before"]:
+            problems.append(f"{version} {g}: planned 'before' (pre / D4 from) differs from Step 0 md5_before")
+        notes[g] = {"null_written": n_null, "excluded_equal_post": int(dropped),
+                    "null_written_cols": sorted({c for d, c in cells if rows[d]["stored"][c] is None})}
+    return notes, problems
 
 
 # ── plan source ───────────────────────────────────────────────────────────────────────────────
@@ -114,8 +167,14 @@ def build(conn_factory, types, crbz_done, expected, run_id=None, heartbeat=None)
         conn.close()
         if heartbeat:
             heartbeat()
-        m = measure(version, rows, types) if run_id else step0_summary(version, rows, types)
         exp = expected["versions"][version]
+        if run_id:
+            notes, more = resolve_written(version, rows, types, exp)
+            problems += more
+        m = measure(version, rows, types) if run_id else step0_summary(version, rows, types)
+        if run_id:
+            for g in GROUPS:
+                m[g].update(notes[g])
         for g in GROUPS:
             for k in MEASURE_KEYS:
                 if run_id and k == "md5_before":   # stored at the written cells now = Step 0's after
@@ -243,7 +302,9 @@ def _print_measure(meas) -> None:
             print(f"  {version} {g:7} rows {m['rows']}; planned/written rows {m['planned_rows']} values "
                   f"{m['planned_values']}; status/touch/reached/days written {m['flip_label_changes']}; "
                   f"differ from post {m['differs_after_write']}" +
-                  (f"; stamped {m['stamped_rows']}" if "stamped_rows" in m else ""))
+                  (f"; stamped {m['stamped_rows']}" if "stamped_rows" in m else "") +
+                  (f"; NULL-written {m['null_written']} {m.get('null_written_cols')}; excluded cell equal to post "
+                   f"{m['excluded_equal_post']}" if "null_written" in m else ""))
             print(f"    md5 keys {m['md5_keys']} after {m['md5_after']} all_post {m['md5_all_post']} "
                   f"untouched {m['md5_untouched']} labels {m['md5_labels']} differs {m['md5_differs_after_write']}")
 
@@ -251,7 +312,8 @@ def _print_measure(meas) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="CR-DO derived recompute for CR-BZ's repaired bars")
     ap.add_argument("--dry-run", action="store_true", help="preflight and print the plan; write nothing, no run row")
-    ap.add_argument("--smoke-only", metavar="RUN_ID", help="second, independent smoke of a completed run")
+    ap.add_argument("--smoke-only", metavar="RUN_ID", help="independent smoke of a completed run")
+    ap.add_argument("--tag", default="2", help="--smoke-only: label stored as smoke_<tag>")
     args = ap.parse_args(argv)
     logging.disable(logging.WARNING)
     expected = load_expected()
@@ -264,24 +326,25 @@ def main(argv=None) -> int:
     crbz_done = conn.execute("SELECT completed_at FROM bt_backfill_runs WHERE run_id = %s", (CRBZ_RUN,)).fetchone()[0]
 
     if args.smoke_only:
-        run_id = args.smoke_only
+        run_id, tag = args.smoke_only, args.tag
         status, results = conn.execute("SELECT status, smoke_test_results FROM bt_backfill_runs "
                                        "WHERE run_id = %s AND cr_id = %s", (run_id, CR_ID)).fetchone()
         fp1 = results["smoke"]["fingerprints"]
         out, problems = smoke(types, crbz_done, expected, run_id, fp1, heartbeat=lambda: conn.execute("SELECT 1"))
-        same = out["measure"] == results["smoke"]["measure"]
-        ok = not problems and same
-        print(f"=== {CR_ID} smoke2 for run {run_id} ({status}) ===")
+        ok = not problems
+        digest = hashlib.md5(json.dumps(out["measure"], sort_keys=True).encode()).hexdigest()
+        print(f"=== {CR_ID} smoke {tag} for run {run_id} ({status}) ===")
         _print_measure(out["measure"])
-        print(f"smoke2 measure == smoke1 measure: {same}; fingerprints == smoke1: {out['fingerprints'] == fp1}")
+        print(f"fingerprints == smoke1: {out['fingerprints'] == fp1}; md5 of the whole measure {digest}")
         for p in problems:
             print("  " + p)
-        results["smoke2"] = {"generated_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-                             "equals_smoke1": same, "problems": problems, "ok": ok}
-        conn.execute("UPDATE bt_backfill_runs SET smoke_test_results = %s WHERE run_id = %s", (Jsonb(results), run_id))
-        (LOG_DIR / "smoke2.json").write_text(json.dumps({"run_id": run_id, **out, "problems": problems, "ok": ok},
-                                                        indent=1, default=str))
-        print(f"smoke2: {'OK' if ok else 'FAIL'}")
+        entry = {"generated_utc": dt.datetime.now(dt.timezone.utc).isoformat(), "measure": out["measure"],
+                 "md5_measure": digest, "problems": problems, "ok": ok}
+        conn.execute("UPDATE bt_backfill_runs SET smoke_test_results = jsonb_set(smoke_test_results, %s, %s) "
+                     "WHERE run_id = %s", ([f"smoke_{tag}"], Jsonb(entry), run_id))
+        (LOG_DIR / f"smoke_{tag}.json").write_text(json.dumps({"run_id": run_id, **out, "md5_measure": digest,
+                                                               "problems": problems, "ok": ok}, indent=1, default=str))
+        print(f"smoke {tag}: {'OK' if ok else 'FAIL'}")
         conn.close()
         return 0 if ok else 1
 

@@ -505,3 +505,33 @@ The write script's preflight must reproduce every one of these, and its smoke mu
 - The owner's own table privileges are revoked too; it keeps ownership. A restore therefore needs a deliberate `GRANT SELECT` by the owner, recorded in a CR.
 - The Render-managed superuser `postgres` can't be excluded.
 - Table comment: "BLIND (CR-DO, B4): contains holdout / R-b values; never queried by Ryan or any Claude session."
+
+## Amendment 3 — write run and smoke (2026-10-29)
+
+**Run `642e0d88-ae02-4297-b8d5-8d09ebb3b996`** (`scripts/cr_do_recompute_derived.py`, `dash_backfill_writer`) started 21:50:50 UTC and completed 21:52:12 UTC. That is outside the 11:00–14:00 UTC cron window, and no bar later than 2026-10-29 20:59 UTC existed during it.
+- **Preflight OK:** the in-process plan equals Step 0 run4 / run5, cell by cell for train with values, and by every count and md5 for the blind groups.
+- **Archive:** 312 complete old rows were inserted into `bt_derived_repair_archive` and committed before the write (train 172, holdout 139, R-b 1, forward 0). Train old rows are also in `smoke_test_results.archive.train_old_rows`. The blind groups appear there only as counts and md5 of the payload.
+- **Write:** one transaction of 312 guarded, column-scoped UPDATEs (train 172, holdout 139, R-b 1). Each guard covers the PK, `active`, `computed_at`, and every written column `IS NOT DISTINCT FROM` its archived value cast to the column type. Each SET is also cast to the column type. Every UPDATE hit exactly 1 row. Stamps: `backfill_run_id`, `computed_at`. `rows_updated` = 312.
+- **Values:** train 457 (including the 10 D4 values), holdout 380, R-b 2. No `outcome_status` / `reached_touch` / `reached_close` / `days_to_reach` value was written. No INSERT or DELETE ran on `bt_daily_outcomes`, and there was no `vol_risk_premium` write.
+
+**Smoke 1 (in-run) — FAIL, a definition gap in the smoke, not a data error.**
+- It failed on `v0.6.1` and `v0.6.0-openiv` holdout: `planned_cols`, `md5_keys`, `before`, `after`, `all_post`, `untouched`, and `planned_values` (`v0.6.0-openiv` 195 vs 196). Every other group and check passed.
+- **Diagnosis** (`scripts/cr_do_smoke_diag.py`, counts and column names only):
+  - The bars didn't move.
+  - The smoke re-derives the written cells from the stored state alone: CR-BZ columns of stamped rows where stored now equals post. Two cell classes can't be told apart that way.
+  - (1) One planned `wall_below_price` cell in each of `v0.6.1` and `v0.6.0-openiv` holdout has a NULL recompute and was written NULL. Stored NULL makes it look never-filled, so it dropped out of both "filled" and the written set.
+  - (2) The one `v0.6.1` holdout CR-BZ cell excluded by reproduction already equalled post (Step 0: excluded 1, cells ≠ post after the write 0). It looks like a written cell.
+  - That is exactly the observed arithmetic: `v0.6.1` 172 − 1 + 1 = 172 with different columns, and `v0.6.0-openiv` 196 − 1 = 195. The correct record is a NULL write, as planned: a recompute that gives NULL is a correction, unlike the CR-DL rule for a column that was never filled.
+- **Fix** (`resolve_written()` in the write script): the smoke pins the written set without reading the blind archive. It matches Step 0's `md5_keys` over the NULL-written candidates (stamped-row cells with stored NULL, post NULL, pre not NULL) × at most one re-derived cell removed. It then checks every other checksum independently:
+  - `before` from pre (and the D4 `from` values) equals Step 0 `md5_before`;
+  - stored at the written cells equals Step 0 `md5_after`;
+  - `all_post`, `untouched` (every cell the write must not change), the labels and the cells still ≠ post all equal Step 0.
+  - The match found exactly the expected cells: NULL-written 1 + 1 (`wall_below_price`), excluded-equal-post 1 (`v0.6.1` holdout).
+
+**Smokes 2 and 3** (`--smoke-only 642e0d88… --tag 2 / 3`): two independent processes after the write. Both **OK**, with identical logs; md5 of the whole measure `9e167a963d050a6acfacd6ded80eec6b`. Both are stored in `smoke_test_results.smoke_2` / `smoke_3`, and the run row's `self_assessment` records the smoke-1 diagnosis.
+- **Every group of every version reproduces Step 0's counts and all seven md5s** (Amendment 2 table), with `after` = the stored cells now.
+- Stamped rows per group = planned rows: train 61 / 61 / 50, holdout 66 / 67 / 6, R-b 1 / 0 / 0, forward 0.
+- Train cell by cell: all 457 written cells equal Step 0's planned value exactly, so the train tables in b plus the D4 table are what was written. The only train cells that still differ from the recompute are the 3 `v0.5.0-rebuilt` rows left as stored (03-02 / 03-03 / 03-05).
+- Status / touch / reached / days unchanged (md5 of the labels equals Step 0).
+- Unchanged fingerprints, with md5 computed in SQL: rows and active rows per ticker / version; every row outside scope (other versions, `-spxcash`, rows before 2025-09-01, inactive rows); `bt_daily_features.vol_risk_premium`.
+- Blind groups: only counts and md5 left the processes.
