@@ -34,3 +34,18 @@ test('rolling on: the pane grows by one slot and every slot keeps its pixel heig
   near(v0 - r1, 0.04 * base)
   const [d0, d1] = px(m.delta); near(d1 - d0, 0.24 * base); near(d0 - v1, 0.04 * base); near(H - d1, 0.02 * base)
 })
+
+// CR-DM item 3 — the live effort label.
+import { LIVE_EFFORT_ID, liveEffortLabel } from '../../src/flowV3.js'
+
+test('live effort label: text, min move and previous-leg gate', () => {
+  const up = { dir: 'up', pts: 6.5, end_time: 1, ratio: 1.234, prev_cpp: 900 }
+  assert.equal(LIVE_EFFORT_ID, 'cr-dm-live-effort')
+  assert.equal(liveEffortLabel(up, 4).text, '↑ +6.5 pts so far · 1.2× vs last ↑')
+  assert.equal(liveEffortLabel(up, 4).up, true)
+  assert.equal(liveEffortLabel(up, 7), null) // below M
+  assert.equal(liveEffortLabel({ ...up, prev_cpp: null, ratio: null }, 4), null) // no previous leg the same way
+  assert.equal(liveEffortLabel({ dir: 'down', pts: -4, end_time: 1, ratio: 0.5, prev_cpp: 10 }, 4).text, '↓ -4.0 pts so far · 0.5× vs last ↓') // exactly M
+  assert.equal(liveEffortLabel({ ...up, ratio: null, prev_cpp: 0 }, 4).text, '↑ +6.5 pts so far · – vs last ↑') // previous cpp 0: no ratio
+  assert.equal(liveEffortLabel(null, 4), null)
+})

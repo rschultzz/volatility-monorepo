@@ -390,10 +390,17 @@ def swing_legs(H, L, swing: float) -> list[dict]:
     every leg runs extreme to extreme and moves >= swing. The last, unconfirmed leg is not returned.
     Returns dicts: dir (+1 up / -1 down), start_i, end_i, confirm_i, start_px, end_px.
     """
+    return _swing_scan(H, L, swing)[0]
+
+
+def _swing_scan(H, L, swing: float) -> tuple[list[dict], dict | None]:
+    """swing_legs' loop, also returning its end state (CR-DM): the leg in progress from the last confirmed
+    leg's end to the running extreme since — dict dir, start_i, end_i (running-extreme bar), start_px, end_px —
+    or None before the first confirmation."""
     n = len(H)
     legs: list[dict] = []
     if n == 0:
-        return legs
+        return legs, None
     start_i, start_px = None, None
     hi, hi_i, lo, lo_i = -np.inf, None, np.inf, None    # running extremes (both while dirn == 0)
     dirn = 0
@@ -419,7 +426,10 @@ def swing_legs(H, L, swing: float) -> list[dict]:
                 hi, hi_i, lo, lo_i = float(H[k]), k, np.inf, None
             else:
                 break
-    return legs
+    if dirn == 0:
+        return legs, None
+    ext_i, ext_px = (hi_i, hi) if dirn > 0 else (lo_i, lo)
+    return legs, dict(dir=dirn, start_i=start_i, end_i=ext_i, start_px=start_px, end_px=ext_px)
 
 
 def leg_effort(legs: list[dict], vol, delta) -> list[dict]:
@@ -457,3 +467,27 @@ def pane_effort_legs(m: pd.DataFrame, start_epoch: int, swing: float) -> list[di
                     "start_px": lg["start_px"], "end_px": lg["end_px"], "pts": lg["pts"], "vol": lg["vol"],
                     "delta": lg["delta"], "cpp": lg["cpp"], "dpp": lg["dpp"], "ratio": lg["ratio"]})
     return out
+
+
+def pane_live_leg(m: pd.DataFrame, start_epoch: int, swing: float) -> dict | None:
+    """CR-DM: the leg in progress on the same bars as pane_effort_legs, with the same effort numbers
+    (leg_effort on the confirmed legs plus this one), or None before the first confirmed extreme.
+    prev_cpp = the previous same-direction leg's cpp (None if there is none); last_time = the last bar with volume
+    (a live session's payload pads to 13:00 PT with flat zero-volume minutes, which never move an extreme);
+    minutes = bars from the leg's start to its running extreme (the window pts / vol / delta cover)."""
+    mm = m[m.index >= start_epoch]
+    if mm.empty:
+        return None
+    times = mm.index.to_numpy()
+    H, L = mm["h"].to_numpy(float), mm["l"].to_numpy(float)
+    legs, tail = _swing_scan(H, L, swing)
+    if tail is None:
+        return None
+    vol, delta = mm["vol"].to_numpy(float), (mm["buy"] - mm["sell"]).to_numpy(float)
+    *done, lg = leg_effort(legs + [tail], vol, delta)
+    prev = next((x for x in reversed(done) if x["dir"] == lg["dir"]), None)
+    return {"start_time": int(times[lg["start_i"]]), "end_time": int(times[lg["end_i"]]),
+            "last_time": int(times[np.flatnonzero(vol > 0)[-1]] if (vol > 0).any() else times[-1]), "dir": "up" if lg["dir"] == 1 else "down",
+            "start_px": lg["start_px"], "end_px": lg["end_px"], "pts": lg["pts"], "vol": lg["vol"],
+            "delta": lg["delta"], "cpp": lg["cpp"], "dpp": lg["dpp"], "ratio": lg["ratio"],
+            "prev_cpp": None if prev is None else prev["cpp"], "minutes": int(lg["end_i"] - lg["start_i"])}

@@ -218,5 +218,83 @@ class TestCausality(unittest.TestCase):
         self.check_prefixes(m, 8.0)
 
 
+class TestLiveLeg(unittest.TestCase):
+    """CR-DM: the leg in progress from swing_legs' own end state, with leg_effort's numbers."""
+
+    def test_swing_legs_is_the_scan(self):
+        for seed in range(4):
+            m = random_minutes(seed)
+            H, L = m["h"].to_numpy(float), m["l"].to_numpy(float)
+            self.assertEqual(ff.swing_legs(H, L, 8.0), ff._swing_scan(H, L, 8.0)[0])
+
+    def test_hand_example(self):
+        # 99 low (bar 0) confirmed at bar 2 (H 110 >= 107); up 99 -> 110 confirmed at bar 3 (L 102 <= 102);
+        # down 110 -> 100 (bar 4) confirmed at bar 6 (H 109 >= 108); then up from 100 to 109 so far (bars 7-8
+        # neither retrace to 101 nor make a new high).
+        H = [100, 105, 110, 104, 102, 105, 109, 106, 108]
+        L = [99, 101, 106, 102, 100, 101, 105, 104, 105]
+        vol = [10, 20, 30, 40, 50, 60, 70, 80, 90]
+        m = frame(H, L, vol=vol, buy=[v * 0.75 for v in vol])
+        legs = ff.pane_effort_legs(m, T0, 8.0)
+        self.assertEqual([(lg["dir"], lg["start_px"], lg["end_px"]) for lg in legs],
+                         [("up", 99.0, 110.0), ("down", 110.0, 100.0)])
+        live = ff.pane_live_leg(m, T0, 8.0)
+        # bars (4, 6]: vol 60 + 70, delta half of it
+        self.assertEqual((live["dir"], live["start_px"], live["end_px"], live["pts"]), ("up", 100.0, 109.0, 9.0))
+        self.assertEqual((live["start_time"], live["end_time"], live["last_time"]), (T0 + 240, T0 + 360, T0 + 480))
+        self.assertEqual((live["vol"], live["delta"], live["minutes"]), (130.0, 65.0, 2))
+        self.assertAlmostEqual(live["cpp"], 130 / 9)
+        self.assertAlmostEqual(live["dpp"], 65 / 9)
+        self.assertAlmostEqual(live["prev_cpp"], 50 / 11)                 # the up leg, bars (0, 2]
+        self.assertAlmostEqual(live["ratio"], (130 / 9) / (50 / 11))
+        self.assertEqual(ff.pane_effort_legs(m, T0, 8.0), legs)          # confirmed legs untouched
+
+    def test_padded_live_session(self):
+        # a live payload pads to 13:00 with flat zero-volume minutes: same leg, last_time = the last traded minute
+        H = [100, 105, 110, 104, 102, 105, 109, 106, 108]
+        L = [99, 101, 106, 102, 100, 101, 105, 104, 105]
+        m = frame(H, L, vol=[10, 20, 30, 40, 50, 60, 70, 80, 90])
+        pad = frame(H + [106.5] * 5, L + [106.5] * 5, vol=[10, 20, 30, 40, 50, 60, 70, 80, 90] + [0] * 5)
+        a, b = ff.pane_live_leg(m, T0, 8.0), ff.pane_live_leg(pad, T0, 8.0)
+        self.assertEqual(a, b)
+        self.assertEqual(b["last_time"], T0 + 480)
+
+    def test_none_before_the_first_confirmation(self):
+        m = frame([100, 101, 102], [99, 100, 101])
+        self.assertIsNone(ff.pane_live_leg(m, T0, 8.0))
+        self.assertIsNone(ff.pane_live_leg(m.iloc[:0], T0, 8.0))
+
+    def check_handoff(self, m, swing):
+        """On the bars just before a leg is confirmed, the live leg IS that leg (same start, extreme, bars, cpp,
+        ratio); prev_cpp is the previous same-direction leg's cpp; the live leg never reads a later bar."""
+        full = ff.pane_effort_legs(m, int(m.index[0]), swing)
+        times = m.index.to_numpy()
+        keys = ("dir", "start_time", "end_time", "start_px", "end_px", "pts", "vol", "delta", "cpp", "dpp", "ratio")
+        checked = 0
+        for j, lg in enumerate(full):
+            k = int(np.searchsorted(times, lg["confirm_time"]))      # bars [0, k) end just before confirmation
+            live = ff.pane_live_leg(m.iloc[:k], int(m.index[0]), swing)
+            if j == 0:
+                continue   # the first leg starts at the first confirmed extreme, so it is not a tail before it
+            self.assertEqual({x: live[x] for x in keys}, {x: lg[x] for x in keys}, f"leg {j}")
+            prev = next((p for p in reversed(full[:j]) if p["dir"] == lg["dir"]), None)
+            self.assertEqual(live["prev_cpp"], None if prev is None else prev["cpp"])
+            self.assertEqual(live["last_time"], int(times[:k][m["vol"].to_numpy()[:k] > 0][-1]))
+            checked += 1
+        self.assertGreater(checked, 2)
+
+    def test_handoff_synthetic(self):
+        for seed in range(6):
+            for swing in (4.0, 8.0):
+                with self.subTest(seed=seed, swing=swing):
+                    self.check_handoff(random_minutes(seed), swing)
+
+    def test_handoff_real_session(self):
+        F = load_real()[REAL_DAYS[2]]                     # 2026-05-01, Databento
+        m = ff.minutes_from_seconds(F)
+        m = m[m.index >= T0]
+        self.check_handoff(m, 8.0)
+
+
 if __name__ == "__main__":
     unittest.main()

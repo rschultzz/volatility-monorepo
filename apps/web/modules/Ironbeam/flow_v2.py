@@ -437,6 +437,7 @@ def _build_flow_v2_payload(engine, trade_date: str | None, *, session: str | Non
     if until_pt is not None:
         payload["until"] = until_pt.replace(tzinfo=None).isoformat()
     segments, bars, markers, gaps, legs = [], [], [], [], []
+    live_leg = None
     complete = end.astimezone(UTC) <= now_utc - dt.timedelta(minutes=2) and until_pt is None
     # the chart's bar closes for the whole loaded window, once (contract choice, A1.4)
     bars_from = eth_a if session_mode == "FULL" else rth_a - dt.timedelta(minutes=WARMUP_MIN)
@@ -481,6 +482,8 @@ def _build_flow_v2_payload(engine, trade_date: str | None, *, session: str | Non
             markers = ff.pane_markers(mm, s, _epoch(a), params)
             if effort:   # A5: RTH legs by the marker swing rule, from bars before `end` only
                 legs = _legs(ff.pane_effort_legs(mm, _epoch(a), params.swing))
+                live = ff.pane_live_leg(mm, _epoch(a), params.swing)   # CR-DM: the leg in progress, same bars
+                live_leg = None if live is None else _legs([live])[0]
             segments.append({"name": "rth", "source": source, "symbol": sym, "symbol_choice": how,
                              "anchor": rth_a.replace(tzinfo=None).isoformat(), "start": _epoch(a), "end": _epoch(b)})
             payload["baseline"] = base
@@ -494,5 +497,6 @@ def _build_flow_v2_payload(engine, trade_date: str | None, *, session: str | Non
                    point_count=len(bars))
     if effort:
         payload["legs"] = legs
+        payload["live_leg"] = live_leg
     payload.setdefault("baseline", None)
     return payload, 200

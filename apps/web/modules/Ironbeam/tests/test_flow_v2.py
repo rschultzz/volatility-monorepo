@@ -146,16 +146,22 @@ class TestFlowV2(_Base):
 
 
 class TestEffortLegs(_Base):
-    """CR-CD A5: `effort=1` adds RTH swing legs and changes nothing else."""
+    """CR-CD A5: `effort=1` adds RTH swing legs (and, CR-DM, the leg in progress) and changes nothing else."""
 
     def test_effort_adds_only_legs(self):
         base = json.loads((vf.FIXTURE_DIR / "cr_cd_flow_v2_golden_0501.json").read_bytes())
         p = self.v2(vf.QS_0501 + "&effort=1").get_json()
         legs = p.pop("legs")
+        live = p.pop("live_leg")
         self.assertEqual(p, base)
         self.assertTrue(legs)
         self.assertEqual(set(legs[0]), {"start_time", "end_time", "confirm_time", "dir", "start_px", "end_px",
                                         "pts", "vol", "delta", "cpp", "dpp", "ratio"})
+        self.assertEqual(set(live), {"start_time", "end_time", "last_time", "dir", "start_px", "end_px", "pts", "vol",
+                                     "delta", "cpp", "dpp", "ratio", "prev_cpp", "minutes"})
+        # CR-DM: the leg in progress starts where the last confirmed leg ends, the other way
+        self.assertEqual((live["start_time"], live["start_px"]), (legs[-1]["end_time"], legs[-1]["end_px"]))
+        self.assertNotEqual(live["dir"], legs[-1]["dir"])
 
     def test_legs_2026_05_01(self):
         p = self.v2(vf.QS_0501 + "&effort=1").get_json()
@@ -194,8 +200,32 @@ class TestEffortLegs(_Base):
         u = epoch("2026-05-01T07:39:00")
         self.assertTrue(cut["legs"])
         self.assertEqual(cut["legs"], [lg for lg in full["legs"] if lg["confirm_time"] < u])
+        live = cut.pop("live_leg")   # CR-DM: built from bars before `until` only
+        self.assertLess(live["last_time"], u)
+        self.assertLessEqual(live["end_time"], live["last_time"])
         cut.pop("legs")
         self.assertEqual(cut, self.v2(vf.QS_0501_UNTIL).get_json())
+
+    def test_live_leg_at_until(self):
+        """CR-DM: at the replay time the live leg's numbers are sums of the bars before it, and the leg the
+        full session later confirms from the same start has the same numbers if its extreme was already in."""
+        full = self.v2(vf.QS_0501 + "&effort=1").get_json()
+        cut = self.v2(vf.QS_0501_UNTIL + "&effort=1").get_json()
+        u = epoch("2026-05-01T07:39:00")
+        rth = {b["time"]: b for b in full["bars"] if b["seg"] == "rth" and b["time"] < u}
+        live = cut["live_leg"]
+        span = [t for t in rth if live["start_time"] < t <= live["end_time"]]
+        self.assertEqual(live["minutes"], len(span))
+        self.assertAlmostEqual(live["vol"], sum(rth[t]["vol"] for t in span))
+        self.assertAlmostEqual(live["delta"], sum(rth[t]["delta"] for t in span))
+        self.assertAlmostEqual(live["cpp"], live["vol"] / abs(live["pts"]))
+        prev = next((lg for lg in reversed(cut["legs"]) if lg["dir"] == live["dir"]), None)
+        self.assertEqual(live["prev_cpp"], None if prev is None else prev["cpp"])
+        later = next(lg for lg in full["legs"] if lg["start_time"] == live["start_time"])
+        self.assertGreaterEqual(later["confirm_time"], u)
+        if later["end_time"] == live["end_time"]:
+            keys = ("dir", "start_px", "end_px", "pts", "vol", "delta", "cpp", "dpp", "ratio")
+            self.assertEqual({k: live[k] for k in keys}, {k: later[k] for k in keys})
 
     def test_ironbeam_session_and_rth_only_session(self):
         for qs in (vf.QS_1023, vf.QS_0317):

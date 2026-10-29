@@ -155,6 +155,19 @@ export function paneSlotMargins(pane0Px, extraPx) {
   }
 }
 
+// CR-DM item 3: the live effort label for the leg in progress (the payload's `live_leg`: swing_legs' end state with
+// leg_effort's numbers). Drawn only once the leg has moved at least `minMove` pts and a previous leg the same way exists
+// (prev_cpp); else null. A display aid, not a tested threshold.
+export const LIVE_EFFORT_ID = 'cr-dm-live-effort'
+export function liveEffortLabel(live, minMove) {
+  if (!live || !fin(live.pts) || !fin(live.end_time)) return null
+  const pts = Number(live.pts)
+  if (Math.abs(pts) < Number(minMove) || live.prev_cpp == null) return null
+  const arrow = live.dir === 'up' ? '↑' : '↓'
+  const ratio = fin(live.ratio) ? `${Number(live.ratio).toFixed(1)}×` : '–'
+  return { leg: live, up: live.dir === 'up', text: `${arrow} ${pts >= 0 ? '+' : '-'}${Math.abs(pts).toFixed(1)} pts so far · ${ratio} vs last ${arrow}` }
+}
+
 // Flatten the cells payload's segments into shifted-time arrays (once per payload).
 export function flattenCells(payload, shift) {
   const segs = Array.isArray(payload?.segments) ? payload.segments : []

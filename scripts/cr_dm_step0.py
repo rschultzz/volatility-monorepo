@@ -33,7 +33,7 @@ import modules.Ironbeam.callbacks as cb  # noqa: E402
 from modules.Ironbeam import flow_v2  # noqa: E402
 from packages.shared import flow_features as ff  # noqa: E402
 
-OUT = os.path.join(REPO, "scripts", "logs", "cr-dm", "step0")
+OUT = os.environ.get("CRDM_OUT") or os.path.join(REPO, "scripts", "logs", "cr-dm", "step0")
 PT = ff.PT
 
 Q1_SQL = """
@@ -80,7 +80,7 @@ def main():
             tag = day + ("" if until is None else "_until_" + until[11:16].replace(":", ""))
             with open(os.path.join(OUT, f"legs_{tag}.json"), "w") as f:
                 json.dump({"status": status, "source": payload.get("source"), "symbol": payload.get("symbol"),
-                           "legs": legs, "bars_vol_buy_sell": vol_bars}, f, indent=1)
+                           "legs": legs, "live_leg": payload.get("live_leg"), "bars_vol_buy_sell": vol_bars}, f, indent=1)
             print(f"  {tag}: status {status}, source {payload.get('source')}, {len(legs)} legs, {len(vol_bars)} bars")
         engine.dispose()
     except Exception as e:  # never print connection strings
