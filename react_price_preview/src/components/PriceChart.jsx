@@ -9,13 +9,9 @@ import {
   createSeriesMarkers,
 } from 'lightweight-charts'
 import SmileChart from './SmileChart'
-import SignalPanel from './SignalPanel'
 import ChartToggleBar from './ChartToggleBar'
 import TradeAnnotationPanel from './TradeAnnotationPanel'
 import CondorPricingPanel from './CondorPricingPanel'
-import AnaloguesPanel, {
-  PANEL_WIDTH as ANALOGUES_PANEL_WIDTH,
-} from './AnaloguesPanel'
 import {
   GexLandscape,
   PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH,
@@ -869,18 +865,8 @@ export default function PriceChart({
   landscapeData = null,
   landscapeSpotMode = 'LIVE',
   onLandscapeSpotModeChange = null,
-  // Day Analogue Comparison panel (CR-013). State + fetch lifecycle live
-  // in App.jsx; PriceChart only owns the ANALOGUES pill and renders the
-  // docked panel.
-  analoguesOpen = false,
-  onToggleAnalogues = null,
-  analoguesData = null,
-  analoguesLoading = false,
-  analoguesError = null,
-  analoguesK = 5,
-  onAnaloguesKChange = null,
   // Setup review (CR-CC). State, fetches and the panel live in App.jsx; PriceChart
-  // owns the REVIEW pill, hides SIGNALS / smile / condor while the replay cutoff is
+  // owns the REVIEW pill, hides smile / condor while the replay cutoff is
   // active (reviewHide), and draws the active candidate's lines and markers.
   reviewOpen = false,
   onToggleReview = null,
@@ -1190,13 +1176,6 @@ export default function PriceChart({
   // under different keys, just not the open/closed state.
   const [smileCollapsed, setSmileCollapsed] = useState(true)
   const smileResizeRef = useRef(null)
-
-  // SIGNALS panel collapsed state — owned here (lifted from SignalPanel) so all
-  // three chart-toggle pills follow the same prop-driven pattern.
-  const [signalsCollapsed, setSignalsCollapsed] = useState(true)
-  const toggleSignalsCollapsed = useCallback(() => {
-    setSignalsCollapsed(prev => !prev)
-  }, [])
 
   // ── Trade annotation mode ─────────────────────────────────────
   const [annotationState, setAnnotationState] = useState(null)
@@ -3697,17 +3676,13 @@ export default function PriceChart({
 
           <ChartToggleBar
             pills={[
-              // CR-CC A2: SMILE stays during a review replay (capped at the cutoff);
-              // SIGNALS is hidden until reveal (A1.3).
+              // CR-CC A2: SMILE stays during a review replay (capped at the cutoff). CR-DP item 5: SIGNALS and
+              // ANALOGUES (and their panels) are removed.
               { key: 'smile', label: 'SMILE', isOpen: !smileCollapsed, onToggle: toggleSmileCollapsed },
-              ...(reviewHide
-                ? []
-                : [{ key: 'signals', label: 'SIGNALS', isOpen: !signalsCollapsed, onToggle: toggleSignalsCollapsed }]),
               ...(Array.isArray(normalizedGexSegments) && normalizedGexSegments.length > 0 && gexEnabled
                 ? [{ key: 'gex', label: 'GEX', isOpen: gexPanelOpen, onToggle: () => setGexPanelOpen(o => !o), title: 'Show GEX legend' }]
                 : []),
               { key: 'landscape', label: 'LANDSCAPE', isOpen: landscapeOpen, onToggle: onToggleLandscape || (() => {}), title: 'Show GEX landscape panel' },
-              { key: 'analogues', label: 'ANALOGUES', isOpen: analoguesOpen, onToggle: onToggleAnalogues || (() => {}), title: 'Show day analogue comparison panel' },
               { key: 'review', label: 'REVIEW', isOpen: reviewOpen, onToggle: onToggleReview || (() => {}), title: 'Show setup review panel' },
             ]}
           />
@@ -3972,18 +3947,6 @@ export default function PriceChart({
             />
           )}
 
-          {analoguesOpen && (
-            <AnaloguesPanel
-              data={analoguesData}
-              loading={analoguesLoading}
-              error={analoguesError}
-              k={analoguesK}
-              onKChange={onAnaloguesKChange || undefined}
-              onClose={onToggleAnalogues || undefined}
-              rightOffset={landscapeOpen ? LANDSCAPE_PANEL_WIDTH : 0}
-            />
-          )}
-
           {!smileCollapsed && (
           <div
             data-testid="smile-window"
@@ -4162,18 +4125,6 @@ export default function PriceChart({
               tradeDate={tradeDate}
               onSaved={clearAnnotationState}
               onCancel={clearAnnotationState}
-            />
-          )}
-
-          {/* Signal Panel — separate floating window, self-managed fetch.
-              Unmounted during a review replay (CR-CC A1.3) so it neither shows
-              nor scans the day's signals. */}
-          {!reviewHide && (
-            <SignalPanel
-              tradeDate={tradeDate}
-              isToday={tradeDate === new Date().toISOString().slice(0, 10)}
-              collapsed={signalsCollapsed}
-              onToggleCollapsed={toggleSignalsCollapsed}
             />
           )}
 

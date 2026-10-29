@@ -1,6 +1,6 @@
 # Dash project — Claude Code memory
 
-Options analytics and algorithmic trading platform (ES/SPX). Python monorepo, PostgreSQL on Render, Flask backend (`service.py`), React frontend. Two GEX-wall-based backtest strategies (short = mature, long = in development) plus an exploratory volatility-compression iron condor. Live signal panel (`SignalPanel.jsx`) persists to the `bt_signals` table.
+Options analytics and algorithmic trading platform (ES/SPX). Python monorepo, PostgreSQL on Render, Flask backend (`service.py`), React frontend. Two GEX-wall-based backtest strategies (short = mature, long = in development) plus an exploratory volatility-compression iron condor. The live signal panel (`SignalPanel.jsx`, which upserted the `bt_signals` table every 60 s while the React price chart was open on today) was removed in CR-DP (Ryan, 2026-10-29): `bt_signals` stops filling from 2026-10-29; the table and the `/api/backtests-v2/signals/*` endpoints are kept, so its history stays readable.
 
 ## Vault-wide conventions
 

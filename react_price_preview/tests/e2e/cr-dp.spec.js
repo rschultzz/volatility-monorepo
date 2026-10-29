@@ -380,3 +380,29 @@ test('item 6: delta-share line (2026-10-29): box 10:15–10:34 ≈ +1 % = hand �
   await ctxB.close()
   await ctxM.close()
 })
+
+test('item 5: no SIGNALS / ANALOGUES pills or panels, no /signals request; REVIEW and LANDSCAPE still open', async ({ page }) => {
+  test.setTimeout(240_000)
+  const signalCalls = []
+  page.on('request', (r) => { if (/\/signals\/|\/api\/analogues/.test(r.url())) signalCalls.push(r.url()) })
+  await open(page, D29, { storage: V3 })
+  const pills = await page.locator('button[aria-label]').evaluateAll((els) => els.map((e) => e.innerText.trim()).filter((t) => /^[A-Z]+$/.test(t)))
+  log('item5-pills.json', pills)
+  expect(pills).toEqual(['SMILE', 'GEX', 'LANDSCAPE', 'REVIEW'])
+  await expect(page.getByRole('button', { name: 'Show SIGNALS' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Show day analogue comparison panel' })).toHaveCount(0)
+  // LANDSCAPE: the panel's request returns and the panel draws
+  const land = page.waitForResponse((r) => r.url().includes('/api/gex-landscape'), { timeout: 60_000 })
+  await page.getByRole('button', { name: 'Show GEX landscape panel' }).click()
+  expect((await land).status()).toBe(200)
+  await page.waitForTimeout(1500)
+  await page.screenshot({ path: path.join(LOGS, 'item5-landscape.png') })
+  // REVIEW: the panel opens (a fresh page: the open landscape panel sits over the pill row's right end)
+  const p2 = await page.context().newPage()
+  p2.on('request', (r) => { if (/\/signals\/|\/api\/analogues/.test(r.url())) signalCalls.push(r.url()) })
+  await open(p2, D29, { storage: V3 })
+  await p2.getByRole('button', { name: 'Show setup review panel' }).click()
+  await expect(p2.getByTestId('review-panel')).toBeVisible()
+  await p2.waitForTimeout(65_000) // longer than the removed SignalPanel's 60 s scan
+  expect(signalCalls).toEqual([])
+})

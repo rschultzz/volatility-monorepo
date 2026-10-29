@@ -4,7 +4,6 @@ import { DEFAULT_MARKER_SETTINGS, alignV2ToCandles, effortChartMarkers } from '.
 import AggressorFlowV3Panel from './components/AggressorFlowV3Panel'
 import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, LIVE_EFFORT_ID, boxSegments, edgeReadout, edgeStripDrawn, endFromPick, flattenBars, liveEffortLabel, makeShifter, rollingExtraHeight, rowCloses, segmentReadouts } from './flowV3'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
-import { PANEL_WIDTH as ANALOGUES_PANEL_WIDTH } from './components/AnaloguesPanel'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
 import {
   GEX_MIN_ABS_B_LEGACY_STORAGE_KEY,
@@ -372,7 +371,7 @@ export default function App() {
   const tradeDate = reviewCandidate?.session_date || urlTradeDate
   const expirationDate = reviewCandidate ? tradeDate : urlExpirationDate
   // A1.2 / A1.3 — replay cutoff: bars with start < entry_ts_pt until reveal. While it
-  // is set, SIGNALS / smile / skew / condor are hidden and the ATM IV series and flow
+  // is set, smile / skew / condor are hidden and the ATM IV series and flow
   // are truncated; reveal clears it and the full session is re-fetched (L8).
   const reviewUntil = reviewCandidate && !reviewCandidate.revealed ? reviewCandidate.entry_ts_pt : null
   const reviewHide = Boolean(reviewUntil)
@@ -652,12 +651,6 @@ export default function App() {
   // CondorPricingPanel overlay.
   const [condorPricing, setCondorPricing] = useState(null)
 
-  // ── Day analogues panel (CR-013) ──────────────────────────────────
-  const [analoguesOpen, setAnaloguesOpen] = useState(false)
-  const [analoguesData, setAnaloguesData] = useState(null)
-  const [analoguesLoading, setAnaloguesLoading] = useState(false)
-  const [analoguesError, setAnaloguesError] = useState(null)
-  const [analoguesK, setAnaloguesK] = useState(5)
 
   // ── GEX landscape panel (CR-008) ──────────────────────────────────
   const [landscapeOpen, setLandscapeOpen] = useState(false)
@@ -891,65 +884,6 @@ export default function App() {
       }
     }
   }, [landscapeOpen, tradeDate, apiBase, landscapeSpotMode, liveEsSpot, landscapeIv, activeLevelsMode])
-
-  // ── Day analogues fetch (CR-013) ──────────────────────────────────────
-  // Pulls from /api/analogues whenever the panel is open and the
-  // (date, spot, implied_move, k) tuple changes. Debounced to avoid
-  // hammering during shift+drag spot adjustments.
-  useEffect(() => {
-    if (!analoguesOpen || !tradeDate || !apiBase) return undefined
-    if (liveEsSpot == null || landscapeIv == null) return undefined
-
-    const spot = liveEsSpot
-    // 1-sigma implied move from the ATM IV passed via the same hook the
-    // landscape panel uses. iv is decimal (e.g. 0.107); 1-day move ≈
-    // spot * iv * sqrt(1/252).
-    const implied_move = spot * landscapeIv * Math.sqrt(1 / 252)
-
-    const controller = new AbortController()
-    let disposed = false
-    setAnaloguesLoading(true)
-    setAnaloguesError(null)
-
-    const timeoutId = window.setTimeout(async () => {
-      try {
-        const url = new URL(`${apiBase}/api/analogues`)
-        url.searchParams.set('ticker', 'SPX')
-        url.searchParams.set('date', tradeDate)
-        url.searchParams.set('spot', String(spot))
-        url.searchParams.set('implied_move', String(implied_move))
-        url.searchParams.set('k', String(analoguesK))
-
-        const response = await fetch(url.toString(), {
-          method: 'GET',
-          credentials: 'include',
-          signal: controller.signal,
-          cache: 'no-store',
-        })
-        if (disposed) return
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({}))
-          throw new Error(body?.error || `Analogues fetch failed: ${response.status}`)
-        }
-        const data = await response.json()
-        if (disposed) return
-        if (!data.ok) throw new Error(data.error || 'Analogues endpoint returned ok=false')
-        setAnaloguesData(data)
-      } catch (e) {
-        if (disposed || e.name === 'AbortError') return
-        setAnaloguesError(String(e.message || e))
-        setAnaloguesData(null)
-      } finally {
-        if (!disposed) setAnaloguesLoading(false)
-      }
-    }, 300)
-
-    return () => {
-      disposed = true
-      controller.abort()
-      window.clearTimeout(timeoutId)
-    }
-  }, [analoguesOpen, tradeDate, apiBase, liveEsSpot, landscapeIv, analoguesK])
 
   // Compute the band levels in ES coordinates from:
   //  - the active SPX anchor (stock_price)
@@ -2135,7 +2069,7 @@ export default function App() {
   }, [])
 
   const reviewRightOffset =
-    (landscapeOpen ? LANDSCAPE_PANEL_WIDTH : 0) + (analoguesOpen ? ANALOGUES_PANEL_WIDTH : 0)
+    landscapeOpen ? LANDSCAPE_PANEL_WIDTH : 0
 
   const handleLinkedCrosshairChange = useCallback((nextValue) => {
     if (!nextValue) {
@@ -2290,13 +2224,6 @@ export default function App() {
                 landscapeData={landscapeData}
                 landscapeSpotMode={landscapeSpotMode}
                 onLandscapeSpotModeChange={setLandscapeSpotMode}
-                analoguesOpen={analoguesOpen}
-                onToggleAnalogues={() => setAnaloguesOpen((o) => !o)}
-                analoguesData={analoguesData}
-                analoguesLoading={analoguesLoading}
-                analoguesError={analoguesError}
-                analoguesK={analoguesK}
-                onAnaloguesKChange={setAnaloguesK}
                 reviewOpen={reviewOpen}
                 onToggleReview={() => (reviewOpen ? closeReview() : setReviewOpen(true))}
                 reviewCandidate={reviewCandidate}
