@@ -280,6 +280,7 @@ def main(argv=None) -> int:
         "left_as_stored": sorted(f"{v} {d}" for v, d in LEFT_AS_STORED),
         "plan_source": str(PLAN_PATH.relative_to(REPO_ROOT)) + " generated " + dry["generated_utc"],
     }
+    archive = json.loads(json.dumps(archive, default=str))  # UUID backfill_run_id etc.
     ok = False
     with backfill_run(conn, CR_ID) as run_id:
         print(f"Run ID: {run_id}")
