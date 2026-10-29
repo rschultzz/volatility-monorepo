@@ -25,9 +25,10 @@ import {
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { absorptionLevels, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
+import { LIVE_EFFORT_ID, absorptionLevels, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
 import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive } from './flowV3Primitives'
 
+const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
 const TIME_AXIS_HEIGHT = 24
@@ -891,6 +892,9 @@ export default function PriceChart({
   // CR-CD A5 — swing effort labels from Flow v2 (Effort on): [{ time (shifted PT epoch of the leg's end
   // bar), position, shape, color, text, size }]; null while Effort is off.
   effortMarkers = null,
+  // CR-DM item 3 — the live effort label's leg (flowV3.liveEffortLabel, App), drawn as the marker with id LIVE_EFFORT_ID
+  // in effortMarkers; used for its hover. null when no live label is drawn.
+  liveEffort = null,
   // CR-DC — Flow v3 on the price pane: { payload (/api/ironbeam/flow/cells), heat, sellLayer, buyLayer,
   // marks, profile, profileFrom (shifted PT epoch), levels, edges (CR-DF: flowV3.edgeReadout) }, memoised by App; null while v3 is off, and then no
   // primitive is attached (the chart is exactly as before). While `anchorPickArmed`, the next bar click
@@ -2584,6 +2588,7 @@ export default function PriceChart({
   // leg's end bar. Their own markers primitive, attached only once there are labels to draw, so with
   // Effort off the chart is exactly as before.
   const effortMarkersRef = useRef(null)
+  const liveEffortMarkerRef = useRef(null) // CR-DM: the live label's marker as drawn (snapped time, position)
   const anchorPickArmedRef = useRef(false)
   const onAnchorPickRef = useRef(null)
   useEffect(() => {
@@ -2605,7 +2610,35 @@ export default function PriceChart({
     }
     markers.sort((a, b) => a.time - b.time)
     effortMarkersRef.current.api.setMarkers(markers)
+    liveEffortMarkerRef.current = markers.find((m) => m.id === LIVE_EFFORT_ID) || null
   }, [effortMarkers, displayCandles])
+
+  // CR-DM item 3 — hover on the live effort label: the pointer on the label's candle, within LIVE_LABEL_BAND_PX above its
+  // high (up legs, label above the bar) or below its low (down legs). The markers plugin reports no hovered marker id
+  // (hoveredObjectId is empty), so the label's area is matched by position.
+  const [liveEffortHover, setLiveEffortHover] = useState(null)
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !liveEffort) {
+      setLiveEffortHover(null)
+      return undefined
+    }
+    const onMove = (p) => {
+      const mk = liveEffortMarkerRef.current
+      const series = seriesRef.current
+      const bar = mk && p?.point && p.time === mk.time && series ? series.data().find((x) => x.time === mk.time) : null
+      if (!bar) {
+        setLiveEffortHover(null)
+        return
+      }
+      const up = mk.position === 'aboveBar'
+      const edge = series.priceToCoordinate(up ? bar.high : bar.low)
+      const d = up ? edge - p.point.y : p.point.y - edge
+      setLiveEffortHover(edge != null && d >= 0 && d <= LIVE_LABEL_BAND_PX ? { x: p.point.x, y: p.point.y } : null)
+    }
+    chart.subscribeCrosshairMove(onMove)
+    return () => chart.unsubscribeCrosshairMove(onMove)
+  }, [liveEffort])
 
   // CR-DC — Flow v3 heatmap, absorption marks and profile: one primitive each, attached on first use and
   // fed inputs computed once per data change (payload / candle times / toggles), never per render.
@@ -3630,6 +3663,35 @@ export default function PriceChart({
               <div>{formatShiftedHHMM(v3Hover.mark.candleTime)} · aggressor {kfmt(Number(v3Hover.mark.aggressor))} · opposite {kfmt(Number(v3Hover.mark.opposite))}</div>
               <div>held {v3Hover.mark.heldMin} min · {v3Hover.mark.break_time != null ? `broke at ${formatShiftedHHMM(v3Shift(v3Hover.mark.break_time))}` : 'not broken'}</div>
               <div style={{ color: '#94a3b8' }}>visual aid — untested</div>
+            </div>
+          )}
+
+          {liveEffortHover && liveEffort && (
+            <div
+              data-testid="live-effort-tooltip"
+              style={{
+                position: 'absolute',
+                left: Math.max(0, (hostRef.current?.offsetLeft || 0) + liveEffortHover.x + 12),
+                top: Math.max(0, (hostRef.current?.offsetTop || 0) + liveEffortHover.y - 10),
+                zIndex: 6, pointerEvents: 'none', background: 'rgba(2,6,23,0.92)', border: '1px solid #334155',
+                borderRadius: 8, padding: '6px 8px', fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4, maxWidth: 300,
+              }}
+            >
+              {(() => {
+                const lg = liveEffort.leg
+                const hm = (t) => formatShiftedHHMM(v3Shift(t))
+                const n = (v, f = kfmt) => (v == null ? '–' : f(Number(v)))
+                const sg = (v) => `${v >= 0 ? '+' : '-'}${kfmt(Math.abs(v))}`
+                return (
+                  <>
+                    <div style={{ fontWeight: 700 }}>{lg.dir === 'up' ? '↑' : '↓'} {Number(lg.pts) >= 0 ? '+' : ''}{Number(lg.pts).toFixed(2)} pts so far · {Number(lg.start_px).toFixed(2)} → {Number(lg.end_px).toFixed(2)}</div>
+                    <div>volume {n(lg.vol)} · delta {n(lg.delta, sg)}</div>
+                    <div>{n(lg.cpp)}/pt · delta {n(lg.dpp, sg)}/pt · {lg.ratio == null ? '–' : `${Number(lg.ratio).toFixed(2)}×`} vs last {lg.dir === 'up' ? '↑' : '↓'} ({n(lg.prev_cpp)}/pt)</div>
+                    <div>{lg.minutes} min so far ({hm(lg.start_time)} → extreme {hm(lg.end_time)}; bars to {hm(lg.last_time)})</div>
+                    <div style={{ color: '#94a3b8' }}>provisional — leg not confirmed</div>
+                  </>
+                )
+              })()}
             </div>
           )}
 

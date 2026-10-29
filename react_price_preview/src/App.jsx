@@ -3,7 +3,7 @@ import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
 import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS, effortChartMarkers } from './components/AggressorFlowV2Panel'
 import AggressorFlowV3Panel from './components/AggressorFlowV3Panel'
-import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, edgeReadout, edgeStripDrawn, flattenBars, makeShifter } from './flowV3'
+import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, LIVE_EFFORT_ID, edgeReadout, edgeStripDrawn, flattenBars, liveEffortLabel, makeShifter, rollingExtraHeight } from './flowV3'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import { PANEL_WIDTH as ANALOGUES_PANEL_WIDTH } from './components/AnaloguesPanel'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
@@ -1596,10 +1596,6 @@ export default function App() {
     if (!flowEnabled || !flowEffort || (!flowV3 && flowMode !== 'v2')) return null
     return flowV2Payloads.flatMap((p) => (Array.isArray(p.payload?.legs) ? p.payload.legs : []))
   }, [flowEnabled, flowMode, flowV3, flowEffort, flowV2Payloads])
-  const effortMarkers = useMemo(
-    () => (flowEffortLegs ? effortChartMarkers(flowEffortLegs, flowMarkerSettings.effortRatio) : null),
-    [flowEffortLegs, flowMarkerSettings.effortRatio]
-  )
 
   useEffect(() => {
     if (!flowEnabled || !flowV2Data || loadingCenter || error) {
@@ -2008,8 +2004,10 @@ export default function App() {
 
   // CR-DI amendment 2: while the Edge effort strip is drawn the Flow v3 pane grows by its height (the price pane
   // above gives it up), so the pane's other series keep their heights; otherwise the pane is unchanged.
-  const flowPaneExtra = flowPaneMode === 'v3' && edgeStripDrawn(flowEdgeEffort, flowV3Layers.edges, flowAnchor, flowV3Edges)
-    ? EDGE_STRIP_HEIGHT : 0
+  // CR-DM item 2: with rolling net delta on (⚙) the pane also grows by one slot, so the other slots keep their heights.
+  const flowRollingExtra = flowPaneMode === 'v3' && flowV3Settings.rollingOn ? rollingExtraHeight(flowPanelHeight) : 0
+  const flowPaneExtra = (flowPaneMode === 'v3' && edgeStripDrawn(flowEdgeEffort, flowV3Layers.edges, flowAnchor, flowV3Edges)
+    ? EDGE_STRIP_HEIGHT : 0) + flowRollingExtra
 
   // One object per real change (CR-CH): the chart's primitives recompute only when this changes.
   const flowV3Chart = useMemo(() => {
@@ -2031,6 +2029,28 @@ export default function App() {
     const hit = flowV2Payloads.find((p) => p.dateStr === flowCellsDate) || flowV2Payloads.find((p) => p.dateStr === tradeDate)
     return hit ? hit.payload : null
   }, [flowV3, flowV2Payloads, flowCellsDate, tradeDate])
+
+  // CR-DM item 3: Flow v3 only — the selected session's leg in progress, a dimmed label at its running extreme, appended
+  // after the confirmed labels (which are unchanged). Bars after `until` are never in the payload.
+  const flowLiveEffort = useMemo(() => {
+    if (!flowEffortLegs || !flowV3) return null
+    return liveEffortLabel(flowV3SessionPayload?.live_leg, flowV3Settings.liveMinMove ?? DEFAULT_V3_SETTINGS.liveMinMove)
+  }, [flowEffortLegs, flowV3, flowV3SessionPayload, flowV3Settings.liveMinMove])
+  const effortMarkers = useMemo(() => {
+    if (!flowEffortLegs) return null
+    const list = effortChartMarkers(flowEffortLegs, flowMarkerSettings.effortRatio)
+    if (!flowLiveEffort) return list
+    const up = flowLiveEffort.up
+    return [...list, {
+      id: LIVE_EFFORT_ID,
+      time: utcEpochShowingZoneTime(Number(flowLiveEffort.leg.end_time)),
+      position: up ? 'aboveBar' : 'belowBar',
+      shape: 'circle',
+      color: up ? 'rgba(96,165,250,0.32)' : 'rgba(229,231,235,0.3)',
+      text: flowLiveEffort.text,
+      size: 0.5,
+    }]
+  }, [flowEffortLegs, flowMarkerSettings.effortRatio, flowLiveEffort])
 
   // CR-CC A2 — the times the smile/skew panel shows: the review selection while a
   // candidate is active, else Dash's time list.
@@ -2535,6 +2555,7 @@ export default function App() {
                 reviewUntil={reviewUntil}
                 onReviewTimesChange={reviewCandidate ? setReviewTimes : null}
                 effortMarkers={effortMarkers}
+                liveEffort={flowLiveEffort}
                 flowV3={flowV3Chart}
                 anchorPickArmed={flowV3 && flowAnchorArmed}
                 onAnchorPick={handleAnchorPick}
@@ -2574,6 +2595,7 @@ export default function App() {
                       candles={mergedBarsWithLiveTimeline}
                       visibleLogicalRange={sharedLogicalRange}
                       height={flowPanelHeight + flowPaneExtra}
+                      rollingExtra={flowRollingExtra}
                       loading={flowV2Loading}
                       error={flowV2Error}
                       linkedCrosshair={linkedCrosshair}

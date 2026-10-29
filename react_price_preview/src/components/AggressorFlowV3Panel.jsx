@@ -5,7 +5,8 @@
 // Profile, plus the edge readout (CR-DF); Heatmap (cells) and Absorbed (marks) moved into ⚙ (CR-DF item 3, DF1).
 // Palette (C1): blue = buyers, light grey = sellers, slate = neutral / marks; magenta = buyers-absorbed levels and
 // edges (C1 deviation approved by Ryan, CR-DF); orange = sellers-absorbed levels (C1 deviation approved by Ryan,
-// CR-DG). Every element is a visual aid, untested as a signal.
+// CR-DG). Every element is a visual aid, untested as a signal. CR-DM: the middle slot is volume per minute; rolling net
+// delta is a ⚙ option (off by default) that takes its old slot back and pushes volume one slot down (the pane grows).
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createChart, CrosshairMode, ColorType, BaselineSeries, HistogramSeries, LineSeries } from 'lightweight-charts'
 import {
@@ -22,6 +23,7 @@ import { alignV2ToCandles } from './AggressorFlowV2Panel'
 import {
   BOX_HOLD_MIN_RANGE,
   DEFAULT_V3_SETTINGS,
+  LIVE_MIN_MOVE_RANGE,
   ROLLING_CHOICES,
   anchoredCvd,
   anchorReadout,
@@ -37,6 +39,8 @@ import {
   kfmt,
   lastSwingAnchor,
   makeShifter,
+  minuteFlow,
+  paneSlotMargins,
   rollingDelta,
   sessionOpenAnchor,
 } from '../flowV3'
@@ -71,6 +75,7 @@ const iconStyle = {
 }
 
 const sfmt = (v) => `${v >= 0 ? '+' : '-'}${kfmt(Math.abs(v))}`
+const shareFmt = (v) => (v == null ? '–' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}`)
 
 function Modal({ title, onClose, children, width = 520 }) {
   useEffect(() => {
@@ -102,9 +107,11 @@ function GuideBody() {
     <div>
       <div style={h}>This pane</div>
       <div><b>Anchored CVD</b> (line, top): buying minus selling added up from the anchor bar, starting at 0. Set the anchor with 📍 and a click on a price bar, or with "session open" / "last swing" (the end of the last confirmed swing, ⚙ swing size of Flow v2). Esc or "clear" removes it; without an anchor the line is the session CVD. The readout shows delta, price change, minutes and contracts per point since the anchor.{tag}</div>
-      <div><span style={sw(BUY_RGBA(0.7))} /><span style={sw(SELL_RGBA(0.6))} /><b>Rolling net delta</b> (middle bars): buying minus selling over the last N minutes (⚙: 5 / 10 / 15).{tag}</div>
+      <div><span style={sw(SLATE_RGBA(0.55))} /><b>Volume per minute</b> (middle bars, slate grey): all contracts traded in each 1-minute bar (the flow's volume, every print, including the rare unknown-side ones), from the same data as the delta bars. Hover a minute for its volume, delta and delta share (delta ÷ volume).{tag}</div>
+      <div><span style={sw(BUY_RGBA(0.7))} /><span style={sw(SELL_RGBA(0.6))} /><b>Rolling net delta</b> (⚙, off by default): buying minus selling over the last N minutes (5 / 10 / 15). When on it draws in the middle slot, volume moves to the slot below it and the pane grows by one slot.{tag}</div>
       <div><b>Delta per bar</b> (bottom bars): the Flow v2 histogram, so this pane stands alone.{tag}</div>
       <div style={h}>On the price chart</div>
+      <div><b>Live effort</b> (with Effort on): the leg in progress — from the end of the last confirmed swing to the running extreme since — gets a dimmed label at that extreme, e.g. "↑ +6.5 pts so far · 1.2× vs last ↑": contracts per point vs the previous leg the same way, as the confirmed labels. Shown once the leg has moved at least M pts (⚙ "Live effort min move", default 4) and a previous leg the same way exists. It moves with the extreme on each refresh and becomes the normal label once the swing is confirmed; in a review replay it uses bars up to the replay time only. Hover it for the numbers. The label and M are display aids, not tested thresholds.{tag}</div>
       <div><span style={sw(ORANGE_RGBA(0.9))} /><span style={sw(MAGENTA_RGBA(0.9))} /><b>Absorption levels</b> (orange and magenta lines): a price where aggressive selling ("sellers absorbed", a floor, orange) or buying ("buyers absorbed", a ceiling, magenta) hit the Absorbed rule below. The line starts at the minute the volume built up, appears once the hold window has passed, and ends when price trades through it (else it runs to now). Thicker = more contracts absorbed; it fades from full to 25 % over 60 minutes. At most 8 are drawn, the largest after fading. The label says side, contracts and minutes held; hover for start, opposite-side contracts and where it broke. Exact data only.{tag}</div>
       <div><span style={{ ...sw('transparent'), borderTop: `2px dashed ${MAGENTA_RGBA(0.8)}`, height: 0 }} /><b>Edge readout</b> (header, with an anchor; dashed magenta lines): the box starts at the anchor minute's close. A close up to 2 pts beyond an edge is a test and the edge stays; a close more than 2 pts beyond moves the edge or breaks the box (below). For each edge: aggressive contracts traded within 1 pt of it since the box started (buyers at the top, sellers at the bottom; exact data only) and minutes since price first came within 1 pt of it.{tag}
         <div style={{ marginTop: '4px' }}><b>Restart on a break</b> (CR-DI): while an edge is younger than N minutes (⚙, default 15) a close more than 2 pts beyond it moves the edge out ("moved hh:mm") and the box grows. Once the edge has held N minutes, such a close is a break: the box freezes (drawn faded, ending at the break minute; hover it for its edges, contracts on both sides, minutes held and "broke hh:mm ↑/↓"), and a new box starts at the break bar from that bar's close. The header ("Box from hh:mm ↑") and the Edge effort strip use the current box. The last 4 frozen boxes are drawn. Clearing or moving the anchor removes all boxes. N is a display default, not a tested threshold.</div>
@@ -147,12 +154,18 @@ function Settings({ value, layers, onApply, onClose }) {
       sellLayer: Boolean(draft.sellLayer),
       buyLayer: Boolean(draft.buyLayer),
       boxHoldMin: Math.round(n('boxHoldMin', BOX_HOLD_MIN_RANGE[0], BOX_HOLD_MIN_RANGE[1], DEFAULT_V3_SETTINGS.boxHoldMin)),
+      rollingOn: Boolean(draft.rollingOn),
+      liveMinMove: n('liveMinMove', LIVE_MIN_MOVE_RANGE[0], LIVE_MIN_MOVE_RANGE[1], DEFAULT_V3_SETTINGS.liveMinMove),
     })
   }
   const label = (text) => <div style={{ fontSize: '12px', color: '#cbd5e1', marginBottom: '4px' }}>{text}</div>
   return (
     <Modal title="Flow v3 settings" onClose={onClose} width={380}>
       <form onSubmit={apply}>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+          <input type="checkbox" aria-label="Rolling net delta" data-testid="flow-v3-rolling-toggle" checked={Boolean(draft.rollingOn)} onChange={(e) => setDraft((d) => ({ ...d, rollingOn: e.target.checked }))} />
+          Rolling net delta ({draft.rollingMin} min) — middle bars; volume moves one slot down
+        </label>
         <label style={{ display: 'block', marginBottom: '10px' }}>
           {label('Rolling net delta window (minutes)')}
           <select aria-label="Rolling net delta window" value={draft.rollingMin} style={input}
@@ -174,6 +187,12 @@ function Settings({ value, layers, onApply, onClose }) {
           <input type="number" step={1} min={BOX_HOLD_MIN_RANGE[0]} max={BOX_HOLD_MIN_RANGE[1]} aria-label="Box hold minutes" data-testid="flow-v3-box-hold"
             value={draft.boxHoldMin ?? DEFAULT_V3_SETTINGS.boxHoldMin} style={input} onChange={(e) => setDraft((d) => ({ ...d, boxHoldMin: e.target.value }))} />
           <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>Edges box, 5–60 (default 15). A display default, not a tested threshold: ranges are measured against the prior move, not a fixed time (A2); this only decides when the drawn box restarts.</div>
+        </label>
+        <label style={{ display: 'block', marginBottom: '10px' }}>
+          {label('Live effort min move (pts)')}
+          <input type="number" step={0.5} min={LIVE_MIN_MOVE_RANGE[0]} max={LIVE_MIN_MOVE_RANGE[1]} aria-label="Live effort min move" data-testid="flow-v3-live-min-move"
+            value={draft.liveMinMove ?? DEFAULT_V3_SETTINGS.liveMinMove} style={input} onChange={(e) => setDraft((d) => ({ ...d, liveMinMove: e.target.value }))} />
+          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>With Effort on, the leg in progress is labelled once it has moved this far (2–12, default 4). A display default, not a tested threshold.</div>
         </label>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
           <input type="checkbox" aria-label="Heatmap (cells)" data-testid="flow-v3-heatmap-toggle" checked={Boolean(draft.heat)} onChange={(e) => setDraft((d) => ({ ...d, heat: e.target.checked }))} />
@@ -213,6 +232,7 @@ export default function AggressorFlowV3Panel({
   visibleLogicalRange,
   linkedCrosshair,
   height = 220,
+  rollingExtra = 0, // CR-DM: px App adds to the pane while rolling net delta is on (flowV3.rollingExtraHeight)
   loading = false,
   error = '',
   flowMode = 'v3',
@@ -240,6 +260,7 @@ export default function AggressorFlowV3Panel({
   const linkedCrosshairRef = useRef(null)
   const anchorRef = useRef(null)
   const refreshDecorationsRef = useRef(() => {})
+  const slotsRef = useRef({ rollingOn: false, extra: 0 })
 
   const [sessionBands, setSessionBands] = useState([])
   const [linkedCrosshairX, setLinkedCrosshairX] = useState(null)
@@ -258,7 +279,8 @@ export default function AggressorFlowV3Panel({
     return aligned.map((r) => m.get(r.time))
   }, [candles, aligned, shift])
   const cvd = useMemo(() => anchoredCvd(aligned, anchor), [aligned, anchor])
-  const rolling = useMemo(() => rollingDelta(aligned, settings.rollingMin), [aligned, settings.rollingMin])
+  const rollingOn = Boolean(settings.rollingOn)
+  const rolling = useMemo(() => (rollingOn ? rollingDelta(aligned, settings.rollingMin) : null), [aligned, rollingOn, settings.rollingMin])
   const readout = useMemo(() => anchorReadout(aligned, closes, anchor), [aligned, closes, anchor])
   // An anchor in ETH sums Ironbeam ETH delta with the RTH segment's delta; say so when the sources differ.
   const mixedNote = useMemo(() => {
@@ -343,9 +365,11 @@ export default function AggressorFlowV3Panel({
     const common = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }
     const delta = chart.addSeries(HistogramSeries, { ...common, priceScaleId: 'delta', base: 0 })
     chart.priceScale('delta').applyOptions({ visible: false, scaleMargins: { top: 0.74, bottom: 0.02 } })
-    // Rolling net delta carries the visible right axis (the pane keeps a right scale like Flow v2, so its
-    // plot width and bar positions follow the price chart's logical range the same way).
-    const rollingS = chart.addSeries(HistogramSeries, { ...common, priceScaleId: 'right', base: 0 })
+    // The middle slot carries the visible right axis (the pane keeps a right scale like Flow v2, so its plot width and
+    // bar positions follow the price chart's logical range the same way): volume per minute, or rolling net delta when
+    // it is on (CR-DM; volume then sits on its own hidden scale in the slot below). applySlots moves them.
+    const rollingS = chart.addSeries(HistogramSeries, { ...common, priceScaleId: 'rolling', base: 0 })
+    const volS = chart.addSeries(HistogramSeries, { ...common, priceScaleId: 'right', base: 0, color: SLATE_RGBA(0.55) })
     const cvdS = chart.addSeries(BaselineSeries, {
       ...common,
       priceScaleId: 'cvd',
@@ -358,7 +382,7 @@ export default function AggressorFlowV3Panel({
     })
     chart.priceScale('cvd').applyOptions({ visible: false, scaleMargins: { top: 0.04, bottom: 0.62 } })
     chartRef.current = chart
-    seriesRef.current = { delta, rolling: rollingS, cvd: cvdS }
+    seriesRef.current = { delta, rolling: rollingS, cvd: cvdS, vol: volS }
 
     const refreshDecorations = () => {
       const w = stageRef.current?.clientWidth || 0
@@ -376,6 +400,7 @@ export default function AggressorFlowV3Panel({
       const h = stageRef.current.clientHeight
       if (w > 0 && h > 0) chart.applyOptions({ width: w, height: Math.max(h, MIN_PANEL_HEIGHT) })
       if (seriesRef.current.strip) chart.panes()[1]?.setHeight(EDGE_STRIP_HEIGHT - PANE_SEPARATOR_PX)
+      applySlots()
       requestAnimationFrame(refreshDecorations)
     }
     const onRange = () => requestAnimationFrame(refreshDecorations)
@@ -401,6 +426,30 @@ export default function AggressorFlowV3Panel({
     }
   }, [])
 
+  // CR-DM item 2: slot layout of pane 0 (paneSlotMargins); rolling off = the CR-DC margins with volume in the middle.
+  const applySlots = () => {
+    const chart = chartRef.current
+    const s = seriesRef.current
+    if (!chart || !s.vol) return
+    const { rollingOn: on, extra } = slotsRef.current
+    // pane 0 from the height just applied (panes()[0].getHeight() lags until the chart's next layout pass)
+    const h0 = chart.options().height - chart.timeScale().height() - (s.strip ? EDGE_STRIP_HEIGHT : 0)
+    const m = paneSlotMargins(h0, on ? extra : 0)
+    if ((s.rolling.options().priceScaleId === 'right') !== on) {
+      s.vol.applyOptions({ priceScaleId: on ? 'vol' : 'right' })
+      s.rolling.applyOptions({ priceScaleId: on ? 'right' : 'rolling' })
+    }
+    chart.priceScale('cvd').applyOptions({ scaleMargins: m.cvd })
+    chart.priceScale('right').applyOptions({ scaleMargins: m.mid })
+    chart.priceScale('delta').applyOptions({ scaleMargins: m.delta })
+    if (on) chart.priceScale('vol').applyOptions({ visible: false, scaleMargins: m.low || m.mid })
+    else chart.priceScale('rolling').applyOptions({ visible: false })
+  }
+  useEffect(() => {
+    slotsRef.current = { rollingOn, extra: rollingExtra }
+    fitToStage()
+  }, [rollingOn, rollingExtra]) // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     const s = seriesRef.current
     if (!s.delta) return
@@ -408,9 +457,10 @@ export default function AggressorFlowV3Panel({
     s.delta.setData(aligned.map((r) => (Number.isFinite(r.delta)
       ? { time: r.time, value: r.delta, color: r.delta >= 0 ? BUY_RGBA(0.75) : SELL_RGBA(0.6) }
       : ws(r))))
-    s.rolling.setData(aligned.map((r, i) => (rolling[i] != null
+    s.rolling.setData(rolling ? aligned.map((r, i) => (rolling[i] != null
       ? { time: r.time, value: rolling[i], color: rolling[i] >= 0 ? BUY_RGBA(0.45) : SELL_RGBA(0.38) }
-      : ws(r))))
+      : ws(r))) : [])
+    s.vol.setData(aligned.map((r) => (Number.isFinite(r.vol) ? { time: r.time, value: r.vol } : ws(r))))
     s.cvd.setData(aligned.map((r, i) => (cvd[i] != null ? { time: r.time, value: cvd[i] } : ws(r))))
     const shared = normalizeLogicalRange(visibleLogicalRange)
     if (chartRef.current && candleTimes.length >= 2 && !shared) {
@@ -438,6 +488,7 @@ export default function AggressorFlowV3Panel({
       const h = Math.max(st.clientHeight || MIN_PANEL_HEIGHT, MIN_PANEL_HEIGHT)
       if (chart.options().height !== h) chart.applyOptions({ height: h })
       if (seriesRef.current.strip) chart.panes()[1]?.setHeight(EDGE_STRIP_HEIGHT - PANE_SEPARATOR_PX)
+      applySlots()
     }
     fit()
     requestAnimationFrame(fit)
@@ -611,7 +662,7 @@ export default function AggressorFlowV3Panel({
           {readout
             ? `since ${formatShiftedHHMM(readout.anchorTime)}: Δ ${sfmt(readout.delta)} · ${readout.dPrice == null ? '–' : `${readout.dPrice >= 0 ? '+' : ''}${readout.dPrice.toFixed(2)} pts`} · ${readout.minutes} min · ${readout.cpp == null ? '–' : kfmt(readout.cpp)}/pt`
               + mixedNote
-            : `CVD from session open · rolling ${settings.rollingMin} min`}
+            : `CVD from session open · ${rollingOn ? `rolling ${settings.rollingMin} min · ` : ''}volume per minute`}
         </div>
         {hoverRow && Number.isFinite(hoverRow.delta) && (
           <div data-testid="flow-v3-tooltip" style={{
@@ -619,7 +670,12 @@ export default function AggressorFlowV3Panel({
             maxWidth: 250, pointerEvents: 'none', zIndex: 5, background: 'rgba(2,6,23,0.92)', border: '1px solid #334155',
             borderRadius: 8, padding: '6px 8px', fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4,
           }}>
-            {formatShiftedHHMM(hoverRow.time)} · Δ {sfmt(hoverRow.delta)} · {settings.rollingMin}-min {rolling[hoverIdx] == null ? '–' : sfmt(rolling[hoverIdx])} · CVD {cvd[hoverIdx] == null ? '–' : sfmt(cvd[hoverIdx])}
+            {(() => {
+              const f = minuteFlow(hoverRow)
+              return `${formatShiftedHHMM(hoverRow.time)} · vol ${f.vol == null ? '–' : kfmt(f.vol)} · Δ ${sfmt(hoverRow.delta)} · share ${shareFmt(f.share)}`
+                + (rolling ? ` · ${settings.rollingMin}-min ${rolling[hoverIdx] == null ? '–' : sfmt(rolling[hoverIdx])}` : '')
+                + ` · CVD ${cvd[hoverIdx] == null ? '–' : sfmt(cvd[hoverIdx])}`
+            })()}
           </div>
         )}
         {stripHover && (
