@@ -205,3 +205,15 @@ the DB, temp tables rolled back, was refused by the session's permission classif
 
 The other specs rewrote their tracked assets; copies in `scripts/logs/cr-dk/smoke/other-assets/`, committed assets
 restored.
+
+## Pre-merge checks (Ryan, chat 2026-10-29; after rebase onto origin/main `ce13906`, CR-DJ)
+
+- **Crosshair test ×5, alone** (`CRDK_SIDES=branch`, same read-only backend): **5/5 passed** (55–60 s each); outputs
+  and each run's `crosshair-0722-branch.json` in `scripts/logs/cr-dk/crosshair-5x/`.
+- **DB route tests** (approved for this run only). Code check first: every SQL statement in `service.py` names
+  `setup_candidates` / `setup_reviews` unqualified; the test's `setUp` creates TEMP copies (`ON COMMIT DROP`) that
+  shadow them and asserts `relpersistence = 't'` for both; the routes get the test connection wrapped in `_NoCommit`
+  (commit / close / rollback are no-ops) and `setUp` rolls it back at cleanup. No write reaches a real table.
+  `CR_CC_DB_TESTS=1 … test_routes`: **22/22 OK** (8 DB tests, incl. `test_cr_dk_chip_strings_stored_unchanged`).
+  `public.setup_reviews` count / max(id) **69 / 83 before and after**; `public.setup_candidates` 228 rows, max
+  `loaded_at` unchanged. Logs: `scripts/logs/cr-dk/db-tests-run.txt`, `db-tests-counts.txt`.
