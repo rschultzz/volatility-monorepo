@@ -227,6 +227,18 @@ Values below are mid → post, the CR-DJ effect. Columns a version never filled 
 - **D2, column scope:** CR-DJ columns only (recommended: matches the kickoff). The alternative is a full-row recompute on current bars, which would also pull CR-BZ changes (F2) into these 45 rows only, a patchy mix.
 - **D3, `vol_risk_premium`:** recompute the 18 (recommended for consistency; tiny change; seam caveat above) or leave them and record.
 
+### Approval and amendment 1 (Ryan, chat 2026-10-29)
+
+**Approved:** D1 all three ES-based versions; D2 only the columns CR-DJ changes; D3 recompute the 18 `vol_risk_premium` rows.
+
+**45 changed rows vs 43 UPDATEs.** The two rows with no write are `v0.5.0-rebuilt` **2026-03-11** and **2026-03-12**. They are *not* skipped because they already match. CR-DJ changes their `session_{open,high,low,close}_t5` (T+5 = 03-18 / 03-19), but those columns are **stored NULL**, as is every t1 / t5 / t15 and position column on those rows. Both were inserted by the CR-AA sweep run `5cef55c5` (2026-06-04), after CR-G / CR-I had run, so those columns were never filled (03-03 and 03-05 from the same run are NULL too; 03-02, run `8d0a8663`, is filled). **Ruling: leave both rows as stored and write 43.** CR-DL corrects values that were computed on H26 bars; it does not fill gaps. Whether to backfill the four CR-AA sweep rows is a separate open question (session note).
+
+**Write mechanics (refines plan steps 2–5).** The full pre / mid / post recompute takes ~30 min on the overlays, so the write script does not re-run it. It takes the Step 0 dry run (`scripts/logs/cr_dl/step0_dryrun.json`) as the frozen plan: for each (version, trade_date, column) in the CR-DJ diff whose stored value is not NULL, `before` = the dry run's stored value and `after` = its post value. Before writing it (i) recomputes post on the current bars with the same writer code and requires it to equal every planned `after`, and (ii) reads the stored rows and requires every planned column to equal its `before`. The dry run already showed no written column is also changed by CR-BZ (stored = mid on every written column), so post − stored on those columns is exactly the CR-DJ effect. Archive, guards, one transaction and stamping as in step 4.
+
+**Smoke:** after the commit, re-run the post recompute and require: every written column equals the dry run's expected value; every row's remaining stored-vs-post difference equals the dry run's, minus the written columns (only the CR-BZ / never-filled differences remain); labels unchanged (`outcome_status`, `reached_touch`, `reached_close`, `days_to_reach`, `max_excursion_in_direction`, `position_t*_post_touch`, `horizon_*`) against the archive; row counts per version unchanged; `-spxcash` untouched; the 18 `vol_risk_premium` values equal the dry run's post.
+
+Standing-rulings conformance re-checked: unchanged (B4 honoured — every read capped at 2026-06-05; rows ≤ 03-20).
+
 ### F2 — the CR-BZ fragment repair (2026-10-25) was never propagated to derived rows (out of scope; follow-up)
 
 The same dry run shows that CR-BZ's repair of 783 fragment minutes in 2026 (many at 06:30 / 12:59 PT) changes stored outcome rows that were computed before it.
