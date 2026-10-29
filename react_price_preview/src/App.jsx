@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
-import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS, effortChartMarkers } from './components/AggressorFlowV2Panel'
+import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS, alignV2ToCandles, effortChartMarkers } from './components/AggressorFlowV2Panel'
 import AggressorFlowV3Panel from './components/AggressorFlowV3Panel'
-import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, LIVE_EFFORT_ID, edgeReadout, edgeStripDrawn, endFromPick, flattenBars, liveEffortLabel, makeShifter, rollingExtraHeight } from './flowV3'
+import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, LIVE_EFFORT_ID, boxSegments, edgeReadout, edgeStripDrawn, endFromPick, flattenBars, liveEffortLabel, makeShifter, rollingExtraHeight, rowCloses, segmentReadouts } from './flowV3'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import { PANEL_WIDTH as ANALOGUES_PANEL_WIDTH } from './components/AnaloguesPanel'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
@@ -2041,6 +2041,18 @@ export default function App() {
       flowV3Settings.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin)
   }, [flowV3, flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin, flowEnd, flowV3Settings.breakHoldMin])
 
+  // CR-DN item 3: with Edges on and an anchor, each drawn box is a CVD segment. Spans come from the edge readout (cells
+  // payload); the readouts run on the same aligned v2 rows the pane draws (alignV2ToCandles + anchorReadout), once here
+  // for both the pane (CVD per segment, header) and the price chart (box labels). Null with Edges off: today's view.
+  const flowV3Segments = useMemo(() => {
+    const seg = boxSegments(flowV3Edges, flowV3Shift)
+    if (!seg) return null
+    const allBars = flowV2PanePayloads.flatMap((p) => (Array.isArray(p?.bars) ? p.bars : []))
+    const rows = alignV2ToCandles(allBars, mergedBarsWithLiveTimeline)
+    const readouts = segmentReadouts(rows, rowCloses(rows, mergedBarsWithLiveTimeline, flowV3Shift), seg.spans)
+    return { ...seg, readouts }
+  }, [flowV3Edges, flowV3Shift, flowV2PanePayloads, mergedBarsWithLiveTimeline])
+
   // CR-DI amendment 2: while the Edge effort strip is drawn the Flow v3 pane grows by its height (the price pane
   // above gives it up), so the pane's other series keep their heights; otherwise the pane is unchanged.
   // CR-DM item 2: with rolling net delta on (⚙) the pane also grows by one slot, so the other slots keep their heights.
@@ -2058,13 +2070,14 @@ export default function App() {
       marks: flowV3Layers.marks,
       levels: flowV3Layers.levels,
       edges: flowV3Edges,
+      segments: flowV3Segments, // CR-DN item 3: per-box readouts for the box labels (drawnBoxes order)
       sellLayer: flowV3Settings.sellLayer,
       buyLayer: flowV3Settings.buyLayer,
       profileFrom: flowAnchor,
       // CR-DN item 1: the profile stops after the end's minute ([from, to) on cell minute starts); null without an end.
       profileTo: flowAnchor != null && flowEnd != null ? flowEnd + 60 : null,
     }
-  }, [flowV3AnyLayer, flowCells, flowV3Layers, flowV3Edges, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowAnchor, flowEnd])
+  }, [flowV3AnyLayer, flowCells, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowAnchor, flowEnd])
   // CR-DN item 1: the anchor → end window, shaded on the price chart (any layer); null without an end.
   const flowV3Window = useMemo(
     () => (flowV3 && flowAnchor != null && flowEnd != null ? { from: flowAnchor, to: flowEnd } : null),
@@ -2653,6 +2666,7 @@ export default function App() {
                       layers={flowV3Layers}
                       onLayersChange={setFlowV3Layers}
                       edges={flowV3Edges}
+                      segments={flowV3Segments}
                       anchor={flowAnchor}
                       onAnchorChange={setFlowAnchor}
                       anchorArmed={flowAnchorArmed}

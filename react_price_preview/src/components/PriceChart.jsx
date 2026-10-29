@@ -25,7 +25,7 @@ import {
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { LIVE_EFFORT_ID, absorptionLevels, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
+import { LIVE_EFFORT_ID, absorptionLevels, boxLabelText, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
 import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, WindowShadePrimitive } from './flowV3Primitives'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
@@ -2680,6 +2680,7 @@ export default function PriceChart({
   const v3LevelsOn = Boolean(flowV3?.levels && v3Payload)
   const v3Levels = useMemo(() => (v3LevelsOn ? absorptionLevels(v3Payload, v3Times, v3Shift) : null), [v3LevelsOn, v3Payload, v3Times, v3Shift])
   const v3EdgeReadout = flowV3?.edges || null
+  const v3Segments = flowV3?.segments || null // CR-DN item 3: per-box readouts (drawnBoxes order)
   const v3Edges = useMemo(() => {
     if (!v3EdgeReadout || !v3Times.length) return null
     const snap = (utc) => {
@@ -2689,13 +2690,22 @@ export default function PriceChart({
     // CR-DI amendment 9: the last 4 frozen boxes (faded, to their break minute) and the current box.
     const { boxes, dropped } = drawnBoxes(v3EdgeReadout)
     const out = []
-    for (const b of boxes) {
+    boxes.forEach((b, k) => {
       const frozen = b !== v3EdgeReadout
       const from = snap(b.from)
       const to = snap(frozen ? b.breakAt : b.to)
-      if (from == null || to == null) continue
-      out.push({ from, to, top: b.top.price, bottom: b.bottom.price, frozen, box: frozen ? { ...b, dropped } : null })
-    }
+      if (from == null || to == null) return
+      // CR-DN item 3b: every drawn box carries its label and hover data (frozen: broke; current: set end / current).
+      const readout = v3Segments?.readouts?.[k] || null
+      const ended = frozen ? { kind: 'broke', dir: b.dir, at: b.breakAt }
+        : v3EdgeReadout.end != null ? { kind: 'end', at: v3EdgeReadout.end } : { kind: 'current' }
+      const pending = frozen ? null : v3EdgeReadout.pending
+      out.push({
+        from, to, top: b.top.price, bottom: b.bottom.price, frozen,
+        label: readout ? boxLabelText(readout) : '',
+        box: { ...b, dropped, readout, ended, pending },
+      })
+    })
     // CR-DN item 2: a tick per probe (cancelled break) of the drawn boxes, at its edge and break minute.
     const probes = []
     for (const b of boxes) {
@@ -2705,7 +2715,7 @@ export default function PriceChart({
       }
     }
     return out.length ? { boxes: out, probes } : null
-  }, [v3EdgeReadout, v3Times, v3Shift])
+  }, [v3EdgeReadout, v3Segments, v3Times, v3Shift])
   const v3SellLayer = flowV3?.sellLayer !== false
   const v3BuyLayer = flowV3?.buyLayer !== false
   const v3PrimRef = useRef({ series: null, heat: null, marks: null, profile: null, levels: null, edges: null, window: null })
@@ -2741,7 +2751,7 @@ export default function PriceChart({
     setV3Hover((h) => relinkHover(h, 'mark', v3Marks, 'time'))
     setV3LevelHover((h) => relinkHover(h, 'level', v3Levels, 'start'))
     setV3BoxHover((h) => {
-      const hit = h && v3Edges?.boxes.find((b) => b.frozen && b.box.from === h.box.from)
+      const hit = h && v3Edges?.boxes.find((b) => b.box.from === h.box.from)
       return hit ? { ...h, box: hit.box } : null
     })
     setV3ProbeHover((h) => {
@@ -3746,12 +3756,19 @@ export default function PriceChart({
                 const b = v3BoxHover.box
                 const hm = (t) => formatShiftedHHMM(v3Shift(t))
                 const n = (v) => (v == null ? 'exact data only' : kfmt(v))
+                const heldE = (e) => (e.heldMin == null ? 'not touched' : `held ${e.heldMin} min`)
+                // CR-DN item 3b: how the box ended (broke ↑/↓ hh:mm, set end hh:mm, or current)
+                const ended = b.ended?.kind === 'broke' ? `broke ${dirArrow(b.ended.dir)} ${hm(b.ended.at)}`
+                  : b.ended?.kind === 'end' ? `set end ${hm(b.ended.at)}` : 'current'
+                const until = b.ended?.kind === 'broke' ? b.ended.at : b.to
+                const probes = b.probes?.length || 0
                 return (
                   <>
-                    <div style={{ fontWeight: 700, color: '#f0abfc' }}>Box {hm(b.from)}–{hm(b.breakAt)} · broke {hm(b.breakAt)} {dirArrow(b.dir)}</div>
-                    <div>Top {b.top.price.toFixed(2)}: buyers {n(b.top.contracts)} / sellers {n(b.top.opposite)}</div>
-                    <div>Bottom {b.bottom.price.toFixed(2)}: sellers {n(b.bottom.contracts)} / buyers {n(b.bottom.opposite)}</div>
-                    <div>held {b.heldMin} min{b.dropped ? ` · ${b.dropped} older box${b.dropped === 1 ? '' : 'es'} not drawn` : ''}</div>
+                    <div style={{ fontWeight: 700, color: '#f0abfc' }}>Box {hm(b.from)}–{hm(until)} · {ended}</div>
+                    {b.readout && <div>{boxLabelText(b.readout)}</div>}
+                    <div>Top {b.top.price.toFixed(2)}: buyers {n(b.top.contracts)} / sellers {n(b.top.opposite)} · {heldE(b.top)}</div>
+                    <div>Bottom {b.bottom.price.toFixed(2)}: sellers {n(b.bottom.contracts)} / buyers {n(b.bottom.opposite)} · {heldE(b.bottom)}</div>
+                    <div>{probes} probe{probes === 1 ? '' : 's'}{b.pending ? ` · testing break ${hm(b.pending.at)} ${dirArrow(b.pending.dir)}${b.ended?.kind === 'end' ? ' (pending at the end)' : ''}` : ''}{b.dropped ? ` · ${b.dropped} older box${b.dropped === 1 ? '' : 'es'} not drawn` : ''}</div>
                     <div style={{ color: '#94a3b8' }}>visual aid — untested</div>
                   </>
                 )

@@ -2,7 +2,7 @@
 // Run: npm --prefix react_price_preview run test:unit
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { anchorReadout, anchoredCvd, edgeReadout, edgeText, endFromPick, endWindowText, flattenBars } from '../../src/flowV3.js'
+import { anchorReadout, anchoredCvd, boxLabelText, boxSegments, edgeReadout, edgeText, endFromPick, endWindowText, flattenBars, rowCloses, segmentCvd, segmentReadouts } from '../../src/flowV3.js'
 
 const T0 = 1_777_642_200 // a UTC minute
 const id = (t) => t
@@ -124,4 +124,34 @@ test('item 2: unresolved at the last bar -> pending, "testing break" in the head
   const cut = edgeReadout(p, flattenBars(p), T0, id, 15, T0 + 22 * 60, 5)
   assert.equal(cut.pending.at, T0 + 21 * 60)
   assert.equal(cut.frozen.length, 0)
+})
+
+test('item 3: segmentCvd restarts at 0 per span through anchoredCvd; gap on the last row of each older span', () => {
+  const r = rows([1, 2, 3, 4, 5, 6, 7])
+  const spans = [{ from: T0 + 60, to: T0 + 180 }, { from: T0 + 240, to: T0 + 360 }]
+  const { cvd, gapAt } = segmentCvd(r, spans)
+  assert.deepEqual(cvd, [null, 0, 3, 7, 0, 6, 13]) // span 2 starts at 0 on its first bar (that bar's delta not counted)
+  assert.deepEqual([...gapAt], [3])
+  // the same as anchoring at each span's start with its end
+  assert.deepEqual(cvd.slice(4), anchoredCvd(r, T0 + 240, T0 + 360).slice(4))
+  // a shared (5-min) row: the newer span's 0 wins and is not a gap end
+  const shared = segmentCvd(r, [{ from: T0, to: T0 + 120 }, { from: T0 + 120, to: T0 + 360 }])
+  assert.deepEqual(shared.cvd, [0, 2, 0, 4, 9, 15, 22])
+  assert.deepEqual([...shared.gapAt], [1])
+})
+
+test('item 3: boxSegments / segmentReadouts / boxLabelText on a held break', () => {
+  const closes = [...held, 106.25, 103, 104, 103, 105, 104.5, 104]
+  const p = payload(closes, [])
+  const e = edgeReadout(p, flattenBars(p), T0, id, 15, null, 5)
+  const seg = boxSegments(e, id)
+  assert.deepEqual(seg.spans, [{ from: T0, to: T0 + 20 * 60 }, { from: T0 + 21 * 60, to: T0 + 27 * 60 }])
+  assert.equal(seg.dropped, 0)
+  const rr = closes.map((c, i) => ({ time: T0 + 60 * i, delta: i % 2 ? 100 : -40, vol: 300 }))
+  const cl = rowCloses(rr, closes.map((c, i) => ({ time: T0 + 60 * i, close: c })), id)
+  const ro = segmentReadouts(rr, cl, seg.spans)
+  // box 1: bars 1..20 -> 10 odd (+100) and 10 even (-40) = +600; close 102 - 100 = +2; 20 min; vol 6000 / 2 pts
+  assert.deepEqual([ro[0].delta, ro[0].dPrice, ro[0].minutes, ro[0].vol, ro[0].cpp], [600, 2, 20, 6000, 3000])
+  assert.equal(boxLabelText(ro[0]), 'Δ +600 · +2.0 pts · 20 m · 3.0k/pt')
+  assert.equal(boxLabelText({ delta: -1234, dPrice: -7.5, minutes: 45, cpp: 1800 }), 'Δ -1.2k · -7.5 pts · 45 m · 1.8k/pt')
 })

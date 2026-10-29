@@ -345,6 +345,8 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
 // data: { boxes: [{ from, to (shifted epochs), top, bottom (prices), frozen, box }] }. Hover: `onHover(box | null, pt)`
 // within 5 px of a frozen box's line (the current box is the header's).
 export const FROZEN_EDGE_ALPHA = 0.35
+// The chart's tag background (the price chart's crosshair label colour, #1e293b), for small label pills (CR-DN).
+export const TAG_BG = (alpha) => `rgba(30,41,59,${alpha})`
 // CR-DN item 2: probes (cancelled breaks) = a short magenta tick from the edge outward at the break minute, low opacity,
 // with a small "probe hh:mm" label. data.probes: [{ time (shifted), price (edge), up, label, probe }]. Hover:
 // `onProbeHover(probe | null, pt)` within 6 px of a tick.
@@ -428,7 +430,23 @@ export class EdgeLinesPrimitive extends BasePrimitive {
         ctx.moveTo(Math.round(x0 * hr), yy)
         ctx.lineTo(Math.round(Math.max(x1, x0 + 2) * hr), yy)
         ctx.stroke()
-        if (b.frozen) this._hit.push({ x0, x1, y, box: b.box })
+        if (b.box) this._hit.push({ x0, x1, y, box: b.box })
+      }
+      // CR-DN item 3b: the box's label inside its top-left corner, on a small dark pill (the chart's tag background).
+      const yt = series.priceToCoordinate(b.top)
+      if (b.label && yt != null && x1 - x0 > 40) {
+        ctx.save()
+        ctx.setLineDash([])
+        ctx.font = `${Math.round(10 * vr)}px sans-serif`
+        ctx.textBaseline = 'top'
+        const tw = ctx.measureText(b.label).width / hr
+        const lx = Math.max(0, x0) + 3
+        const ly = yt + 3
+        ctx.fillStyle = TAG_BG(b.frozen ? 0.6 : 0.8)
+        ctx.fillRect(Math.round((lx - 2) * hr), Math.round((ly - 1) * vr), Math.round((tw + 4) * hr), Math.round(13 * vr))
+        ctx.fillStyle = `rgba(${MAGENTA_RGB},${b.frozen ? 0.6 : 0.95})`
+        ctx.fillText(b.label, Math.round(lx * hr), Math.round(ly * vr))
+        ctx.restore()
       }
     }
     ctx.setLineDash([])

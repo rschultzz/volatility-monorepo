@@ -778,6 +778,55 @@ export function edgeText(r, hhmm) {
   return `${testing}${box}${one('Top', r.top, 'buyers')} | ${one('Bottom', r.bottom, 'sellers')}`
 }
 
+// CR-DN item 3 — boxes as segments. The drawn boxes (drawnBoxes: the last FROZEN_BOXES_MAX frozen + the current) as
+// CVD segments in shifted time, oldest first: from = the box's first bar, to = its last bar (a frozen box ends on the
+// bar before its break; the current one on the last bar or the end). `dropped` = older boxes whose segments aren't drawn.
+export function boxSegments(r, shift, max = FROZEN_BOXES_MAX) {
+  if (!r) return null
+  const { boxes, dropped } = drawnBoxes(r, max)
+  return { spans: boxes.map((b) => ({ from: shift(b.from), to: shift(b.to) })), dropped }
+}
+
+// The candle close aligned with each pane row (rows[i].time = shifted candle time), as the anchored readout uses.
+export function rowCloses(rows, candles, shift) {
+  const m = new Map()
+  for (const c of Array.isArray(candles) ? candles : []) m.set(shift(c.time), Number(c.close))
+  return (Array.isArray(rows) ? rows : []).map((r) => m.get(r.time))
+}
+
+// Per-segment anchored CVD through the same anchoredCvd: each span restarts at 0 on its first bar and runs to its last
+// bar; rows outside every span are null. `gapAt` = the last row of each span but the newest: the pane draws the line
+// from there to the next span's 0 transparent, so segments don't join.
+export function segmentCvd(rows, spans) {
+  const list = Array.isArray(rows) ? rows : []
+  const out = new Array(list.length).fill(null)
+  const owner = new Array(list.length).fill(-1)
+  ;(spans || []).forEach((sp, k) => {
+    const c = anchoredCvd(list, sp.from, sp.to)
+    for (let i = 0; i < c.length; i += 1) {
+      if (c[i] == null) continue
+      out[i] = c[i] // a later span's 0 overwrites the previous span's last value on a shared (5-min) row
+      owner[i] = k
+    }
+  })
+  const gapAt = new Set()
+  for (let i = 0; i + 1 < list.length; i += 1) if (owner[i] >= 0 && owner[i + 1] >= 0 && owner[i + 1] !== owner[i]) gapAt.add(i)
+  return { cvd: out, gapAt }
+}
+
+// The anchored readout of each span (anchorReadout over [from, to]), in span order.
+export function segmentReadouts(rows, closes, spans) {
+  return (spans || []).map((sp) => anchorReadout(rows, closes, sp.from, sp.to))
+}
+
+// Box label: "Δ +1.2k · +7.5 pts · 45 m · 1.8k/pt".
+export function boxLabelText(ro) {
+  if (!ro) return ''
+  const d = Number(ro.delta) || 0
+  const pts = ro.dPrice == null ? '–' : `${ro.dPrice >= 0 ? '+' : ''}${ro.dPrice.toFixed(1)} pts`
+  return `Δ ${d >= 0 ? '+' : '-'}${kfmt(Math.abs(d))} · ${pts} · ${ro.minutes} m · ${ro.cpp == null ? '–' : kfmt(ro.cpp)}/pt`
+}
+
 // CR-DN item 1 — set end. The picked end (shifted candle time) is stored as the last 1-minute bar inside that candle
 // (`stepSec` = the chart's candle step: 60 on the 1-minute chart, 300 on 5-minute), so a 5-minute pick keeps the whole
 // candle. Valid only after the anchor and not after the payload's last bar (`lastShifted`: live = now, replay /

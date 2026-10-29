@@ -44,6 +44,8 @@ import {
   minuteFlow,
   paneSlotMargins,
   rollingDelta,
+  rowCloses,
+  segmentCvd,
   sessionOpenAnchor,
 } from '../flowV3'
 import { EdgeEffortPrimitive, ORANGE_RGB } from './flowV3Primitives'
@@ -108,7 +110,7 @@ function GuideBody() {
   return (
     <div>
       <div style={h}>This pane</div>
-      <div><b>Anchored CVD</b> (line, top): buying minus selling added up from the anchor bar, starting at 0. Set the anchor with 📍 and a click on a price bar, or with "session open" / "last swing" (the end of the last confirmed swing, ⚙ swing size of Flow v2). Esc or "clear" removes it; without an anchor the line is the session CVD. The readout shows delta, price change, minutes and contracts per point since the anchor.{tag}</div>
+      <div><b>Anchored CVD</b> (line, top): buying minus selling added up from the anchor bar, starting at 0. Set the anchor with 📍 and a click on a price bar, or with "session open" / "last swing" (the end of the last confirmed swing, ⚙ swing size of Flow v2). Esc or "clear" removes it; without an anchor the line is the session CVD. The readout shows delta, price change, minutes and contracts per point since the anchor. With Edges on, each drawn box is its own segment: the line restarts at 0 at each box's first bar (a gap at each boundary), older boxes than the drawn ones aren't drawn, and the readout ("box from hh:mm") is the current box (the last one with an end set). Each box on the price chart is labelled "Δ · pts · minutes · contracts/pt" from the same numbers; hover a box line for its edges, contracts on both sides, held minutes, probes and how it ended.{tag}</div>
       <div><span style={sw(SLATE_RGBA(0.25))} /><b>Set end</b> (with an anchor): click "set end", then a price bar after the anchor (not after the last bar: now, or the replay / review until time). Anchored CVD and its readout, the Edges box(es), the Edge effort strip and the Profile then use anchor → end only; after the end CVD isn't drawn and the boxes and strip stop. Delta, volume and rolling bars and the absorption levels / marks are unchanged. The window is shaded lightly on the price chart and the header shows "hh:mm → hh:mm · N min". Esc while picking cancels; "clear end" removes only the end, "clear" removes anchor and end. On the 5-minute chart the end is the last minute of the clicked candle.{tag}</div>
       <div><span style={sw(SLATE_RGBA(0.55))} /><b>Volume per minute</b> (middle bars, slate grey): all contracts traded in each 1-minute bar (the flow's volume, every print, including the rare unknown-side ones), from the same data as the delta bars. Hover a minute for its volume, delta and delta share (delta ÷ volume).{tag}</div>
       <div><span style={sw(BUY_RGBA(0.7))} /><span style={sw(SELL_RGBA(0.6))} /><b>Rolling net delta</b> (⚙, off by default): buying minus selling over the last N minutes (5 / 10 / 15). When on it draws in the middle slot, volume moves to the slot below it and the pane grows by one slot.{tag}</div>
@@ -252,6 +254,7 @@ export default function AggressorFlowV3Panel({
   layers = { heat: false, profile: false, marks: false, levels: false, edges: false },
   onLayersChange,
   edges = null, // CR-DF: flowV3.edgeReadout (App), null without an anchor or with the readout off
+  segments = null, // CR-DN item 3: App's box segments { spans, readouts, dropped } (Edges on + anchor), else null
   anchor = null,
   onAnchorChange,
   anchorArmed = false,
@@ -287,15 +290,20 @@ export default function AggressorFlowV3Panel({
   const candleTimes = useMemo(() => normalizeShiftedCandleTimes(candles), [candles])
   const allBars = useMemo(() => (payloads || []).flatMap((p) => (Array.isArray(p?.bars) ? p.bars : [])), [payloads])
   const aligned = useMemo(() => alignV2ToCandles(allBars, candles), [allBars, candles])
-  const closes = useMemo(() => {
-    const m = new Map()
-    for (const c of Array.isArray(candles) ? candles : []) m.set(shift(c.time), Number(c.close))
-    return aligned.map((r) => m.get(r.time))
-  }, [candles, aligned, shift])
-  const cvd = useMemo(() => anchoredCvd(aligned, anchor, end), [aligned, anchor, end])
+  const closes = useMemo(() => rowCloses(aligned, candles, shift), [candles, aligned, shift])
+  // CR-DN item 3: with box segments, the CVD restarts at 0 on each drawn box (same anchoredCvd per span); `cvdGaps` =
+  // rows whose line to the next box is drawn transparent. Without segments, one anchored line as before.
+  const cvdSeg = useMemo(() => (segments?.spans?.length ? segmentCvd(aligned, segments.spans) : null), [aligned, segments])
+  const plainCvd = useMemo(() => (cvdSeg ? null : anchoredCvd(aligned, anchor, end)), [cvdSeg, aligned, anchor, end])
+  const cvd = cvdSeg ? cvdSeg.cvd : plainCvd
+  const cvdGaps = cvdSeg ? cvdSeg.gapAt : null
   const rollingOn = Boolean(settings.rollingOn)
   const rolling = useMemo(() => (rollingOn ? rollingDelta(aligned, settings.rollingMin) : null), [aligned, rollingOn, settings.rollingMin])
-  const readout = useMemo(() => anchorReadout(aligned, closes, anchor, end), [aligned, closes, anchor, end])
+  // CR-DN item 3c: with segments, the header reads the current box (the last one when an end is set).
+  const readout = useMemo(() => {
+    const ro = segments?.readouts?.length ? segments.readouts[segments.readouts.length - 1] : null
+    return ro ? { ...ro, box: true } : anchorReadout(aligned, closes, anchor, end)
+  }, [segments, aligned, closes, anchor, end])
   const windowText = useMemo(() => endWindowText(anchor, end, formatShiftedHHMM), [anchor, end])
   // An anchor in ETH sums Ironbeam ETH delta with the RTH segment's delta; say so when the sources differ.
   const mixedNote = useMemo(() => {
@@ -477,7 +485,10 @@ export default function AggressorFlowV3Panel({
       ? { time: r.time, value: rolling[i], color: rolling[i] >= 0 ? BUY_RGBA(0.45) : SELL_RGBA(0.38) }
       : ws(r))) : [])
     s.vol.setData(aligned.map((r) => (Number.isFinite(r.vol) ? { time: r.time, value: r.vol } : ws(r))))
-    s.cvd.setData(aligned.map((r, i) => (cvd[i] != null ? { time: r.time, value: cvd[i] } : ws(r))))
+    const gap = 'rgba(0,0,0,0)' // CR-DN item 3a: the line from a box's last bar to the next box's 0 is not drawn
+    s.cvd.setData(aligned.map((r, i) => (cvd[i] != null
+      ? (cvdGaps?.has(i) ? { time: r.time, value: cvd[i], topLineColor: gap, bottomLineColor: gap } : { time: r.time, value: cvd[i] })
+      : ws(r))))
     const shared = normalizeLogicalRange(visibleLogicalRange)
     if (chartRef.current && candleTimes.length >= 2 && !shared) {
       chartRef.current.timeScale().fitContent()
@@ -491,7 +502,7 @@ export default function AggressorFlowV3Panel({
       }
     }
     requestAnimationFrame(() => refreshDecorationsRef.current())
-  }, [aligned, rolling, cvd, candleTimes, visibleLogicalRange])
+  }, [aligned, rolling, cvd, cvdGaps, candleTimes, visibleLogicalRange])
 
   // CR-DI amendment 2: the pane (App) grows by EDGE_STRIP_HEIGHT with the strip, so size the chart to the stage and
   // the strip pane to its height now and on the next frame, before a ResizeObserver pass could split the new height
@@ -690,7 +701,7 @@ export default function AggressorFlowV3Panel({
         )}
         <div data-testid="flow-v3-readout" style={{ position: 'absolute', top: 4, left: 8, zIndex: 4, pointerEvents: 'none', fontSize: '11px', color: '#cbd5e1', background: 'rgba(15,23,42,0.72)', borderRadius: 6, padding: '2px 6px' }}>
           {readout
-            ? `since ${formatShiftedHHMM(readout.anchorTime)}: Δ ${sfmt(readout.delta)} · ${readout.dPrice == null ? '–' : `${readout.dPrice >= 0 ? '+' : ''}${readout.dPrice.toFixed(2)} pts`} · ${readout.minutes} min · ${readout.cpp == null ? '–' : kfmt(readout.cpp)}/pt`
+            ? `${readout.box ? 'box from' : 'since'} ${formatShiftedHHMM(readout.anchorTime)}: Δ ${sfmt(readout.delta)} · ${readout.dPrice == null ? '–' : `${readout.dPrice >= 0 ? '+' : ''}${readout.dPrice.toFixed(2)} pts`} · ${readout.minutes} min · ${readout.cpp == null ? '–' : kfmt(readout.cpp)}/pt`
               + mixedNote
             : `CVD from session open · ${rollingOn ? `rolling ${settings.rollingMin} min · ` : ''}volume per minute`}
         </div>
