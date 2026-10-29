@@ -483,3 +483,30 @@ export class EdgeEffortPrimitive extends BasePrimitive {
     }
   }
 }
+
+// CR-DN item 1 — the Flow v3 anchor → end window, shaded lightly behind the candles (existing slate, low opacity; C1).
+// data: { from, to (shifted epochs; `to` = the end's last 1-minute bar), times (shifted candle times) }: the shade runs
+// from the anchor candle's left edge to the end candle's right edge, half a bar spacing either side.
+export const WINDOW_SHADE_RGBA = 'rgba(148,163,184,0.08)'
+export class WindowShadePrimitive extends BasePrimitive {
+  zOrder() {
+    return 'bottom'
+  }
+
+  paint({ context: ctx, horizontalPixelRatio: hr, bitmapSize }, chart, series, d) {
+    const times = Array.isArray(d.times) ? d.times : []
+    const i0 = floorIndex(times, d.from)
+    const i1 = floorIndex(times, d.to)
+    if (i0 < 0 || i1 < i0) return
+    const ts = chart.timeScale()
+    const xa = ts.timeToCoordinate(times[i0])
+    const xb = ts.timeToCoordinate(times[i1])
+    const half = (Number(ts.options().barSpacing) || 6) / 2
+    const plotW = bitmapSize.width / hr
+    const x0 = xa == null ? (xb == null ? null : 0) : xa - half
+    const x1 = xb == null ? (xa == null ? null : plotW) : xb + half
+    if (x0 == null || x1 == null || x1 <= 0 || x0 >= plotW) return
+    ctx.fillStyle = WINDOW_SHADE_RGBA
+    ctx.fillRect(Math.round(Math.max(0, x0) * hr), 0, Math.round((Math.min(plotW, x1) - Math.max(0, x0)) * hr), bitmapSize.height)
+  }
+}

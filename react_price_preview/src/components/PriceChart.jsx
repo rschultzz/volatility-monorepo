@@ -26,7 +26,7 @@ import LandscapeChartOverlay from './LandscapeChartOverlay'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
 import { LIVE_EFFORT_ID, absorptionLevels, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
-import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive } from './flowV3Primitives'
+import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, WindowShadePrimitive } from './flowV3Primitives'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
 const ETH_BG_COLOR = '#1f2937'
@@ -900,6 +900,8 @@ export default function PriceChart({
   // primitive is attached (the chart is exactly as before). While `anchorPickArmed`, the next bar click
   // is consumed and reported to `onAnchorPick(shifted time)` instead of toggling a timeslice (DC3).
   flowV3 = null,
+  // CR-DN item 1 — the Flow v3 anchor → end window { from, to } (shifted PT epochs), shaded lightly; null without an end.
+  flowWindow = null,
   anchorPickArmed = false,
   onAnchorPick = null,
 }) {
@@ -2665,13 +2667,14 @@ export default function PriceChart({
   const v3Marks = useMemo(() => (v3MarksOn ? chartMarks(v3Payload, v3Times, v3Shift) : null), [v3MarksOn, v3Payload, v3Times, v3Shift])
   const v3ProfileOn = Boolean(flowV3?.profile && v3Flat)
   const v3ProfileFrom = flowV3?.profileFrom ?? null
+  const v3ProfileTo = flowV3?.profileTo ?? null // CR-DN item 1: the end's minute + 60 s, or null (to now)
   const v3Profile = useMemo(() => {
     if (!v3ProfileOn) return null
-    const r1 = profileTotals(v3Flat, v3ProfileFrom == null ? -Infinity : v3ProfileFrom)
+    const r1 = profileTotals(v3Flat, v3ProfileFrom == null ? -Infinity : v3ProfileFrom, v3ProfileTo == null ? Infinity : v3ProfileTo)
     const r2 = mergeRows(r1, 2)
     const mx = (rows) => rows.reduce((m, r) => Math.max(m, r.buy + r.sell), 0)
     return { rows: { 1: r1, 2: r2 }, max: { 1: mx(r1), 2: mx(r2) } }
-  }, [v3ProfileOn, v3Flat, v3ProfileFrom])
+  }, [v3ProfileOn, v3Flat, v3ProfileFrom, v3ProfileTo])
   // CR-DF — absorption levels (exact marks as fading lines: magenta buyers absorbed, orange sellers absorbed, CR-DG)
   // and the edge readout's dashed lines.
   const v3LevelsOn = Boolean(flowV3?.levels && v3Payload)
@@ -2697,7 +2700,7 @@ export default function PriceChart({
   }, [v3EdgeReadout, v3Times, v3Shift])
   const v3SellLayer = flowV3?.sellLayer !== false
   const v3BuyLayer = flowV3?.buyLayer !== false
-  const v3PrimRef = useRef({ series: null, heat: null, marks: null, profile: null, levels: null, edges: null })
+  const v3PrimRef = useRef({ series: null, heat: null, marks: null, profile: null, levels: null, edges: null, window: null })
   const [v3Hover, setV3Hover] = useState(null)
   const [v3LevelHover, setV3LevelHover] = useState(null)
   const [v3BoxHover, setV3BoxHover] = useState(null)
@@ -2705,7 +2708,7 @@ export default function PriceChart({
     const series = seriesRef.current
     if (!series) return
     const reg = v3PrimRef.current
-    if (reg.series !== series) v3PrimRef.current = { series, heat: null, marks: null, profile: null, levels: null, edges: null }
+    if (reg.series !== series) v3PrimRef.current = { series, heat: null, marks: null, profile: null, levels: null, edges: null, window: null }
     const r = v3PrimRef.current
     const feed = (key, make, data) => {
       if (!data && !r[key]) return
@@ -2722,6 +2725,7 @@ export default function PriceChart({
     feed('levels', () => new AbsorptionLevelsPrimitive((level, pt) => setV3LevelHover(level ? { level, pt } : null)),
       v3Levels ? { levels: v3Levels, times: v3Times } : null)
     feed('edges', () => new EdgeLinesPrimitive((box, pt) => setV3BoxHover(box ? { box, pt } : null)), v3Edges)
+    feed('window', () => new WindowShadePrimitive(), flowWindow ? { ...flowWindow, times: v3Times } : null)
     // CR-DG: an open hover re-reads its mark / level from the new payload, so held minutes update on a refresh
     // while the pointer is still (gone from the new list = hover closed).
     setV3Hover((h) => relinkHover(h, 'mark', v3Marks, 'time'))
@@ -2730,7 +2734,7 @@ export default function PriceChart({
       const hit = h && v3Edges?.boxes.find((b) => b.frozen && b.box.from === h.box.from)
       return hit ? { ...h, box: hit.box } : null
     })
-  }, [v3Columns, v3Marks, v3Profile, v3Levels, v3Edges, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
+  }, [v3Columns, v3Marks, v3Profile, v3Levels, v3Edges, flowWindow, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
 
   // CR-CD A3 — when a candidate loads in replay (not yet revealed), fit the price axis to the
   // setup zone/range (range box, zone band, level, extreme, entry, stop) ± max(25 pts, 0.5·IM) instead of the full GEX-line

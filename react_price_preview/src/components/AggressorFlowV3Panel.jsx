@@ -34,6 +34,7 @@ import {
   edgeStripColumns,
   edgeText,
   edgeVisits,
+  endWindowText,
   dirArrow,
   floorIndex,
   kfmt,
@@ -107,6 +108,7 @@ function GuideBody() {
     <div>
       <div style={h}>This pane</div>
       <div><b>Anchored CVD</b> (line, top): buying minus selling added up from the anchor bar, starting at 0. Set the anchor with 📍 and a click on a price bar, or with "session open" / "last swing" (the end of the last confirmed swing, ⚙ swing size of Flow v2). Esc or "clear" removes it; without an anchor the line is the session CVD. The readout shows delta, price change, minutes and contracts per point since the anchor.{tag}</div>
+      <div><span style={sw(SLATE_RGBA(0.25))} /><b>Set end</b> (with an anchor): click "set end", then a price bar after the anchor (not after the last bar: now, or the replay / review until time). Anchored CVD and its readout, the Edges box(es), the Edge effort strip and the Profile then use anchor → end only; after the end CVD isn't drawn and the boxes and strip stop. Delta, volume and rolling bars and the absorption levels / marks are unchanged. The window is shaded lightly on the price chart and the header shows "hh:mm → hh:mm · N min". Esc while picking cancels; "clear end" removes only the end, "clear" removes anchor and end. On the 5-minute chart the end is the last minute of the clicked candle.{tag}</div>
       <div><span style={sw(SLATE_RGBA(0.55))} /><b>Volume per minute</b> (middle bars, slate grey): all contracts traded in each 1-minute bar (the flow's volume, every print, including the rare unknown-side ones), from the same data as the delta bars. Hover a minute for its volume, delta and delta share (delta ÷ volume).{tag}</div>
       <div><span style={sw(BUY_RGBA(0.7))} /><span style={sw(SELL_RGBA(0.6))} /><b>Rolling net delta</b> (⚙, off by default): buying minus selling over the last N minutes (5 / 10 / 15). When on it draws in the middle slot, volume moves to the slot below it and the pane grows by one slot.{tag}</div>
       <div><b>Delta per bar</b> (bottom bars): the Flow v2 histogram, so this pane stands alone.{tag}</div>
@@ -246,6 +248,10 @@ export default function AggressorFlowV3Panel({
   onAnchorChange,
   anchorArmed = false,
   onAnchorArmedChange,
+  end = null, // CR-DN item 1: the window's end (shifted epoch of its last 1-minute bar), null = to now
+  onEndChange,
+  endArmed = false,
+  onEndArmedChange,
   effortOn = false, // CR-DG item 4: the Flow v2 Effort switch (same state), labels on the price chart
   onEffortChange,
   edgeEffortOn = false, // CR-DI: the Edge effort strip (stored per viewer); draws only with Edges on, an anchor and exact data
@@ -278,10 +284,11 @@ export default function AggressorFlowV3Panel({
     for (const c of Array.isArray(candles) ? candles : []) m.set(shift(c.time), Number(c.close))
     return aligned.map((r) => m.get(r.time))
   }, [candles, aligned, shift])
-  const cvd = useMemo(() => anchoredCvd(aligned, anchor), [aligned, anchor])
+  const cvd = useMemo(() => anchoredCvd(aligned, anchor, end), [aligned, anchor, end])
   const rollingOn = Boolean(settings.rollingOn)
   const rolling = useMemo(() => (rollingOn ? rollingDelta(aligned, settings.rollingMin) : null), [aligned, rollingOn, settings.rollingMin])
-  const readout = useMemo(() => anchorReadout(aligned, closes, anchor), [aligned, closes, anchor])
+  const readout = useMemo(() => anchorReadout(aligned, closes, anchor, end), [aligned, closes, anchor, end])
+  const windowText = useMemo(() => endWindowText(anchor, end, formatShiftedHHMM), [anchor, end])
   // An anchor in ETH sums Ironbeam ETH delta with the RTH segment's delta; say so when the sources differ.
   const mixedNote = useMemo(() => {
     if (!readout || readout.fromSeg === readout.toSeg) return ''
@@ -334,18 +341,19 @@ export default function AggressorFlowV3Panel({
     requestAnimationFrame(() => refreshDecorationsRef.current())
   }, [anchor])
 
-  // DC5: Esc disarms a pending pick, else clears the anchor.
+  // DC5: Esc disarms a pending pick (anchor or, CR-DN, end), else clears the anchor (and with it the end).
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return
       const tag = (e.target?.tagName || '').toLowerCase()
       if (tag === 'input' || tag === 'select' || tag === 'textarea') return
-      if (anchorArmed) onAnchorArmedChange?.(false)
+      if (endArmed) onEndArmedChange?.(false)
+      else if (anchorArmed) onAnchorArmedChange?.(false)
       else if (anchor != null) onAnchorChange?.(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [anchor, anchorArmed, onAnchorChange, onAnchorArmedChange])
+  }, [anchor, anchorArmed, endArmed, onAnchorChange, onAnchorArmedChange, onEndArmedChange])
 
   useEffect(() => {
     if (!hostRef.current || !stageRef.current) return undefined
@@ -607,8 +615,22 @@ export default function AggressorFlowV3Panel({
           onClick={() => setAnchorTo(swingAnchor)} title="The end of the last confirmed swing (Flow v2 swing size)">
           last swing
         </button>
-        <button type="button" style={chipStyle(false)} data-testid="flow-v3-anchor-clear" disabled={anchor == null && !anchorArmed}
-          onClick={() => { onAnchorArmedChange?.(false); onAnchorChange?.(null) }}>
+        <button type="button" style={{ ...chipStyle(endArmed), opacity: anchor == null ? 0.5 : 1 }} aria-pressed={endArmed} data-testid="flow-v3-end-pick"
+          disabled={anchor == null} onClick={() => onEndArmedChange?.(!endArmed)}
+          title={anchor == null ? 'Set an anchor first' : 'Click, then click a bar after the anchor on the price chart to end the window there (Esc cancels)'}>
+          {endArmed ? 'click a bar…' : 'set end'}
+        </button>
+        {windowText && (
+          <span data-testid="flow-v3-window" style={{ fontSize: '11px', color: '#cbd5e1', whiteSpace: 'nowrap', flex: '0 0 auto' }}>{windowText}</span>
+        )}
+        {end != null && (
+          <button type="button" data-testid="flow-v3-end-clear" onClick={() => { onEndArmedChange?.(false); onEndChange?.(null) }}
+            style={{ ...chipStyle(false), fontSize: '10px', padding: '1px 6px' }} title="Remove the end (the anchor stays)">
+            clear end
+          </button>
+        )}
+        <button type="button" style={chipStyle(false)} data-testid="flow-v3-anchor-clear" disabled={anchor == null && !anchorArmed && !endArmed}
+          onClick={() => { onAnchorArmedChange?.(false); onEndArmedChange?.(false); onEndChange?.(null); onAnchorChange?.(null) }}>
           clear
         </button>
         <button type="button" style={chipStyle(layers.edges)} aria-pressed={Boolean(layers.edges)} data-testid="flow-v3-edges-toggle"

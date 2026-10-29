@@ -49,8 +49,9 @@ export function floorIndex(times, t) {
 const fin = (v) => Number.isFinite(Number(v)) && v !== null
 
 // DC5: CVD from 0 at the anchor bar, accumulating from the next bar; null before the anchor. With no
-// anchor the v2 CVD (from the session open) is returned unchanged.
-export function anchoredCvd(rows, anchorTime) {
+// anchor the v2 CVD (from the session open) is returned unchanged. CR-DN item 1: with `endTime` (shifted), null
+// after the last row at or before it.
+export function anchoredCvd(rows, anchorTime, endTime = null) {
   const list = Array.isArray(rows) ? rows : []
   if (anchorTime == null) return list.map((r) => (fin(r.cvd) ? Number(r.cvd) : null))
   const a = floorIndex(list.map((r) => r.time), anchorTime)
@@ -59,6 +60,7 @@ export function anchoredCvd(rows, anchorTime) {
   let acc = 0
   out[a] = 0
   for (let i = a + 1; i < list.length; i += 1) {
+    if (endTime != null && list[i].time > endTime) break
     if (!fin(list[i].delta)) continue
     acc += Number(list[i].delta)
     out[i] = acc
@@ -67,14 +69,16 @@ export function anchoredCvd(rows, anchorTime) {
 }
 
 // DC5 header readout: delta, price change, minutes and contracts per point from the anchor bar to the
-// last bar with data. `closes[i]` is the candle close aligned with rows[i]. Null without an anchor.
-export function anchorReadout(rows, closes, anchorTime) {
+// last bar with data. `closes[i]` is the candle close aligned with rows[i]. Null without an anchor. CR-DN item 1:
+// with `endTime` (shifted), the last bar with data at or before it.
+export function anchorReadout(rows, closes, anchorTime, endTime = null) {
   const list = Array.isArray(rows) ? rows : []
   if (anchorTime == null || !list.length) return null
   const a = floorIndex(list.map((r) => r.time), anchorTime)
   if (a < 0) return null
   let last = -1
   for (let i = list.length - 1; i > a; i -= 1) {
+    if (endTime != null && list[i].time > endTime) continue
     if (fin(list[i].delta)) {
       last = i
       break
@@ -529,8 +533,9 @@ function boxStats(payload, bars, j0, j1, exact) {
 // only when every bar since the anchor is on an exact segment (else null and `exact` false); `minutes` are the same
 // cells per minute (CR-DI strip), so the contracts are their sums. First touch: the first minute of the box whose high
 // (top) / low (bottom) came within EDGE_NEAR_PTS of the edge; `brokeAt` / `breaks` on an edge = its growth moves.
-// `holdMin` is a display default (⚙), not a tested threshold. Null without an anchor or bars.
-export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAULT_V3_SETTINGS.boxHoldMin) {
+// `holdMin` is a display default (⚙), not a tested threshold. Null without an anchor or bars. CR-DN item 1: with
+// `endShifted`, bars after it are ignored (the last box ends on the last bar at or before it; `end` = that bar).
+export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAULT_V3_SETTINGS.boxHoldMin, endShifted = null) {
   if (anchorShifted == null || !bars?.t?.length) return null
   let i0 = -1
   for (let i = 0; i < bars.t.length; i += 1) {
@@ -540,7 +545,8 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
     }
   }
   if (i0 < 0) return null
-  const last = bars.t.length - 1
+  let last = bars.t.length - 1
+  if (endShifted != null) while (last > i0 && shift(bars.t[last]) > endShifted) last -= 1
   let exact = true
   for (let i = i0; i <= last; i += 1) if (!bars.exact[i]) exact = false
   const hold = Math.max(0, Number(holdMin) || 0) * 60
@@ -585,7 +591,7 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
   const cur = boxStats(payload, bars, j0, last, exact)
   const held = (e) => (e.firstTouch == null ? null : Math.round((tLast - e.firstTouch) / 60))
   return {
-    ...cur, anchor: bars.t[i0], exact, holdMin: Number(holdMin), frozen,
+    ...cur, anchor: bars.t[i0], exact, holdMin: Number(holdMin), frozen, end: endShifted == null ? null : bars.t[last],
     startDir: frozen.length ? frozen[frozen.length - 1].dir : null,
     top: { ...cur.top, heldMin: held(cur.top) }, bottom: { ...cur.bottom, heldMin: held(cur.bottom) },
   }
@@ -719,4 +725,23 @@ export function edgeText(r, hhmm) {
   }
   const box = r.frozen?.length ? `Box from ${hhmm(r.from)} ${dirArrow(r.startDir)} · ` : ''
   return `${box}${one('Top', r.top, 'buyers')} | ${one('Bottom', r.bottom, 'sellers')}`
+}
+
+// CR-DN item 1 — set end. The picked end (shifted candle time) is stored as the last 1-minute bar inside that candle
+// (`stepSec` = the chart's candle step: 60 on the 1-minute chart, 300 on 5-minute), so a 5-minute pick keeps the whole
+// candle. Valid only after the anchor and not after the payload's last bar (`lastShifted`: live = now, replay /
+// review = the until time); else null (the pick is ignored).
+export function endFromPick(t, stepSec, anchor, lastShifted) {
+  const v = Number(t)
+  if (!Number.isFinite(v) || anchor == null) return null
+  const end = v + Math.max(0, (Number(stepSec) || 60) - 60)
+  if (!(v > anchor)) return null
+  if (lastShifted != null && v > lastShifted) return null
+  return lastShifted != null ? Math.min(end, lastShifted) : end
+}
+
+// "06:49 → 06:57 · 8 min" for the header (hhmm formats a shifted epoch).
+export function endWindowText(anchor, end, hhmm) {
+  if (anchor == null || end == null) return ''
+  return `${hhmm(anchor)} → ${hhmm(end)} · ${Math.round((end - anchor) / 60)} min`
 }
