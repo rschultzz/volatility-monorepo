@@ -420,3 +420,19 @@ Checksums of the planned write (identical in run2 and run3):
   - (a) **New insert-only `bt_derived_repair_archive` table** (DDL + grant by Ryan; recommended).
   - (b) `smoke_test_results` `blind_archive` key.
 - **D6 — `setup_candidates` / `bt_signals`:** not modified (immutable research sets, live snapshots). 141 train events sit on repaired sessions, and 3 have a stamped minute that was repaired. Whether any affected set needs a corrected re-load (a new `set_name`) is proposed as an open question, not done here.
+
+## Amendment 1 — Ryan's decisions (chat 2026-10-29)
+
+D1–D6 approved as recommended, with these conditions:
+
+- **D1 (a):** blind-write the R-b row.
+- **D2 (a):** write all planned holdout values blind.
+- **D3 (a):** all three ES-based versions.
+- **D4 (a):** write the 10 CR-DJ leftover values (`v0.6.1` / `v0.6.0-openiv`, 03-16 `range_over_im`; 03-18 and 03-19 `range_over_im` and `close_move_over_im`). Scope amended to include them.
+  - **Every comparison in this CR is exact in the column's own type, with no tolerance.** That covers reproduction, the regime test, the pre-write guard and the smoke. `real` columns compare as float4 (both sides rounded to float32 the way PostgreSQL stores them). `double precision` compares as float8. Integer, boolean, date and text compare as values. Checksums hash the same canonical form. The Step 0 numbers above used 1e-6 / 4 dp and are superseded by the exact re-run (Amendment 2).
+  - **Why CR-DL used 0.013:** CR-DL's `_same(a, b, tol=0.013)` (`scripts/cr_dl_step0_dryrun.py`) is a copy of CR-BI's (`scripts/cr_bi_backfill_nyse_sessions.py`, commented "REAL columns round-trip at ~1e-3 relative"). CR-BI chose it as an absolute tolerance for ES *prices* stored as float4: at ~7000 their resolution is about 0.0005, and 0.013 is far below the 0.25 tick. CR-DL applied it to every column, including the `real` ratios `range_over_im` / `close_move_over_im` (around 1, where 0.013 is about 1 %). So it hid CR-DJ's 0.004–0.011 changes to those ratios on 03-16 / 03-18 / 03-19, and CR-DL left them unwritten. A note goes into CR-DL's session note.
+  - D4 proof: on each of the 10 values, stored must equal (exactly) a recompute on bars with **both** CR-DJ and CR-BZ undone (CR-DL's overlay of both runs), and **post** is the value written.
+- **D5 (a):** new archive table `bt_derived_repair_archive`, created by the owner role. `dash_backfill_writer` gets INSERT only (no SELECT, UPDATE or DELETE), and no other role gets SELECT. Marked BLIND in vault `components/field-conventions.md` ("contains holdout / R-b values; never queried by Ryan or any Claude session"). The DDL and grant times are recorded below and in the run notes.
+- **D6:** open question, counts only: how many CR-CZ cards (`setup_candidates`) sit on CR-BZ-repaired sessions (train only), and whether their outcomes were computed from Databento or Ironbeam bars.
+
+Write under the unattended backfill protocol: archive first, then guarded, column-only UPDATEs in one transaction. Smoke: train with values; holdout and R-b blind (counts, columns, checksums, second-run equality). Then wrap, open a PR (don't merge), copy the logs (holdout parts count-only). No deploy.
