@@ -778,6 +778,7 @@ export default function PriceChart({
   expectedMoveLevels,
   onApplyGexMinAbsB,
   gexLevelsMode = 'current',
+  levelsNotice = null,
   onApplyGexLevelsMode,
   onApplyIntervalChange,
   onVisibleLogicalRangeChange,
@@ -3474,6 +3475,30 @@ export default function PriceChart({
               { key: 'review', label: 'REVIEW', isOpen: reviewOpen, onToggle: onToggleReview || (() => {}), title: 'Show setup review panel' },
             ]}
           />
+
+          {/* CR-DK: Levels: Corrected with no lines for this date — the API's reason, where the lines would be */}
+          {levelsNotice && (
+            <div
+              data-testid="levels-notice"
+              style={{
+                position: 'absolute',
+                top: '64px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 5,
+                maxWidth: 'calc(100% - 140px)',
+                padding: '4px 10px',
+                borderRadius: '6px',
+                border: '1px solid rgba(148, 163, 184, 0.22)',
+                background: 'rgba(15, 23, 42, 0.9)',
+                color: '#cbd5e1',
+                fontSize: '11px',
+                pointerEvents: 'none',
+              }}
+            >
+              {levelsNotice}
+            </div>
+          )}
 
           {reviewShapes && (
             <div
