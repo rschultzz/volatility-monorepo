@@ -150,12 +150,17 @@ def _f(v):
 
 def write(conn, run_id, plan, stored, post, vrp_now, vrp_new) -> int:
     n = 0
+    # Guard parameters are cast to the column type: psycopg reads `real` as text, so the Python
+    # float (0.07837067) is not the float4 widened to double, and an uncast guard never matches.
+    types = dict(conn.execute(
+        "SELECT column_name, data_type FROM information_schema.columns "
+        "WHERE table_name = 'bt_daily_outcomes'").fetchall())
     with conn.transaction():
         for version, rows in plan.items():
             for d, cols in rows.items():
                 names = list(cols)
                 sets = ", ".join(f"{c} = %s" for c in names)
-                guards = " AND ".join(f"{c} IS NOT DISTINCT FROM %s" for c in names)
+                guards = " AND ".join(f"{c} IS NOT DISTINCT FROM %s::{types[c]}" for c in names)
                 cur = conn.execute(
                     f"UPDATE bt_daily_outcomes SET {sets}, backfill_run_id = %s, computed_at = NOW() "
                     f"WHERE ticker = %s AND trade_date = %s AND feature_version = %s AND active "
