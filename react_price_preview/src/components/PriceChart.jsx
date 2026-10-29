@@ -644,6 +644,62 @@ function clampLogicalToData(logical, candles) {
   return value
 }
 
+// CR-DK: the chart's logical index counts every series' time points (GEX segment ends between sessions too, CR-DG);
+// the flow panes' charts hold only the candles. Logical values shared with them (visible range, linked crosshair) are
+// therefore mapped to candle-index space: candle i sits at the chart's index timeToIndex(candle i), linear between
+// candles, slope 1 beyond the ends. With no extra time points this is the identity.
+function candleIndexAtTime(candles, time) {
+  let lo = 0
+  let hi = candles.length - 1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    const t = Number(candles[mid]?.time)
+    if (t === time) return mid
+    if (t < time) lo = mid + 1
+    else hi = mid - 1
+  }
+  return null
+}
+
+function toCandleLogical(chart, candles, logical) {
+  const value = Number(logical)
+  if (!chart || !Number.isFinite(value) || !Array.isArray(candles) || !candles.length) return logical
+  const ts = chart.timeScale()
+  if (typeof ts.timeToIndex !== 'function') return logical
+  const at = (i) => {
+    const idx = ts.timeToIndex(candles[i].time, false)
+    return idx == null ? null : Number(idx)
+  }
+  const last = candles.length - 1
+  const first = at(0)
+  const end = at(last)
+  if (first == null || end == null) return logical
+  if (value <= first) return value - first
+  if (value >= end) return last + (value - end)
+  let lo = 0
+  let hi = last
+  let mLo = first
+  let mHi = end
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1
+    const m = at(mid)
+    if (m == null) return logical
+    if (m <= value) {
+      lo = mid
+      mLo = m
+    } else {
+      hi = mid
+      mHi = m
+    }
+  }
+  return mHi > mLo ? lo + (value - mLo) / (mHi - mLo) : lo
+}
+
+function toCandleLogicalRange(chart, candles, range) {
+  if (!range) return range
+  return { from: toCandleLogical(chart, candles, range.from), to: toCandleLogical(chart, candles, range.to) }
+}
+
 function normalizeGexSegments(value) {
   if (!Array.isArray(value)) return []
   const out = []
@@ -1727,7 +1783,7 @@ export default function PriceChart({
 
     const reportLogicalRange = (range) => {
       if (typeof onVisibleLogicalRangeChange !== 'function') return
-      const next = normalizeLogicalRange(range)
+      const next = normalizeLogicalRange(toCandleLogicalRange(chartRef.current, shiftedCandlesRef.current, range))
       if (!next) return
       if (rangesClose(lastReportedRangeRef.current, next)) return
       lastReportedRangeRef.current = next
@@ -1827,7 +1883,16 @@ export default function PriceChart({
       const snappedEpoch = Number(param.time)
       const timeText = formatShiftedTimestamp(Number.isFinite(snappedEpoch) ? snappedEpoch : shiftedEpoch)
       showTooltipAtPoint(x, y, priceText, timeText)
-      reportLinkedCrosshair({ logical: clampedLogical, shiftedTime: shiftedEpoch })
+      // CR-DK: the flow panes get the candle the tooltip shows (its index in the candles, not the chart's logical)
+      const snappedIndex = Number.isFinite(snappedEpoch) ? candleIndexAtTime(shiftedCandlesRef.current, snappedEpoch) : null
+      reportLinkedCrosshair(
+        snappedIndex != null
+          ? { logical: snappedIndex, shiftedTime: snappedEpoch }
+          : {
+              logical: clampLogicalToData(toCandleLogical(chartRef.current, shiftedCandlesRef.current, logical), shiftedCandlesRef.current),
+              shiftedTime: shiftedEpoch,
+            }
+      )
     }
 
     const handleResize = () => {
@@ -2315,7 +2380,10 @@ export default function PriceChart({
     }
 
     const syncReportedRange = () => {
-      const vr = normalizeLogicalRange(chart.timeScale().getVisibleLogicalRange?.())
+      // CR-DK: reported in candle-index space, as reportLogicalRange
+      const vr = normalizeLogicalRange(
+        toCandleLogicalRange(chart, shiftedCandlesRef.current, chart.timeScale().getVisibleLogicalRange?.())
+      )
       if (vr && typeof onVisibleLogicalRangeChange === 'function') {
         if (!rangesClose(lastReportedRangeRef.current, vr)) {
           lastReportedRangeRef.current = vr

@@ -6,8 +6,9 @@
 //   baseline   the same frontend at origin/main (a detached worktree), --port 5180
 // then:       CRBV_BASE_URL=http://localhost:5181 npx playwright test tests/e2e/cr-dk.spec.js   (from react_price_preview/)
 //
-// "crosshair": with the cursor on the 07:22 PT candle of 2026-10-27 the flow pane's linked crosshair sits on the flow
-//   bar of the same minute (Flow current and v3; one session and a day either side). origin/main is logged.
+// "crosshair": with the cursor on the 07:22 PT candle of 2026-10-27 (07:20 on 5-minute bars) the flow pane's linked
+//   crosshair sits on the flow bar of the same minute, and the flow pane scrolls with the price chart (Flow current
+//   and v3; one session and a day either side). origin/main is logged (CRDK_SIDES=main).
 import { test, expect } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -112,17 +113,22 @@ async function flowCrosshair(page, target) {
 
 // Cursor across the 07:22 candle (left quarter, centre, right quarter): price-chart tooltip time and the flow pane's
 // crosshair time / x offset from the flow bar of 07:22, in bars.
+// The flow pane's scroll must match the price chart too: the price-vs-flow x of the bar is the same with a day either
+// side as with none (Flow v3 sits a constant ≈ 9 px off at 0 days: different price-scale widths, out of scope).
+const V3 = { 'ib-react-flow-mode-v3': '1' }
 const CROSS_VARIANTS = [
   { name: 'current-0d', storage: {}, either: 0 },
-  { name: 'current-1d', storage: {}, either: 1 },
-  { name: 'v3-0d', storage: { 'ib-react-flow-mode-v3': '1' }, either: 0 },
-  { name: 'v3-1d', storage: { 'ib-react-flow-mode-v3': '1' }, either: 1 },
+  { name: 'current-1d', storage: {}, either: 1, same: 'current-0d' },
+  { name: 'v3-0d', storage: V3, either: 0 },
+  { name: 'v3-1d', storage: V3, either: 1, same: 'v3-0d' },
+  { name: 'v3-5min-0d', storage: V3, either: 0, interval: '5min', bar: '07:20' },
+  { name: 'v3-5min-1d', storage: V3, either: 1, interval: '5min', bar: '07:20', same: 'v3-5min-0d' },
 ]
 
 async function crossAt(page, base, v) {
-  await open(page, DAY, { base, storage: v.storage, either: v.either })
+  await open(page, DAY, { base, storage: v.storage, either: v.either, interval: v.interval || '1min' })
   await settle(page)
-  const t = shifted(`${DAY}T07:22`)
+  const t = shifted(`${DAY}T${v.bar || '07:22'}`)
   await frame(page, t - 20 * 60, t + 20 * 60)
   const p = await point(page, t)
   const y = p.rect.y + p.rect.h * 0.4
@@ -152,9 +158,10 @@ test('crosshair: the flow pane follows the 07:22 PT candle', async ({ browser })
   if (!sides.includes('branch')) return
   for (const v of CROSS_VARIANTS) {
     for (const s of res[`${v.name}:branch`]) {
-      expect(s.tooltip, v.name).toBe('10/27 07:22:00 PT')
-      expect(s.flow?.time, v.name).toBe('07:22')
+      expect(s.tooltip, v.name).toBe(`10/27 ${v.bar || '07:22'}:00 PT`)
+      expect(s.flow?.time, v.name).toBe(v.bar || '07:22')
       expect(Math.abs(s.flow.offsetBars), v.name).toBeLessThan(0.05)
+      if (v.same) expect(Math.abs(s.flow.priceVsFlowPx - res[`${v.same}:branch`][0].flow.priceVsFlowPx), v.name).toBeLessThan(2)
     }
   }
 })
