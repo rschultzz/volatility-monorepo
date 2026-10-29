@@ -333,3 +333,37 @@ branch held only this spec). Step 0e re-checked against the merged code:
 | 8 | Volume field | holds: `aligned[i].vol` is the field CR-DM draws; the box label's `/pt` uses it through `anchorReadout` |
 
 Step 0's line numbers for App / panel shifted by CR-DM; the functions and their behaviour are as Step 0 states.
+
+## Amendment 3 (Ryan, chat 2026-10-29) — item 6, volume strip scale
+
+Received while the item 1–5 smoke was running; amended before any item-6 code. Implemented as its own commit after
+item 5.
+
+6. **Volume strip scale** (CR-DM's volume-per-minute bars):
+   - a. The strip's scale tops out at the 98th-percentile minute volume of the bars currently loaded for the session
+     (recomputed when data loads or refreshes), not the single largest minute.
+   - b. Bars taller than that are drawn at full height with a small cap mark (a 2 px line at the top in the bar's own
+     colour, brighter) so clipped minutes are obvious. Hover still shows the true volume.
+   - c. Nothing else changes: bar colours, slot position and height, hover fields, rolling delta.
+
+**Rulings (item 6).** C1 honoured (the bars' slate, brighter for the cap mark). C2 **deviates — approved by Ryan in
+chat 2026-10-29** (an existing display changes); change-log line added to `standing-rulings.md`. A display scale, no
+research meaning.
+
+**Smoke (item 6).** 2026-10-27 full-day zoom: the 57k closing minute is capped and the rest of the session's bars are
+readable; zoomed in, a normal stretch looks as today if it holds no clipped minute; hover on a capped bar shows its
+true volume.
+
+**Step 0 for item 6 (read-only, on the rebased code):**
+- Volume bars: `s.vol`, a HistogramSeries (`SLATE_RGBA(0.55)`) on the visible `right` scale (on its hidden `vol`
+  scale with rolling on), data `aligned[i].vol` (panel `setData` effect). Its scale autoscales to the **visible**
+  bars' max (lightweight-charts default), so today a full-day view is scaled by the largest minute and a zoomed-in
+  stretch by its own largest minute.
+- Rule that satisfies 6a and the "zoomed in looks as today" smoke together: the drawn value is `min(vol, cap)` with
+  cap = the 98th percentile (nearest rank) of the loaded rows' positive volumes; the scale keeps autoscaling, so it
+  tops out at min(visible max, cap). A stretch with no minute above the cap draws exactly as today; a view holding the
+  57k minute tops out at the cap.
+- Cap mark: a primitive on the volume series draws, for each clipped bar, a 2 px line at the bar's top across the
+  histogram column width (lightweight-charts: `round(barSpacing × pr) − gap`), in the slate at 0.95.
+- Hover reads `minuteFlow(row)` from the rows, not the series, so it keeps the true volume with no change.
+- On the 5-minute chart the rows are 5-minute sums; the cap is the 98th percentile of those rows (the bars drawn).
