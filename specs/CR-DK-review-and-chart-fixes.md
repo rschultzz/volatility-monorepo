@@ -29,6 +29,9 @@ CR-DJ (data patch) may be running in its own worktree and is not touched. One DB
    - Use the reason the API already returns. Nothing changes on dates that have lines.
 4. **Flow-pane crosshair:** snap to the bar under the cursor using the same indexing as CR-DG's price-chart tooltip
    fix (with a day either side the flow pane may sit one bar off). Check and fix if so.
+   - **Amendment 1 (Ryan, chat 2026-10-29):** item 4 also covers the flow pane's **scroll**. With a day either side,
+     the flow pane sat one bar off the price chart (the price chart's logical range counted GEX time points); the
+     shared candle-index mapping (`bdcdd3e`) aligns it. Approved as part of item 4; C2 approval unchanged.
 
 ## Standing rulings conformance (UI CR)
 
