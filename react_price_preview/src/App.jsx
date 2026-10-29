@@ -3,7 +3,7 @@ import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
 import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS, effortChartMarkers } from './components/AggressorFlowV2Panel'
 import AggressorFlowV3Panel from './components/AggressorFlowV3Panel'
-import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, edgeReadout, edgeStripDrawn, flattenBars, makeShifter } from './flowV3'
+import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, edgeReadout, edgeStripDrawn, flattenBars, makeShifter, rollingExtraHeight } from './flowV3'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import { PANEL_WIDTH as ANALOGUES_PANEL_WIDTH } from './components/AnaloguesPanel'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
@@ -2008,8 +2008,10 @@ export default function App() {
 
   // CR-DI amendment 2: while the Edge effort strip is drawn the Flow v3 pane grows by its height (the price pane
   // above gives it up), so the pane's other series keep their heights; otherwise the pane is unchanged.
-  const flowPaneExtra = flowPaneMode === 'v3' && edgeStripDrawn(flowEdgeEffort, flowV3Layers.edges, flowAnchor, flowV3Edges)
-    ? EDGE_STRIP_HEIGHT : 0
+  // CR-DM item 2: with rolling net delta on (⚙) the pane also grows by one slot, so the other slots keep their heights.
+  const flowRollingExtra = flowPaneMode === 'v3' && flowV3Settings.rollingOn ? rollingExtraHeight(flowPanelHeight) : 0
+  const flowPaneExtra = (flowPaneMode === 'v3' && edgeStripDrawn(flowEdgeEffort, flowV3Layers.edges, flowAnchor, flowV3Edges)
+    ? EDGE_STRIP_HEIGHT : 0) + flowRollingExtra
 
   // One object per real change (CR-CH): the chart's primitives recompute only when this changes.
   const flowV3Chart = useMemo(() => {
@@ -2574,6 +2576,7 @@ export default function App() {
                       candles={mergedBarsWithLiveTimeline}
                       visibleLogicalRange={sharedLogicalRange}
                       height={flowPanelHeight + flowPaneExtra}
+                      rollingExtra={flowRollingExtra}
                       loading={flowV2Loading}
                       error={flowV2Error}
                       linkedCrosshair={linkedCrosshair}

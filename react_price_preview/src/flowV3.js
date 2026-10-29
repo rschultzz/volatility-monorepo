@@ -8,7 +8,10 @@ export const ALPHA_MIN = 0.08
 export const ALPHA_SPAN = 0.62
 export const CROWDED_TICK_PX = 3 // DC7: one tick shorter than this -> 0.5-pt cells
 export const ROLLING_CHOICES = [5, 10, 15]
-export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15 }
+// CR-DM: rolling net delta is a ⚙ option, off by default (volume per minute takes its slot); liveMinMove = the live
+// effort label's minimum move in points (⚙, a display default, not a tested threshold).
+export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: false, liveMinMove: 4 }
+export const LIVE_MIN_MOVE_RANGE = [2, 12]
 // CR-DI amendment 9: an Edges box edge must hold this many minutes before a close beyond it freezes the box (⚙; a display
 // default, not a tested threshold).
 export const BOX_HOLD_MIN_RANGE = [5, 60]
@@ -117,6 +120,39 @@ export function rollingDelta(rows, minutes) {
     if (fin(list[i].delta)) out[i] = acc
   }
   return out
+}
+
+// CR-DM item 1: one minute's hover numbers from the same row the delta bars draw: volume (all prints, unknown side
+// included), delta and the raw delta share (delta ÷ volume; the payload's `share` is its 3-bar EMA).
+export function minuteFlow(row) {
+  const vol = fin(row?.vol) ? Number(row.vol) : null
+  const delta = fin(row?.delta) ? Number(row.delta) : null
+  return { vol, delta, share: vol != null && delta != null && vol > 0 ? delta / vol : null }
+}
+
+// CR-DM item 2: the pane's slots as price-scale margins of pane 0. Rolling off: CVD, volume (the old rolling slot) and
+// delta, exactly the CR-DC margins. Rolling on: the pane is `extra` px taller (App adds rollingExtraHeight) and the
+// slots keep their pixel heights: CVD, rolling (its old slot), volume (the slot below), delta.
+export const ROLLING_SLOT_FRAC = 0.32 // one slot (0.28) + its gap (0.04) of the pane's base height
+// Pane 0 = the panel minus its header row (8 px padding + 24 px chips) and the time axis (28 px), measured at 220 px.
+export const FLOW_V3_CHROME_PX = 60
+export function rollingExtraHeight(panelHeight) {
+  return Math.round(ROLLING_SLOT_FRAC * Math.max(0, Number(panelHeight) - FLOW_V3_CHROME_PX))
+}
+export function paneSlotMargins(pane0Px, extraPx) {
+  const H = Number(pane0Px)
+  const X = Number(extraPx) || 0
+  if (!(X > 0) || !(H > X)) {
+    return { cvd: { top: 0.04, bottom: 0.62 }, mid: { top: 0.42, bottom: 0.30 }, low: null, delta: { top: 0.74, bottom: 0.02 } }
+  }
+  const B = H - X // the base height: each slot keeps its px
+  const m = (a, b) => ({ top: a / H, bottom: (H - b) / H })
+  return {
+    cvd: m(0.04 * B, 0.38 * B),
+    mid: m(0.42 * B, 0.70 * B),
+    low: m(0.74 * B, 0.70 * B + X),
+    delta: m(0.74 * B + X, 0.98 * B + X),
+  }
 }
 
 // Flatten the cells payload's segments into shifted-time arrays (once per payload).
