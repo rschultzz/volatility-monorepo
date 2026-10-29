@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PriceChart from './components/PriceChart'
-import AggressorFlowPanel from './components/AggressorFlowPanel'
-import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS, alignV2ToCandles, effortChartMarkers } from './components/AggressorFlowV2Panel'
+import { DEFAULT_MARKER_SETTINGS, alignV2ToCandles, effortChartMarkers } from './flowShared'
 import AggressorFlowV3Panel from './components/AggressorFlowV3Panel'
 import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, LIVE_EFFORT_ID, boxSegments, edgeReadout, edgeStripDrawn, endFromPick, flattenBars, liveEffortLabel, makeShifter, rollingExtraHeight, rowCloses, segmentReadouts } from './flowV3'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
@@ -17,15 +16,12 @@ import { GEX_LEVELS_MODE_STORAGE_KEY, correctedLevelsNotice, resolveInitialGexLe
 
 
 const FLOW_HEIGHT_STORAGE_KEY = 'ib-react-flow-panel-height'
-const FLOW_EMA_MINUTES_STORAGE_KEY = 'ib-react-flow-ema-minutes'
-// CR-CD: Flow pane mode (Current | v2) and the v2 marker settings, per viewer.
-const FLOW_MODE_STORAGE_KEY = 'ib-react-flow-mode'
+// CR-CD: the v2 marker settings (swing size for the legs v3 reads, effort ratio), per viewer. CR-DP item 1: Flow is
+// always v3; the retired mode keys are removed once on load (a stored Current / v2 opens as v3).
+const FLOW_RETIRED_MODE_KEYS = ['ib-react-flow-mode', 'ib-react-flow-mode-v3', 'ib-react-flow-ema-minutes']
 const FLOW_V2_MARKERS_STORAGE_KEY = 'ib-react-flow-v2-markers'
 // CR-CD A5: swing effort labels (off by default), per viewer.
 const FLOW_V2_EFFORT_STORAGE_KEY = 'ib-react-flow-v2-effort'
-// CR-DC DC2: v3 is remembered in its own key ('1' while chosen); the CR-CD key keeps 'current' / 'v2', so
-// code without v3 never reads an unknown mode.
-const FLOW_V3_STORAGE_KEY = 'ib-react-flow-mode-v3'
 const FLOW_V3_SETTINGS_STORAGE_KEY = 'ib-react-flow-v3-settings'
 const FLOW_V3_LAYERS_STORAGE_KEY = 'ib-react-flow-v3-layers'
 // CR-DF adds levels / edges; a stored CR-DC object keeps its heat / marks values (now switched in ⚙).
@@ -148,52 +144,9 @@ function parseBool(value, fallback = true) {
   return !['0', 'false', 'no', 'off'].includes(String(value).trim().toLowerCase())
 }
 
-function parseFloatOrNull(value) {
-  if (value == null || value === '') return null
-  const num = Number(value)
-  return Number.isFinite(num) ? num : null
-}
-
 function parseIntOrDefault(value, fallback) {
   const num = Number.parseInt(String(value ?? ''), 10)
   return Number.isFinite(num) ? num : fallback
-}
-
-function coercePositiveInt(value, fallback) {
-  const num = Number.parseInt(String(value ?? ''), 10)
-  if (!Number.isFinite(num) || num < 1) return fallback
-  return num
-}
-
-function flowResampleToSeconds(value) {
-  const s = String(value || '').trim().toLowerCase()
-  if (!s) return 60
-
-  if (s === '1m' || s === '1min' || s === '60s') return 60
-
-  const secMatch = s.match(/^(\d+)\s*s$/)
-  if (secMatch) return Math.max(1, Number(secMatch[1]))
-
-  const minMatch = s.match(/^(\d+)\s*(m|min)$/)
-  if (minMatch) return Math.max(60, Number(minMatch[1]) * 60)
-
-  return 60
-}
-
-function deriveDefaultFlowEmaMinutes(params, flowResample) {
-  const explicitMinutes = coercePositiveInt(
-    params.get('flow_ema_minutes') || params.get('flow_ema_min'),
-    NaN
-  )
-  if (Number.isFinite(explicitMinutes)) return explicitMinutes
-
-  const legacyBars = coercePositiveInt(params.get('flow_ema_len'), NaN)
-  if (Number.isFinite(legacyBars)) {
-    const stepSeconds = flowResampleToSeconds(flowResample)
-    return Math.max(1, Math.round((legacyBars * stepSeconds) / 60))
-  }
-
-  return 14
 }
 
 function dedupeAndSortBars(values) {
@@ -218,17 +171,6 @@ function dedupeSegments(values) {
     byKey.set(key, seg)
   }
   return Array.from(byKey.values())
-}
-
-function dedupeAndSortFlowPoints(values) {
-  const byTime = new Map()
-  for (const point of Array.isArray(values) ? values : []) {
-    const t = Number(point?.time)
-    const value = Number(point?.value)
-    if (!Number.isFinite(t) || !Number.isFinite(value)) continue
-    byTime.set(t, { ...point, time: t, value })
-  }
-  return Array.from(byTime.values()).sort((a, b) => a.time - b.time)
 }
 
 function normalizeDateList(values) {
@@ -369,36 +311,6 @@ function zonedLocalToUtcEpochSec(parts, timeZone = 'America/Los_Angeles') {
   return Math.round((utcGuess.getTime() + (targetAsUtc - zonedAsUtc)) / 1000)
 }
 
-function sessionWindowUtcRangeForTradeDate(tradeDate, timeZone = 'America/Los_Angeles') {
-  const current = parseDateKey(tradeDate)
-  const priorKey = shiftDateKey(tradeDate, -1)
-  const prior = parseDateKey(priorKey)
-  if (!current || !prior) return null
-
-  const from = zonedLocalToUtcEpochSec({ ...prior, hour: 15, minute: 0, second: 0 }, timeZone)
-  const to = zonedLocalToUtcEpochSec({ ...current, hour: 13, minute: 0, second: 0 }, timeZone)
-  if (!Number.isFinite(from) || !Number.isFinite(to)) return null
-  return { from, to }
-}
-
-function replaceFlowPointsForTradeDate(existingPoints, replacementPoints, tradeDate) {
-  const sessionRange = sessionWindowUtcRangeForTradeDate(tradeDate)
-  if (!sessionRange) {
-    return dedupeAndSortFlowPoints(replacementPoints)
-  }
-
-  const preserved = (Array.isArray(existingPoints) ? existingPoints : []).filter((point) => {
-    const t = Number(point?.time)
-    if (!Number.isFinite(t)) return false
-    return t < sessionRange.from || t >= sessionRange.to
-  })
-
-  return dedupeAndSortFlowPoints([
-    ...preserved,
-    ...(Array.isArray(replacementPoints) ? replacementPoints : []),
-  ])
-}
-
 function barsPayloadSignature(payload) {
   const bars = Array.isArray(payload?.bars) ? payload.bars : []
   const segs = Array.isArray(payload?.gex_segments) ? payload.gex_segments : []
@@ -432,12 +344,6 @@ function overlayBarsSignature(bars) {
     last?.low ?? '',
     last?.close ?? '',
   ].join('|')
-}
-
-function flowPointsSignature(points) {
-  const list = Array.isArray(points) ? points : []
-  const last = list.length ? list[list.length - 1] : null
-  return [list.length, last?.time ?? '', last?.value ?? ''].join('|')
 }
 
 function normalizeLogicalRange(range) {
@@ -496,10 +402,6 @@ export default function App() {
 
   const flowEnabled = parseBool(params.get('flow_enabled'), true)
   const flowSession = (params.get('flow_session') || 'FULL').toUpperCase()
-  const defaultFlowResample = '1m'
-  const flowResample = (params.get('flow_resample') || defaultFlowResample).toLowerCase()
-  const defaultFlowEmaMinutes = deriveDefaultFlowEmaMinutes(params, flowResample)
-  const flowHistAlpha = parseFloatOrNull(params.get('flow_hist_alpha')) ?? 0.30
 
   const apiBase = useMemo(() => inferApiBase(), [])
 
@@ -536,18 +438,8 @@ export default function App() {
   const [meta, setMeta] = useState(null)
   const [liveTradeBars, setLiveTradeBars] = useState([])
 
-  const [flowPoints, setFlowPoints] = useState([])
-  const [flowLoading, setFlowLoading] = useState(false)
-  const [flowError, setFlowError] = useState('')
 
   // CR-CD: Flow v2 (default Current; remembered per viewer).
-  const [flowMode, setFlowMode] = useState(() => {
-    try {
-      return window.localStorage.getItem(FLOW_MODE_STORAGE_KEY) === 'v2' ? 'v2' : 'current'
-    } catch (err) {
-      return 'current'
-    }
-  })
   const [flowMarkerSettings, setFlowMarkerSettings] = useState(() => {
     try {
       const raw = JSON.parse(window.localStorage.getItem(FLOW_V2_MARKERS_STORAGE_KEY) || 'null')
@@ -566,13 +458,6 @@ export default function App() {
   const [flowV2Payloads, setFlowV2Payloads] = useState([])
   // CR-DC: Flow v3 (off by default). v3 reads the v2 payloads (plus legs) and, while a price-pane layer
   // is on, /api/ironbeam/flow/cells for the selected session.
-  const [flowV3, setFlowV3] = useState(() => {
-    try {
-      return window.localStorage.getItem(FLOW_V3_STORAGE_KEY) === '1'
-    } catch (err) {
-      return false
-    }
-  })
   const readStoredObject = (key, dflt) => {
     try {
       const raw = JSON.parse(window.localStorage.getItem(key) || 'null')
@@ -626,17 +511,6 @@ export default function App() {
     }
   })
 
-  const [flowEmaMinutes, setFlowEmaMinutes] = useState(() => {
-    try {
-      return coercePositiveInt(
-        window.localStorage.getItem(FLOW_EMA_MINUTES_STORAGE_KEY),
-        defaultFlowEmaMinutes
-      )
-    } catch (err) {
-      return defaultFlowEmaMinutes
-    }
-  })
-
   // CR-CQ: stored value → URL param → 40; an empty or invalid value never becomes 0.
   const [gexMinAbsB, setGexMinAbsB] = useState(() => {
     try {
@@ -677,12 +551,6 @@ export default function App() {
 
   const lastLiveBarsSignatureRef = useRef('')
   const lastLiveOverlaySignatureRef = useRef('')
-  const lastLiveFlowSignatureRef = useRef('')
-
-  const flowEmaLen = useMemo(() => {
-    const stepSeconds = flowResampleToSeconds(flowResample)
-    return Math.max(1, Math.round((flowEmaMinutes * 60) / stepSeconds))
-  }, [flowEmaMinutes, flowResample])
 
   useEffect(() => {
     const handleParentTimeslices = (event) => {
@@ -1234,30 +1102,20 @@ export default function App() {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(FLOW_EMA_MINUTES_STORAGE_KEY, String(flowEmaMinutes))
-    } catch (err) {
-      // ignore
-    }
-  }, [flowEmaMinutes])
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(FLOW_MODE_STORAGE_KEY, flowMode)
-    } catch (err) {
-      // ignore
-    }
-  }, [flowMode])
-
-  useEffect(() => {
-    try {
-      if (flowV3) window.localStorage.setItem(FLOW_V3_STORAGE_KEY, '1')
-      else window.localStorage.removeItem(FLOW_V3_STORAGE_KEY)
       window.localStorage.setItem(FLOW_V3_SETTINGS_STORAGE_KEY, JSON.stringify(flowV3Settings))
       window.localStorage.setItem(FLOW_V3_LAYERS_STORAGE_KEY, JSON.stringify(flowV3Layers))
     } catch (err) {
       // ignore
     }
-  }, [flowV3, flowV3Settings, flowV3Layers])
+  }, [flowV3Settings, flowV3Layers])
+
+  useEffect(() => {
+    try {
+      for (const k of FLOW_RETIRED_MODE_KEYS) window.localStorage.removeItem(k)
+    } catch (err) {
+      // ignore
+    }
+  }, [])
 
   useEffect(() => {
     try {
@@ -1268,16 +1126,6 @@ export default function App() {
     }
   }, [flowEdgeEffort])
 
-  const flowPaneMode = flowV3 ? 'v3' : flowMode
-  const flowV2Data = flowV3 || flowMode === 'v2'
-  const handleFlowModeChange = useCallback((mode) => {
-    if (mode === 'v3') {
-      setFlowV3(true)
-      return
-    }
-    setFlowV3(false)
-    setFlowMode(mode === 'v2' ? 'v2' : 'current')
-  }, [])
   const handleAnchorPick = useCallback((t) => {
     // CR-DN item 1: while "set end" is armed the click sets the end; a bar at or before the anchor or after the
     // payload's last bar is ignored (still armed).
@@ -1298,7 +1146,7 @@ export default function App() {
     setFlowAnchorArmed(false)
     setFlowEnd(null)
     setFlowEndArmed(false)
-  }, [tradeDate, flowSession, flowV3])
+  }, [tradeDate, flowSession])
   // CR-DN item 1: clearing the anchor clears the end; a new anchor at or after the end drops it.
   useEffect(() => {
     if (flowAnchor == null) setFlowEndArmed(false)
@@ -1390,7 +1238,6 @@ export default function App() {
         setSharedLogicalRange(null)
         lastLiveBarsSignatureRef.current = ''
         lastLiveOverlaySignatureRef.current = ''
-        lastLiveFlowSignatureRef.current = ''
 
         const response = await fetch(url.toString(), {
           method: 'GET',
@@ -1437,7 +1284,6 @@ export default function App() {
         setLiveTradeBars([])
         lastLiveBarsSignatureRef.current = ''
         lastLiveOverlaySignatureRef.current = ''
-        lastLiveFlowSignatureRef.current = ''
         setError(err?.message || `Could not load bars from ${url.toString()}`)
       } finally {
         setLoadingCenter(false)
@@ -1508,86 +1354,6 @@ export default function App() {
     return () => controller.abort()
   }, [apiBase, tradeDate, interval, effectiveDaysEitherSide, loadingCenter, error, gexEnabled, gexMinAbsB, activeLevelsMode, reviewUntil])
 
-  useEffect(() => {
-    if (!flowEnabled || flowMode !== 'current' || flowV3 || loadingCenter || error) {
-      setFlowPoints([])
-      setFlowError('')
-      setFlowLoading(false)
-      return
-    }
-
-    const controller = new AbortController()
-    const datesToLoad = loadedFlowDates.length ? loadedFlowDates : [tradeDate]
-
-    async function loadFlow() {
-      try {
-        setFlowLoading(true)
-        setFlowError('')
-        setFlowPoints([])
-
-        const settled = await Promise.allSettled(
-          datesToLoad.map(async (dateStr) => {
-            const url = new URL(`${apiBase}/api/ironbeam/flow`)
-            url.searchParams.set('trade_date', dateStr)
-            url.searchParams.set('session', flowSession)
-            url.searchParams.set('resample', flowResample)
-            url.searchParams.set('ema_len', String(flowEmaLen))
-            if (reviewUntil) url.searchParams.set('until', reviewUntil)
-
-            const response = await fetch(url.toString(), {
-              method: 'GET',
-              credentials: 'include',
-              signal: controller.signal,
-              cache: 'no-store',
-            })
-
-            if (response.status === 401) {
-              throw new Error(
-                `Unauthorized from Dash backend at ${apiBase}. Open the Dash app first and make sure you are logged in there.`
-              )
-            }
-
-            if (!response.ok) {
-              throw new Error(
-                `Flow request failed for ${dateStr}: ${response.status} ${response.statusText || ''}`.trim()
-              )
-            }
-
-            const payload = await response.json()
-            return Array.isArray(payload.flow_points) ? payload.flow_points : []
-          })
-        )
-
-        const merged = []
-        const failures = []
-
-        for (const result of settled) {
-          if (result.status === 'fulfilled') {
-            merged.push(...result.value)
-          } else if (result.reason?.name !== 'AbortError') {
-            failures.push(result.reason?.message || 'Unknown flow load error')
-          }
-        }
-
-        if (!merged.length && failures.length) {
-          throw new Error(failures[0])
-        }
-
-        setFlowPoints(dedupeAndSortFlowPoints(merged))
-        setFlowError('')
-      } catch (err) {
-        if (err?.name === 'AbortError') return
-        setFlowPoints([])
-        setFlowError(err?.message || 'Could not load multi-day flow')
-      } finally {
-        setFlowLoading(false)
-      }
-    }
-
-    loadFlow()
-    return () => controller.abort()
-  }, [apiBase, tradeDate, flowEnabled, flowMode, flowV3, flowSession, flowResample, flowEmaLen, loadingCenter, error, loadedFlowDates, reviewUntil])
-
   // CR-CD: Flow v2 — one /api/ironbeam/flow?mode=v2 request per loaded session. Markers are
   // computed server-side with the viewer's settings; `until` truncates everything in a review replay.
   const flowV2Query = useCallback(
@@ -1600,12 +1366,12 @@ export default function App() {
       url.searchParams.set('m_fade', String(flowMarkerSettings.fade))
       url.searchParams.set('m_gap', String(flowMarkerSettings.gap))
       if (reviewUntil) url.searchParams.set('until', reviewUntil)
-      // CR-DC: v3 asks for the legs too ("anchor = last swing"; CR-DG: and the effort labels when Effort is on).
-      if (flowEffort || flowV3) url.searchParams.set('effort', '1')
+      // CR-DC: v3 asks for the legs ("anchor = last swing"; CR-DG: and the effort labels when Effort is on).
+      url.searchParams.set('effort', '1')
       return url
     },
     [flowSession, flowMarkerSettings.swing, flowMarkerSettings.push, flowMarkerSettings.div,
-      flowMarkerSettings.fade, flowMarkerSettings.gap, reviewUntil, flowEffort, flowV3]
+      flowMarkerSettings.fade, flowMarkerSettings.gap, reviewUntil]
   )
 
   // CR-CH: one payloads array per flowV2Payloads change. A new array on every App render made the
@@ -1630,15 +1396,15 @@ export default function App() {
     if (flowEnd != null && flowLastShifted != null && flowEnd > flowLastShifted) setFlowEnd(null)
   }, [flowEnd, flowLastShifted])
 
-  // CR-CD A5: swing effort labels for the price chart — only while Flow v2 is shown with Effort on
-  // (null otherwise, so the chart draws nothing extra). CR-DG item 4: also in Flow v3, on the same switch.
+  // CR-CD A5 / CR-DG item 4: swing effort labels for the price chart while Effort is on (null otherwise, so the chart
+  // draws nothing extra).
   const flowEffortLegs = useMemo(() => {
-    if (!flowEnabled || !flowEffort || (!flowV3 && flowMode !== 'v2')) return null
+    if (!flowEnabled || !flowEffort) return null
     return flowV2Payloads.flatMap((p) => (Array.isArray(p.payload?.legs) ? p.payload.legs : []))
-  }, [flowEnabled, flowMode, flowV3, flowEffort, flowV2Payloads])
+  }, [flowEnabled, flowEffort, flowV2Payloads])
 
   useEffect(() => {
-    if (!flowEnabled || !flowV2Data || loadingCenter || error) {
+    if (!flowEnabled || loadingCenter || error) {
       setFlowV2Payloads([])
       setFlowV2Error('')
       setFlowV2Loading(false)
@@ -1691,7 +1457,7 @@ export default function App() {
 
     loadFlowV2()
     return () => controller.abort()
-  }, [apiBase, tradeDate, flowEnabled, flowV2Data, flowV2Query, loadingCenter, error, loadedFlowDates])
+  }, [apiBase, tradeDate, flowEnabled, flowV2Query, loadingCenter, error, loadedFlowDates])
 
 
   useEffect(() => {
@@ -1860,81 +1626,9 @@ export default function App() {
     }
   }, [apiBase, tradeDate, selectedSessionTradeDateKey, interval, loadingCenter, error, isLiveTradeDate])
 
-  useEffect(() => {
-    if (!isLiveTradeDate || !flowEnabled || flowMode !== 'current' || flowV3 || loadingCenter || error || isChartInteracting) return undefined
-
-    let disposed = false
-    let inFlight = false
-    let activeController = null
-
-    const tick = async () => {
-      if (disposed || inFlight) return
-      inFlight = true
-      const controller = new AbortController()
-      activeController = controller
-
-      try {
-        const url = new URL(`${apiBase}/api/ironbeam/flow`)
-        url.searchParams.set('trade_date', selectedSessionTradeDateKey || tradeDate)
-        url.searchParams.set('session', flowSession)
-        url.searchParams.set('resample', flowResample)
-        url.searchParams.set('ema_len', String(flowEmaLen))
-
-        const response = await fetch(url.toString(), {
-          method: 'GET',
-          credentials: 'include',
-          signal: controller.signal,
-          cache: 'no-store',
-        })
-
-        if (response.status === 401) {
-          throw new Error(
-            `Unauthorized from Dash backend at ${apiBase}. Open the Dash app first and make sure you are logged in there.`
-          )
-        }
-
-        if (!response.ok) {
-          throw new Error(
-            `Flow request failed for ${tradeDate}: ${response.status} ${response.statusText || ''}`.trim()
-          )
-        }
-
-        const payload = await response.json()
-        if (disposed) return
-
-        const nextPoints = Array.isArray(payload.flow_points) ? payload.flow_points : []
-        const nextSignature = flowPointsSignature(nextPoints)
-        if (nextSignature !== lastLiveFlowSignatureRef.current) {
-          lastLiveFlowSignatureRef.current = nextSignature
-          setFlowPoints((prev) => replaceFlowPointsForTradeDate(prev, nextPoints, selectedSessionTradeDateKey || tradeDate))
-        }
-      } catch (err) {
-        if (err?.name !== 'AbortError') {
-          console.error('React preview live flow refresh failed', err)
-        }
-      } finally {
-        if (activeController === controller) {
-          activeController = null
-        }
-        inFlight = false
-      }
-    }
-
-    tick()
-    const timer = window.setInterval(tick, FLOW_LIVE_POLL_MS)
-
-    return () => {
-      disposed = true
-      window.clearInterval(timer)
-      if (activeController) {
-        activeController.abort()
-      }
-    }
-  }, [apiBase, tradeDate, selectedSessionTradeDateKey, flowEnabled, flowMode, flowV3, flowSession, flowResample, flowEmaLen, loadingCenter, error, isLiveTradeDate])
-
   // CR-CD D7: live Flow v2 refresh every 15 s (the server recomputes the session; Current keeps 3 s).
   useEffect(() => {
-    if (!isLiveTradeDate || !flowEnabled || !flowV2Data || loadingCenter || error || isChartInteracting) return undefined
+    if (!isLiveTradeDate || !flowEnabled || loadingCenter || error || isChartInteracting) return undefined
     let disposed = false
     let inFlight = false
     let activeController = null
@@ -1978,11 +1672,11 @@ export default function App() {
       window.clearInterval(timer)
       if (activeController) activeController.abort()
     }
-  }, [apiBase, tradeDate, selectedSessionTradeDateKey, flowEnabled, flowV2Data, flowV2Query, loadingCenter, error, isLiveTradeDate, isChartInteracting])
+  }, [apiBase, tradeDate, selectedSessionTradeDateKey, flowEnabled, flowV2Query, loadingCenter, error, isLiveTradeDate, isChartInteracting])
 
   // CR-DC: price cells + absorption marks for the selected session, only while v3 has a price-pane layer
   // on (DC13); live sessions refresh with the v2 cadence and pause during chart interaction (DC14).
-  const flowV3AnyLayer = flowV3 && (flowV3Layers.heat || flowV3Layers.profile || flowV3Layers.marks || flowV3Layers.levels || flowV3Layers.edges)
+  const flowV3AnyLayer = (flowV3Layers.heat || flowV3Layers.profile || flowV3Layers.marks || flowV3Layers.levels || flowV3Layers.edges)
   const flowCellsDate = selectedSessionTradeDateKey || tradeDate
   const flowCellsUrl = useMemo(() => {
     if (!flowEnabled || !flowV3AnyLayer || !flowCellsDate) return null
@@ -2038,10 +1732,10 @@ export default function App() {
   const flowCells = flowCellsLoaded.url === flowCellsUrl ? flowCellsLoaded.payload : null
   const flowCellsBars = useMemo(() => (flowCells ? flattenBars(flowCells) : null), [flowCells])
   const flowV3Edges = useMemo(() => {
-    if (!flowV3 || !flowV3Layers.edges || !flowCells || flowAnchor == null) return null
+    if (!flowV3Layers.edges || !flowCells || flowAnchor == null) return null
     return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin, flowEnd,
       flowV3Settings.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin)
-  }, [flowV3, flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin, flowEnd, flowV3Settings.breakHoldMin])
+  }, [flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin, flowEnd, flowV3Settings.breakHoldMin])
 
   // CR-DN item 3: with Edges on and an anchor, each drawn box is a CVD segment. Spans come from the edge readout (cells
   // payload); the readouts run on the same aligned v2 rows the pane draws (alignV2ToCandles + anchorReadout), once here
@@ -2058,8 +1752,8 @@ export default function App() {
   // CR-DI amendment 2: while the Edge effort strip is drawn the Flow v3 pane grows by its height (the price pane
   // above gives it up), so the pane's other series keep their heights; otherwise the pane is unchanged.
   // CR-DM item 2: with rolling net delta on (⚙) the pane also grows by one slot, so the other slots keep their heights.
-  const flowRollingExtra = flowPaneMode === 'v3' && flowV3Settings.rollingOn ? rollingExtraHeight(flowPanelHeight) : 0
-  const flowPaneExtra = (flowPaneMode === 'v3' && edgeStripDrawn(flowEdgeEffort, flowV3Layers.edges, flowAnchor, flowV3Edges)
+  const flowRollingExtra = flowV3Settings.rollingOn ? rollingExtraHeight(flowPanelHeight) : 0
+  const flowPaneExtra = (edgeStripDrawn(flowEdgeEffort, flowV3Layers.edges, flowAnchor, flowV3Edges)
     ? EDGE_STRIP_HEIGHT : 0) + flowRollingExtra
 
   // One object per real change (CR-CH): the chart's primitives recompute only when this changes.
@@ -2082,21 +1776,20 @@ export default function App() {
   }, [flowV3AnyLayer, flowCells, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowAnchor, flowEnd])
   // CR-DN item 1: the anchor → end window, shaded on the price chart (any layer); null without an end.
   const flowV3Window = useMemo(
-    () => (flowV3 && flowAnchor != null && flowEnd != null ? { from: flowAnchor, to: flowEnd } : null),
-    [flowV3, flowAnchor, flowEnd]
+    () => (flowAnchor != null && flowEnd != null ? { from: flowAnchor, to: flowEnd } : null),
+    [flowAnchor, flowEnd]
   )
   const flowV3SessionPayload = useMemo(() => {
-    if (!flowV3) return null
     const hit = flowV2Payloads.find((p) => p.dateStr === flowCellsDate) || flowV2Payloads.find((p) => p.dateStr === tradeDate)
     return hit ? hit.payload : null
-  }, [flowV3, flowV2Payloads, flowCellsDate, tradeDate])
+  }, [flowV2Payloads, flowCellsDate, tradeDate])
 
   // CR-DM item 3: Flow v3 only — the selected session's leg in progress, a dimmed label at its running extreme, appended
   // after the confirmed labels (which are unchanged). Bars after `until` are never in the payload.
   const flowLiveEffort = useMemo(() => {
-    if (!flowEffortLegs || !flowV3) return null
+    if (!flowEffortLegs) return null
     return liveEffortLabel(flowV3SessionPayload?.live_leg, flowV3Settings.liveMinMove ?? DEFAULT_V3_SETTINGS.liveMinMove)
-  }, [flowEffortLegs, flowV3, flowV3SessionPayload, flowV3Settings.liveMinMove])
+  }, [flowEffortLegs, flowV3SessionPayload, flowV3Settings.liveMinMove])
   const effortMarkers = useMemo(() => {
     if (!flowEffortLegs) return null
     const list = effortChartMarkers(flowEffortLegs, flowMarkerSettings.effortRatio)
@@ -2401,13 +2094,6 @@ export default function App() {
     setSharedLogicalRange((prev) => (rangesClose(prev, next) ? prev : next))
   }, [])
 
-  const handleFlowEmaMinutesChange = useCallback((nextValue) => {
-    setFlowEmaMinutes((prev) => {
-      const next = coercePositiveInt(nextValue, prev)
-      return next === prev ? prev : next
-    })
-  }, [])
-
   const handleGexMinAbsBChange = useCallback((nextValue) => {
     setGexMinAbsB((prev) => {
       const next = coerceGexMinAbsB(nextValue, prev)
@@ -2620,7 +2306,7 @@ export default function App() {
                 liveEffort={flowLiveEffort}
                 flowV3={flowV3Chart}
                 flowWindow={flowV3Window}
-                anchorPickArmed={flowV3 && (flowAnchorArmed || flowEndArmed)}
+                anchorPickArmed={flowAnchorArmed || flowEndArmed}
                 onAnchorPick={handleAnchorPick}
               />
             </div>
@@ -2648,75 +2334,39 @@ export default function App() {
                     height: `${flowPanelHeight + flowPaneExtra}px`,
                   }}
                 >
-                  {flowPaneMode === 'v3' ? (
-                    <AggressorFlowV3Panel
-                      priceAxisWidth={priceAxisWidth}
-                      payloads={flowV2PanePayloads}
-                      sessionPayload={flowV3SessionPayload}
-                      cellsPayload={flowCells}
-                      cellsLoading={flowCellsLoading}
-                      cellsError={flowCellsError}
-                      candles={mergedBarsWithLiveTimeline}
-                      visibleLogicalRange={sharedLogicalRange}
-                      height={flowPanelHeight + flowPaneExtra}
-                      rollingExtra={flowRollingExtra}
-                      loading={flowV2Loading}
-                      error={flowV2Error}
-                      linkedCrosshair={linkedCrosshair}
-                      flowMode={flowPaneMode}
-                      onFlowModeChange={handleFlowModeChange}
-                      settings={flowV3Settings}
-                      onSettingsChange={setFlowV3Settings}
-                      layers={flowV3Layers}
-                      onLayersChange={setFlowV3Layers}
-                      edges={flowV3Edges}
-                      segments={flowV3Segments}
-                      anchor={flowAnchor}
-                      onAnchorChange={setFlowAnchor}
-                      anchorArmed={flowAnchorArmed}
-                      onAnchorArmedChange={(v) => { if (v) setFlowEndArmed(false); setFlowAnchorArmed(v) }}
-                      end={flowEnd}
-                      onEndChange={setFlowEnd}
-                      endArmed={flowEndArmed}
-                      onEndArmedChange={(v) => { if (v) setFlowAnchorArmed(false); setFlowEndArmed(v) }}
-                      effortOn={flowEffort}
-                      onEffortChange={setFlowEffort}
-                      edgeEffortOn={flowEdgeEffort}
-                      onEdgeEffortChange={setFlowEdgeEffort}
-                    />
-                  ) : flowMode === 'v2' ? (
-                    <AggressorFlowV2Panel
-                      payloads={flowV2PanePayloads}
-                      candles={mergedBarsWithLiveTimeline}
-                      visibleLogicalRange={sharedLogicalRange}
-                      height={flowPanelHeight}
-                      loading={flowV2Loading}
-                      error={flowV2Error}
-                      linkedCrosshair={linkedCrosshair}
-                      flowMode={flowMode}
-                      onFlowModeChange={handleFlowModeChange}
-                      markerSettings={flowMarkerSettings}
-                      onMarkerSettingsChange={setFlowMarkerSettings}
-                      effortOn={flowEffort}
-                      onEffortChange={setFlowEffort}
-                      effortLegs={flowEffortLegs}
-                    />
-                  ) : (
-                    <AggressorFlowPanel
-                      dataPoints={flowPoints}
-                      candles={mergedBarsWithLiveTimeline}
-                      visibleLogicalRange={sharedLogicalRange}
-                      height={flowPanelHeight}
-                      loading={flowLoading}
-                      error={flowError}
-                      histAlpha={flowHistAlpha}
-                      linkedCrosshair={linkedCrosshair}
-                      emaMinutes={flowEmaMinutes}
-                      onApplyEmaMinutes={handleFlowEmaMinutesChange}
-                      flowMode={flowMode}
-                      onFlowModeChange={handleFlowModeChange}
-                    />
-                  )}
+                  <AggressorFlowV3Panel
+                    priceAxisWidth={priceAxisWidth}
+                    payloads={flowV2PanePayloads}
+                    sessionPayload={flowV3SessionPayload}
+                    cellsPayload={flowCells}
+                    cellsLoading={flowCellsLoading}
+                    cellsError={flowCellsError}
+                    candles={mergedBarsWithLiveTimeline}
+                    visibleLogicalRange={sharedLogicalRange}
+                    height={flowPanelHeight + flowPaneExtra}
+                    rollingExtra={flowRollingExtra}
+                    loading={flowV2Loading}
+                    error={flowV2Error}
+                    linkedCrosshair={linkedCrosshair}
+                    settings={flowV3Settings}
+                    onSettingsChange={setFlowV3Settings}
+                    layers={flowV3Layers}
+                    onLayersChange={setFlowV3Layers}
+                    edges={flowV3Edges}
+                    segments={flowV3Segments}
+                    anchor={flowAnchor}
+                    onAnchorChange={setFlowAnchor}
+                    anchorArmed={flowAnchorArmed}
+                    onAnchorArmedChange={(v) => { if (v) setFlowEndArmed(false); setFlowAnchorArmed(v) }}
+                    end={flowEnd}
+                    onEndChange={setFlowEnd}
+                    endArmed={flowEndArmed}
+                    onEndArmedChange={(v) => { if (v) setFlowAnchorArmed(false); setFlowEndArmed(v) }}
+                    effortOn={flowEffort}
+                    onEffortChange={setFlowEffort}
+                    edgeEffortOn={flowEdgeEffort}
+                    onEdgeEffortChange={setFlowEdgeEffort}
+                  />
                 </div>
               </>
             )}

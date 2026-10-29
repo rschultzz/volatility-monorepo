@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createChart, CrosshairMode, ColorType, BaselineSeries, HistogramSeries, LineSeries } from 'lightweight-charts'
 import {
-  FlowModeToggle,
+  alignV2ToCandles,
   coordinateForLinkedCrosshair,
   computeSessionBands,
   formatShiftedHHMM,
@@ -18,8 +18,7 @@ import {
   normalizeShiftedCandleTimes,
   rangesClose,
   utcEpochShowingZoneTime,
-} from './AggressorFlowPanel'
-import { alignV2ToCandles } from './AggressorFlowV2Panel'
+} from '../flowShared'
 import {
   BOX_HOLD_MIN_RANGE,
   BREAK_HOLD_MIN_RANGE,
@@ -249,8 +248,6 @@ export default function AggressorFlowV3Panel({
   rollingExtra = 0, // CR-DM: px App adds to the pane while rolling net delta is on (flowV3.rollingExtraHeight)
   loading = false,
   error = '',
-  flowMode = 'v3',
-  onFlowModeChange,
   settings = DEFAULT_V3_SETTINGS,
   onSettingsChange,
   layers = { heat: false, profile: false, marks: false, levels: false, edges: false },
@@ -622,8 +619,6 @@ export default function AggressorFlowV3Panel({
       <div className="flow-panel-header" style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-start', overflowX: 'auto' }}>
         <button type="button" style={iconStyle} title="Flow v3 settings" aria-label="Open Flow v3 settings" onClick={() => setSettingsOpen(true)}>⚙</button>
         <div className="flow-panel-title" style={{ whiteSpace: 'nowrap', flex: '0 0 auto' }}>Flow v3</div>
-        {/* the header scrolls when narrow (review panel open): the mode toggle must never shrink away */}
-        <span style={{ flex: '0 0 auto', display: 'inline-flex' }}><FlowModeToggle mode={flowMode} onChange={onFlowModeChange} /></span>
         {sources.map((s) => (
           <span key={s} data-testid="flow-v3-source" style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '999px', border: '1px solid rgba(148,163,184,0.35)', color: s === 'databento' ? '#bfdbfe' : '#e5e7eb', whiteSpace: 'nowrap' }}>
             {SOURCE_LABEL[s] || s}
