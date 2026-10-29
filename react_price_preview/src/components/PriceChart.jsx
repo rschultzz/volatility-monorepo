@@ -28,6 +28,7 @@ import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
 import { LIVE_EFFORT_ID, absorptionLevels, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
 import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive } from './flowV3Primitives'
 
+const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
 const ETH_BG_COLOR = '#1f2937'
 const PRICE_AXIS_HIT_WIDTH = 72
 const TIME_AXIS_HEIGHT = 24
@@ -2587,6 +2588,7 @@ export default function PriceChart({
   // leg's end bar. Their own markers primitive, attached only once there are labels to draw, so with
   // Effort off the chart is exactly as before.
   const effortMarkersRef = useRef(null)
+  const liveEffortMarkerRef = useRef(null) // CR-DM: the live label's marker as drawn (snapped time, position)
   const anchorPickArmedRef = useRef(false)
   const onAnchorPickRef = useRef(null)
   useEffect(() => {
@@ -2608,9 +2610,12 @@ export default function PriceChart({
     }
     markers.sort((a, b) => a.time - b.time)
     effortMarkersRef.current.api.setMarkers(markers)
+    liveEffortMarkerRef.current = markers.find((m) => m.id === LIVE_EFFORT_ID) || null
   }, [effortMarkers, displayCandles])
 
-  // CR-DM item 3 — hover on the live effort label (the markers primitive reports the hovered marker's id).
+  // CR-DM item 3 — hover on the live effort label: the pointer on the label's candle, within LIVE_LABEL_BAND_PX above its
+  // high (up legs, label above the bar) or below its low (down legs). The markers plugin reports no hovered marker id
+  // (hoveredObjectId is empty), so the label's area is matched by position.
   const [liveEffortHover, setLiveEffortHover] = useState(null)
   useEffect(() => {
     const chart = chartRef.current
@@ -2618,7 +2623,19 @@ export default function PriceChart({
       setLiveEffortHover(null)
       return undefined
     }
-    const onMove = (p) => setLiveEffortHover(p?.hoveredObjectId === LIVE_EFFORT_ID && p.point ? { x: p.point.x, y: p.point.y } : null)
+    const onMove = (p) => {
+      const mk = liveEffortMarkerRef.current
+      const series = seriesRef.current
+      const bar = mk && p?.point && p.time === mk.time && series ? series.data().find((x) => x.time === mk.time) : null
+      if (!bar) {
+        setLiveEffortHover(null)
+        return
+      }
+      const up = mk.position === 'aboveBar'
+      const edge = series.priceToCoordinate(up ? bar.high : bar.low)
+      const d = up ? edge - p.point.y : p.point.y - edge
+      setLiveEffortHover(edge != null && d >= 0 && d <= LIVE_LABEL_BAND_PX ? { x: p.point.x, y: p.point.y } : null)
+    }
     chart.subscribeCrosshairMove(onMove)
     return () => chart.unsubscribeCrosshairMove(onMove)
   }, [liveEffort])

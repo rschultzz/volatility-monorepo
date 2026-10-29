@@ -134,3 +134,32 @@ spec freeze → Step 0 → items 1+2 together → item 3 → smoke + wrap.
   (`legs_*.json`). After implementation the same five calls must give byte-identical `legs` (checked in the item-3
   commit). The frontend label code (`effortChartMarkers`, `effortLabel`) is not edited; the live marker is appended
   to the list separately.
+
+## Smoke (2026-10-29, read-only backend `scripts/cr_dm_smoke_backend.py` on 8065; logs `scripts/logs/cr-dm/smoke/`)
+
+- **Items 1+2** (`cr-dm.spec.js`): default 2026-10-27 Flow v3 = origin/main's panel height (220) and price pane (672),
+  CVD / middle / delta margins identical; the middle slot is volume (= the payload's per-minute `vol`, 390 minutes),
+  rolling has no data; hover 07:21 "vol 4.0k · Δ -28 · share -0.01 · CVD -2.6k" matches the payload row. ⚙ rolling on:
+  panel 271 (+51), price 621 (−51), rolling data = origin/main's, slots px CVD 6.4–60.8, rolling 67.2–112, volume
+  118.4–163, delta 169.4–207.8 (origin/main: 6.4–60.8, 67.2–112, delta 118.4–156.8); off again = before.
+- **Item 3, hand check** (`scripts/cr_dm_hand_check.py`): 2026-10-29 at until 06:50, 07:05, 07:06, 07:07, 07:20,
+  07:35, 07:50 the payload's `live_leg` equals a hand computation from 1-s flow minutes on every field (dir, start,
+  extreme, pts, vol, delta, cpp, ratio, prev_cpp, minutes, last_time); no bar ≥ until. Hand-off: the up leg
+  7733.00 → 7758.75 is provisional at until 07:06 with the confirmed leg's exact numbers; at 07:07 it is a confirmed
+  label and the down leg (−8.75) is provisional. (Minutes from the 1-s table: the 1-minute table lags a live session.)
+- **Item 3, browser** (`cr-dm.spec.js`): review replay through the REVIEW panel with a browser-only fake candidate at
+  each time (B8: list / detail intercepted, review / reveal aborted): the App asks with `until`, every response stops
+  before it, no un-capped refresh in 16 s, the drawn label text equals the hand computation's label at the running
+  extreme, nothing drawn after until, confirmed labels = the payload's legs. Hover at 07:06: "↑ +25.75 pts so far ·
+  7733.00 → 7758.75 | volume 51.7k · delta +1.6k | 2.0k/pt · delta +64/pt · 1.09× vs last ↑ (1.8k/pt) | 8 min so far |
+  provisional — leg not confirmed". Flow v2 with Effort on draws no live label.
+- Hover detection: the markers plugin reports no hovered marker id (`hoveredObjectId` is empty), so the label's area is
+  matched by position: the label's candle, within 36 px above its high / below its low.
+- **Existing specs** (branch 5186 vs origin/main 5187): cr-dm 5/5, cr-dk 7/7, cr-df 6/6, cr-dg 4 + 1 skipped (live),
+  cr-dc 6/6, cr-de 7/7. cr-di 5/6 → 6/6: its pixel test's Flow v3 pane differs from a pre-CR-DM baseline by design
+  (item 1); price chart still identical; the flow assertion is skipped only with `CRDM_BASELINE_PRE_DM=1`.
+  cr-db 4/5: "keys T / S / U" fails identically against origin/main's frontend (its picked card's label is locked in
+  the DB, CR-DE) — pre-existing. cr-dh: price chart 3/3; the 4 Dashboard tests need CR-DH's Dashboard backend (not
+  run, as in CR-DI / CR-DK).
+- Unit 52/52. Python `packages/shared/tests` + `apps/web/modules/Ironbeam/tests`: same 31 failures as origin/main
+  (golden byte-identity subtests), 7 more passing.
