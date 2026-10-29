@@ -53,3 +53,12 @@ test('stored fractions keep their proportions when the pane is resized; tiny slo
   assert.equal(boundsFromFracs(160, null, 6), null)
   assert.equal(boundsFromFracs(160, [1, 0, 1], 6), null)
 })
+
+test('zoomRange: about 0 when 0 is in range, else about the middle; 1 = unchanged', async () => {
+  const { zoomRange } = await import('../../src/flowV3.js')
+  assert.deepEqual(zoomRange({ minValue: 0, maxValue: 100 }, 2), { minValue: 0, maxValue: 50 })
+  assert.deepEqual(zoomRange({ minValue: -0.1, maxValue: 0.1 }, 2), { minValue: -0.05, maxValue: 0.05 })
+  assert.deepEqual(zoomRange({ minValue: 1000, maxValue: 3000 }, 0.5), { minValue: 0, maxValue: 4000 })
+  const r = { minValue: -5, maxValue: 5 }
+  assert.equal(zoomRange(r, 1), r)
+})

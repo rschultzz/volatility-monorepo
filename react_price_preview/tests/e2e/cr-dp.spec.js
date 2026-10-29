@@ -467,3 +467,91 @@ test('item 7: slot dividers resize slots (≥ 24 px, pane height unchanged), per
   expect(await slotMargins(page)).toEqual(m0)
   expect(await page.evaluate(() => window.localStorage.getItem('ib-react-flow-v3-slots'))).toBeNull()
 })
+
+const priceRange = (page) => page.evaluate((fn) => {
+  const { price } = eval(fn) // eslint-disable-line no-eval
+  const sc = price.chart.priceScale('right')
+  const r = sc.getVisibleRange()
+  return { auto: sc.options().autoScale, from: r.from, to: r.to, bars: price.series.data().length }
+}, CHARTS_FN)
+const flowRanges = (page) => page.evaluate((fn) => {
+  const { flow } = eval(fn) // eslint-disable-line no-eval
+  const g = (id) => { const r = flow.chart.priceScale(id).getVisibleRange(); return r ? { from: r.from, to: r.to } : null }
+  return { cvd: g('cvd'), right: g('right'), delta: g('delta') }
+}, CHARTS_FN)
+// drag vertically on an axis at (x, y) by dy px
+async function axisDrag(page, x, y, dy) {
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  await page.mouse.move(x, y + dy, { steps: 8 })
+  await page.mouse.up()
+  await page.waitForTimeout(600)
+}
+
+test('item 8: price axis drag zooms, survives a reload and live refreshes, double-click resets; Flow v3 axis zooms the slot under the pointer, double-click resets', async ({ page }) => {
+  test.setTimeout(200_000)
+  const live = process.env.CRDP_LIVE_DATE || '2026-10-30'
+  await open(page, live, { storage: V3, session: 'FULL' })
+  const pr = await page.locator('.tv-lightweight-charts').first().boundingBox()
+  const axis = await page.evaluate((fn) => { const { price } = eval(fn); return price.chart.timeScale().width() }, CHARTS_FN) // eslint-disable-line no-eval
+  const r0 = await priceRange(page)
+  await axisDrag(page, pr.x + axis + 30, pr.y + 250, 120)
+  const r1 = await priceRange(page)
+  log('item8-price.json', { r0, r1 })
+  expect(r1.auto).toBe(false)
+  expect(r1.to - r1.from).not.toBeCloseTo(r0.to - r0.from, 1)
+  // live refreshes (bars keep arriving on the live session) don't undo it: wait for a new bar
+  let r2 = await priceRange(page)
+  for (let i = 0; i < 45 && r2.bars <= r1.bars; i += 1) {
+    await page.waitForTimeout(2000)
+    r2 = await priceRange(page)
+  }
+  expect(r2.bars, 'a live bar arrived').toBeGreaterThan(r1.bars)
+  log('item8-price-live.json', { r1, r2 })
+  expect(r2.auto).toBe(false)
+  expect(r2.from).toBeCloseTo(r1.from, 6)
+  expect(r2.to).toBeCloseTo(r1.to, 6)
+  // a reload restores it for the same date
+  await page.reload()
+  await page.getByTestId('flow-v3-panel').waitFor()
+  await page.waitForTimeout(3000)
+  const r3 = await priceRange(page)
+  expect(r3.auto).toBe(false)
+  expect(r3.from).toBeCloseTo(r1.from, 6)
+  expect(r3.to).toBeCloseTo(r1.to, 6)
+  // double-click the axis: auto-fit again, and the stored range is dropped
+  await page.mouse.dblclick(pr.x + axis + 30, pr.y + 250)
+  await page.waitForTimeout(800)
+  expect((await priceRange(page)).auto).toBe(true)
+  expect(await page.evaluate(() => window.localStorage.getItem('ib-react-price-zoom'))).toBeNull()
+
+  // Flow v3: drag on its axis over the anchored-line slot stretches that slot only
+  const fl = await page.getByTestId('flow-v3-panel').locator('.tv-lightweight-charts').boundingBox()
+  const fw = await page.evaluate((fn) => { const { flow } = eval(fn); return flow.chart.timeScale().width() }, CHARTS_FN) // eslint-disable-line no-eval
+  const m = await slotMargins(page)
+  const H = m.height - 28
+  const yCvd = fl.y + ((m.cvd.top + (1 - m.cvd.bottom)) / 2) * H
+  const f0 = await flowRanges(page)
+  await axisDrag(page, fl.x + fw + 25, yCvd, -50)
+  const f1 = await flowRanges(page)
+  log('item8-flow.json', { f0, f1, zoom: await page.evaluate(() => window.localStorage.getItem('ib-react-flow-v3-zoom')) })
+  expect(f1.cvd.to - f1.cvd.from).toBeLessThan(0.8 * (f0.cvd.to - f0.cvd.from)) // stretched
+  expect(f1.delta).toEqual(f0.delta)
+  expect(f1.right).toEqual(f0.right)
+  // compress the delta slot
+  const yDelta = fl.y + ((m.delta.top + (1 - m.delta.bottom)) / 2) * H
+  await axisDrag(page, fl.x + fw + 25, yDelta, 40)
+  const f2 = await flowRanges(page)
+  expect(f2.delta.to - f2.delta.from).toBeGreaterThan(1.2 * (f0.delta.to - f0.delta.from))
+  // reload keeps both; double-click the anchored-line slot resets only it
+  await page.reload()
+  await page.getByTestId('flow-v3-panel').waitFor()
+  await page.waitForTimeout(3000)
+  const f3 = await flowRanges(page)
+  expect(f3.cvd.to - f3.cvd.from).toBeLessThan(0.8 * (f0.cvd.to - f0.cvd.from))
+  await page.mouse.dblclick(fl.x + fw + 25, yCvd)
+  await page.waitForTimeout(800)
+  const f4 = await flowRanges(page)
+  expect((f4.cvd.to - f4.cvd.from) / (f0.cvd.to - f0.cvd.from)).toBeGreaterThan(0.9)
+  expect(f4.delta.to - f4.delta.from).toBeGreaterThan(1.2 * (f0.delta.to - f0.delta.from))
+})

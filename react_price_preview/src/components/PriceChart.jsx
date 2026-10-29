@@ -219,6 +219,8 @@ const REVIEW_ZONE_COLOR = '251, 191, 36' // amber #fbbf24 (confluence)
 
 // CR-CD A3: replay price-axis fit pads the setup zone by max(this, 0.5·IM) points.
 const REVIEW_FIT_MIN_PTS = 25
+// CR-DP item 8a: the manual price range (axis drag, wheel zoom, plot pan) for one trade date, per browser.
+const PRICE_ZOOM_STORAGE_KEY = 'ib-react-price-zoom'
 const REVIEW_LINE_COLORS = {
   level: '#e879f9',
   extreme: '#94a3b8',
@@ -2845,6 +2847,70 @@ export default function PriceChart({
       return hit ? { ...h, probe: hit.probe } : null
     })
   }, [v3Columns, v3Marks, v3Profile, v3Levels, v3Edges, flowWindow, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
+
+  // CR-DP item 8a — y-axis zoom memory. Dragging the right price axis stretches / compresses the scale (lightweight-charts'
+  // axisPressedMouseMove, as before; the wheel zoom and plot drag also set a manual range) and a double-click on the
+  // axis returns to auto-fit (the library's axisDoubleClickReset). New: the manual range is remembered for the trade date
+  // (localStorage), so it survives reloads; live refreshes only set data and never re-enable autoscale. A date change or
+  // a double-click clears it. The view only: the data are unchanged.
+  const tradeDateRef = useRef(tradeDate)
+  tradeDateRef.current = tradeDate
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return undefined
+    let timer = 0
+    const save = () => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        const scale = chartRef.current?.priceScale('right')
+        // not before this date's stored range has been restored (a click while loading must not drop it)
+        if (!scale || priceZoomRef.current.date !== tradeDateRef.current) return
+        try {
+          const r = scale.options().autoScale ? null : scale.getVisibleRange()
+          if (r && Number.isFinite(r.from) && Number.isFinite(r.to)) {
+            window.localStorage.setItem(PRICE_ZOOM_STORAGE_KEY, JSON.stringify({ date: tradeDateRef.current, from: r.from, to: r.to }))
+          } else {
+            window.localStorage.removeItem(PRICE_ZOOM_STORAGE_KEY)
+          }
+        } catch (err) { /* storage unavailable */ }
+      }, 250)
+    }
+    stage.addEventListener('wheel', save, { capture: true, passive: true })
+    stage.addEventListener('dblclick', save, true)
+    window.addEventListener('mouseup', save)
+    return () => {
+      window.clearTimeout(timer)
+      stage.removeEventListener('wheel', save, { capture: true })
+      stage.removeEventListener('dblclick', save, true)
+      window.removeEventListener('mouseup', save)
+    }
+  }, [])
+  const priceZoomRef = useRef({ date: null, chart: null })
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !displayCandles?.length) return
+    const prev = priceZoomRef.current
+    if (prev.date === tradeDate && prev.chart === chart) return
+    const dateChanged = prev.chart === chart && prev.date != null && prev.date !== tradeDate
+    priceZoomRef.current = { date: tradeDate, chart }
+    let stored = null
+    try { stored = JSON.parse(window.localStorage.getItem(PRICE_ZOOM_STORAGE_KEY) || 'null') } catch (err) { stored = null }
+    const scale = chart.priceScale('right')
+    if (stored && stored.date === tradeDate && Number.isFinite(stored.from) && Number.isFinite(stored.to) && stored.to > stored.from) {
+      requestAnimationFrame(() => {
+        if (chartRef.current !== chart) return
+        try {
+          scale.setAutoScale(false)
+          scale.setVisibleRange({ from: stored.from, to: stored.to })
+        } catch (err) { /* ignore */ }
+      })
+      return
+    }
+    try { if (stored) window.localStorage.removeItem(PRICE_ZOOM_STORAGE_KEY) } catch (err) { /* ignore */ }
+    if (dateChanged) {
+      try { scale.setAutoScale(true) } catch (err) { /* ignore */ }
+    }
+  }, [tradeDate, displayCandles])
 
   // CR-CD A3 — when a candidate loads in replay (not yet revealed), fit the price axis to the
   // setup zone/range (range box, zone band, level, extreme, entry, stop) ± max(25 pts, 0.5·IM) instead of the full GEX-line

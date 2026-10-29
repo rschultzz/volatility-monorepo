@@ -2265,6 +2265,7 @@ export default function App() {
                   <AggressorFlowV3Panel
                     priceAxisWidth={priceAxisWidth}
                     onResetLayout={() => setFlowPanelHeight(clampFlowHeight(220))} // CR-DP item 7c: the price chart / Flow split back to its default
+                    zoomResetKey={tradeDate} // CR-DP item 8b: a date change resets the Flow v3 slot zoom
                     payloads={flowV2PanePayloads}
                     sessionPayload={flowV3SessionPayload}
                     cellsPayload={flowCells}

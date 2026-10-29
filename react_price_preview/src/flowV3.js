@@ -224,6 +224,15 @@ export function dragSlotFracs(bounds, k, dy, minPx = SLOT_MIN_PX) {
   return h.map((x) => x / sum)
 }
 
+// CR-DP item 8b — a slot's y zoom: its auto range ({ minValue, maxValue }) scaled by `f` (> 1 stretches) about 0 when 0
+// is in range (bars, delta, delta share), else about the middle (raw CVD). The view only.
+export function zoomRange(range, f) {
+  if (!range || !(f > 0) || f === 1) return range
+  const { minValue: lo, maxValue: hi } = range
+  const a = lo <= 0 && hi >= 0 ? 0 : (lo + hi) / 2
+  return { minValue: a + (lo - a) / f, maxValue: a + (hi - a) / f }
+}
+
 // CR-DN item 6: the volume bars' scale cap = the 98th percentile (nearest rank) of the loaded rows' positive volumes
 // (null with no volume). Bars are drawn at min(vol, cap) and the scale keeps autoscaling, so it tops out at
 // min(visible max, cap): a stretch with no minute above the cap draws as before. A display scale, no research meaning.

@@ -49,6 +49,7 @@ import {
   paneSlotMargins,
   slotGapPx,
   slotOrder,
+  zoomRange,
   rollingDelta,
   rowCloses,
   segmentCvd,
@@ -73,6 +74,18 @@ const ORANGE_RGBA = (alpha) => `rgba(${ORANGE_RGB},${alpha})`
 const SOURCE_LABEL = { databento: 'Databento', ironbeam: 'Ironbeam' }
 // CR-DP item 7b: the slot layout (heights as fractions, per slot count: '3' rolling off, '4' rolling on), per browser.
 const SLOTS_STORAGE_KEY = 'ib-react-flow-v3-slots'
+// CR-DP item 8b: per-slot y zoom factors for one trade date ({ date, f: { cvd | vol | rolling | delta: factor } }), per browser.
+const ZOOM_STORAGE_KEY = 'ib-react-flow-v3-zoom'
+const ZOOM_MIN = 0.2
+const ZOOM_MAX = 20
+const readZoom = (key) => {
+  try {
+    const v = JSON.parse(window.localStorage.getItem(ZOOM_STORAGE_KEY) || 'null')
+    return v && v.date === key && v.f && typeof v.f === 'object' ? v.f : {}
+  } catch (e) {
+    return {}
+  }
+}
 const readSlots = () => {
   try {
     const v = JSON.parse(window.localStorage.getItem(SLOTS_STORAGE_KEY) || 'null')
@@ -159,6 +172,8 @@ function GuideBody() {
       <div><span style={sw(SELL_RGBA(0.6))} /><span style={sw(BUY_RGBA(0.6))} /><b>Heatmap (cells)</b> (⚙, behind the candles): for each 1-minute bar and 0.25 pt (0.5 pt when zoomed out), aggressive selling (market sells hitting the bid, grey, left half) and aggressive buying (market buys lifting the offer, blue, right half). Darker = a bigger cell for that session. Either layer can be switched off in ⚙.{tag}</div>
       <div><b>Profile</b> (right edge): the same volume summed per price from the anchor (or the session open) to now, selling grey and buying blue.{tag}</div>
       <div><b>Absorbed (marks)</b> (⚙, slate triangles): ▲ "sellers absorbed" — aggressive selling at one price at least K× the session's typical cell (median so far), and nothing traded more than 1 tick below it for that minute and the next M minutes. ▼ "buyers absorbed" is the mirror. The slate line runs until price trades through. Hover for the numbers. K and M (default 3 and 3) are display defaults, not tested thresholds.{tag}</div>
+      <div style={h}>Layout and zoom</div>
+      <div>Drag the faint lines between this pane's slots to give a slot more or less height (each keeps at least 24 px; the pane's height stays the same), and the bar between the price chart and this pane to change the split. Both are remembered in this browser; ⚙ "Reset layout" restores the defaults. Drag up / down on this pane's right axis over a slot to stretch / compress that slot's scale; double-click there to fit it again. The price chart's right axis works the same way (drag, double-click to fit); a manual price range is kept for the date through refreshes and reloads. Zoom changes only the view, never the data.</div>
       <div style={h}>Data</div>
       <div><b>exact: trades</b> / <b>exact: es_flow_price_1m</b> — each trade at its own price and side. Ironbeam keeps raw trades for about 2 days, so this is usually only the live and previous session.</div>
       <div><b>approximate: 1-s data</b> — older sessions: each second's selling is placed at that second's low and its buying at its high. About 61 % of volume trades in seconds wider than 1 tick, so cells are off by a tick or two and selling leans toward lows, buying toward highs. <b>Absorption levels, Absorbed marks, edge contracts and the Edge effort strip are not drawn on approximate data</b>, because that lean manufactures them.</div>
@@ -304,6 +319,7 @@ export default function AggressorFlowV3Panel({
   onEffortChange,
   edgeEffortOn = false, // CR-DI: the Edge effort strip (stored per viewer); draws only with Edges on, an anchor and exact data
   onEdgeEffortChange,
+  zoomResetKey = null, // CR-DP item 8b: the trade date; a change resets the slot zoom
   onResetLayout, // CR-DP item 7: App restores the price chart / Flow split (7c); the pane clears its slot layout
 }) {
   const stageRef = useRef(null)
@@ -321,6 +337,10 @@ export default function AggressorFlowV3Panel({
   const [slotFracs, setSlotFracs] = useState(readSlots) // CR-DP item 7
   const [slotBounds, setSlotBounds] = useState(null) // pane-0 px bounds of the slots, for the dividers
   const slotDragRef = useRef(null)
+  const [zoom, setZoom] = useState(() => readZoom(zoomResetKey)) // CR-DP item 8b: { seriesName: factor }
+  const zoomKeyRef = useRef(zoomResetKey)
+  const zoomDragRef = useRef(null)
+  const slotBoundsRef = useRef(null)
 
   const [sessionBands, setSessionBands] = useState([])
   const [linkedCrosshairX, setLinkedCrosshairX] = useState(null)
@@ -607,20 +627,106 @@ export default function AggressorFlowV3Panel({
   }, [aligned, rolling, cvd, cvdGaps, shareSeries, candleTimes, visibleLogicalRange])
 
   // CR-DP item 6b: in share mode the line's scale is fixed at ±10 % with faint slate guides at 0, ±2 % and ±5 % (no axis
-  // labels); raw CVD autoscales as before.
+  // labels); raw CVD autoscales as before. Item 8b: each slot's auto range (fixed ±10 % for the share line) is then
+  // zoomed by that slot's factor; autoscale stays on, so live refreshes keep the zoom and never change the data.
   useEffect(() => {
     const s = seriesRef.current
-    if (!s.cvd) return undefined
-    if (!shareMode) {
-      s.cvd.applyOptions({ autoscaleInfoProvider: (original) => original() })
-      return undefined
+    if (!s.cvd) return
+    const provider = (name, fixed) => (original) => {
+      const base = fixed ? { priceRange: { minValue: -SHARE_SCALE, maxValue: SHARE_SCALE } } : original()
+      const f = zoom[name]
+      if (!base?.priceRange || !(f > 0) || f === 1) return base
+      return { ...base, priceRange: zoomRange(base.priceRange, f) }
     }
-    s.cvd.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: -SHARE_SCALE, maxValue: SHARE_SCALE } }) })
+    s.cvd.applyOptions({ autoscaleInfoProvider: provider('cvd', shareMode) })
+    s.vol.applyOptions({ autoscaleInfoProvider: provider('vol', false) })
+    s.rolling.applyOptions({ autoscaleInfoProvider: provider('rolling', false) })
+    s.delta.applyOptions({ autoscaleInfoProvider: provider('delta', false) })
+  }, [shareMode, zoom])
+  useEffect(() => {
+    const s = seriesRef.current
+    if (!s.cvd || !shareMode) return undefined
     const lines = SHARE_GUIDES.map((v) => s.cvd.createPriceLine({
       price: v, color: SLATE_RGBA(v === 0 ? 0.4 : 0.22), lineWidth: 1, lineStyle: v === 0 ? 0 : 2, axisLabelVisible: false, title: '',
     }))
     return () => { for (const l of lines) { try { s.cvd.removePriceLine(l) } catch (e) { /* chart gone */ } } }
   }, [shareMode])
+  // Item 8b: a date change resets the slot zoom (a reload restores the date's stored factors); stored per browser.
+  useEffect(() => {
+    if (zoomKeyRef.current === zoomResetKey) return
+    zoomKeyRef.current = zoomResetKey
+    setZoom({})
+  }, [zoomResetKey])
+  useEffect(() => {
+    try {
+      if (Object.keys(zoom).length) window.localStorage.setItem(ZOOM_STORAGE_KEY, JSON.stringify({ date: zoomKeyRef.current, f: zoom }))
+      else window.localStorage.removeItem(ZOOM_STORAGE_KEY)
+    } catch (e) {
+      // ignore
+    }
+  }, [zoom])
+  useEffect(() => { slotBoundsRef.current = slotBounds }, [slotBounds])
+  // Item 8b: drag on the pane's right axis over a slot stretches (up) / compresses (down) that slot only; double-click
+  // there returns it to auto-fit. The library's own axis scaling is off in this pane (handleScale.axisPressedMouseMove).
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return undefined
+    const slotAt = (e) => {
+      const chart = chartRef.current
+      const sb = slotBoundsRef.current
+      if (!chart || !sb) return null
+      const r = stage.getBoundingClientRect()
+      const x = e.clientX - r.left
+      const y = e.clientY - r.top
+      if (x < chart.timeScale().width() || y > sb.h0) return null
+      let best = 0
+      let bestD = Infinity
+      sb.bounds.forEach((b, i) => {
+        const d = y < b.top ? b.top - y : y > b.bottom ? y - b.bottom : 0
+        if (d < bestD) { bestD = d; best = i }
+      })
+      const key = sb.order[best]
+      const on = sb.order.length === 4
+      return key === 'cvd' ? 'cvd' : key === 'delta' ? 'delta' : key === 'low' ? 'vol' : on ? 'rolling' : 'vol'
+    }
+    const down = (e) => {
+      if (e.button !== 0) return
+      const name = slotAt(e)
+      if (!name) return
+      e.preventDefault()
+      zoomDragRef.current = { name, y: e.clientY, f0: null }
+    }
+    const move = (e) => {
+      const d = zoomDragRef.current
+      if (!d) return
+      setZoom((z) => {
+        if (d.f0 == null) d.f0 = z[d.name] || 1
+        const f = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, d.f0 * Math.exp(-(e.clientY - d.y) * 0.01)))
+        return Math.abs(f - (z[d.name] || 1)) < 1e-6 ? z : { ...z, [d.name]: f }
+      })
+    }
+    const up = () => { zoomDragRef.current = null }
+    const dbl = (e) => {
+      const name = slotAt(e)
+      if (!name) return
+      setZoom((z) => {
+        if (!(name in z)) return z
+        const { [name]: _drop, ...rest } = z
+        return rest
+      })
+    }
+    stage.addEventListener('mousedown', down, true)
+    stage.addEventListener('dblclick', dbl, true)
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    return () => {
+      stage.removeEventListener('mousedown', down, true)
+      stage.removeEventListener('dblclick', dbl, true)
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+  }, [])
+
 
   // CR-DI amendment 2: the pane (App) grows by EDGE_STRIP_HEIGHT with the strip, so size the chart to the stage and
   // the strip pane to its height now and on the next frame, before a ResizeObserver pass could split the new height
