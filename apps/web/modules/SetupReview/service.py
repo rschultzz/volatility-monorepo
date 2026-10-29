@@ -31,10 +31,11 @@ DEFAULT_REASONS = (
     "chop",
     "too late in day",
     "flow against",
-    "take continuation (other edge)",   # CR-CZ
-    "take fade (called side)",          # CR-CZ
+    "take continuation (other edge)",   # CR-CZ; the panel shows it as "take opposite" (CR-DK)
     "other",
 )
+# CR-DK: no longer offered as a chip for new labels (Take covers it). Saved reviews keep and display it as stored.
+RETIRED_REASONS = ("take fade (called side)",)   # CR-CZ
 STATUSES = ("unreviewed", "reviewed", "all")
 FIXTURE_SET_SUFFIX = ":fixture"   # CR-CC smoke sets; their reasons are not offered as chips
 
@@ -118,7 +119,8 @@ def list_sets(conn) -> list[dict]:
 
 def known_reasons(conn) -> list[str]:
     """The default chips plus every reason used in a saved review (L7), except reviews on
-    fixture sets (CR-DE: smoke-test reasons such as "fixture smoke reason" are not chips)."""
+    fixture sets (CR-DE: smoke-test reasons such as "fixture smoke reason" are not chips) and
+    retired reasons (CR-DK)."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT DISTINCT unnest(r.reasons) FROM setup_reviews r "
@@ -126,7 +128,7 @@ def known_reasons(conn) -> list[str]:
             (f"%{FIXTURE_SET_SUFFIX}",),
         )
         used = {r[0] for r in cur.fetchall() if r[0]}
-    extra = sorted(used - set(DEFAULT_REASONS))
+    extra = sorted(used - set(DEFAULT_REASONS) - set(RETIRED_REASONS))
     return list(DEFAULT_REASONS) + extra
 
 

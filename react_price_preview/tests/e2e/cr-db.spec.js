@@ -22,7 +22,10 @@ const BRANCH_URL = process.env.CRDB_BRANCH_URL || 'http://localhost:5176'
 const MAIN_URL = process.env.CRDB_MAIN_URL || 'http://localhost:5177'
 const ASSETS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../specs/assets/cr-db')
 const SET = 'cr-cz:cp-ranges'
-const CHIPS = ['take fade (called side)', 'take continuation (other edge)']
+// CR-DK: "take continuation (other edge)" is shown as "take opposite" (the stored / sent string is unchanged);
+// "take fade (called side)" is no longer a chip.
+const CHIPS = [{ shown: 'take opposite', stored: 'take continuation (other edge)' }]
+const RETIRED_CHIP = 'take fade (called side)'
 
 async function api(request, p) {
   const r = await request.get(`${API_BASE}/api/setup-review${p}`)
@@ -95,8 +98,9 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 900, height: 600 
       page.getByTestId('review-label-take'),
       page.getByTestId('review-label-skip'),
       page.getByTestId('review-label-unsure'),
-      ...CHIPS.map((ch) => page.getByTestId('review-reasons').getByRole('button', { name: ch, exact: true })),
+      ...CHIPS.map((ch) => page.getByTestId('review-reasons').getByRole('button', { name: ch.shown, exact: true })),
     ]) await expectInView(page, loc)
+    await expect(page.getByTestId('review-reasons').getByRole('button', { name: RETIRED_CHIP })).toHaveCount(0)
     const scrolled = await page.evaluate(() => ({
       page: window.scrollY,
       panel: document.querySelector('[data-testid=review-panel]').scrollTop,
@@ -129,10 +133,10 @@ test('keys T / S / U set the label; Save sends label and chips (intercepted, no 
     await page.keyboard.press(key)
     await expect(page.getByTestId(`review-label-${id}`)).toHaveAttribute('aria-pressed', 'true')
   }
-  for (const ch of CHIPS) await page.getByTestId('review-reasons').getByRole('button', { name: ch, exact: true }).click()
+  for (const ch of CHIPS) await page.getByTestId('review-reasons').getByRole('button', { name: ch.shown, exact: true }).click()
   await page.getByTestId('review-save').click()
   await expect.poll(() => posts.length).toBe(1)
-  expect(posts[0]).toEqual({ label: 'take', reasons: CHIPS, comment: '' })
+  expect(posts[0]).toEqual({ label: 'take', reasons: CHIPS.map((ch) => ch.stored), comment: '' })
   const after = await api(request, `/candidates/${encodeURIComponent(c.id)}`)
   expect(after.candidate.reviews || []).toEqual(c.reviews || []) // nothing reached the DB
 })

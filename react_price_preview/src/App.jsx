@@ -13,7 +13,7 @@ import {
   coerceGexMinAbsB,
   resolveInitialGexMinAbsB,
 } from './gexMinAbsB'
-import { GEX_LEVELS_MODE_STORAGE_KEY, resolveInitialGexLevelsMode } from './gexLevelsMode'
+import { GEX_LEVELS_MODE_STORAGE_KEY, correctedLevelsNotice, resolveInitialGexLevelsMode } from './gexLevelsMode'
 
 
 const FLOW_HEIGHT_STORAGE_KEY = 'ib-react-flow-panel-height'
@@ -755,6 +755,11 @@ export default function App() {
       .filter((seg) => Number(seg?.start_time) <= replayLastBarTime)
       .map((seg) => (Number(seg?.end_time) > replayLastBarTime ? { ...seg, end_time: replayLastBarTime } : seg))
   }, [mergedGexSegments, replayLastBarTime])
+  // CR-DK: Levels: Corrected with no lines for the centre date → the API's reason, shown on the price chart
+  const levelsNotice = useMemo(
+    () => correctedLevelsNotice(meta, centerGexSegments.length > 0),
+    [meta, centerGexSegments]
+  )
   const chartExpectedMoveLevels = useMemo(() => {
     if (replayLastBarTime == null) return mergedExpectedMoveLevels
     return mergedExpectedMoveLevels
@@ -2494,6 +2499,7 @@ export default function App() {
                 expectedMoveLevels={chartExpectedMoveLevels}
                 onApplyGexMinAbsB={handleGexMinAbsBChange}
                 gexLevelsMode={activeLevelsMode}
+                levelsNotice={levelsNotice}
                 onApplyGexLevelsMode={handleGexLevelsModeChange}
                 onApplyIntervalChange={handleIntervalChange}
                 onVisibleLogicalRangeChange={handleSharedLogicalRangeChange}
