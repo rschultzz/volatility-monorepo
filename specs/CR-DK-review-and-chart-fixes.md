@@ -148,3 +148,57 @@ chart's (different price-scale widths); the crosshair still lands on the right b
 
 Unchanged: C2 deviation approved (items 1–4 visible); item 4's scroll fix is the "flow pane may sit one bar off" the
 spec names. C1, B8 honoured.
+
+## Smoke (read-only backend `scripts/cr_dk_smoke_backend.py`, port 8064; branch :5181, origin/main :5180)
+
+One DB-backed server (checked `pg_stat_activity` first: 45/103; no other local DB server running). Logs in
+`scripts/logs/cr-dk/smoke/`.
+
+**`tests/e2e/cr-dk.spec.js` 7/7:**
+
+- **Chip.** The panel shows "take opposite" with the tooltip; no "take fade (called side)" chip and no raw
+  "take continuation (other edge)" chip. Take + "take opposite" + Save: the captured POST carries
+  `reasons: ["take continuation (other edge)"]`; the request was fulfilled in the browser (500, never reached the
+  backend), and the card's reviews in the DB are unchanged. The API's chip list holds the stored string and not
+  the retired one.
+- **Retired chip on a saved review.** No saved review carries "take fade (called side)" (Step 0a), so the 2026-01-16
+  card's detail is intercepted in the browser to add it: "Saved:" shows it (and "take opposite"); it is still not a
+  chip.
+- **Notes.** 2026-01-16 09:32 (`CR-CZ:cr-cz:cp-ranges:18`): "Notes (2)", first entry "before reveal" with the
+  pre-reveal comment, then the post-reveal note; "Saved: SKIP · take opposite, flow against" without the comment
+  (`notes-0116.png`).
+- **Levels notice.** 2024-03-15 Corrected: "No corrected GEX levels for this date (pre-forward era) — switch Levels
+  to Current" (`levels-notice-2024-03-15.png`); 2024-03-15 Current and 2026-10-27 Corrected: no notice.
+- **Crosshair** (2026-10-27, cursor at three points across the bar; branch vs origin/main):
+
+  | Variant | origin/main flow bar · price-vs-flow px | branch |
+  |---|---|---|
+  | current, 0 days | 07:22 · 0 | 07:22 · 0 |
+  | current, 1 day | **07:23 · 30.2** | 07:22 · 0 |
+  | v3, 0 days | 07:22 · −9 | 07:22 · −9 |
+  | v3, 1 day | **07:23 · 21.2** | 07:22 · −9.4 |
+  | v3 5-min, 0 / 1 day | 07:20 · −9 | 07:20 · −9 |
+
+  The flow crosshair is on the price chart's bar and the flow pane scrolls with the price chart; 0 days and 5-minute
+  bars are unchanged (v3's constant −9 px is the price-scale width difference, out of scope).
+  The first run of this test after the item-4 change failed (output truncated, not kept); every run since passed
+  (branch-only, branch + main, full spec).
+
+**Existing specs** (same backend; review writes intercepted by the specs themselves; `cr-cc` not run, it writes):
+
+| Spec | Result |
+|---|---|
+| cr-db | 5/5 (chips updated by item 1) |
+| cr-de | 7/7 |
+| cr-dg | 4 + 1 skipped (live, deferred since CR-DG) |
+| cr-di | 6/6 |
+| cr-dc | 5/6 on the batch run: "unchanged … pixel-identical to origin/main" failed once on the v2 price chart (2026-05-01); re-run alone twice: **2/2 passed** (both modes). Recorded as a one-off |
+| cr-df | 6/6 |
+| cr-dh (price-chart tests) | 3/3; its Dashboard test matched the filter and failed (needs CR-DH's Dashboard backend at `/`, not run here, as in CR-DI) |
+
+Unit: `npm run test:unit` 47/47 (4 new). Python: SetupReview 17 passed, 8 DB tests skipped (`CR_CC_DB_TESTS=1` against
+the DB, temp tables rolled back, was refused by the session's permission classifier; the new
+`test_cr_dk_chip_strings_stored_unchanged` is among the skipped).
+
+The other specs rewrote their tracked assets; copies in `scripts/logs/cr-dk/smoke/other-assets/`, committed assets
+restored.

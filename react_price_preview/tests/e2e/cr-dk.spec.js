@@ -165,3 +165,125 @@ test('crosshair: the flow pane follows the 07:22 PT candle', async ({ browser })
     }
   }
 })
+
+// ── Review panel (items 1, 2). B8: every Save is intercepted in the browser and never reaches the backend (which is
+// read-only anyway); the DB's reviews are compared before and after.
+const SET = 'cr-cz:cp-ranges'
+const STORED = 'take continuation (other edge)'
+const RETIRED = 'take fade (called side)'
+
+async function api(request, p) {
+  const r = await request.get(`${API_BASE}/api/setup-review${p}`)
+  expect(r.ok()).toBeTruthy()
+  return r.json()
+}
+
+async function openCard(page, c) {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.addInitScript(() => {
+    try {
+      window.localStorage.setItem('ib-react-gex-min-abs-b', '40')
+      window.localStorage.setItem('ib-react-gex-levels-mode-v2', 'current')
+    } catch (e) { /* ignore */ }
+  })
+  await page.goto(`/?trade_date=2026-10-23&interval=1min&api_base=${encodeURIComponent(API_BASE)}`)
+  await page.locator('.tv-lightweight-charts').first().waitFor()
+  await page.getByRole('button', { name: 'Show setup review panel' }).click()
+  await page.getByTestId('review-panel').getByLabel('Set', { exact: true }).selectOption(SET)
+  await page.locator(`[data-testid="review-row"][data-candidate-id="${c.id}"]`).click()
+  await expect(page.getByTestId('review-active')).toContainText(String(c.id), { timeout: 60_000 })
+  await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
+}
+
+test('chip: "take opposite" shown, stored string sent (intercepted, no write); take fade not offered', async ({ page, request }) => {
+  const list = await api(request, `/candidates?set=${encodeURIComponent(SET)}`)
+  expect(list.reasons).toContain(STORED)
+  expect(list.reasons).not.toContain(RETIRED)
+  const c = list.candidates.find((x) => !x.reviewed) || list.candidates.find((x) => x.revealed)
+  const before = (await api(request, `/candidates/${encodeURIComponent(c.id)}`)).candidate
+  const posts = []
+  await page.route('**/api/setup-review/candidates/*/review', async (route) => {
+    posts.push(route.request().postDataJSON())
+    await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'smoke: not saved' }) })
+  })
+  await openCard(page, c)
+  const chips = page.getByTestId('review-reasons')
+  const chip = chips.getByRole('button', { name: 'take opposite', exact: true })
+  await expect(chip).toBeVisible()
+  await expect(chip).toHaveAttribute('title', "You'd take the opposite trade (approach direction, at the other edge of the box).")
+  await expect(chips.getByRole('button', { name: RETIRED })).toHaveCount(0)
+  await expect(chips.getByRole('button', { name: STORED })).toHaveCount(0)
+  if (!c.revealed) await page.getByTestId('review-label-take').click()
+  await chip.click()
+  await page.getByTestId('review-save').click()
+  await expect.poll(() => posts.length).toBe(1)
+  expect(posts[0].reasons).toEqual([STORED])
+  const after = (await api(request, `/candidates/${encodeURIComponent(c.id)}`)).candidate
+  expect(after.reviews || []).toEqual(before.reviews || [])   // nothing reached the DB
+  log('chip-post.json', { candidate: c.id, revealed: c.revealed, post: posts[0], chips: await chips.getByRole('button').allInnerTexts() })
+})
+
+// 2026-01-16 09:32 (CR-CZ card 18): pre-reveal comment + one post-reveal note → Notes (2), the pre-reveal comment first.
+// The same card checks the retired chip on a saved review: its detail is intercepted to add "take fade (called side)"
+// to the saved reasons (browser only; the DB has no review carrying it).
+const CARD_0116 = 'CR-CZ:cr-cz:cp-ranges:18'
+
+test('notes: 2026-01-16 09:32 shows Notes (2) with the pre-reveal comment first; Saved keeps label + reasons', async ({ page, request }) => {
+  const c = (await api(request, `/candidates/${encodeURIComponent(CARD_0116)}`)).candidate
+  const blind = c.reviews.find((r) => !r.post_reveal)
+  const post = c.reviews.filter((r) => r.post_reveal)
+  expect(c.revealed).toBe(true)
+  expect(blind.comment).toBeTruthy()
+  expect(post.length).toBe(1)
+  await openCard(page, c)
+  const notes = page.getByTestId('review-notes')
+  await expect(notes).toContainText('Notes (2)')
+  const items = page.getByTestId('review-note')
+  await expect(items).toHaveCount(2)
+  await expect(items.nth(0)).toHaveAttribute('data-before-reveal', 'true')
+  await expect(items.nth(0)).toContainText('before reveal')
+  await expect(items.nth(0)).toContainText(blind.comment.slice(0, 40))
+  await expect(items.nth(1)).toContainText(post[0].comment.slice(0, 40))
+  const saved = page.getByTestId('review-saved')
+  await expect(saved).toContainText(blind.label.toUpperCase())
+  await expect(saved).toContainText('take opposite')      // stored "take continuation (other edge)", displayed
+  await expect(saved).not.toContainText(STORED)
+  await expect(saved).not.toContainText(blind.comment.slice(0, 40))
+  await page.getByTestId('review-active').screenshot({ path: path.join(LOGS, 'notes-0116.png') })
+  log('notes-0116.json', { saved: await saved.innerText(), notes: await items.allInnerTexts() })
+})
+
+test('retired chip: a saved review carrying "take fade (called side)" still shows it (intercepted detail)', async ({ page, request }) => {
+  const c = (await api(request, `/candidates/${encodeURIComponent(CARD_0116)}`)).candidate
+  await page.route(`**/api/setup-review/candidates/${encodeURIComponent(CARD_0116)}`, async (route) => {
+    const r = await route.fetch()
+    const body = await r.json()
+    for (const rv of body.candidate.reviews) if (!rv.post_reveal) rv.reasons = [...rv.reasons, RETIRED]
+    await route.fulfill({ response: r, json: body })
+  })
+  await openCard(page, c)
+  const saved = page.getByTestId('review-saved')
+  await expect(saved).toContainText(RETIRED)
+  await expect(saved).toContainText('take opposite')
+  await expect(page.getByTestId('review-reasons').getByRole('button', { name: RETIRED })).toHaveCount(0)
+  log('retired-chip.json', { saved: await saved.innerText() })
+})
+
+// ── Item 3: Levels: Corrected with no corrected lines → the API's reason on the price chart.
+for (const v of [
+  { day: '2024-03-15', levels: 'corrected', notice: 'No corrected GEX levels for this date (pre-forward era) — switch Levels to Current' },
+  { day: '2024-03-15', levels: 'current', notice: null },
+  { day: '2026-10-27', levels: 'corrected', notice: null },
+]) {
+  test(`levels notice: ${v.day} ${v.levels} → ${v.notice ? 'notice' : 'none'}`, async ({ page }) => {
+    await open(page, v.day, { levels: v.levels })
+    await settle(page)
+    const n = page.getByTestId('levels-notice')
+    if (v.notice) {
+      await expect(n).toHaveText(v.notice)
+      await page.screenshot({ path: path.join(LOGS, `levels-notice-${v.day}.png`) })
+    } else {
+      await expect(n).toHaveCount(0)
+    }
+  })
+}
