@@ -436,3 +436,72 @@ D1–D6 approved as recommended, with these conditions:
 - **D6:** open question, counts only: how many CR-CZ cards (`setup_candidates`) sit on CR-BZ-repaired sessions (train only), and whether their outcomes were computed from Databento or Ironbeam bars.
 
 Write under the unattended backfill protocol: archive first, then guarded, column-only UPDATEs in one transaction. Smoke: train with values; holdout and R-b blind (counts, columns, checksums, second-run equality). Then wrap, open a PR (don't merge), copy the logs (holdout parts count-only). No deploy.
+
+## Amendment 2 — Step 0 re-run with exact in-type comparison (2026-10-29, read-only)
+
+`scripts/cr_do_step0_dryrun.py` now compares exactly in each column's type: `real` as float4, `double precision` as float8, everything else as values. The regime test, reproduction, the D4 proof and the checksums all use that canonical form. The analysis is now a function, `analyse()` / `measure()`, which the write script reuses for its preflight and smoke. **run4 and run5** (independent processes) print identical outcome passes and equal JSON for all three versions, so every checksum below is reproduced. Run4's last pass (`vol_risk_premium`) stalled on a dropped connection and was stopped. Run5 completed it: 94 / 94 reproduce exactly (`double precision`), 0 change, md5 of the stored column `365f9be93bc14ab9000f16acf502c8f3`. No `vol_risk_premium` write. The write script's dry-run preflight (`write_dryrun.log`) re-derived the plan a third time, independently, and reproduced every count and md5. Logs: `scripts/logs/cr_do/step0_run4.*`, `step0_run5.*`, `write_dryrun.log`.
+
+**Exact comparison changes no count from Step 0.** The plan's key sets for holdout and R-b are the same as Step 0's (md5 keys identical). The `before` / `after` / `all_post` md5s differ from the Step 0 table only because the canonical form changed from 4 dp to exact float4 / float8. They supersede it.
+
+**D4 proof:** all 10 residual values pass, in both `v0.6.1` and `v0.6.0-openiv` (`resid_ok`). Stored ≠ pre, stored = the recompute with both CR-DJ and CR-BZ undone (exact float4), and stored ≠ post. So they are CR-DJ effects CR-DL left unwritten. Values (train, float4 as stored → as written):
+
+| Date | Column | Stored | Written |
+|---|---|---|---|
+| 2026-03-16 | `range_over_im` | 0.67807662 | 0.68489146 |
+| 2026-03-18 | `range_over_im` | 1.09334338 | 1.08389080 |
+| 2026-03-18 | `close_move_over_im` | −0.87278420 | −0.87908590 |
+| 2026-03-19 | `range_over_im` | 0.68829566 | 0.69918644 |
+| 2026-03-19 | `close_move_over_im` | 0.27662516 | 0.28098145 |
+
+(Same values in both versions.)
+
+**Plan (rows / values to write).** In the table, "S/T/R/D" means changes to `outcome_status`, `reached_touch`, `reached_close` and `days_to_reach`, and "max_exc" means changes to `max_excursion_in_direction`. Holdout, R-b and forward cells are counts only.
+
+| Version | Group | Rows | Rows to write | Values | S/T/R/D | max_exc | Repro-fail rows | CR-BZ values excluded | Cells ≠ post after the write (left as stored) |
+|---|---|---|---|---|---|---|---|---|---|
+| `v0.6.1` | train | 81 | 61 | 167 (162 + 5 D4) | 0 | 9 | 3 (= the D4 cells) | 0 | 0 |
+| `v0.6.1` | holdout | 118 | 66 | 172 | 0 | 10 | 1 | 1 | 0 |
+| `v0.6.1` | R-b | 81 | 1 | 2 | 0 | 0 | 0 | 0 | 0 |
+| `v0.6.1` | fwd | 3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `v0.6.0-openiv` | train | 83 | 61 | 184 (179 + 5 D4) | 0 | 9 | 3 (= the D4 cells) | 0 | 0 |
+| `v0.6.0-openiv` | holdout | 91 | 67 | 196 | 0 | 10 | 3 | 0 | 3 |
+| `v0.6.0-openiv` | R-b | 81 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `v0.5.0-rebuilt` | train | 83 | 50 | 106 | 0 | 9 | 3 | 0 | 3 (03-02 / 03-03 / 03-05, the unlogged-bar-state rows) |
+| `v0.5.0-rebuilt` | holdout | 19 | 6 | 12 | 0 | 5 | 2 | 1 | 3 |
+| `v0.5.0-rebuilt` | R-b | 81 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+Totals: train 172 rows / 457 values; holdout 139 rows / 380 values; R-b 1 row / 2 values; forward 0. The train per-row tables in b still hold, plus the D4 cells above.
+
+On `v0.6.1` holdout, the one value excluded by reproduction already equals post (0 cells ≠ post after the write). The other holdout cells left as stored are the reproduction failures listed in Step 0 a (counts only).
+
+**Checksums.** Each is the md5 of sorted `version|date|column|value` lines in the exact canonical form.
+- keys / before / after: the planned cells.
+- all_post: every filled column, post.
+- untouched: every cell the write must not change. That is whole unplanned rows, plus planned rows minus the written columns and the stamps.
+- labels: `outcome_status` / `reached_touch` / `reached_close` / `days_to_reach`.
+- differs: cells that will still differ from post after the write.
+
+The write script's preflight must reproduce every one of these, and its smoke must reproduce them after the write (with `after` = the stored cells).
+
+| Version | Group | keys | before | after | all_post | untouched | labels | differs |
+|---|---|---|---|---|---|---|---|---|
+| `v0.6.1` | train | `0ce0b58e1057db1e1fe29c92fee561ed` | `9c6138b34a98ae6eff0a34cdda2b027c` | `95049dfda56caca5af3890f43b96aa5e` | `11fb33b0bc1195a34d22b9f2c11fc36c` | `72426d7e9ffbeae70b104d2e10f8944c` | `02c9a5c15e005b4d8324c5b1231cf45b` | (empty) |
+| `v0.6.1` | holdout | `d2eb66097ca13d1a439f52d56636a68c` | `cde1b012c1404341e77725fbdd9e0c58` | `fe49ed3846f083f1b9935447e0abf9d6` | `0c97b053266156046753749179dd6668` | `07228372d43b202039fba68a9d50394e` | `5495254f3b9896941ea9152d9072a6b1` | (empty) |
+| `v0.6.1` | R-b | `d257cae8cfce37ede61d0a4af9ca20ed` | `548a9e066da2c31feac890348e0d449a` | `d09253ee80c11aaa42219e1cbbb13f9a` | `74eea8230c959a9a344618442a558e0e` | `af0ca35d45513ae041c86ff4a43a3d17` | `7bb8bcb90d83daaec0e9320273640778` | (empty) |
+| `v0.6.1` | fwd | (empty) | (empty) | (empty) | `3b4e12cb8ec7cbb2cc0c38da56850bcb` | `81817d582a0f6dee2aae1f83c6a871b5` | `3a662e7cb7a4a725ce19dd771773cb1e` | (empty) |
+| `v0.6.0-openiv` | train | `4240ef13a27e705ca9a6c766806cff5e` | `b7a1fbbc9d4320a24f59a25d98633181` | `0553ea369bb598566de45d7ed6b98be4` | `eebc26d133f21d879aba26a6047574f7` | `95f37bca19641f6372601cdfb946dd00` | `2789b030c5bcdbd240725ac81f0ec773` | (empty) |
+| `v0.6.0-openiv` | holdout | `c3f179722bcaa13fbe45bbb9f20ec70a` | `97d458510bf89b58ed64a94fd0030541` | `1905deb2c5b4570307a4fc9741dad5f9` | `dc86b974be6049ed3edf3ef80f58dbaf` | `6cf7acc72f8b72803a8fca80f40f23cc` | `856cac15429ee6da7e9e839ddc75b1f0` | `e18d871b595d919e2584a4f8fea8eadd` |
+| `v0.6.0-openiv` | R-b | (empty) | (empty) | (empty) | `1a6475e8b6aebbe5dbe50672afbe3987` | `ecbb7501eb8aad14b24247400a56fede` | `fe3653117b3e042371356b5ccbd6c549` | (empty) |
+| `v0.5.0-rebuilt` | train | `cbdfa17bb2ff01987b62ae6bdd032602` | `96241b13bdb49295365d3fd2ff4029b7` | `cb39d62f94f90e82789cacab6368b9c6` | `cd6cf9e9c4092886506c22000b7455a3` | `2b849d336ee32facadfe2e176604d3e1` | `23a6803c17714d4f7a8e88711d4d5925` | `049243301e90b1697cf6f781fb0a6fa9` |
+| `v0.5.0-rebuilt` | holdout | `808ee4a85d9e364c0a332ee5b4f01fb9` | `c8e67ca1123b0cbabf1e123a226b4a42` | `7fb94308582f9dd4d77df5ac94d0205e` | `24251975724f22688bde8d8ecbb6384a` | `c5a0d13b60fe59a24acc7dd0847eef55` | `59c326a068dfd2f0596c89a6e4d95f7c` | `13442f8b5b2e4a8df56fe996a28d42e8` |
+| `v0.5.0-rebuilt` | R-b | (empty) | (empty) | (empty) | `e4d1a54197d69adcf91c9ac50f953c1c` | `52287479387c8dc532736cea0d364ca9` | `493e9d527026caa5460e22c0aa079fd2` | (empty) |
+
+"(empty)" is the md5 of the empty set, `d41d8cd98f00b204e9800998ecf8427e`. `v0.6.0-openiv` and `v0.5.0-rebuilt` have no forward rows.
+
+**D5 archive table** (`infra/sql/bt_derived_repair_archive.sql`, run by `scripts/cr_do_archive_ddl.py` as the owner `rschultz`):
+- **DDL and grants done at 2026-10-29 21:34:42 UTC.**
+- `relacl` = `{dash_backfill_writer=a/rschultz}`: INSERT only. No non-superuser role has SELECT, UPDATE, DELETE or TRUNCATE.
+- The schema's default ACL would have given `dash_backfill_writer` SELECT, so that grant is revoked explicitly.
+- The owner's own table privileges are revoked too; it keeps ownership. A restore therefore needs a deliberate `GRANT SELECT` by the owner, recorded in a CR.
+- The Render-managed superuser `postgres` can't be excluded.
+- Table comment: "BLIND (CR-DO, B4): contains holdout / R-b values; never queried by Ryan or any Claude session."

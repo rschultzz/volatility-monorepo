@@ -17,6 +17,11 @@ Reproduction: rows computed before CR-BZ (or stamped by CR-DL, which wrote only 
 must equal pre; rows computed after CR-BZ must equal post. The CR-BZ effect is pre → post on the
 columns a row stores (stored NULL = never filled by its writer; left as stored, CR-DL rule).
 
+Amendment 1 (Ryan, 2026-10-29): every comparison is exact in the column's own type — `real` as
+float4, `double precision` as float8, the rest as values; checksums hash the same canonical form.
+D4: the 10 CR-DJ ratio values CR-DL's 0.013 tolerance hid (RESIDUAL) are written too; each must
+equal, exactly, a recompute on bars with both CR-DJ and CR-BZ undone.
+
 B4 regimes (row-level):
   train    trade_date ≤ 2026-06-05 and the row computes identically with every bar read capped
            at 2026-06-05 (both states) — i.e. it reads no holdout bar;
@@ -24,14 +29,14 @@ B4 regimes (row-level):
   rb       trade_date in 2025;  fwd  trade_date ≥ 2026-10-27.
 Train rows are reported with values. Holdout, R-b and forward rows are BLIND: only row counts,
 column names, per-column change counts and md5 checksums leave this process (stdout and JSON);
-their values are never printed or written. md5 keys / before / after cover the planned write
-(CR-BZ columns that reproduce); md5 all_post covers every filled column of the group. Run it twice (--tag run1 / run2) and compare the
-checksums.
+their values are never printed or written. Run it twice (--tag) and compare the checksums.
+
+analyse() and measure() are shared with scripts/cr_do_recompute_derived.py (preflight and smoke).
 
 Nothing is written to the DB: read-only transaction, no run row. DB errors print the type only.
 
 Usage:
-    apps/web/.venv/bin/python scripts/cr_do_step0_dryrun.py --tag run1
+    apps/web/.venv/bin/python scripts/cr_do_step0_dryrun.py --tag run4
 Writes scripts/logs/cr_do/step0_<tag>.json (train values + blind counts / checksums).
 """
 from __future__ import annotations
@@ -52,6 +57,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from dotenv import load_dotenv  # noqa: E402
 load_dotenv(REPO_ROOT / ".env")
 
+import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from packages.shared.backfill_safety import assert_role_or_die, get_backfill_db_conn  # noqa: E402
@@ -64,8 +70,9 @@ from scripts.cr_bi_backfill_nyse_sessions import compute_row as cr_bi_compute_ro
 from scripts.cr_d_backfill_vol_features import _compute_vol_features  # noqa: E402
 from scripts.cr_dl_step0_dryrun import (  # noqa: E402
     BAR_WINDOW_CALENDAR_DAYS, OUTCOME_COLUMNS, OWNED, POS_COLUMNS, RTH_END_UTC, RTH_START_UTC, TIMEFRAMES, TN_COLUMNS,
-    _compute_session_ohlc, _fetch_rth_minute_bars, _implied_move, _j, _rewrite, _rth_daily_closes, _same,
+    _compute_session_ohlc, _fetch_rth_minute_bars, _implied_move, _j, _rewrite, _rth_daily_closes,
 )
+from scripts.cr_dl_step0_dryrun import PreConn as CrDlPreConn  # noqa: E402
 
 TICKER = "SPX"
 CRBZ_RUN = "88139854-3605-4d94-ab03-7bc34af5da5c"
@@ -77,8 +84,17 @@ RB_FROM, RB_TO = dt.date(2025, 1, 1), dt.date(2025, 12, 31)
 ROWS_FROM = dt.date(2025, 9, 1)
 VRP_FROM = dt.date(2026, 1, 1)
 LOG_DIR = REPO_ROOT / "scripts" / "logs" / "cr_do"
+GROUPS = ("train", "holdout", "rb", "fwd")
+BLIND = ("holdout", "rb", "fwd")
 LABELS = ("outcome_status", "reached_touch", "reached_close", "days_to_reach",
           "max_excursion_in_direction", "horizon_sessions", "horizon_end_date") + POS_COLUMNS
+FLIP_LABELS = ("outcome_status", "reached_touch", "reached_close", "days_to_reach")   # Ryan's "labels"
+STAMP_COLUMNS = ("backfill_run_id", "computed_at")
+# D4: CR-DJ changes to the t0 ratios that CR-DL's 0.013 tolerance hid (train, CR-DL rows)
+RESIDUAL = {(v, dt.date(2026, 3, d)): cols
+            for v in ("v0.6.1-nyse-sessions", "v0.6.0-openiv")
+            for d, cols in ((16, ("range_over_im",)), (18, ("range_over_im", "close_move_over_im")),
+                            (19, ("range_over_im", "close_move_over_im")))}
 
 # Bars with CR-BZ undone; minutes CR-DJ rewrote afterwards keep their current (CR-DJ) values.
 PRE_SQL = f"""(
@@ -182,182 +198,266 @@ def compute(conn, version, rows, feats, landscape, stored, cap=None) -> dict:
     return compute_legacy(conn, version, rows, feats, landscape, stored, cap)
 
 
-# ── blind summaries ───────────────────────────────────────────────────────────────────────────
-def _canon(v) -> str:
-    if v is None or (isinstance(v, float) and pd.isna(v)):
+# ── exact, in-type comparison and canonical form (Amendment 1) ─────────────────────────────────
+def column_types(conn, table="bt_daily_outcomes") -> dict:
+    return dict(conn.execute("SELECT column_name, data_type FROM information_schema.columns "
+                             "WHERE table_schema = 'public' AND table_name = %s", (table,)).fetchall())
+
+
+def _is_null(v) -> bool:
+    return v is None or v is pd.NaT or (isinstance(v, (float, np.floating)) and np.isnan(v))
+
+
+def canon(v, typ: str) -> str:
+    """The value as the column stores it: `real` → float4, `double precision` → float8."""
+    if _is_null(v):
         return "NULL"
-    if isinstance(v, bool):
-        return "t" if v else "f"
-    if isinstance(v, (dt.date, dt.datetime, str)):
-        return str(_j(v))
-    try:
-        return f"{float(v):.4f}"   # stored session_* / *_over_im are float4: compare at 4 dp
-    except (TypeError, ValueError):
-        return str(v)
+    if typ == "real":
+        return repr(float(np.float32(float(v))))
+    if typ == "double precision":
+        return repr(float(v))
+    if typ == "boolean":
+        return "t" if bool(v) else "f"
+    if typ in ("smallint", "integer", "bigint"):
+        return str(int(v))
+    if isinstance(v, pd.Timestamp):
+        v = v.to_pydatetime()
+    if typ == "date" and isinstance(v, dt.datetime):
+        v = v.date()
+    return str(_j(v))
 
 
 def md5(lines) -> str:
     return hashlib.md5("\n".join(sorted(lines)).encode()).hexdigest()
 
 
-def _differs(a, b) -> bool:
-    return not _same(a, b, 1e-6) and _canon(a) != _canon(b)
+# ── per-version analysis (shared with the write script) ────────────────────────────────────────
+def fetch_stored(conn, version) -> dict:
+    cur = conn.execute(
+        "SELECT * FROM bt_daily_outcomes WHERE ticker=%s AND feature_version=%s AND active "
+        "AND trade_date >= %s ORDER BY trade_date", (TICKER, version, ROWS_FROM))
+    names = [c.name for c in cur.description]
+    return {r[names.index("trade_date")]: dict(zip(names, r)) for r in cur.fetchall()}
+
+
+def analyse(conn, version, types, crbz_done, stored=None, run_id: Optional[str] = None) -> dict:
+    """Every row of `version` from ROWS_FROM: regime, stored, pre / post recompute and the plan.
+
+    run_id=None (Step 0 / preflight): the plan is derived from reproduction.
+    run_id set (smoke after the write): rows stamped with run_id are the written rows; the plan is
+    re-derived from the bars alone — (CR-BZ columns ∪ RESIDUAL) where stored now equals post.
+    """
+    cols = OWNED[version]
+    stored = stored if stored is not None else fetch_stored(conn, version)
+    feats = {d: (reg, fv) for d, reg, fv in conn.execute(
+        "SELECT trade_date, regime_at_classification, feature_vector FROM bt_daily_features "
+        "WHERE ticker=%s AND feature_version=%s AND active AND trade_date = ANY(%s)",
+        (TICKER, version, list(stored))).fetchall()}
+    assert not [d for d in stored if d not in feats], version
+    landscape = _fetch_landscape(conn, TICKER, list(stored))
+    pre_conn = PreConn(conn)
+    comp = {"pre": compute(pre_conn, version, stored, feats, landscape, stored),
+            "post": compute(conn, version, stored, feats, landscape, stored)}
+    train_dated = {d: s for d, s in stored.items() if d <= TRAIN_END}
+    capped = {"pre": compute(pre_conn, version, train_dated, feats, landscape, stored, TRAIN_END),
+              "post": compute(conn, version, train_dated, feats, landscape, stored, TRAIN_END)}
+    resid_dates = {d: s for (v, d), _ in RESIDUAL.items() if v == version for s in [stored[d]]}
+    pre_both = (compute(CrDlPreConn(conn, [CRDJ_RUN, CRBZ_RUN]), version, resid_dates, feats, landscape, stored)
+                if resid_dates else {})
+
+    def eq(c, a, b) -> bool:
+        return canon(a, types[c]) == canon(b, types[c])
+
+    def regime(d) -> str:
+        if RB_FROM <= d <= RB_TO:
+            return "rb"
+        if d > HOLDOUT_END:
+            return "fwd"
+        if d > TRAIN_END:
+            return "holdout"
+        reads_holdout = any(not eq(c, comp[k][d][c], capped[k][d][c]) for k in comp for c in cols)
+        return "holdout" if reads_holdout else "train"
+
+    rows = {}
+    for d, s in stored.items():
+        filled = [c for c in cols if s[c] is not None]   # stored NULL = never filled: not compared, not written
+        pre, post = comp["pre"][d], comp["post"][d]
+        crbz = [c for c in filled if not eq(c, pre[c], post[c])]
+        resid = list(RESIDUAL.get((version, d), ()))
+        r = {"regime": regime(d), "stored": s, "pre": pre, "post": post, "filled": filled, "resid": resid,
+             "crdl_row": str(s["backfill_run_id"]) == CRDL_RUN}
+        if run_id is None:
+            expect_pre = s["computed_at"] < crbz_done or r["crdl_row"]
+            want = pre if expect_pre else post
+            repro_fail = [c for c in filled if not eq(c, s[c], want[c])]
+            crbz = crbz if expect_pre else []
+            resid_ok = all(c in repro_fail and c not in crbz and eq(c, s[c], pre_both[d][c]) and not eq(c, s[c], post[c])
+                           for c in resid)
+            # a label that doesn't reproduce leaves the row whole as stored; other failing columns stay as stored
+            if (set(repro_fail) - set(resid)) & set(LABELS):
+                planned = []
+            else:
+                planned = sorted(set(c for c in crbz if c not in repro_fail) | set(resid))
+            r.update(expect_pre=expect_pre, repro_fail=repro_fail, crbz=crbz, resid_ok=resid_ok, planned=planned)
+        else:
+            written = str(s["backfill_run_id"]) == run_id
+            planned = sorted(c for c in set(crbz) | set(resid) if eq(c, s[c], post[c])) if written else []
+            r.update(written=written, crbz=crbz, planned=planned)
+        r["differs"] = [c for c in filled if not eq(c, s[c], post[c])]   # stored vs post now
+        rows[d] = r
+    return rows
+
+
+def _row_lines(version, d, s, types, skip=()) -> list:
+    return [f"{version}|{d}|{c}|{canon(v, types.get(c, ''))}" for c, v in s.items() if c not in skip]
+
+
+def measure(version, rows, types) -> dict:
+    """Per-group counts and checksums (no values). Identical in Step 0, preflight and smoke if the
+    write did exactly the plan: `md5_after` / `md5_keys` are of the planned (or re-derived written)
+    cells; `md5_differs` of the cells where stored ≠ post (expected after the write: the excluded
+    ones); `md5_untouched` of every cell the write must not change (unplanned rows whole, planned rows
+    minus written columns and stamps); `md5_labels` of the stored status / touch / reached / days."""
+    out = {}
+    for g in GROUPS:
+        rs = {d: r for d, r in rows.items() if r["regime"] == g}
+        keys, before, after, all_post, untouched, labels = [], [], [], [], [], []
+        differs_after_write = []
+        for d, r in rs.items():
+            s, post = r["stored"], r["post"]
+            for c in r["planned"]:
+                keys.append(f"{version}|{d}|{c}")
+                before.append(f"{version}|{d}|{c}|{canon(s[c], types[c])}")
+                after.append(f"{version}|{d}|{c}|{canon(post[c], types[c])}")
+            all_post.extend(f"{version}|{d}|{c}|{canon(post[c], types[c])}" for c in r["filled"])
+            skip = set(r["planned"]) | (set(STAMP_COLUMNS) if r["planned"] else set())
+            untouched.extend(_row_lines(version, d, s, types, skip))
+            labels.extend(f"{version}|{d}|{c}|{canon(s[c], types[c])}" for c in FLIP_LABELS)
+            # cells that differ from post once the plan is written (Step 0: differs minus planned)
+            differs_after_write.extend(f"{version}|{d}|{c}|{canon(s[c], types[c])}"
+                                       for c in r["differs"] if c not in r["planned"])
+        out[g] = {
+            "rows": len(rs), "planned_rows": sum(bool(r["planned"]) for r in rs.values()),
+            "planned_values": len(keys), "planned_cols": dict(Counter(c for r in rs.values() for c in r["planned"])),
+            "label_changes": dict(Counter(c for r in rs.values() for c in r["planned"] if c in LABELS)),
+            "flip_label_changes": sum(c in FLIP_LABELS for r in rs.values() for c in r["planned"]),
+            "differs_after_write": len(differs_after_write),
+            "md5_keys": md5(keys), "md5_before": md5(before), "md5_after": md5(after),
+            "md5_all_post": md5(all_post), "md5_untouched": md5(untouched), "md5_labels": md5(labels),
+            "md5_differs_after_write": md5(differs_after_write),
+        }
+    return out
+
+
+def step0_summary(version, rows, types) -> dict:
+    """Step 0 view: measure() plus reproduction counts; train rows with values."""
+    m = measure(version, rows, types)
+    for g in GROUPS:
+        rs = [r for r in rows.values() if r["regime"] == g]
+        m[g].update({
+            "repro_fail_rows": sum(bool(r["repro_fail"]) for r in rs),
+            "repro_fail_cols": dict(Counter(c for r in rs for c in r["repro_fail"])),
+            "changed_rows": sum(bool(r["crbz"]) for r in rs),
+            "changed_cols": dict(Counter(c for r in rs for c in r["crbz"])),
+            "crbz_label_changes": dict(Counter(c for r in rs for c in r["crbz"] if c in LABELS)),
+            "excluded_crbz_values": sum(len(set(r["crbz"]) - set(r["planned"])) for r in rs),
+            "resid_values": sum(len(r["resid"]) for r in rs),
+            "resid_ok": all(r["resid_ok"] for r in rs),
+            "crdl_rows": sum(r["crdl_row"] for r in rs),
+            "crdl_rows_only_crbz_cols": sum(r["crdl_row"] and not (set(r["differs"]) - set(r["crbz"]) - set(r["resid"]))
+                                            for r in rs),
+        })
+    detail = {}
+    for d, r in rows.items():
+        if r["regime"] != "train":
+            continue
+        s = r["stored"]
+        detail[str(d)] = {
+            "status": s["outcome_status"], "computed_at": _j(s["computed_at"]),
+            "expect": "pre" if r["expect_pre"] else "post", "crdl_row": r["crdl_row"],
+            "repro_fail": {c: {"stored": canon(s[c], types[c]), "recomputed":
+                               canon((r["pre"] if r["expect_pre"] else r["post"])[c], types[c])} for c in r["repro_fail"]},
+            "crbz": {c: {"from": canon(s[c], types[c]), "to": canon(r["post"][c], types[c])} for c in r["crbz"]},
+            "resid": {c: {"from": canon(s[c], types[c]), "to": canon(r["post"][c], types[c])} for c in r["resid"]},
+            "planned": {c: {"from": canon(s[c], types[c]), "to": canon(r["post"][c], types[c])} for c in r["planned"]},
+            "never_filled": [c for c in OWNED[version] if s[c] is None],
+        }
+    m["train"]["rows_detail"] = detail
+    return m
+
+
+def _print_group(version, g, o) -> None:
+    extra = (f"; reproduction fails {o['repro_fail_rows']} rows {o['repro_fail_cols']}; CR-BZ changes "
+             f"{o['changed_rows']} rows {o['changed_cols']}; CR-BZ label changes {o['crbz_label_changes']}; "
+             f"excluded CR-BZ values {o['excluded_crbz_values']}; residual {o['resid_values']} ok={o['resid_ok']}; "
+             f"CR-DL rows {o['crdl_rows']} (only CR-BZ / residual cols {o['crdl_rows_only_crbz_cols']})"
+             if "repro_fail_rows" in o else "")
+    print(f"  {version} {g:7} rows {o['rows']}; planned {o['planned_rows']} rows / {o['planned_values']} values "
+          f"{o['planned_cols']}; label cols planned {o['label_changes']} (status/touch/reached/days "
+          f"{o['flip_label_changes']}); differ from post after write "
+          f"{o['differs_after_write']}{extra}", flush=True)
+    print(f"    md5 keys {o['md5_keys']} before {o['md5_before']} after {o['md5_after']} all_post {o['md5_all_post']}\n"
+          f"    md5 untouched {o['md5_untouched']} labels {o['md5_labels']} differs_after_write "
+          f"{o['md5_differs_after_write']}", flush=True)
+
+
+def connect():
+    conn = get_backfill_db_conn()
+    assert_role_or_die(conn)
+    return conn
+
+
+def vrp_rows(conn) -> list:
+    return conn.execute(
+        "SELECT trade_date, vol_risk_premium FROM bt_daily_features WHERE ticker=%s AND "
+        "feature_version='v0.5.0-rebuilt' AND active AND vol_risk_premium IS NOT NULL "
+        "AND trade_date >= %s ORDER BY trade_date", (TICKER, VRP_FROM)).fetchall()
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tag", required=True, help="run label (run1 / run2) for the checksum comparison")
+    ap.add_argument("--tag", required=True, help="run label for the checksum comparison")
     args = ap.parse_args()
     logging.disable(logging.WARNING)
     try:
-        conn = get_backfill_db_conn()
-        assert_role_or_die(conn)
+        conn = connect()
     except Exception as e:  # never echo the connection string
         print(f"DB connect failed: {type(e).__name__}")
         return 1
     conn.read_only = True
-    pre_conn = PreConn(conn)
+    types = column_types(conn)
     crbz_done = conn.execute("SELECT completed_at FROM bt_backfill_runs WHERE run_id = %s", (CRBZ_RUN,)).fetchone()[0]
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     report: dict = {"generated_utc": dt.datetime.now(dt.timezone.utc).isoformat(), "tag": args.tag,
-                    "crbz_completed_at": _j(crbz_done), "versions": {}}
-
-    for version, cols in OWNED.items():
-        cur = conn.execute(
-            "SELECT o.*, (o.computed_at < %s::timestamptz OR o.backfill_run_id = %s::uuid) AS expect_pre "
-            "FROM bt_daily_outcomes o WHERE ticker=%s AND feature_version=%s AND active "
-            "AND trade_date >= %s ORDER BY trade_date",
-            (crbz_done, CRDL_RUN, TICKER, version, ROWS_FROM))
-        names = [c.name for c in cur.description]
-        stored = {r[names.index("trade_date")]: dict(zip(names, r)) for r in cur.fetchall()}
-        feats = {d: (reg, fv) for d, reg, fv in conn.execute(
-            "SELECT trade_date, regime_at_classification, feature_vector FROM bt_daily_features "
-            "WHERE ticker=%s AND feature_version=%s AND active AND trade_date = ANY(%s)",
-            (TICKER, version, list(stored))).fetchall()}
-        assert not [d for d in stored if d not in feats], version
-        landscape = _fetch_landscape(conn, TICKER, list(stored))
-        comp = {"pre": compute(pre_conn, version, stored, feats, landscape, stored),
-                "post": compute(conn, version, stored, feats, landscape, stored)}
-        train_dated = {d: s for d, s in stored.items() if d <= TRAIN_END}
-        capped = {"pre": compute(pre_conn, version, train_dated, feats, landscape, stored, TRAIN_END),
-                  "post": compute(conn, version, train_dated, feats, landscape, stored, TRAIN_END)}
-
-        def regime(d) -> str:
-            if RB_FROM <= d <= RB_TO:
-                return "rb"
-            if d > HOLDOUT_END:
-                return "fwd"
-            if d > TRAIN_END:
-                return "holdout"
-            reads_holdout = any(_differs(comp[k][d][c], capped[k][d][c]) for k in comp for c in cols)
-            return "holdout" if reads_holdout else "train"
-
-        train_rows: dict = {}
-        blind: dict = {g: {"rows": 0, "repro_fail_rows": 0, "repro_fail_cols": Counter(), "changed_rows": 0,
-                           "changed_cols": Counter(), "label_changes": Counter(), "crdl_rows": 0,
-                           "crdl_rows_only_crbz_cols": 0, "planned_rows": 0, "planned_cols": Counter(),
-                           "excluded_by_repro": 0, "keys": [], "before": [], "after": [], "all_post": []}
-                       for g in ("holdout", "rb", "fwd")}
-        for d, s in stored.items():
-            g = regime(d)
-            want = comp["pre"][d] if s["expect_pre"] else comp["post"][d]
-            # stored NULL = never filled by the writer (CR-DL rule): not compared, not written
-            filled = [c for c in cols if s[c] is not None]
-            repro_fail = {c: {"stored": _j(s[c]), "recomputed": _j(want[c])}
-                          for c in filled if _differs(s[c], want[c])}
-            crbz = ({c: {"from": _j(s[c]), "to": _j(comp["post"][d][c])}
-                     for c in filled if _differs(comp["pre"][d][c], comp["post"][d][c])}
-                    if s["expect_pre"] else {})
-            # write plan: CR-BZ columns that reproduce; a label that doesn't reproduce leaves the row as stored
-            planned = [] if set(repro_fail) & set(LABELS) else [c for c in crbz if c not in repro_fail]
-            is_crdl = str(s["backfill_run_id"]) == CRDL_RUN
-            # CR-DL rows: stored vs post must differ only in CR-BZ columns
-            crdl_extra = sorted(set(c for c in filled if _differs(s[c], comp["post"][d][c])) - set(crbz)) if is_crdl else []
-            if g == "train":
-                train_rows[str(d)] = {"status": s["outcome_status"], "computed_at": _j(s["computed_at"]),
-                                      "expect": "pre" if s["expect_pre"] else "post", "crdl_row": is_crdl,
-                                      "repro_fail": repro_fail, "crbz": crbz, "planned": planned,
-                                      "never_filled": [c for c in cols if s[c] is None],
-                                      "crdl_extra_diff": crdl_extra}
-                continue
-            b = blind[g]
-            b["rows"] += 1
-            b["repro_fail_rows"] += bool(repro_fail)
-            b["repro_fail_cols"].update(list(repro_fail))
-            b["changed_rows"] += bool(crbz)
-            b["changed_cols"].update(list(crbz))
-            b["label_changes"].update(c for c in crbz if c in LABELS)
-            if is_crdl:
-                b["crdl_rows"] += 1
-                b["crdl_rows_only_crbz_cols"] += not crdl_extra
-            b["planned_rows"] += bool(planned)
-            b["planned_cols"].update(planned)
-            b["excluded_by_repro"] += len(crbz) - len(planned)
-            for c in planned:
-                b["keys"].append(f"{version}|{d}|{c}")
-                b["before"].append(f"{version}|{d}|{c}|{_canon(s[c])}")
-                b["after"].append(f"{version}|{d}|{c}|{_canon(comp['post'][d][c])}")
-            b["all_post"].extend(f"{version}|{d}|{c}|{_canon(comp['post'][d][c])}" for c in filled)
-
-        out_blind = {g: {"rows": b["rows"], "repro_fail_rows": b["repro_fail_rows"],
-                         "repro_fail_cols": dict(b["repro_fail_cols"]), "changed_rows": b["changed_rows"],
-                         "changed_cols": dict(b["changed_cols"]), "label_changes": dict(b["label_changes"]),
-                         "crdl_rows": b["crdl_rows"], "crdl_rows_only_crbz_cols": b["crdl_rows_only_crbz_cols"],
-                         "planned_rows": b["planned_rows"], "planned_cols": dict(b["planned_cols"]),
-                         "excluded_by_repro": b["excluded_by_repro"], "n_planned_values": len(b["keys"]), "md5_keys": md5(b["keys"]),
-                         "md5_before": md5(b["before"]), "md5_after": md5(b["after"]),
-                         "md5_all_post": md5(b["all_post"])}
-                     for g, b in blind.items()}
-        tr = train_rows.values()
-        v = {"rows_checked": len(stored),
-             "train": {"rows": len(train_rows),
-                       "repro_fail_rows": sum(bool(r["repro_fail"]) for r in tr),
-                       "changed_rows": sum(bool(r["crbz"]) for r in tr),
-                       "changed_cols": dict(Counter(c for r in tr for c in r["crbz"])),
-                       "planned_rows": sum(bool(r["planned"]) for r in tr),
-                       "planned_values": sum(len(r["planned"]) for r in tr),
-                       "label_changes": dict(Counter(c for r in tr for c in r["crbz"] if c in LABELS)),
-                       "rows_detail": train_rows},
-             **out_blind}
-        report["versions"][version] = v
-        print(f"{version}: {len(stored)} rows from {ROWS_FROM}")
-        t = v["train"]
-        print(f"  train   rows {t['rows']}; reproduction fails {t['repro_fail_rows']}; CR-BZ changes "
-              f"{t['changed_rows']} rows; planned {t['planned_rows']} rows / {t['planned_values']} values; "
-              f"columns {t['changed_cols']}; label changes {t['label_changes']}")
-        for g in ("holdout", "rb", "fwd"):
-            o = out_blind[g]
-            print(f"  {g:7} rows {o['rows']}; reproduction fails {o['repro_fail_rows']} {o['repro_fail_cols']}; "
-                  f"CR-BZ changes {o['changed_rows']} rows; planned {o['planned_rows']} rows / {o['n_planned_values']} values "
-                  f"(excluded by reproduction {o['excluded_by_repro']}); columns "
-                  f"{o['changed_cols']}; label changes {o['label_changes']}; CR-DL rows {o['crdl_rows']} "
-                  f"(only CR-BZ cols {o['crdl_rows_only_crbz_cols']}); md5 keys {o['md5_keys'][:12]} "
-                  f"before {o['md5_before'][:12]} after {o['md5_after'][:12]} all_post {o['md5_all_post'][:12]}",
-                  flush=True)
+                    "comparison": "exact in column type (Amendment 1)", "crbz_completed_at": _j(crbz_done),
+                    "versions": {}}
+    for version in OWNED:
+        rows = analyse(conn, version, types, crbz_done)
+        report["versions"][version] = step0_summary(version, rows, types)
+        print(f"{version}: {len(rows)} rows from {ROWS_FROM}")
+        for g in GROUPS:
+            _print_group(version, g, report["versions"][version][g])
         (LOG_DIR / f"step0_{args.tag}.json").write_text(json.dumps(report, indent=1, default=str))
+        conn.close()   # fresh connection per version: long passes outlive the server's idle limit
+        conn = connect()
+        conn.read_only = True
 
-    # vol_risk_premium (v0.5.0-rebuilt only; every non-null 2026 row is ≤ 2026-05-22, train).
-    # Fresh connection: the outcome passes run long enough for the server to drop the first one.
-    conn.close()
-    conn = get_backfill_db_conn()
-    assert_role_or_die(conn)
-    conn.read_only = True
+    # vol_risk_premium (v0.5.0-rebuilt only; every non-null 2026 row is ≤ 2026-06-05, train)
+    vtype = column_types(conn, "bt_daily_features")["vol_risk_premium"]
     pre_conn = PreConn(conn)
-    vrows = conn.execute(
-        "SELECT trade_date, vol_risk_premium FROM bt_daily_features WHERE ticker=%s AND "
-        "feature_version='v0.5.0-rebuilt' AND active AND vol_risk_premium IS NOT NULL "
-        "AND trade_date >= %s ORDER BY trade_date", (TICKER, VRP_FROM)).fetchall()
+    vrows = vrp_rows(conn)
     assert all(d <= TRAIN_END for d, _ in vrows)
-    vrp = {"rows_checked": len(vrows), "rows": {}}
+    vrp = {"rows_checked": len(vrows), "type": vtype, "rows": {}}
     for d, stored_v in vrows:
-        x = {k: _compute_vol_features(c, d, TICKER)["vol_risk_premium"] for k, c in (("pre", pre_conn), ("post", conn))}
-        vrp["rows"][str(d)] = {"stored": stored_v, **x, "repro_ok": _same(stored_v, x["pre"], 1e-9),
-                               "crbz": not _same(x["pre"], x["post"], 1e-9)}
-    report["vol_risk_premium"] = vrp
+        x = {k: canon(_compute_vol_features(c, d, TICKER)["vol_risk_premium"], vtype)
+             for k, c in (("pre", pre_conn), ("post", conn))}
+        vrp["rows"][str(d)] = {"stored": canon(stored_v, vtype), **x}
     r = vrp["rows"].values()
-    print(f"vol_risk_premium: {len(vrows)} rows {VRP_FROM} → {TRAIN_END}; reproduction fails "
-          f"{sum(not x['repro_ok'] for x in r)}; CR-BZ changes {sum(x['crbz'] for x in r)}")
-
+    vrp.update(repro_fail=sum(x["stored"] != x["pre"] for x in r), crbz=sum(x["pre"] != x["post"] for x in r),
+               md5_stored=md5(f"{d}|{x['stored']}" for d, x in vrp["rows"].items()))
+    report["vol_risk_premium"] = vrp
+    print(f"vol_risk_premium ({vtype}): {len(vrows)} rows {VRP_FROM} → {TRAIN_END}; reproduction fails "
+          f"{vrp['repro_fail']}; CR-BZ changes {vrp['crbz']}; md5 stored {vrp['md5_stored']}")
     (LOG_DIR / f"step0_{args.tag}.json").write_text(json.dumps(report, indent=1, default=str))
     print(f"wrote {LOG_DIR / f'step0_{args.tag}.json'}")
     conn.close()
