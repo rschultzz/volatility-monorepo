@@ -319,14 +319,8 @@ export default function AggressorFlowV3Panel({
     for (const p of payloads || []) for (const seg of p?.segments || []) if (seg.name === 'rth') s.add(seg.source)
     return [...s]
   }, [payloads])
-  const cellBadges = useMemo(() => {
-    const out = []
-    for (const seg of cellsPayload?.segments || []) {
-      const label = `${seg.name.toUpperCase()} ${seg.badge}`
-      if (!out.some((b) => b.label === label)) out.push({ label, exact: seg.exact, source: seg.source })
-    }
-    return out
-  }, [cellsPayload])
+  // CR-DP item 2: one note when either segment's cells are approximate (1-s data); nothing on exact sessions.
+  const approxCells = useMemo(() => (cellsPayload?.segments || []).some((seg) => seg.exact === false), [cellsPayload])
   const marksNote = useMemo(() => {
     const rth = (cellsPayload?.segments || []).find((s) => s.name === 'rth')
     return rth && !Array.isArray(rth.marks) ? rth.marks_note : null
@@ -678,15 +672,15 @@ export default function AggressorFlowV3Panel({
           title={edgeEffortWhy || 'Edge effort strip: aggressive contracts within 1 pt of each edge per minute, both sides — visual aid, untested'}>
           Edge effort {edgeEffortOn ? 'on' : 'off'}
         </button>
-        {anyLayer && cellBadges.map((b) => (
-          <span key={b.label} data-testid="flow-v3-cells-badge" title={b.exact ? 'each trade at its own price and side' : 'each second: sells at its low, buys at its high'}
-            style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '999px', border: `1px solid ${b.exact ? 'rgba(96,165,250,0.45)' : 'rgba(148,163,184,0.35)'}`, color: '#cbd5e1', whiteSpace: 'nowrap' }}>
-            {b.label}
+        {anyLayer && approxCells && (
+          <span data-testid="flow-v3-approx-note" title="each second: sells at its low, buys at its high"
+            style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap', flex: '0 0 auto' }}>
+            approx data — absorption &amp; edges off
           </span>
-        ))}
+        )}
         {anyLayer && cellsLoading && <span style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>loading cells…</span>}
         {anyLayer && cellsError && <span style={{ fontSize: '11px', color: '#cbd5e1', whiteSpace: 'nowrap' }} title={cellsError}>cells failed</span>}
-        {(layers.marks || layers.levels) && marksNote && <span data-testid="flow-v3-marks-note" style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>{marksNote}</span>}
+        {(layers.marks || layers.levels) && marksNote && !approxCells && <span data-testid="flow-v3-marks-note" style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>{marksNote}</span>}
         <button type="button" style={chipStyle(effortOn)} aria-pressed={effortOn} data-testid="flow-v3-effort-toggle"
           onClick={() => onEffortChange?.(!effortOn)}
           title="Label each confirmed swing on the price chart: points · volume · contracts per point · × the previous swing the same way (the Flow v2 Effort switch)">
