@@ -2696,7 +2696,15 @@ export default function PriceChart({
       if (from == null || to == null) continue
       out.push({ from, to, top: b.top.price, bottom: b.bottom.price, frozen, box: frozen ? { ...b, dropped } : null })
     }
-    return out.length ? { boxes: out } : null
+    // CR-DN item 2: a tick per probe (cancelled break) of the drawn boxes, at its edge and break minute.
+    const probes = []
+    for (const b of boxes) {
+      for (const pr of b.probes || []) {
+        const at = snap(pr.at)
+        if (at != null) probes.push({ time: at, price: pr.edge, up: pr.dir === 'up', label: `probe ${formatShiftedHHMM(v3Shift(pr.at))}`, probe: pr })
+      }
+    }
+    return out.length ? { boxes: out, probes } : null
   }, [v3EdgeReadout, v3Times, v3Shift])
   const v3SellLayer = flowV3?.sellLayer !== false
   const v3BuyLayer = flowV3?.buyLayer !== false
@@ -2704,6 +2712,7 @@ export default function PriceChart({
   const [v3Hover, setV3Hover] = useState(null)
   const [v3LevelHover, setV3LevelHover] = useState(null)
   const [v3BoxHover, setV3BoxHover] = useState(null)
+  const [v3ProbeHover, setV3ProbeHover] = useState(null) // CR-DN item 2
   useEffect(() => {
     const series = seriesRef.current
     if (!series) return
@@ -2724,7 +2733,8 @@ export default function PriceChart({
     feed('profile', () => new ProfilePrimitive(), v3Profile)
     feed('levels', () => new AbsorptionLevelsPrimitive((level, pt) => setV3LevelHover(level ? { level, pt } : null)),
       v3Levels ? { levels: v3Levels, times: v3Times } : null)
-    feed('edges', () => new EdgeLinesPrimitive((box, pt) => setV3BoxHover(box ? { box, pt } : null)), v3Edges)
+    feed('edges', () => new EdgeLinesPrimitive((box, pt) => setV3BoxHover(box ? { box, pt } : null),
+      (probe, pt) => setV3ProbeHover(probe ? { probe, pt } : null)), v3Edges)
     feed('window', () => new WindowShadePrimitive(), flowWindow ? { ...flowWindow, times: v3Times } : null)
     // CR-DG: an open hover re-reads its mark / level from the new payload, so held minutes update on a refresh
     // while the pointer is still (gone from the new list = hover closed).
@@ -2733,6 +2743,10 @@ export default function PriceChart({
     setV3BoxHover((h) => {
       const hit = h && v3Edges?.boxes.find((b) => b.frozen && b.box.from === h.box.from)
       return hit ? { ...h, box: hit.box } : null
+    })
+    setV3ProbeHover((h) => {
+      const hit = h && v3Edges?.probes.find((q) => q.probe.at === h.probe.at && q.probe.dir === h.probe.dir)
+      return hit ? { ...h, probe: hit.probe } : null
     })
   }, [v3Columns, v3Marks, v3Profile, v3Levels, v3Edges, flowWindow, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
 
@@ -3739,6 +3753,33 @@ export default function PriceChart({
                     <div>Bottom {b.bottom.price.toFixed(2)}: sellers {n(b.bottom.contracts)} / buyers {n(b.bottom.opposite)}</div>
                     <div>held {b.heldMin} min{b.dropped ? ` · ${b.dropped} older box${b.dropped === 1 ? '' : 'es'} not drawn` : ''}</div>
                     <div style={{ color: '#94a3b8' }}>visual aid — untested</div>
+                  </>
+                )
+              })()}
+            </div>
+          )}
+
+          {v3ProbeHover && (
+            <div
+              data-testid="flow-v3-probe-tooltip"
+              style={{
+                position: 'absolute',
+                left: Math.max(0, (hostRef.current?.offsetLeft || 0) + v3ProbeHover.pt.x + 12),
+                top: Math.max(0, (hostRef.current?.offsetTop || 0) + v3ProbeHover.pt.y - 10),
+                zIndex: 6, pointerEvents: 'none', background: 'rgba(2,6,23,0.92)', border: '1px solid #86198f',
+                borderRadius: 8, padding: '6px 8px', fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4, maxWidth: 300,
+              }}
+            >
+              {(() => {
+                const q = v3ProbeHover.probe
+                const hm = (t) => formatShiftedHHMM(v3Shift(t))
+                const n = (v) => (v == null ? 'exact data only' : kfmt(v))
+                return (
+                  <>
+                    <div style={{ fontWeight: 700, color: '#f0abfc' }}>Probe {hm(q.at)} {dirArrow(q.dir)} · {q.dir === 'up' ? 'top' : 'bottom'} {q.edge.toFixed(2)}</div>
+                    <div>extreme {q.extreme.toFixed(2)} ({Math.abs(q.extreme - q.edge).toFixed(2)} pts beyond) · {q.minutesOutside} min outside · back inside {hm(q.back)}</div>
+                    <div>beyond the edge: buyers {n(q.buy)} / sellers {n(q.sell)}</div>
+                    <div style={{ color: '#94a3b8' }}>break cancelled: a close came back inside within A min — visual aid, untested</div>
                   </>
                 )
               })()}

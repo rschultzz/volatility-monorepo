@@ -345,16 +345,35 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
 // data: { boxes: [{ from, to (shifted epochs), top, bottom (prices), frozen, box }] }. Hover: `onHover(box | null, pt)`
 // within 5 px of a frozen box's line (the current box is the header's).
 export const FROZEN_EDGE_ALPHA = 0.35
+// CR-DN item 2: probes (cancelled breaks) = a short magenta tick from the edge outward at the break minute, low opacity,
+// with a small "probe hh:mm" label. data.probes: [{ time (shifted), price (edge), up, label, probe }]. Hover:
+// `onProbeHover(probe | null, pt)` within 6 px of a tick.
+export const PROBE_ALPHA = 0.45
+const PROBE_TICK_PX = 7
 export class EdgeLinesPrimitive extends BasePrimitive {
-  constructor(onHover) {
+  constructor(onHover, onProbeHover) {
     super()
     this._onHover = onHover
+    this._onProbeHover = onProbeHover
     this._hit = []
+    this._probeHit = []
     this._move = (param) => {
       const pt = param?.point
+      let probe = null
+      if (pt) {
+        let bd = 7
+        for (const h of this._probeHit) {
+          const dd = Math.hypot(pt.x - h.x, pt.y - h.y)
+          if (dd < bd) {
+            bd = dd
+            probe = h
+          }
+        }
+      }
+      this._onProbeHover?.(probe ? probe.probe : null, probe ? { x: probe.x, y: probe.y } : null)
       let best = null
       let bestD = 6
-      if (pt) {
+      if (pt && !probe) {
         for (const h of this._hit) {
           if (pt.x < h.x0 - 3 || pt.x > h.x1 + 3) continue
           const dd = Math.abs(pt.y - h.y)
@@ -376,6 +395,7 @@ export class EdgeLinesPrimitive extends BasePrimitive {
   detached() {
     this._chart?.unsubscribeCrosshairMove(this._move)
     this._onHover?.(null, null)
+    this._onProbeHover?.(null, null)
     super.detached()
   }
 
@@ -385,6 +405,7 @@ export class EdgeLinesPrimitive extends BasePrimitive {
 
   paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }, chart, series, d) {
     this._hit = []
+    this._probeHit = []
     const ts = chart.timeScale()
     const plotW = bitmapSize.width / hr
     const vrange = ts.getVisibleRange?.()
@@ -409,6 +430,25 @@ export class EdgeLinesPrimitive extends BasePrimitive {
         ctx.stroke()
         if (b.frozen) this._hit.push({ x0, x1, y, box: b.box })
       }
+    }
+    ctx.setLineDash([])
+    ctx.strokeStyle = `rgba(${MAGENTA_RGB},${PROBE_ALPHA})`
+    ctx.fillStyle = `rgba(${MAGENTA_RGB},${PROBE_ALPHA + 0.2})`
+    ctx.font = `${Math.round(9 * vr)}px sans-serif`
+    for (const q of d.probes || []) {
+      if (q.time < Number(vrange.from) || q.time > Number(vrange.to)) continue
+      const x = ts.timeToCoordinate(q.time)
+      const y = series.priceToCoordinate(q.price)
+      if (x == null || y == null) continue
+      const y1 = q.up ? y - PROBE_TICK_PX : y + PROBE_TICK_PX
+      const xx = Math.round(x * hr) + 0.5
+      ctx.beginPath()
+      ctx.moveTo(xx, Math.round(y * vr))
+      ctx.lineTo(xx, Math.round(y1 * vr))
+      ctx.stroke()
+      ctx.textBaseline = q.up ? 'bottom' : 'top'
+      ctx.fillText(q.label, Math.round((x + 2) * hr), Math.round((q.up ? y1 : y1) * vr))
+      this._probeHit.push({ x, y: (y + y1) / 2, probe: q.probe })
     }
     ctx.restore()
   }

@@ -2037,8 +2037,9 @@ export default function App() {
   const flowCellsBars = useMemo(() => (flowCells ? flattenBars(flowCells) : null), [flowCells])
   const flowV3Edges = useMemo(() => {
     if (!flowV3 || !flowV3Layers.edges || !flowCells || flowAnchor == null) return null
-    return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin, flowEnd)
-  }, [flowV3, flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin, flowEnd])
+    return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin, flowEnd,
+      flowV3Settings.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin)
+  }, [flowV3, flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin, flowEnd, flowV3Settings.breakHoldMin])
 
   // CR-DI amendment 2: while the Edge effort strip is drawn the Flow v3 pane grows by its height (the price pane
   // above gives it up), so the pane's other series keep their heights; otherwise the pane is unchanged.

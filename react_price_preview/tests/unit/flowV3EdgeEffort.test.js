@@ -101,7 +101,8 @@ test('box: a close > 2 pts beyond a young edge grows the box; after N minutes it
   const closes = [...flat(5, 100), 103, ...flat(19, 102), 106, 105, 106.5]
   const cells = [[5, 103, 50, 40], [10, 102.5, 7, 3], [25, 106, 9, 1], [27, 106.5, 11, 2], [3, 100, 4, 6]]
   const p = payload(closes, cells)
-  const r = edgeReadout(p, flattenBars(p), T0, id, 15)
+  // CR-DN item 2: the break must hold A bars; CR-DI's single-close break is A = 1 (105 at minute 26 is not back inside)
+  const r = edgeReadout(p, flattenBars(p), T0, id, 15, null, 1)
   assert.equal(r.frozen.length, 1)
   const f = r.frozen[0]
   assert.deepEqual([f.from, f.to, f.breakAt, f.dir], [T0, T0 + 24 * 60, T0 + 25 * 60, 'up'])
