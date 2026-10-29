@@ -116,3 +116,19 @@ CR-BF needed DELETE and ran attended under the owner role, outside the unattende
 - **D5 June:** nothing to patch; confirm.
 - **D6 Derived:** `bt_daily_outcomes` (84 rows) and `vol_risk_premium` as a follow-up CR.
 - **B4:** confirm the June contract-identity reads.
+
+## Amendment 1 — Ryan's decisions (chat 2026-10-28)
+
+1. **Convention:** CR-BF calendar rule. Window **2026-03-15 22:00 → 2026-03-20 20:59 UTC** (bar starts, inclusive; 6,900 Globex minutes). June: nothing to patch.
+2. **Grants, this run only** (applied by Ryan / the owner session, not by this CR's code): `GRANT UPDATE (source) ON ironbeam_es_1m_bars, es_minutes TO dash_backfill_writer; GRANT UPDATE (bar_index) ON es_minutes TO dash_backfill_writer;`. After the run and smoke: REVOKE the same three column privileges and confirm with `has_column_privilege`. Grant and revoke times are recorded here and in the run's `bt_backfill_runs.notes`. The CR-BZ OHLCV grants are unchanged.
+3. **Databento fetch approved** ($0.0252): `ohlcv-1m` `ESM6` / `raw_symbol` for the window, plus 2026-03-23 10:35 → 11:36 UTC (±30 min of the 11:05 jump) in the same order; total must stay under $0.05, else stop and report.
+4. **B4 deviation approved for the record:** contract-identity / volume aggregates in the holdout window (June roll check); no outcomes or setups read. Logged in `research/standing-rulings.md`.
+5. **Repair log:** one row per (table, minute) in `ironbeam_es_1m_bars_repair_log`, `symbol = 'ESM6'` (the raw symbol), old and new OHLCV, as CR-BZ. Inserted minutes have NULL old values.
+6. **2026-03-23 11:05 UTC jump:** compared against Databento and reported as a separate finding; not patched here.
+7. **Follow-up (not this CR):** recompute the 84 `bt_daily_outcomes` rows and the affected `vol_risk_premium` rows (CR-BG pattern); list past research CRs that read 2026-03-16 → 03-19 bars. Recorded as an open question in the session note.
+
+### Implementation order
+
+- I1 `scripts/cr_dj_fetch_databento.py`: cost gate (< $0.05), fetch once, cache to `scripts/logs/cr_dj/` (git-ignored).
+- I2 `scripts/cr_dj_roll_patch.py` (unattended protocol): preconditions (role, column privileges, 6,900 Databento minutes, every stored minute covered, no ETH minute in the 21:00 UTC maintenance hour); one transaction: log → guarded OHLCV + `source` UPDATE of the 6,776 stored minutes in both tables → INSERT of the 124 missing minutes (`es_minutes` first, with explicit `trade_date` / `is_rth` / `bar_index`, then `ironbeam_es_1m_bars`, whose trigger then does nothing) → renumber RTH `bar_index` 0..389 by time on the affected PT dates; after-state smoke in the same run; `update_run_smoke`; grant times in `notes`.
+- I3 smoke + wrap.
