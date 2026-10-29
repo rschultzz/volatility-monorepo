@@ -300,7 +300,8 @@ its live-effort hover here):**
 - **5a — width today is 1–5 px, not 1–2.** `levelWidth`: 1 px ≤ 50 contracts, log scale to 5 px at ≥ 1,500 (CR-DF
   Step 0: p50 350, max 1,426). A 330-contract level is ≈ 3.2 px. The kickoff says "1–2 px by contracts as today, not
   thicker": **implemented as "widths unchanged (today's `levelWidth`)"** — nothing gets thicker. Capping at 2 px would
-  be a further visible change; **flagged to Ryan**, not done without his word.
+  be a further visible change. **Ruled by Ryan in chat 2026-10-29: keep today's widths (1–5 px by contracts), no
+  cap** — the 1–2 px in the amendment was chat's guess at current widths, not a request.
 - **5c — selection must not move.** `score = contracts × alpha` picks the 8 drawn levels. Raising the unbroken floor
   to 0.5 would change which levels are kept (5e: nothing else changes). So: the score keeps today's `levelAlpha`
   (floor 0.25); only the drawn opacity of an unbroken level uses the 0.5 floor. Broken levels: drawn and scored exactly
