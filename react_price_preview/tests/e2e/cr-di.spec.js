@@ -217,9 +217,7 @@ test('chip off: price chart and Flow v3 pane pixel-identical to origin/main (202
   log('pixel-identity.json', rows)
   for (const r of rows.filter((x) => x.name === 'v3, Edges off')) {
     expect(r.price_equal, `${r.day} ${r.name}: price chart = origin/main`).toBeTruthy()
-    // CR-DM (C2 deviation approved 2026-10-29): Flow v3's middle slot is now volume per minute, so the pane differs from
-    // an origin/main baseline older than CR-DM by design; flow_equal stays in the log. The price chart must still match.
-    if (!process.env.CRDM_BASELINE_PRE_DM) expect(r.flow_equal, `${r.day} ${r.name}: Flow v3 pane = origin/main`).toBeTruthy()
+    expect(r.flow_equal, `${r.day} ${r.name}: Flow v3 pane = origin/main`).toBeTruthy()
   }
 })
 
