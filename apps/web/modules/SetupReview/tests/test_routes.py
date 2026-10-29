@@ -61,14 +61,17 @@ class TestRoutesMocked(unittest.TestCase):
 
     def test_known_reasons_include_cr_cz_tags(self):
         cur = MagicMock()
-        cur.fetchall.return_value = [("trend day",), ("my custom",)]
+        # CR-DK: a saved review carrying the retired "take fade (called side)" does not bring it back as a chip
+        cur.fetchall.return_value = [("trend day",), ("my custom",), ("take fade (called side)",)]
         conn = MagicMock()
         conn.cursor.return_value.__enter__.return_value = cur
         got = service.known_reasons(conn)
         self.assertEqual(got[:len(service.DEFAULT_REASONS)], list(service.DEFAULT_REASONS))
         self.assertEqual(got[-1], "my custom")
-        i = got.index("take continuation (other edge)")
-        self.assertEqual(got[i + 1:i + 3], ["take fade (called side)", "other"])
+        i = got.index("take continuation (other edge)")   # stored string unchanged; displayed "take opposite"
+        self.assertEqual(got[i + 1], "other")
+        self.assertNotIn("take fade (called side)", got)
+        self.assertEqual(service.RETIRED_REASONS, ("take fade (called side)",))
 
     def test_missing_tables_is_503(self):
         with patch.object(service, "summary", side_effect=psycopg.errors.UndefinedTable("relation does not exist")):
@@ -259,8 +262,8 @@ class TestAgainstDb(unittest.TestCase):
         self.assertTrue(all("outcome" not in c for c in lst["candidates"]))
         self.assertNotIn("pnl_pts", json.dumps(lst))
         self.assertIn("trend day", lst["reasons"])
-        for tag in ("take continuation (other edge)", "take fade (called side)"):   # CR-CZ
-            self.assertIn(tag, lst["reasons"])
+        self.assertIn("take continuation (other edge)", lst["reasons"])   # CR-CZ (displayed "take opposite", CR-DK)
+        self.assertNotIn("take fade (called side)", lst["reasons"])       # CR-DK: retired for new labels
 
         det = self.client.get(f"{P}/candidates/{self.cid(1)}").get_json()["candidate"]
         self.assertNotIn("outcome", det)
@@ -287,6 +290,18 @@ class TestAgainstDb(unittest.TestCase):
         lst = self.client.get(f"{P}/candidates?cr={self.CR}&set={self.SET}&status=unreviewed").get_json()
         self.assertEqual([c["id"] for c in lst["candidates"]], [self.cid(2), self.cid(3)])
         self.assertIn("clean retest", lst["reasons"])
+
+    def test_cr_dk_chip_strings_stored_unchanged(self):
+        # CR-DK: "take opposite" is a display label only; both CR-CZ strings are stored and counted as sent
+        tags = ["take continuation (other edge)", "take fade (called side)"]
+        rv = self.client.post(f"{P}/candidates/{self.cid(1)}/review", json={"label": "skip", "reasons": tags})
+        self.assertEqual(rv.get_json()["review"]["reasons"], tags)
+        det = self.client.get(f"{P}/candidates/{self.cid(1)}").get_json()["candidate"]
+        self.assertEqual(det["reviews"][0]["reasons"], tags)   # a saved review keeps the retired string
+        self.client.post(f"{P}/candidates/{self.cid(1)}/reveal")
+        g = self.client.get(f"{P}/summary?cr={self.CR}&set={self.SET}").get_json()["groups"][0]
+        self.assertEqual(sorted(r["reason"] for r in g["skip_reasons"]), sorted(tags))
+        self.assertNotIn("take fade (called side)", self.client.get(f"{P}/candidates").get_json()["reasons"])
 
     def test_summary_take_vs_skip(self):
         for n, label, reasons in ((1, "take", []), (2, "skip", ["chop", "trend day"]), (3, "skip", ["chop"])):
