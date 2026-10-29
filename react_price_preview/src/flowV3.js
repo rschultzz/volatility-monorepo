@@ -163,6 +163,67 @@ export function paneSlotMargins(pane0Px, extraPx) {
   }
 }
 
+// CR-DP item 7 — adjustable slots. A slot = one price scale's band in pane 0, in px from the pane top. Without a stored
+// layout the slots are exactly paneSlotMargins' (today's). A stored layout is the slots' heights as fractions of the
+// content height C = H − (n + ½)·G, where G = 0.04 × the base height (H minus the rolling extra): the same top pad (G),
+// gaps (G) and bottom pad (½G) as the default, so the pane's total height never changes. Each slot ≥ SLOT_MIN_PX.
+export const SLOT_MIN_PX = 24
+export function slotOrder(rollingOn) {
+  return rollingOn ? ['cvd', 'mid', 'low', 'delta'] : ['cvd', 'mid', 'delta']
+}
+export function slotGapPx(pane0Px, extraPx) {
+  return 0.04 * (Number(pane0Px) - (Number(extraPx) || 0))
+}
+// [{ top, bottom }] px of each slot from paneSlotMargins-shaped margins (in slotOrder).
+export function marginsToBounds(pane0Px, margins, order) {
+  const H = Number(pane0Px)
+  return order.map((k) => ({ top: margins[k].top * H, bottom: (1 - margins[k].bottom) * H }))
+}
+export function boundsToMargins(pane0Px, bounds, order) {
+  const H = Number(pane0Px)
+  const out = { cvd: null, mid: null, low: null, delta: null }
+  order.forEach((k, i) => { out[k] = { top: bounds[i].top / H, bottom: (H - bounds[i].bottom) / H } })
+  return out
+}
+// Bounds from stored fractions (null / wrong length → null: use the default). Slots below the minimum are raised to
+// it (taken from the largest) when the pane is big enough.
+export function boundsFromFracs(pane0Px, fracs, gapPx, minPx = SLOT_MIN_PX) {
+  const H = Number(pane0Px)
+  const n = Array.isArray(fracs) ? fracs.length : 0
+  if (!(n >= 2) || !(H > 0) || fracs.some((f) => !(Number(f) > 0))) return null
+  const G = Number(gapPx)
+  const C = H - (n + 0.5) * G
+  if (!(C > 0)) return null
+  const sum = fracs.reduce((a, f) => a + Number(f), 0)
+  const h = fracs.map((f) => (Number(f) / sum) * C)
+  if (C >= n * minPx) {
+    for (let i = 0; i < n; i += 1) {
+      if (h[i] >= minPx) continue
+      const need = minPx - h[i]
+      h[i] = minPx
+      const j = h.indexOf(Math.max(...h))
+      h[j] -= need
+    }
+  }
+  const out = []
+  let y = G
+  for (let i = 0; i < n; i += 1) {
+    out.push({ top: y, bottom: y + h[i] })
+    y += h[i] + G
+  }
+  return out
+}
+// Move the divider between slot k and slot k+1 by dy px (down = slot k grows): both stay ≥ minPx, the rest unchanged.
+// Returns the new heights as fractions of their sum (what is stored).
+export function dragSlotFracs(bounds, k, dy, minPx = SLOT_MIN_PX) {
+  const h = bounds.map((b) => b.bottom - b.top)
+  const d = Math.max(minPx - h[k], Math.min(Number(dy) || 0, h[k + 1] - minPx))
+  h[k] += d
+  h[k + 1] -= d
+  const sum = h.reduce((a, x) => a + x, 0)
+  return h.map((x) => x / sum)
+}
+
 // CR-DN item 6: the volume bars' scale cap = the 98th percentile (nearest rank) of the loaded rows' positive volumes
 // (null with no volume). Bars are drawn at min(vol, cap) and the scale keeps autoscaling, so it tops out at
 // min(visible max, cap): a stretch with no minute above the cap draws as before. A display scale, no research meaning.

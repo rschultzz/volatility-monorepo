@@ -42,7 +42,13 @@ import {
   lastSwingAnchor,
   makeShifter,
   minuteFlow,
+  boundsFromFracs,
+  boundsToMargins,
+  dragSlotFracs,
+  marginsToBounds,
   paneSlotMargins,
+  slotGapPx,
+  slotOrder,
   rollingDelta,
   rowCloses,
   segmentCvd,
@@ -65,6 +71,16 @@ const SLATE_RGBA = (alpha) => `rgba(148,163,184,${alpha})`
 const MAGENTA_RGBA = (alpha) => `rgba(232,121,249,${alpha})`
 const ORANGE_RGBA = (alpha) => `rgba(${ORANGE_RGB},${alpha})`
 const SOURCE_LABEL = { databento: 'Databento', ironbeam: 'Ironbeam' }
+// CR-DP item 7b: the slot layout (heights as fractions, per slot count: '3' rolling off, '4' rolling on), per browser.
+const SLOTS_STORAGE_KEY = 'ib-react-flow-v3-slots'
+const readSlots = () => {
+  try {
+    const v = JSON.parse(window.localStorage.getItem(SLOTS_STORAGE_KEY) || 'null')
+    return v && typeof v === 'object' ? v : {}
+  } catch (e) {
+    return {}
+  }
+}
 
 const chipStyle = (active) => ({
   height: '24px',
@@ -151,7 +167,7 @@ function GuideBody() {
   )
 }
 
-function Settings({ value, layers, onApply, onClose }) {
+function Settings({ value, layers, onApply, onClose, onResetLayout }) {
   const [draft, setDraft] = useState({ ...value, heat: Boolean(layers?.heat), marks: Boolean(layers?.marks) })
   const input = { width: '100%', background: '#020617', color: '#e2e8f0', border: '1px solid #334155', borderRadius: '10px', padding: '8px 10px', fontSize: '14px' }
   const apply = (e) => {
@@ -241,7 +257,11 @@ function Settings({ value, layers, onApply, onClose }) {
           Heatmap: buy layer (blue)
         </label>
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', marginTop: '14px' }}>
-          <button type="button" style={chipStyle(false)} onClick={() => setDraft({ ...DEFAULT_V3_SETTINGS, heat: false, marks: false })}>Defaults</button>
+          <span style={{ display: 'flex', gap: '6px' }}>
+            <button type="button" style={chipStyle(false)} onClick={() => setDraft({ ...DEFAULT_V3_SETTINGS, heat: false, marks: false })}>Defaults</button>
+            <button type="button" style={chipStyle(false)} data-testid="flow-v3-reset-layout" onClick={onResetLayout}
+              title="Slot heights in this pane and the price chart / Flow split back to their defaults">Reset layout</button>
+          </span>
           <div style={{ display: 'flex', gap: '6px' }}>
             <button type="button" style={chipStyle(false)} onClick={onClose}>Cancel</button>
             <button type="submit" style={{ ...chipStyle(true), fontWeight: 700 }}>Apply</button>
@@ -284,6 +304,7 @@ export default function AggressorFlowV3Panel({
   onEffortChange,
   edgeEffortOn = false, // CR-DI: the Edge effort strip (stored per viewer); draws only with Edges on, an anchor and exact data
   onEdgeEffortChange,
+  onResetLayout, // CR-DP item 7: App restores the price chart / Flow split (7c); the pane clears its slot layout
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -296,7 +317,10 @@ export default function AggressorFlowV3Panel({
   const linkedCrosshairRef = useRef(null)
   const anchorRef = useRef(null)
   const refreshDecorationsRef = useRef(() => {})
-  const slotsRef = useRef({ rollingOn: false, extra: 0 })
+  const slotsRef = useRef({ rollingOn: false, extra: 0, fracs: {} })
+  const [slotFracs, setSlotFracs] = useState(readSlots) // CR-DP item 7
+  const [slotBounds, setSlotBounds] = useState(null) // pane-0 px bounds of the slots, for the dividers
+  const slotDragRef = useRef(null)
 
   const [sessionBands, setSessionBands] = useState([])
   const [linkedCrosshairX, setLinkedCrosshairX] = useState(null)
@@ -484,10 +508,15 @@ export default function AggressorFlowV3Panel({
     const chart = chartRef.current
     const s = seriesRef.current
     if (!chart || !s.vol) return
-    const { rollingOn: on, extra } = slotsRef.current
+    const { rollingOn: on, extra, fracs } = slotsRef.current
     // pane 0 from the height just applied (panes()[0].getHeight() lags until the chart's next layout pass)
     const h0 = chart.options().height - chart.timeScale().height() - (s.strip ? EDGE_STRIP_HEIGHT : 0)
-    const m = paneSlotMargins(h0, on ? extra : 0)
+    // CR-DP item 7: a stored layout for this slot count, else today's margins (paneSlotMargins)
+    const order = slotOrder(on)
+    const custom = boundsFromFracs(h0, fracs?.[order.length], slotGapPx(h0, on ? extra : 0))
+    const m = custom ? boundsToMargins(h0, custom, order) : paneSlotMargins(h0, on ? extra : 0)
+    const bounds = custom || marginsToBounds(h0, m, order)
+    setSlotBounds((prev) => (prev && JSON.stringify(prev) === JSON.stringify({ order, bounds, h0 }) ? prev : { order, bounds, h0 }))
     if ((s.rolling.options().priceScaleId === 'right') !== on) {
       s.vol.applyOptions({ priceScaleId: on ? 'vol' : 'right' })
       s.rolling.applyOptions({ priceScaleId: on ? 'right' : 'rolling' })
@@ -499,9 +528,40 @@ export default function AggressorFlowV3Panel({
     else chart.priceScale('rolling').applyOptions({ visible: false })
   }
   useEffect(() => {
-    slotsRef.current = { rollingOn, extra: rollingExtra }
+    slotsRef.current = { rollingOn, extra: rollingExtra, fracs: slotFracs }
     fitToStage()
-  }, [rollingOn, rollingExtra]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rollingOn, rollingExtra, slotFracs]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    try {
+      if (Object.keys(slotFracs).length) window.localStorage.setItem(SLOTS_STORAGE_KEY, JSON.stringify(slotFracs))
+      else window.localStorage.removeItem(SLOTS_STORAGE_KEY)
+    } catch (e) {
+      // ignore
+    }
+  }, [slotFracs])
+  // CR-DP item 7a: drag a divider between two slots (pointer capture on the handle); the pane's height is unchanged.
+  const onDividerDown = (k) => (e) => {
+    if (e.button !== 0 || !slotBounds) return
+    e.preventDefault()
+    e.stopPropagation()
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+    slotDragRef.current = { k, y: e.clientY, bounds: slotBounds.bounds, n: slotBounds.order.length }
+  }
+  const onDividerMove = (e) => {
+    const d = slotDragRef.current
+    if (!d) return
+    const fr = dragSlotFracs(d.bounds, d.k, e.clientY - d.y)
+    setSlotFracs((prev) => ({ ...prev, [d.n]: fr }))
+  }
+  const onDividerUp = (e) => {
+    if (!slotDragRef.current) return
+    slotDragRef.current = null
+    e.currentTarget.releasePointerCapture?.(e.pointerId)
+  }
+  const resetLayout = () => {
+    setSlotFracs({})
+    onResetLayout?.()
+  }
 
   useEffect(() => {
     const s = seriesRef.current
@@ -752,7 +812,7 @@ export default function AggressorFlowV3Panel({
       </div>
       {guideOpen && <Modal title="How to read Flow v3" onClose={() => setGuideOpen(false)}><GuideBody /></Modal>}
       {settingsOpen && (
-        <Settings value={settings} layers={layers} onClose={() => setSettingsOpen(false)}
+        <Settings value={settings} layers={layers} onClose={() => setSettingsOpen(false)} onResetLayout={() => { resetLayout(); setSettingsOpen(false) }}
           onApply={(lay, v) => { onLayersChange?.((l) => ({ ...l, ...lay })); onSettingsChange?.(v); setSettingsOpen(false) }} />
       )}
       <div ref={stageRef} className="flow-stage" style={{ width: '100%' }}>
@@ -763,6 +823,17 @@ export default function AggressorFlowV3Panel({
         {Number.isFinite(anchorX) && (
           <div data-testid="flow-v3-anchor-line" style={{ position: 'absolute', top: 0, bottom: 0, left: `${Math.round(anchorX)}px`, width: 0, borderLeft: `1px dashed ${SLATE_RGBA(0.8)}`, pointerEvents: 'none', zIndex: 3 }} />
         )}
+        {slotBounds && slotBounds.bounds.slice(0, -1).map((b, k) => {
+          const y = (b.bottom + slotBounds.bounds[k + 1].top) / 2
+          return (
+            <div key={`div-${slotBounds.order.length}-${k}`} data-testid={`flow-v3-slot-divider-${k}`} className="flow-v3-slot-divider"
+              onPointerDown={onDividerDown(k)} onPointerMove={onDividerMove} onPointerUp={onDividerUp} onPointerCancel={onDividerUp}
+              title="Drag to resize these slots (⚙ Reset layout restores)"
+              style={{ position: 'absolute', left: 0, right: priceAxisWidth || 60, top: Math.round(y) - 4, height: 8, cursor: 'row-resize', zIndex: 4, touchAction: 'none' }}>
+              <div style={{ position: 'absolute', left: 0, right: 0, top: 4, height: 0, borderTop: `1px solid ${SLATE_RGBA(0.18)}` }} />
+            </div>
+          )
+        })}
         {Number.isFinite(linkedCrosshairX) && (
           <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${Math.round(linkedCrosshairX)}px`, width: 0, borderLeft: '1px dashed rgba(191, 219, 254, 0.45)', pointerEvents: 'none', zIndex: 4 }} />
         )}

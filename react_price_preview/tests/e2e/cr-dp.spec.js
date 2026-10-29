@@ -406,3 +406,64 @@ test('item 5: no SIGNALS / ANALOGUES pills or panels, no /signals request; REVIE
   await p2.waitForTimeout(65_000) // longer than the removed SignalPanel's 60 s scan
   expect(signalCalls).toEqual([])
 })
+
+const slotMargins = (page) => page.evaluate((fn) => {
+  const { flow } = eval(fn) // eslint-disable-line no-eval
+  const r6 = (v) => Math.round(v * 1e6) / 1e6
+  const pm = (id) => { const m = flow.chart.priceScale(id).options().scaleMargins; return { top: r6(m.top), bottom: r6(m.bottom) } }
+  return { cvd: pm('cvd'), right: pm('right'), delta: pm('delta'), height: flow.chart.options().height }
+}, CHARTS_FN)
+
+test('item 7: slot dividers resize slots (≥ 24 px, pane height unchanged), persist across reload; Reset layout restores slots and the price / Flow split', async ({ page }) => {
+  await open(page, D29, { storage: V3 })
+  const m0 = await slotMargins(page)
+  const paneH0 = await page.getByTestId('flow-v3-panel').evaluate((el) => el.getBoundingClientRect().height)
+  const d0 = page.getByTestId('flow-v3-slot-divider-0')
+  await expect(d0).toHaveCount(1)
+  await expect(page.getByTestId('flow-v3-slot-divider-1')).toHaveCount(1)
+  const r = await d0.boundingBox()
+  await page.mouse.move(r.x + 200, r.y + r.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(r.x + 200, r.y + r.height / 2 + 12, { steps: 6 })
+  await page.mouse.up()
+  await page.waitForTimeout(500)
+  const m1 = await slotMargins(page)
+  log('item7-margins.json', { m0, m1 })
+  const H = m1.height - 28 // pane 0 (time axis 28 px)
+  // the CVD slot grew by 12 px, the middle slot (45 px at the default 160 px pane) shrank by 12 px, the delta slot is unchanged
+  expect(Math.round(((1 - m1.cvd.bottom) - (1 - m0.cvd.bottom)) * H)).toBe(12)
+  expect(Math.round((m1.right.top - m0.right.top) * H)).toBe(12)
+  expect(m1.delta).toEqual(m0.delta)
+  expect(m1.height).toBe(m0.height)
+  expect(await page.getByTestId('flow-v3-panel').evaluate((el) => el.getBoundingClientRect().height)).toBe(paneH0)
+  // drag far: the middle slot stops at 24 px
+  const r2 = await d0.boundingBox()
+  await page.mouse.move(r2.x + 200, r2.y + r2.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(r2.x + 200, r2.y + 400, { steps: 6 })
+  await page.mouse.up()
+  const m2 = await slotMargins(page)
+  expect(Math.round(((1 - m2.right.bottom) - m2.right.top) * H)).toBe(24)
+  // persists across a reload
+  await page.reload()
+  await page.getByTestId('flow-v3-panel').waitFor()
+  await page.waitForTimeout(2500)
+  expect(await slotMargins(page)).toEqual(m2)
+  // 7c: the existing price / Flow splitter changes the split and is remembered
+  const sp = await page.locator('.panel-splitter').boundingBox()
+  await page.mouse.move(sp.x + 300, sp.y + sp.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(sp.x + 300, sp.y + sp.height / 2 - 60, { steps: 6 })
+  await page.mouse.up()
+  await page.waitForTimeout(500)
+  const paneH1 = await page.getByTestId('flow-v3-panel').evaluate((el) => el.getBoundingClientRect().height)
+  expect(paneH1).toBe(paneH0 + 60)
+  expect(await page.evaluate(() => window.localStorage.getItem('ib-react-flow-panel-height'))).toBe(String(paneH0 + 60))
+  // Reset layout: slots and split back to their defaults
+  await page.getByRole('button', { name: 'Open Flow v3 settings' }).click()
+  await page.getByTestId('flow-v3-reset-layout').click()
+  await page.waitForTimeout(800)
+  expect(await page.getByTestId('flow-v3-panel').evaluate((el) => el.getBoundingClientRect().height)).toBe(paneH0)
+  expect(await slotMargins(page)).toEqual(m0)
+  expect(await page.evaluate(() => window.localStorage.getItem('ib-react-flow-v3-slots'))).toBeNull()
+})
