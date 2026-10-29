@@ -62,14 +62,14 @@ Read `research/standing-rulings.md` (2026-10-29 copy, last ruling A22, last chan
 | A19 — in-range confirmation, both sides | n/a (context) | per-box CVD and edge counts display flow inside a range; not a confirmation rule |
 | A20 — trade the range edges | n/a (context) | display only; no entry logic |
 | A21, A22 | n/a | |
-| A27 (draft) — "a failed probe can strengthen the fade; untested" | **not in the rulings file** | the file ends at A22 and no vault note mentions A27. The legend quotes the kickoff's wording, labelled untested; nothing is added to `standing-rulings.md` (only Ryan changes a line). Flagged to Ryan |
+| A23–A28 (Ryan's drafts, undecided) | n/a — not rulings | Ryan, chat 2026-10-29: A23–A28 are drafts, not rulings. The legend quotes the idea "a failed probe can strengthen the fade" as **an untested idea**, without citing it as A27; nothing is added to `standing-rulings.md` |
 | B1–B7 | n/a | no hypothesis tested, no data split read beyond what the chart already displays |
 | B8 — Code smoke labels are never Ryan's | honoured | no review labels written; smoke runs against a read-only backend |
 | C1 — no green / red; Dash palette | honoured | end window in the existing slate at low opacity; probe ticks in the existing magenta (`#e879f9`, CR-DF) at low opacity; per-box CVD in the existing CVD colour; labels in the pane's label style |
 | C2 — new display features off by default, existing views unchanged | item 1 honoured; items 2–3 **deviate — APPROVED by Ryan in chat 2026-10-29** | item 1 is a new control: nothing changes until an end is set. Items 2 and 3 change existing behaviour with Edges on (a break needs acceptance; CVD restarts per box; per-box labels). Change-log line added to `standing-rulings.md` |
 
 Nothing in "Revoked / superseded" (R1–R7) is used. A, M and N (kickoff wording; M = CR-DM's live effort min move) and
-the end are display settings, not tested thresholds; the legend says so and notes A27's draft wording ("a failed probe can strengthen the fade; untested").
+the end are display settings, not tested thresholds; the legend says so and notes the untested idea "a failed probe can strengthen the fade" (not cited as a ruling).
 
 ## Step 0 (commit before implementation)
 
@@ -193,7 +193,7 @@ itself, and only the strict reading matches the kickoff's A = 1 expectation:
 | inclusive (bottom ≤ close ≤ top) | probe, back 07:35, 1 min outside | probe (07:35 closed at 7756.25) → no split until 07:39 | one box; probes 07:34, 07:37, 07:39, 08:10, 08:14 |
 
 With strict "inside" and A = 1 the split is identical to CR-DI's (frozen 06:49–07:33, current 07:34– 7738.25–
-7760.00). **Proposed: strict** (a close exactly on the edge is not back inside); Ryan to confirm. As of 08:23 PT no
+7760.00). **Strict — approved by Ryan in chat 2026-10-29** (see Amendment 1). As of 08:23 PT no
 later break holds; the smoke re-checks on the complete session.
 
 **Held-break date for the smoke: 2026-10-28, anchor 07:00** (complete session, bars to 12:51 PT). Under item 2,
@@ -243,10 +243,20 @@ On `78a50fb` rolling net delta is always drawn and there is no volume series.
 
 ### 0f — other notes
 
-- **A27 is not in `standing-rulings.md`** (it ends at A22; no vault note mentions A27). The legend will quote the
-  kickoff's wording, labelled untested; nothing is added to the rulings file.
+- **A27 is not a ruling** (A23–A28 are Ryan's undecided drafts, chat 2026-10-29). The legend quotes the idea as an
+  untested idea, not as A27; nothing is added to the rulings file.
 - 5-minute chart: a click picks a 5-min candle; the end is taken as **the last 1-minute bar inside that candle**
   (so the box, strip and profile include the whole candle). On the 1-minute chart it is that minute.
 - Replay: if `until` moves before the end (the payload shrinks), the end is dropped (as if "clear end") rather than
   clamped.
 - No backend change is needed for items 1–3.
+
+## Amendment 1 (Ryan, chat 2026-10-29) — strict "inside"; A27 not a ruling
+
+- **Strict reading approved.** A close exactly on an edge is **not** back inside. Only a close strictly inside the box
+  (below the top / above the bottom: bottom < close < top) cancels a pending break. A break that retests the edge
+  (closes on it) and holds stays a break.
+- The A = 1 smoke stays as written: it reproduces the 07:34 split (Step 0d, strict row).
+- A23–A28 are Ryan's drafts, undecided. The legend quotes "a failed probe can strengthen the fade" as an untested
+  idea, not as A27.
+- Standing rulings conformance unchanged (C2 deviation as approved; A23–A28 n/a, not rulings).
