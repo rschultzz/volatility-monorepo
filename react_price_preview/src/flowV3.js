@@ -833,12 +833,66 @@ export function segmentReadouts(rows, closes, spans) {
   return (spans || []).map((sp) => anchorReadout(rows, closes, sp.from, sp.to))
 }
 
-// Box label: "Δ +1.2k · +7.5 pts · 45 m · 1.8k/pt".
+// Box label: "Δ +1.2k · +7.5 pts · 45 m · 1.8k/pt". CR-DP item 4: built from boxLabelParts, which the popup shares.
+export function boxLabelParts(ro) {
+  const d = Number(ro.delta) || 0
+  return {
+    delta: `Δ ${d >= 0 ? '+' : '-'}${kfmt(Math.abs(d))}`,
+    pts: ro.dPrice == null ? '–' : `${ro.dPrice >= 0 ? '+' : ''}${ro.dPrice.toFixed(1)} pts`,
+    minutes: `${ro.minutes} m`,
+    cpp: `${ro.cpp == null ? '–' : kfmt(ro.cpp)}/pt`,
+  }
+}
 export function boxLabelText(ro) {
   if (!ro) return ''
-  const d = Number(ro.delta) || 0
-  const pts = ro.dPrice == null ? '–' : `${ro.dPrice >= 0 ? '+' : ''}${ro.dPrice.toFixed(1)} pts`
-  return `Δ ${d >= 0 ? '+' : '-'}${kfmt(Math.abs(d))} · ${pts} · ${ro.minutes} m · ${ro.cpp == null ? '–' : kfmt(ro.cpp)}/pt`
+  const p = boxLabelParts(ro)
+  return `${p.delta} · ${p.pts} · ${p.minutes} · ${p.cpp}`
+}
+
+// CR-DP items 4 / 6 — delta share = Σ delta ÷ Σ volume over the readout's bars (anchorReadout's `vol`: the same volume
+// field as the CR-DM volume bars); null without volume. Shown as a percentage with two decimals. A display aid.
+export function readoutShare(ro) {
+  return ro && Number(ro.vol) > 0 ? Number(ro.delta) / Number(ro.vol) : null
+}
+export const sharePctText = (v) => (v == null || !Number.isFinite(v) ? '–' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)} %`)
+
+// CR-DP item 4 — one edge's state for the box stats popup: "testing break hh:mm ↑" while a break at that edge is pending,
+// else "moved hh:mm" (its last growth move) and / or "probe hh:mm" (its last cancelled break, "(n)" when several); ''
+// when none. Same fields as the box hover and edgeText.
+export function edgeStateText(box, side, hhmm) {
+  const dir = side === 'top' ? 'up' : 'down'
+  if (box.pending && box.pending.dir === dir) return `testing break ${hhmm(box.pending.at)} ${dirArrow(dir)}`
+  const e = box[side]
+  const probes = (box.probes || []).filter((p) => p.dir === dir)
+  const out = []
+  if (e?.brokeAt != null) out.push(`moved ${hhmm(e.brokeAt)}`)
+  if (probes.length) out.push(`probe ${hhmm(probes[probes.length - 1].at)}${probes.length > 1 ? ` (${probes.length})` : ''}`)
+  return out.join(' · ')
+}
+
+// CR-DP item 4 — the popup's three lines for the current box (PriceChart's v3Edges box: drawnBoxes' box + its segment
+// readout + ended / pending). `hhmm` formats a UTC epoch as PT hh:mm.
+//   "box from 06:49 → 07:10 · Δ +1.2k · share +1.02 % · +7.5 pts · 45 m · 1.8k/pt"
+//   "Top 7724.75 · buyers 1.8k / sellers 900 · held 9 m · probe 07:34"
+//   "Bottom 7715.25 · sellers 4.1k / buyers 2.0k · held 6 m"
+export function boxPopupLines(box, hhmm) {
+  if (!box) return null
+  const ro = box.readout
+  const n = (v) => (v == null ? 'exact data only' : kfmt(v))
+  const held = (e) => (e.heldMin == null ? 'not touched' : `held ${e.heldMin} m`)
+  const end = box.ended?.kind === 'end' ? ` → ${hhmm(box.ended.at)}` : ''
+  const p = ro ? boxLabelParts(ro) : null
+  const stats = p ? ` · ${p.delta} · share ${sharePctText(readoutShare(ro))} · ${p.pts} · ${p.minutes} · ${p.cpp}` : ''
+  const edge = (name, side, main, opp) => {
+    const e = box[side]
+    const st = edgeStateText(box, side, hhmm)
+    return `${name} ${e.price.toFixed(2)} · ${main} ${n(e.contracts)} / ${opp} ${n(e.opposite)} · ${held(e)}${st ? ` · ${st}` : ''}`
+  }
+  return {
+    head: `box from ${hhmm(box.from)}${end}${stats}`,
+    top: edge('Top', 'top', 'buyers', 'sellers'),
+    bottom: edge('Bottom', 'bottom', 'sellers', 'buyers'),
+  }
 }
 
 // CR-DN item 1 — set end. The picked end (shifted candle time) is stored as the last 1-minute bar inside that candle

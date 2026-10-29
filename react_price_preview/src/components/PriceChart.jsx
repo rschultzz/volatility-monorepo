@@ -25,8 +25,8 @@ import {
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { LIVE_EFFORT_ID, absorptionLevels, boxLabelText, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
-import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, WindowShadePrimitive } from './flowV3Primitives'
+import { LIVE_EFFORT_ID, absorptionLevels, boxLabelText, boxPopupLines, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
+import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
 const ETH_BG_COLOR = '#1f2937'
@@ -2741,6 +2741,95 @@ export default function PriceChart({
   const [v3LevelHover, setV3LevelHover] = useState(null)
   const [v3BoxHover, setV3BoxHover] = useState(null)
   const [v3ProbeHover, setV3ProbeHover] = useState(null) // CR-DN item 2
+
+  // CR-DP item 4 — box stats popup for the current (unfrozen) box, with Edges on and an anchor (v3EdgeReadout is null
+  // otherwise, so clear / Esc / Edges off remove it). Default place: just right of the box's top-right, kept inside the
+  // plot, following the box on pans and zooms; once dragged it stays where it was put. A new anchor resets the
+  // position and the × (closed until the next anchor). Text: flowV3.boxPopupLines, the box label's own numbers.
+  const v3Anchor = flowV3?.anchor ?? null
+  const v3CurrentBox = useMemo(() => v3Edges?.boxes.find((b) => !b.frozen) || null, [v3Edges])
+  const v3PopupLines = useMemo(
+    () => (v3CurrentBox ? boxPopupLines(v3CurrentBox.box, (t) => formatShiftedHHMM(v3Shift(t))) : null),
+    [v3CurrentBox, v3Shift]
+  )
+  const [boxPopupDrag, setBoxPopupDrag] = useState(null) // { left, top } in stage px once dragged
+  const [boxPopupClosed, setBoxPopupClosed] = useState(false)
+  const [boxPopupAuto, setBoxPopupAuto] = useState(null) // { left, top, pane } default place + plot rect (stage px)
+  const boxPopupRef = useRef(null)
+  const boxPopupDragRef = useRef(null)
+  useEffect(() => {
+    setBoxPopupDrag(null)
+    setBoxPopupClosed(false)
+  }, [v3Anchor])
+  const boxPopupOn = Boolean(v3PopupLines && !boxPopupClosed)
+  useEffect(() => {
+    if (!boxPopupOn || !v3CurrentBox) {
+      setBoxPopupAuto(null)
+      return undefined
+    }
+    let raf = 0
+    let lastKey = ''
+    const tick = () => {
+      raf = requestAnimationFrame(tick)
+      const chart = chartRef.current
+      const series = seriesRef.current
+      const stage = stageRef.current
+      const paneEl = chart?.panes?.()[0]?.getHTMLElement?.()
+      if (!chart || !series || !stage || !paneEl) return
+      const sr = stage.getBoundingClientRect()
+      const pr = paneEl.getBoundingClientRect()
+      // the pane element is the chart's table row (price axis included): the plot is the time scale's width
+      const pane = { left: pr.left - sr.left, top: pr.top - sr.top, width: chart.timeScale().width() || pr.width, height: pr.height }
+      const w = boxPopupRef.current?.offsetWidth || 0
+      const h = boxPopupRef.current?.offsetHeight || 0
+      const x = chart.timeScale().timeToCoordinate(v3CurrentBox.to)
+      const y = series.priceToCoordinate(v3CurrentBox.top)
+      const rawLeft = pane.left + (x == null ? pane.width : x + 8)
+      const rawTop = pane.top + (y == null ? 0 : y - 2)
+      const next = {
+        left: Math.max(pane.left, Math.min(rawLeft, pane.left + pane.width - w - 4)),
+        top: Math.max(pane.top, Math.min(rawTop, pane.top + pane.height - h - 4)),
+        pane,
+      }
+      const key = JSON.stringify(next, (k, v) => (typeof v === 'number' ? Math.round(v) : v))
+      if (key !== lastKey) {
+        lastKey = key
+        setBoxPopupAuto(next)
+      }
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [boxPopupOn, v3CurrentBox])
+  const clampToPlot = (left, top) => {
+    const pane = boxPopupAuto?.pane
+    const w = boxPopupRef.current?.offsetWidth || 0
+    const h = boxPopupRef.current?.offsetHeight || 0
+    if (!pane) return { left, top }
+    return {
+      left: Math.max(pane.left, Math.min(left, pane.left + pane.width - w)),
+      top: Math.max(pane.top, Math.min(top, pane.top + pane.height - h)),
+    }
+  }
+  const onBoxPopupPointerDown = (e) => {
+    if (e.button !== 0 || e.target?.closest?.('[data-popup-close]')) return
+    const el = boxPopupRef.current
+    if (!el) return
+    e.preventDefault()
+    e.stopPropagation()
+    el.setPointerCapture?.(e.pointerId)
+    boxPopupDragRef.current = { x: e.clientX, y: e.clientY, left: el.offsetLeft, top: el.offsetTop }
+  }
+  const onBoxPopupPointerMove = (e) => {
+    const d = boxPopupDragRef.current
+    if (!d) return
+    setBoxPopupDrag(clampToPlot(d.left + e.clientX - d.x, d.top + e.clientY - d.y))
+  }
+  const onBoxPopupPointerUp = (e) => {
+    if (!boxPopupDragRef.current) return
+    boxPopupDragRef.current = null
+    boxPopupRef.current?.releasePointerCapture?.(e.pointerId)
+  }
+  const boxPopupPlace = boxPopupDrag ? clampToPlot(boxPopupDrag.left, boxPopupDrag.top) : boxPopupAuto
   useEffect(() => {
     const series = seriesRef.current
     if (!series) return
@@ -3791,6 +3880,44 @@ export default function PriceChart({
                   </>
                 )
               })()}
+            </div>
+          )}
+
+          {boxPopupOn && (
+            <div
+              ref={boxPopupRef}
+              data-testid="flow-v3-box-popup"
+              data-dragged={boxPopupDrag ? '1' : '0'}
+              onPointerDown={onBoxPopupPointerDown}
+              onPointerMove={onBoxPopupPointerMove}
+              onPointerUp={onBoxPopupPointerUp}
+              onPointerCancel={onBoxPopupPointerUp}
+              title="Current box (drag to move) — visual aid, untested"
+              style={{
+                position: 'absolute',
+                left: boxPopupPlace?.left ?? 0,
+                top: boxPopupPlace?.top ?? 0,
+                visibility: boxPopupPlace ? 'visible' : 'hidden',
+                zIndex: 5, cursor: 'move', userSelect: 'none', touchAction: 'none',
+                background: TAG_BG(0.92), border: '1px solid rgba(232,121,249,0.35)', borderRadius: 4,
+                padding: '3px 18px 3px 6px', fontSize: '10px', fontFamily: 'sans-serif', color: '#e2e8f0', lineHeight: 1.35,
+                maxWidth: 340,
+              }}
+            >
+              <div data-testid="flow-v3-box-popup-head" style={{ color: '#f0abfc' }}>{v3PopupLines.head}</div>
+              <div data-testid="flow-v3-box-popup-top">{v3PopupLines.top}</div>
+              <div data-testid="flow-v3-box-popup-bottom">{v3PopupLines.bottom}</div>
+              <button
+                type="button"
+                data-popup-close="1"
+                data-testid="flow-v3-box-popup-close"
+                aria-label="Hide box stats until the next anchor"
+                title="Hide until the next anchor"
+                onClick={() => setBoxPopupClosed(true)}
+                style={{ position: 'absolute', top: 1, right: 2, width: 14, height: 14, padding: 0, border: 'none', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontSize: '11px', lineHeight: '14px' }}
+              >
+                ×
+              </button>
             </div>
           )}
 

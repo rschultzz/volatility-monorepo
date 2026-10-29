@@ -1770,6 +1770,7 @@ export default function App() {
       sellLayer: flowV3Settings.sellLayer,
       buyLayer: flowV3Settings.buyLayer,
       profileFrom: flowAnchor,
+      anchor: flowAnchor, // CR-DP item 4: the box stats popup's position and × reset on a new anchor
       // CR-DN item 1: the profile stops after the end's minute ([from, to) on cell minute starts); null without an end.
       profileTo: flowAnchor != null && flowEnd != null ? flowEnd + 60 : null,
     }
