@@ -367,3 +367,37 @@ true volume.
   histogram column width (lightweight-charts: `round(barSpacing × pr) − gap`), in the slate at 0.95.
 - Hover reads `minuteFlow(row)` from the rows, not the series, so it keeps the true volume with no change.
 - On the 5-minute chart the rows are 5-minute sums; the cap is the 98th percentile of those rows (the bars drawn).
+
+## Smoke (2026-10-29, on 48858d2 + items 1–6)
+
+Servers: read-only backend `scripts/cr_dm_smoke_backend.py` on 8066 (one DB-backed server), branch frontend 5188,
+origin/main frontend 5189 (detached worktree). Spec `react_price_preview/tests/e2e/cr-dn.spec.js`, 9/9. Logs:
+`scripts/logs/cr-dn/smoke/`; screenshots: `specs/assets/cr-dn/`. Unit 64/64.
+
+| Check | Result |
+|---|---|
+| No end, Edges off (item 4) | 2026-10-28 and 2026-10-29: price chart pixel-identical to origin/main; Flow v3 CVD / delta / rolling data identical; readout identical. The Flow v3 pane's pixels differ by item 6 only (volume bars), so it is compared by its other series' data. 10-29 is live: a pair counts only when both loads saw the same last bars before and after the capture (the first run caught a 7740.50 → 7740.75 last-price tick between capture and read; the test now brackets the capture; 4 tries) |
+| 10-29 anchor 06:49, A = 5 (item 2) | 07:34 is a probe (back inside 07:38, 4 min outside, extreme 7761.00, 8,025 buyers / 7,432 sellers beyond the edge); probes 07:39 and 08:10 too; one box from 06:49 until a later break **holds at 08:24 ↑** (box 06:49–08:23), then 08:45 ↓, 09:12 ↓ (until 09:30) |
+| 10-29 anchor 06:49, A = 1 | the old split at 07:34 (06:49–07:33 / 07:34–…); CVD reads −334 on 07:33 with a gap, restarts at 0 on 07:34; every box label = hand sums from the v2 bars and candle closes (4/4) |
+| Set end 06:57 (item 1) | one box 06:49–06:57; readout `box from 06:49: Δ -724 · +1.00 pts · 8 min · 43.9k/pt` = hand sums; strip 7 minutes; profile only those minutes; header `06:49 → 06:57 · 8 min` |
+| 10-28 anchor 07:00, held breaks | 08:16 / 08:39 / 09:54 / 11:05 hold as in CR-DI (plus 11:33 / 12:06 / 12:46 later in the session), no probes; labels on the 5 drawn boxes |
+| Replay until 10-28 08:09 | no bar after until in the boxes or the CVD (box 07:00–08:08); an end after until is ignored |
+| Item 5, 10-29 until 08:26 | the 330-contract buyers-absorbed level (7760.25) paints over both candles that reach it, drawAlpha 0.90, pill label, magenta axis tag; outside the level's line / label / tag the chart is pixel-identical to origin/main (0 px); GEX lines identical |
+| Item 5, 10-29 until 09:30 | 7760.25 broke at 08:27: it keeps today's fade (0.25) and has no axis tag; the unbroken 7751.25 sellers level has its orange tag |
+| Item 6, 10-27 | cap 7,326 (p98 of the loaded minutes); 7 minutes capped incl. 12:59 (57,094); hover `12:59 · vol 57.1k …`; 10:00–11:00 has no clipped minute and the same bar values and scale range as origin/main once the page is loaded at that zoom |
+
+**Item 6 side effect (not in the spec):** the flow pane's price axis sizes to its tick labels, so with the scale topped
+at 7,326 instead of 57,094 the axis on 10-27 is 52 px wide instead of 60 px, and the flow plot sits a few px off the
+price chart's time axis (on origin/main it is already ~5 px off at 10:30). Not pinned in this CR; listed in the session
+note for Ryan.
+
+**Existing specs** (same servers; `scripts/logs/cr-dn/smoke/e2e-recent.txt`): cr-di 6/6, cr-df 6/6, cr-dg 4 + 1
+skipped (live), cr-dk 7/7, cr-dc 6/6, cr-de 7/7, cr-db 4/5, cr-dm 3/5, cr-dh price chart 3/3.
+- cr-di / cr-df updated for intended changes: cr-df reads the anchor from the panel's new `data-anchor` attribute and
+  accepts the `box from` readout; cr-di expects `broke ↑ hh:mm` in the box tooltip and compares the Flow v3 series data
+  instead of its pixels (item 6 changes the volume bars).
+- cr-db `keys T / S / U` fails on origin/main too (known, CR-DM wrap).
+- cr-dm `default: volume…` and `rolling net delta on` assert a **pre-CR-DM** baseline (`main.mid === 'rolling'`); they
+  fail identically with origin/main on both sides (`e2e-crdm-main-vs-main.txt`), so baseline, not CR-DN.
+- The run also picked up older specs (cr-bv, cr-cd, cr-cd-a5, cr-ch, cr-ck, cr-cq, cr-dh Dashboard) that need their own
+  servers / ports (8062, 8064, 5176–5179, a Dash server); they time out on connection, not on CR-DN code.

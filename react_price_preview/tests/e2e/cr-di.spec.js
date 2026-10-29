@@ -183,6 +183,19 @@ test('chip off: price chart and Flow v3 pane pixel-identical to origin/main (202
       price: await canvasHash(page, '.react-top-pane .tv-lightweight-charts'),
       flow: await canvasHash(page, '[data-testid=flow-v3-panel] .flow-stage'),
       readout: anchorOpen ? await page.getByTestId('flow-v3-edge-readout').innerText() : null,
+      // CR-DN item 6 changes the volume bars on purpose: the pane's other series are compared by data
+      series: await page.evaluate(() => {
+        const el = document.querySelector('[data-testid=flow-v3-panel] .tv-lightweight-charts')
+        const key = Object.keys(el.parentElement).find((k) => k.startsWith('__reactFiber'))
+        let f = el.parentElement[key]
+        for (let d = 0; f && d < 40; d += 1, f = f.return) {
+          for (let h = f.memoizedState; h; h = h.next) {
+            const c = h.memoizedState && typeof h.memoizedState === 'object' && 'current' in h.memoizedState ? h.memoizedState.current : null
+            if (c && c.delta && c.rolling && c.cvd) return JSON.stringify([c.cvd.data(), c.delta.data(), c.rolling.data()])
+          }
+        }
+        return null
+      }),
       png: await page.locator('.react-top-pane').screenshot(),
     }
     await ctx.close()
@@ -198,8 +211,8 @@ test('chip off: price chart and Flow v3 pane pixel-identical to origin/main (202
       do {
         ;[a, b] = await Promise.all([shot(SIDE_A, day, storage, anchorOpen), shot(BASELINE, day, storage, anchorOpen)])
         tries += 1
-      } while (day === TODAY && (a.price !== b.price || a.flow !== b.flow) && tries < 6)
-      rows.push({ day, name, tries, price_equal: a.price === b.price, flow_equal: a.flow === b.flow, branch_readout: a.readout, main_readout: b.readout })
+      } while (day === TODAY && (a.price !== b.price || a.series !== b.series) && tries < 6)
+      rows.push({ day, name, tries, price_equal: a.price === b.price, flow_equal: a.flow === b.flow, flow_series_equal: a.series === b.series, branch_readout: a.readout, main_readout: b.readout })
       if (a.price !== b.price || a.flow !== b.flow) {
         // kept for diagnosis: both composites (data URLs -> png) in the logs
         fs.mkdirSync(LOGS, { recursive: true })
@@ -217,7 +230,7 @@ test('chip off: price chart and Flow v3 pane pixel-identical to origin/main (202
   log('pixel-identity.json', rows)
   for (const r of rows.filter((x) => x.name === 'v3, Edges off')) {
     expect(r.price_equal, `${r.day} ${r.name}: price chart = origin/main`).toBeTruthy()
-    expect(r.flow_equal, `${r.day} ${r.name}: Flow v3 pane = origin/main`).toBeTruthy()
+    expect(r.flow_series_equal, `${r.day} ${r.name}: Flow v3 CVD / delta / rolling = origin/main (volume bars: CR-DN item 6)`).toBeTruthy()
   }
 })
 
@@ -329,7 +342,8 @@ for (const until of [`${TODAY}T07:40`, `${TODAY}T08:09`, null]) {
       expect(magentaish, `faded magenta dashes on the oldest drawn frozen top ${fb.top.price}`).toBeGreaterThan(5)
       await page.mouse.move(probe.x, probe.y)
       const tip = page.getByTestId('flow-v3-box-tooltip')
-      await expect(tip).toContainText(`Box ${pt(fb.from)}–${pt(fb.breakAt)} · broke ${pt(fb.breakAt)} ${dirArrow(fb.dir)}`)
+      // CR-DN item 3b: "how it ended" reads "broke ↑/↓ hh:mm"
+      await expect(tip).toContainText(`Box ${pt(fb.from)}–${pt(fb.breakAt)} · broke ${dirArrow(fb.dir)} ${pt(fb.breakAt)}`)
       await expect(tip).toContainText(`Top ${fb.top.price.toFixed(2)}: buyers ${kfmt(fb.top.contracts)} / sellers ${kfmt(fb.top.opposite)}`)
       await expect(tip).toContainText(`Bottom ${fb.bottom.price.toFixed(2)}: sellers ${kfmt(fb.bottom.contracts)} / buyers ${kfmt(fb.bottom.opposite)}`)
       if (dropped) await expect(tip).toContainText(`${dropped} older box${dropped === 1 ? '' : 'es'} not drawn`)

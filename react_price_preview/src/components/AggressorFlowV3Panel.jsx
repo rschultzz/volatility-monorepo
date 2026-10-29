@@ -608,7 +608,8 @@ export default function AggressorFlowV3Panel({
   const openAnchor = useMemo(() => sessionOpenAnchor(sessionPayload?.segments, candleTimes, shift), [sessionPayload, candleTimes, shift])
 
   return (
-    <div className="flow-shell" style={{ height: `${height}px`, position: 'relative', width: '100%' }} data-testid="flow-v3-panel">
+    <div className="flow-shell" style={{ height: `${height}px`, position: 'relative', width: '100%' }} data-testid="flow-v3-panel"
+      data-anchor={anchor ?? ''} data-end={end ?? ''}>
       <div className="flow-panel-header" style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-start', overflowX: 'auto' }}>
         <button type="button" style={iconStyle} title="Flow v3 settings" aria-label="Open Flow v3 settings" onClick={() => setSettingsOpen(true)}>⚙</button>
         <div className="flow-panel-title" style={{ whiteSpace: 'nowrap', flex: '0 0 auto' }}>Flow v3</div>
