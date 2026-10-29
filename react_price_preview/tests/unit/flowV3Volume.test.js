@@ -49,3 +49,12 @@ test('live effort label: text, min move and previous-leg gate', () => {
   assert.equal(liveEffortLabel({ ...up, ratio: null, prev_cpp: 0 }, 4).text, '↑ +6.5 pts so far · – vs last ↑') // previous cpp 0: no ratio
   assert.equal(liveEffortLabel(null, 4), null)
 })
+
+test('CR-DN item 6: volumeCap = the 98th percentile (nearest rank) of the positive volumes', async () => {
+  const { volumeCap } = await import('../../src/flowV3.js')
+  const rows = Array.from({ length: 100 }, (_, i) => ({ vol: i + 1 })) // 1..100
+  assert.equal(volumeCap(rows), 98)
+  assert.equal(volumeCap([...rows, { vol: 57000 }]), 99) // one huge minute doesn't move the cap much
+  assert.equal(volumeCap([{ vol: 0 }, {}, { vol: null }]), null)
+  assert.equal(volumeCap([{ vol: 5 }]), 5)
+})

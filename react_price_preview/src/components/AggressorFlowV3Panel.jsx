@@ -46,9 +46,10 @@ import {
   rollingDelta,
   rowCloses,
   segmentCvd,
+  volumeCap,
   sessionOpenAnchor,
 } from '../flowV3'
-import { EdgeEffortPrimitive, ORANGE_RGB } from './flowV3Primitives'
+import { EdgeEffortPrimitive, ORANGE_RGB, VolumeCapPrimitive } from './flowV3Primitives'
 
 const BG_COLOR = '#1f2937'
 const PANE_SEPARATOR_PX = 1 // CR-DI: the strip's 64 px include the 1-px pane separator, so pane 0 keeps its height
@@ -112,7 +113,7 @@ function GuideBody() {
       <div style={h}>This pane</div>
       <div><b>Anchored CVD</b> (line, top): buying minus selling added up from the anchor bar, starting at 0. Set the anchor with 📍 and a click on a price bar, or with "session open" / "last swing" (the end of the last confirmed swing, ⚙ swing size of Flow v2). Esc or "clear" removes it; without an anchor the line is the session CVD. The readout shows delta, price change, minutes and contracts per point since the anchor. With Edges on, each drawn box is its own segment: the line restarts at 0 at each box's first bar (a gap at each boundary), older boxes than the drawn ones aren't drawn, and the readout ("box from hh:mm") is the current box (the last one with an end set). Each box on the price chart is labelled "Δ · pts · minutes · contracts/pt" from the same numbers; hover a box line for its edges, contracts on both sides, held minutes, probes and how it ended.{tag}</div>
       <div><span style={sw(SLATE_RGBA(0.25))} /><b>Set end</b> (with an anchor): click "set end", then a price bar after the anchor (not after the last bar: now, or the replay / review until time). Anchored CVD and its readout, the Edges box(es), the Edge effort strip and the Profile then use anchor → end only; after the end CVD isn't drawn and the boxes and strip stop. Delta, volume and rolling bars and the absorption levels / marks are unchanged. The window is shaded lightly on the price chart and the header shows "hh:mm → hh:mm · N min". Esc while picking cancels; "clear end" removes only the end, "clear" removes anchor and end. On the 5-minute chart the end is the last minute of the clicked candle.{tag}</div>
-      <div><span style={sw(SLATE_RGBA(0.55))} /><b>Volume per minute</b> (middle bars, slate grey): all contracts traded in each 1-minute bar (the flow's volume, every print, including the rare unknown-side ones), from the same data as the delta bars. Hover a minute for its volume, delta and delta share (delta ÷ volume).{tag}</div>
+      <div><span style={sw(SLATE_RGBA(0.55))} /><b>Volume per minute</b> (middle bars, slate grey): all contracts traded in each 1-minute bar (the flow's volume, every print, including the rare unknown-side ones), from the same data as the delta bars. Hover a minute for its volume, delta and delta share (delta ÷ volume). The scale tops out at the session's 98th-percentile minute (of the bars loaded), so one huge minute (e.g. the close) doesn't flatten the rest: taller minutes are drawn at full height with a brighter cap line, and their hover shows the true volume. A display scale only.{tag}</div>
       <div><span style={sw(BUY_RGBA(0.7))} /><span style={sw(SELL_RGBA(0.6))} /><b>Rolling net delta</b> (⚙, off by default): buying minus selling over the last N minutes (5 / 10 / 15). When on it draws in the middle slot, volume moves to the slot below it and the pane grows by one slot.{tag}</div>
       <div><b>Delta per bar</b> (bottom bars): the Flow v2 histogram, so this pane stands alone.{tag}</div>
       <div style={h}>On the price chart</div>
@@ -394,6 +395,8 @@ export default function AggressorFlowV3Panel({
     // it is on (CR-DM; volume then sits on its own hidden scale in the slot below). applySlots moves them.
     const rollingS = chart.addSeries(HistogramSeries, { ...common, priceScaleId: 'rolling', base: 0 })
     const volS = chart.addSeries(HistogramSeries, { ...common, priceScaleId: 'right', base: 0, color: SLATE_RGBA(0.55) })
+    const volCap = new VolumeCapPrimitive() // CR-DN item 6
+    volS.attachPrimitive(volCap)
     const cvdS = chart.addSeries(BaselineSeries, {
       ...common,
       priceScaleId: 'cvd',
@@ -406,7 +409,7 @@ export default function AggressorFlowV3Panel({
     })
     chart.priceScale('cvd').applyOptions({ visible: false, scaleMargins: { top: 0.04, bottom: 0.62 } })
     chartRef.current = chart
-    seriesRef.current = { delta, rolling: rollingS, cvd: cvdS, vol: volS }
+    seriesRef.current = { delta, rolling: rollingS, cvd: cvdS, vol: volS, volCap }
 
     const refreshDecorations = () => {
       const w = stageRef.current?.clientWidth || 0
@@ -484,7 +487,10 @@ export default function AggressorFlowV3Panel({
     s.rolling.setData(rolling ? aligned.map((r, i) => (rolling[i] != null
       ? { time: r.time, value: rolling[i], color: rolling[i] >= 0 ? BUY_RGBA(0.45) : SELL_RGBA(0.38) }
       : ws(r))) : [])
-    s.vol.setData(aligned.map((r) => (Number.isFinite(r.vol) ? { time: r.time, value: r.vol } : ws(r))))
+    // CR-DN item 6: bars above the session's p98 minute volume are drawn at the cap (with a cap mark); hover reads the rows
+    const cap = volumeCap(aligned)
+    s.vol.setData(aligned.map((r) => (Number.isFinite(r.vol) ? { time: r.time, value: cap == null ? r.vol : Math.min(r.vol, cap) } : ws(r))))
+    s.volCap.setData({ cap, color: SLATE_RGBA(0.95), times: cap == null ? [] : aligned.filter((r) => Number.isFinite(r.vol) && r.vol > cap).map((r) => r.time) })
     const gap = 'rgba(0,0,0,0)' // CR-DN item 3a: the line from a box's last bar to the next box's 0 is not drawn
     s.cvd.setData(aligned.map((r, i) => (cvd[i] != null
       ? (cvdGaps?.has(i) ? { time: r.time, value: cvd[i], topLineColor: gap, bottomLineColor: gap } : { time: r.time, value: cvd[i] })

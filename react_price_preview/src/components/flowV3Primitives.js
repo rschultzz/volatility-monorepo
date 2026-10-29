@@ -579,6 +579,33 @@ export class EdgeEffortPrimitive extends BasePrimitive {
   }
 }
 
+// CR-DN item 6 — cap marks on the Flow v3 volume bars: for each bar clipped at the scale cap, a 2 px line at its top
+// across the histogram column, in the bars' slate, brighter. data: { times (shifted), cap (value), color }.
+export class VolumeCapPrimitive extends BasePrimitive {
+  zOrder() {
+    return 'top'
+  }
+
+  paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr }, chart, series, d) {
+    if (!d.times?.length || d.cap == null) return
+    const y = series.priceToCoordinate(d.cap)
+    if (y == null) return
+    const ts = chart.timeScale()
+    const spacing = Number(ts.options().barSpacing) || 6
+    // lightweight-charts' histogram column: round(barSpacing × pr) minus a 1-device-px gap when there is room
+    const gap = Math.ceil(spacing * hr) <= 1 ? 0 : Math.max(1, Math.floor(hr))
+    const w = Math.max(1, Math.round(spacing * hr) - gap)
+    const h = Math.max(1, Math.round(2 * vr))
+    const top = Math.round(y * vr)
+    ctx.fillStyle = d.color
+    for (const t of d.times) {
+      const x = ts.timeToCoordinate(t)
+      if (x == null) continue
+      ctx.fillRect(Math.round(x * hr) - Math.floor(w / 2), top, w, h)
+    }
+  }
+}
+
 // CR-DN item 1 — the Flow v3 anchor → end window, shaded lightly behind the candles (existing slate, low opacity; C1).
 // data: { from, to (shifted epochs; `to` = the end's last 1-minute bar), times (shifted candle times) }: the shade runs
 // from the anchor candle's left edge to the end candle's right edge, half a bar spacing either side.

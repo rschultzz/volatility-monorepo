@@ -162,6 +162,16 @@ export function paneSlotMargins(pane0Px, extraPx) {
   }
 }
 
+// CR-DN item 6: the volume bars' scale cap = the 98th percentile (nearest rank) of the loaded rows' positive volumes
+// (null with no volume). Bars are drawn at min(vol, cap) and the scale keeps autoscaling, so it tops out at
+// min(visible max, cap): a stretch with no minute above the cap draws as before. A display scale, no research meaning.
+export const VOLUME_CAP_Q = 0.98
+export function volumeCap(rows, q = VOLUME_CAP_Q) {
+  const v = (Array.isArray(rows) ? rows : []).map((r) => Number(r?.vol)).filter((x) => Number.isFinite(x) && x > 0).sort((a, b) => a - b)
+  if (!v.length) return null
+  return v[Math.min(v.length - 1, Math.max(0, Math.ceil(q * v.length) - 1))]
+}
+
 // CR-DM item 3: the live effort label for the leg in progress (the payload's `live_leg`: swing_legs' end state with
 // leg_effort's numbers). Drawn only once the leg has moved at least `minMove` pts and a previous leg the same way exists
 // (prev_cpp); else null. A display aid, not a tested threshold.
