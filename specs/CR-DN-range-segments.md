@@ -429,3 +429,9 @@ The ≈ 9–10 px at the session's right end is CR-DK's offset; item 6 widened i
 on its price-axis cell (lightweight-charts lays the axis out as a table cell), so a change in the price chart's labels
 is tracked. `minimumWidth` cannot shrink an axis; the flow axis's own labels (k-formatted, ≤ 60 px measured) are
 narrower than the price axis (70 px), and the smoke asserts equality.
+
+**Smoke (amendment 4, 2026-10-29).** Item 7: 2026-10-27 and 10-29 at 06:30 / 10:30 / 12:59 PT, Flow v3 bar centres
+at the price chart's x, dx 0 / 0 / 0 px (was +0.1 / +6.2 / +9.9 on origin/main); axes 70 / 70; widening the price axis
+to 96 px moves the flow axis to 96 (`align-branch.json`, `align-main.json`). CR-DK's ≈ 9 px open question closed.
+Item 8: cr-dm's two layout tests re-pointed, pass. Re-run (`e2e-amend4.txt`): cr-dn 10/10 (+ the origin/main
+measurement, skipped by default), cr-dm 5/5, cr-di 6/6, cr-dk 7/7. Unit 64/64.
