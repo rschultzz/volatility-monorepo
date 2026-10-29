@@ -287,7 +287,9 @@ def smoke(conn, db: pd.DataFrame) -> dict:
         a, b = rng.get("formed_ts_pt"), rng.get("qualified_ts_pt")
         top = bot = None
         if a and b:
-            top, bot = q("SELECT max(close), min(close) FROM es_minutes WHERE ts_pt >= %(a)s AND ts_pt <= %(b)s",
+            # qualified_ts_pt is the qualifying bar's close (cr_cz_build_gallery: ts(d, r.q, close=True)),
+            # so the box covers bar starts [formed, qualified).
+            top, bot = q("SELECT max(close), min(close) FROM es_minutes WHERE ts_pt >= %(a)s AND ts_pt < %(b)s",
                          {"a": a, "b": b})[0]
         cards.append({"id": cid, "card_top": rng.get("top"), "card_bottom": rng.get("bottom"),
                       "chart_close_top": top, "chart_close_bottom": bot,
@@ -304,15 +306,40 @@ def smoke(conn, db: pd.DataFrame) -> dict:
     return out
 
 
+def smoke_only(conn, run_id: str) -> int:
+    """Re-run the smoke on the patched tables; keep the run's original results, add the re-run beside them."""
+    row = conn.execute("SELECT smoke_test_results, self_assessment FROM bt_backfill_runs WHERE run_id = %s AND cr_id = %s",
+                       (run_id, CR_ID)).fetchone()
+    if row is None:
+        print(f"[{CR_ID}] no {CR_ID} run {run_id}")
+        return 1
+    original, assessment = row
+    rerun = smoke(conn, load_databento())
+    rerun["at"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    rerun["why"] = ("in-run smoke rebuilt CR-CZ boxes over [formed, qualified] inclusive; qualified_ts_pt is the "
+                    "qualifying bar's close, so the box is [formed, qualified) — cards 50 (0.75) and 54 (8.0) failed "
+                    "on the smoke's rule, not the data")
+    update_run_smoke(conn, run_id, {**original, "smoke_rerun": rerun},
+                     f"{assessment} | smoke re-run {rerun['at']} (card box rule fixed): {'OK' if rerun['ok'] else 'FAILED'}")
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    (OUT_DIR / f"smoke_rerun_{stamp}.json").write_text(json.dumps({"run_id": run_id, **rerun}, indent=2, default=str))
+    print(json.dumps(rerun, indent=1, default=str))
+    return 0 if rerun["ok"] else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="plan and report only; no writes")
     ap.add_argument("--grants-applied-at", help="UTC time the run-only grants were applied (recorded in notes)")
+    ap.add_argument("--smoke-only", metavar="RUN_ID",
+                    help="re-run the smoke (read-only) and add it to RUN_ID's smoke results as 'smoke_rerun'")
     args = ap.parse_args()
 
     conn = get_backfill_db_conn()
     assert_role_or_die(conn)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    if args.smoke_only:
+        return smoke_only(conn, args.smoke_only)
     if args.dry_run:
         conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
 
