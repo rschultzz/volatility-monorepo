@@ -148,3 +148,31 @@ Databento ESM6 `ohlcv-1m` 2026-03-23 10:35 → 11:35 UTC (61 bars, `scripts/logs
 ## Dry run (2026-10-28, `scripts/logs/cr_dj/dryrun.log`)
 
 6,900 Databento minutes (ESM6 only, none in the 21:00 UTC hour); 6,776 stored per table (all `ironbeam`, `es_minutes` equal to the bars); 6,776 updates + 124 inserts per table (50 RTH, all on PT 2026-03-17 → renumber that date); preconditions OK except the three run-only grants. Before-state smoke: 6,326 minutes differ from Databento; 03-18 11:00–11:15 PT chart 6665.25 / 6686.0; CR-CZ cards 49–58 box edges 50.0–59.25 pts above the chart's closes, cards 59–60 (03-20, post-switch) 0.0.
+
+## Run record (2026-10-29 UTC)
+
+One scripted sequence (`scripts/logs/cr_dj/grant_run_revoke.py`, log `grant_run_revoke.log`; no connection string printed):
+
+| Step | UTC | Result |
+|---|---|---|
+| Owner GRANT UPDATE (source) on both tables, UPDATE (bar_index) on `es_minutes` | **2026-10-29 01:24:43** | `has_column_privilege` false → true on all three |
+| Patch run as `dash_backfill_writer` (`--grants-applied-at 2026-10-29T01:24:43Z`) | 01:24:43 → **01:50:24** | run **`2adcc833-5f7f-4406-b645-0ce1b7d61bbc`**, status `completed`; preconditions OK; 6,776 updated + 124 inserted per table; repair log 13,800 rows (`ESM6`, 124 × 2 with NULL old values); `bar_index` renumbered 390 rows (PT 2026-03-17); script exit 1 (in-run smoke, see below) |
+| Owner REVOKE (same three) | **2026-10-29 01:50:25** | `has_column_privilege` false on all three; CR-BZ OHLCV grant unchanged (true) |
+
+Times are in `bt_backfill_runs.notes` for the run.
+
+**In-run smoke: FAILED on the smoke's own rule, not the data.** It rebuilt each CR-CZ box over bar starts [formed, qualified] inclusive, but `qualified_ts_pt` is the qualifying bar's **close** (`cr_cz_build_gallery.py`: `ts(d, r.q, close=True)`), so the box is [formed, qualified). Card 50 (top 6756.0 vs 6755.25) and card 54 (bottom 6717.0 vs 6725.0, the 11:15 bar close) failed. CR-CP's own source (`es_flow_1m_databento` ESM6) gives the same values as the patched `es_minutes` under both rules. Script fixed (`83938da`); `--smoke-only` re-run at 2026-10-29 01:51:30 UTC stored beside the original as `smoke_test_results.smoke_rerun`.
+
+**Smoke (re-run): OK.**
+
+| Check | Result |
+|---|---|
+| `ironbeam_es_1m_bars` vs Databento ESM6 | 6,900 / 6,900 minutes, 0 only-one-side, 0 OHLCV mismatches, all `source='databento'` |
+| `es_minutes` vs Databento ESM6 | same: 6,900, 0, 0, all `databento` |
+| RTH `bar_index` 03-16 → 03-20 | 390 rows a day, `bar_index` = rank on all; ETH rows −1 |
+| 2026-03-18 11:00–11:15 PT (`es_minutes`, which the chart reads) | low **6716.5**, high **6737.5** (was 6665.25 / 6686.0) |
+| CR-CZ cards 49–60 box edges vs patched closes | **0.00 on all 12** (49–58 were 50.0–59.25 before) |
+| `source='databento'` rows in 2026 outside the CR-BF and CR-DJ windows | 0 |
+| `bt_backfill_runs` | CR-DJ row with smoke results, self-assessment and grant / revoke notes |
+
+Chart verified at the data layer (the price chart and REVIEW cards read `es_minutes` / `ironbeam_es_1m_bars` on each request); no local Dash server started (DB connection slots).
