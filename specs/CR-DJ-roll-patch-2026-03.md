@@ -132,3 +132,19 @@ CR-BF needed DELETE and ran attended under the owner role, outside the unattende
 - I1 `scripts/cr_dj_fetch_databento.py`: cost gate (< $0.05), fetch once, cache to `scripts/logs/cr_dj/` (git-ignored).
 - I2 `scripts/cr_dj_roll_patch.py` (unattended protocol): preconditions (role, column privileges, 6,900 Databento minutes, every stored minute covered, no ETH minute in the 21:00 UTC maintenance hour); one transaction: log → guarded OHLCV + `source` UPDATE of the 6,776 stored minutes in both tables → INSERT of the 124 missing minutes (`es_minutes` first, with explicit `trade_date` / `is_rth` / `bar_index`, then `ironbeam_es_1m_bars`, whose trigger then does nothing) → renumber RTH `bar_index` 0..389 by time on the affected PT dates; after-state smoke in the same run; `update_run_smoke`; grant times in `notes`.
 - I3 smoke + wrap.
+
+## Finding F1 — 2026-03-23 11:05 UTC jump (Amendment 1 D6; not patched)
+
+Databento ESM6 `ohlcv-1m` 2026-03-23 10:35 → 11:35 UTC (61 bars, `scripts/logs/cr_dj/databento_esm6_jump.parquet`) vs `ironbeam_es_1m_bars`:
+
+- **Real move, not a bad print or gap.** Databento 11:05 bar: O 6510.50 H 6648.50 L 6509.75 C 6629.00, 13,541 contracts; then 11:06 C 6685.25, 11:07 H 6724.75, 11:14 H 6748.00. About +230 pts (≈ +3.5 %) in 10 minutes from 07:05 ET Monday, on 10–25× the prior minutes' volume; no missing minute.
+- Ironbeam agrees on 58 / 61 closes and on every high; its 11:05 bar is a CR-BZ-type **TAIL fragment** (O 6517.50 / L 6517.25 vs 6510.50 / 6509.75, volume 12,796 vs 13,541), and several bars 11:08 → 11:28 carry less volume (e.g. 11:15 3,699 vs 4,841). Ordinary fragment differences; left as is.
+
+## Fetch validation
+
+- Databento marks 2026-03-15 and 03-16 (and 03-21) GLBX.MDP3 as `degraded`. Against the trades-built `es_flow_1m_databento` (RTH window, ESM6): 03-16 equal on 405 / 405 minutes in O, H, L, C and volume; 03-17 → 03-20 high / low 100 %, open / close 99.75 % (one minute a day), volume 98–99 %. 03-15 (Sun 22:00 → 23:59 UTC, 120 minutes) has no second source.
+- 03-20 13:30 → 20:59 UTC (Ironbeam already ESM6): 450 / 450 minutes equal in O, H, L, C; volume ratio 1.000.
+
+## Dry run (2026-10-28, `scripts/logs/cr_dj/dryrun.log`)
+
+6,900 Databento minutes (ESM6 only, none in the 21:00 UTC hour); 6,776 stored per table (all `ironbeam`, `es_minutes` equal to the bars); 6,776 updates + 124 inserts per table (50 RTH, all on PT 2026-03-17 → renumber that date); preconditions OK except the three run-only grants. Before-state smoke: 6,326 minutes differ from Databento; 03-18 11:00–11:15 PT chart 6665.25 / 6686.0; CR-CZ cards 49–58 box edges 50.0–59.25 pts above the chart's closes, cards 59–60 (03-20, post-switch) 0.0.
