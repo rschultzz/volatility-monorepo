@@ -315,3 +315,21 @@ its live-effort hover here):**
 - No backend change.
 
 Commits: … item 3 → **item 5** → smoke + wrap.
+
+## Rebase + Step 0 re-check (after CR-DM merged)
+
+Rebased onto `origin/main` `48858d2` (CR-DM merge `782ca3a` + its test-only follow-up PR #120); no conflicts (the
+branch held only this spec). Step 0e re-checked against the merged code:
+
+| # | Point | Result on `48858d2` |
+|---|---|---|
+| 1 | Item 1c's unchanged series | holds: `s.vol` (volume per minute) and `rolling` (null unless `settings.rollingOn`) are set from `aligned` per bar, not from the anchor; an end does not touch them |
+| 2 | CVD series / `setData` effect | holds: CR-DM's effect (panel `:427–451`) still sets one `s.cvd` series from one `cvd` array (`anchoredCvd(aligned, anchor)`, `:280`); the per-segment array replaces that array only |
+| 3 | Pane slots | holds: `applySlots` (`:405–421`) sets the `cvd` scale's margins from `paneSlotMargins`; CVD stays one BaselineSeries on `priceScaleId: 'cvd'` |
+| 4 | ⚙ settings | holds: `DEFAULT_V3_SETTINGS` (`flowV3.js:13`) now has `rollingOn`, `liveMinMove`; `Settings.apply` (`:141–161`) clamps each with `n(...)`; `breakHoldMin` (A) is added beside `boxHoldMin` the same way |
+| 5 | Header readout / hover | holds: the readout JSX (`:657–662`) has CR-DM's no-anchor text; the anchored text is the only part item 3c changes. The hover (`minuteFlow`) reads `cvd[hoverIdx]`, kept aligned to rows |
+| 6 | App heights / live effort | holds: `flowPaneExtra` = strip + `flowRollingExtra` (`App.jsx:2008–2010`), unchanged by CR-DN; `flowLiveEffort` (`:2035`) uses the v2 `live_leg`, not the anchor — an end does not change it |
+| 7 | PriceChart | holds: CR-DM added `LIVE_EFFORT_ID` to the `flowV3` import and the live-effort hover; the edges / levels / profile code CR-DN changes (`v3Profile`, `v3Edges`, `feed(...)`) is untouched by CR-DM |
+| 8 | Volume field | holds: `aligned[i].vol` is the field CR-DM draws; the box label's `/pt` uses it through `anchorReadout` |
+
+Step 0's line numbers for App / panel shifted by CR-DM; the functions and their behaviour are as Step 0 states.
