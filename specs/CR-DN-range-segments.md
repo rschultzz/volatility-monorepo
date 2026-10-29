@@ -260,3 +260,57 @@ On `78a50fb` rolling net delta is always drawn and there is no volume series.
 - A23–A28 are Ryan's drafts, undecided. The legend quotes "a failed probe can strengthen the fade" as an untested
   idea, not as A27.
 - Standing rulings conformance unchanged (C2 deviation as approved; A23–A28 n/a, not rulings).
+
+## Amendment 2 (Ryan, chat 2026-10-29) — item 5, absorption levels readable over candles (display only)
+
+Amended before any implementation; implemented as its own commit after items 1–3.
+
+5. **Absorption levels readable over candles** (display only):
+   - a. Absorption level lines draw above the candles (z-order), 1–2 px by contracts as today, not thicker.
+   - b. Labels sit on a small dark pill (the chart's tag background), same text, nudge / collision rules unchanged.
+   - c. Fade: unbroken levels fade from full to a floor of 50 % (was 25 %) over 60 min; broken levels keep today's
+     fade.
+   - d. Each unbroken drawn level gets a price-axis tag in its side colour (magenta buyers absorbed, orange sellers
+     absorbed), price only; tags follow the existing at-most-8 rule.
+   - e. Absorbed (marks) triangles, the Edges boxes and everything else unchanged.
+
+**Rulings (item 5).**
+
+| Ruling | Status | Note |
+|---|---|---|
+| C1 | honoured | existing magenta `#e879f9` (CR-DF) and orange `#fb923c` (CR-DG); pill = the chart's existing crosshair label background `#1e293b` |
+| C2 | **deviates — approved by Ryan in chat 2026-10-29** | an existing display changes (level opacity floor, label pill, axis tags); change-log line added to `standing-rulings.md` |
+
+**Smoke (item 5).** 2026-10-29: the 330-contract buyers-absorbed level is visible over candles with a readable label
+and an axis tag; a broken level still fades as before; a pixel check that nothing else on the chart moved.
+
+**Step 0 for item 5 (read-only, `78a50fb`; re-checked after the rebase — CR-DM touches only PriceChart's imports and
+its live-effort hover here):**
+
+- **Code path:** `flowV3.absorptionLevels` (`flowV3.js:342`: confirmed marks → levels, `alpha = levelAlpha(age)`,
+  `width = levelWidth(contracts)`, `score = contracts × alpha`, top `LEVELS_MAX` = 8 by score) →
+  `AbsorptionLevelsPrimitive` (`flowV3Primitives.js:262`), attached to the **candle series** (`seriesRef.current =
+  candleSeries`, `PriceChart.jsx:1663`) via `feed('levels', …)` (`:2689`). Label: 10 px text at the line's right end,
+  `rgba(side, max(0.55, alpha))`, nudged 0 / −11 / +11+w / −22 px, dropped if all collide.
+- **5a — z-order is already `'top'`** (`AbsorptionLevelsPrimitive.zOrder()` returns `'top'`; `BasePrimitive` passes it
+  to the pane view). In lightweight-charts 5 a `'top'` primitive on the candle series paints after the candles, so the
+  lines may already be above them and what reads as "under" is the 25 % opacity floor plus thin lines and unbacked
+  text. **To verify in the browser before changing anything** (pixel sample on the 330-contract level's row over a
+  candle body); if already on top, 5a is a no-op recorded by that check.
+- **5a — width today is 1–5 px, not 1–2.** `levelWidth`: 1 px ≤ 50 contracts, log scale to 5 px at ≥ 1,500 (CR-DF
+  Step 0: p50 350, max 1,426). A 330-contract level is ≈ 3.2 px. The kickoff says "1–2 px by contracts as today, not
+  thicker": **implemented as "widths unchanged (today's `levelWidth`)"** — nothing gets thicker. Capping at 2 px would
+  be a further visible change; **flagged to Ryan**, not done without his word.
+- **5c — selection must not move.** `score = contracts × alpha` picks the 8 drawn levels. Raising the unbroken floor
+  to 0.5 would change which levels are kept (5e: nothing else changes). So: the score keeps today's `levelAlpha`
+  (floor 0.25); only the drawn opacity of an unbroken level uses the 0.5 floor. Broken levels: drawn and scored exactly
+  as today.
+- **5b — pill:** filled rounded rect behind each placed label, `#1e293b` (the price chart's crosshair
+  `labelBackgroundColor`, `PriceChart.jsx:1616`), sized to the measured text plus padding inside the same box the
+  collision test already uses (so placement is unchanged).
+- **5d — axis tags:** `priceAxisViews()` on the levels primitive, one per drawn unbroken level (≤ 8 by construction),
+  text = price, background = side colour. Lightweight-charts does not de-collide primitive axis labels against the GEX
+  line / last-price labels; overlaps are reported in the smoke, not re-laid out (no rule for that in the spec).
+- No backend change.
+
+Commits: … item 3 → **item 5** → smoke + wrap.
