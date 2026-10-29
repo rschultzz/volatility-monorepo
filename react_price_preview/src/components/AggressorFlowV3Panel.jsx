@@ -32,7 +32,6 @@ import {
   edgeEffortSeries,
   edgeStripDrawn,
   edgeStripColumns,
-  edgeText,
   edgeVisits,
   endWindowText,
   dirArrow,
@@ -71,6 +70,9 @@ const chipStyle = (active) => ({
   padding: '0 8px',
   whiteSpace: 'nowrap',
 })
+
+// CR-DP item 3: one header group (its chips 6 px apart; the header puts 14 px between groups)
+const groupStyle = { display: 'inline-flex', alignItems: 'center', gap: '6px', flex: '0 0 auto' }
 
 const iconStyle = {
   width: '24px', height: '24px', borderRadius: '8px', border: '1px solid rgba(148, 163, 184, 0.22)',
@@ -325,7 +327,6 @@ export default function AggressorFlowV3Panel({
     const rth = (cellsPayload?.segments || []).find((s) => s.name === 'rth')
     return rth && !Array.isArray(rth.marks) ? rth.marks_note : null
   }, [cellsPayload])
-  const edgeLine = useMemo(() => (edges ? edgeText(edges, (t) => formatShiftedHHMM(shift(t))) : ''), [edges, shift])
   const notes = useMemo(() => [...new Set((payloads || []).flatMap((p) => p?.notes || []))], [payloads])
   const hasValues = aligned.some((r) => Number.isFinite(r.delta))
   const edgeEffortWhy = edgeEffortBlock(layers.edges, anchor, edges)
@@ -610,83 +611,93 @@ export default function AggressorFlowV3Panel({
   return (
     <div className="flow-shell" style={{ height: `${height}px`, position: 'relative', width: '100%' }} data-testid="flow-v3-panel"
       data-anchor={anchor ?? ''} data-end={end ?? ''}>
-      <div className="flow-panel-header" style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-start', overflowX: 'auto' }}>
-        <button type="button" style={iconStyle} title="Flow v3 settings" aria-label="Open Flow v3 settings" onClick={() => setSettingsOpen(true)}>⚙</button>
-        <div className="flow-panel-title" style={{ whiteSpace: 'nowrap', flex: '0 0 auto' }}>Flow v3</div>
-        {sources.map((s) => (
-          <span key={s} data-testid="flow-v3-source" style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '999px', border: '1px solid rgba(148,163,184,0.35)', color: s === 'databento' ? '#bfdbfe' : '#e5e7eb', whiteSpace: 'nowrap' }}>
-            {SOURCE_LABEL[s] || s}
-          </span>
-        ))}
-        <button type="button" style={chipStyle(layers.levels)} aria-pressed={Boolean(layers.levels)} data-testid="flow-v3-levels-toggle"
-          onClick={() => onLayersChange?.((l) => ({ ...l, levels: !l.levels }))} title="Absorption levels (exact data only) — visual aid, untested">
-          Absorption levels {layers.levels ? 'on' : 'off'}
-        </button>
-        <button type="button" style={chipStyle(layers.profile)} aria-pressed={layers.profile} data-testid="flow-v3-profile-toggle"
-          onClick={() => onLayersChange?.((l) => ({ ...l, profile: !l.profile }))} title="Volume profile at the right edge, from the anchor (or session open) — visual aid, untested">
-          Profile {layers.profile ? 'on' : 'off'}
-        </button>
-        <span style={{ width: 1, height: 16, background: 'rgba(148,163,184,0.25)', flex: '0 0 auto' }} />
-        <button type="button" style={chipStyle(anchorArmed)} aria-pressed={anchorArmed} data-testid="flow-v3-anchor-pick"
-          onClick={() => onAnchorArmedChange?.(!anchorArmed)} title="Click, then click a bar on the price chart to anchor CVD there (Esc cancels)">
-          📍 {anchorArmed ? 'click a bar…' : 'set anchor'}
-        </button>
-        <button type="button" style={chipStyle(false)} data-testid="flow-v3-anchor-open"
-          disabled={openAnchor == null} onClick={() => setAnchorTo(openAnchor)}>
-          session open
-        </button>
-        <button type="button" style={chipStyle(false)} data-testid="flow-v3-anchor-swing" disabled={swingAnchor == null}
-          onClick={() => setAnchorTo(swingAnchor)} title="The end of the last confirmed swing (Flow v2 swing size)">
-          last swing
-        </button>
-        <button type="button" style={{ ...chipStyle(endArmed), opacity: anchor == null ? 0.5 : 1 }} aria-pressed={endArmed} data-testid="flow-v3-end-pick"
-          disabled={anchor == null} onClick={() => onEndArmedChange?.(!endArmed)}
-          title={anchor == null ? 'Set an anchor first' : 'Click, then click a bar after the anchor on the price chart to end the window there (Esc cancels)'}>
-          {endArmed ? 'click a bar…' : 'set end'}
-        </button>
-        {windowText && (
-          <span data-testid="flow-v3-window" style={{ fontSize: '11px', color: '#cbd5e1', whiteSpace: 'nowrap', flex: '0 0 auto' }}>{windowText}</span>
-        )}
-        {end != null && (
-          <button type="button" data-testid="flow-v3-end-clear" onClick={() => { onEndArmedChange?.(false); onEndChange?.(null) }}
-            style={{ ...chipStyle(false), fontSize: '10px', padding: '1px 6px' }} title="Remove the end (the anchor stays)">
-            clear end
+      {/* CR-DP item 3: Anchor · Edges · Display groups (a small gap between groups), status notes, then ⚙ and ? at the far
+          right. Same buttons and behaviour; the anchored readout moved to the price chart's box stats popup (item 4). */}
+      <div className="flow-panel-header" style={{ display: 'flex', alignItems: 'center', gap: '14px', justifyContent: 'flex-start', overflowX: 'auto' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flex: '0 0 auto' }}>
+          <div className="flow-panel-title" style={{ whiteSpace: 'nowrap', flex: '0 0 auto' }}>Flow v3</div>
+          {sources.map((s) => (
+            <span key={s} data-testid="flow-v3-source" style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '999px', border: '1px solid rgba(148,163,184,0.35)', color: s === 'databento' ? '#bfdbfe' : '#e5e7eb', whiteSpace: 'nowrap' }}>
+              {SOURCE_LABEL[s] || s}
+            </span>
+          ))}
+        </span>
+        <span data-testid="flow-v3-group-anchor" style={groupStyle}>
+          <button type="button" style={chipStyle(anchorArmed)} aria-pressed={anchorArmed} data-testid="flow-v3-anchor-pick"
+            onClick={() => onAnchorArmedChange?.(!anchorArmed)} title="Click, then click a bar on the price chart to anchor CVD there (Esc cancels)">
+            📍 {anchorArmed ? 'click a bar…' : 'set anchor'}
           </button>
-        )}
-        <button type="button" style={chipStyle(false)} data-testid="flow-v3-anchor-clear" disabled={anchor == null && !anchorArmed && !endArmed}
-          onClick={() => { onAnchorArmedChange?.(false); onEndArmedChange?.(false); onEndChange?.(null); onAnchorChange?.(null) }}>
-          clear
-        </button>
-        <button type="button" style={chipStyle(layers.edges)} aria-pressed={Boolean(layers.edges)} data-testid="flow-v3-edges-toggle"
-          onClick={() => onLayersChange?.((l) => ({ ...l, edges: !l.edges }))} title="Edge readout from the anchor: close box, contracts at each edge, held / broke — visual aid, untested">
-          Edges {layers.edges ? 'on' : 'off'}
-        </button>
-        {layers.edges && (
-          <span data-testid="flow-v3-edge-readout" style={{ fontSize: '11px', color: edges ? '#f5d0fe' : '#94a3b8', whiteSpace: 'nowrap', flex: '0 0 auto' }}>
-            {anchor == null ? 'edges: set an anchor' : edges ? edgeLine : cellsLoading ? 'edges: loading…' : 'edges: no bars since the anchor'}
+          <button type="button" style={{ ...chipStyle(endArmed), opacity: anchor == null ? 0.5 : 1 }} aria-pressed={endArmed} data-testid="flow-v3-end-pick"
+            disabled={anchor == null} onClick={() => onEndArmedChange?.(!endArmed)}
+            title={anchor == null ? 'Set an anchor first' : 'Click, then click a bar after the anchor on the price chart to end the window there (Esc cancels)'}>
+            {endArmed ? 'click a bar…' : 'set end'}
+          </button>
+          {windowText && (
+            <span data-testid="flow-v3-window" style={{ fontSize: '11px', color: '#cbd5e1', whiteSpace: 'nowrap', flex: '0 0 auto' }}>{windowText}</span>
+          )}
+          {end != null && (
+            <button type="button" data-testid="flow-v3-end-clear" onClick={() => { onEndArmedChange?.(false); onEndChange?.(null) }}
+              style={{ ...chipStyle(false), fontSize: '10px', padding: '1px 6px' }} title="Remove the end (the anchor stays)">
+              clear end
+            </button>
+          )}
+          <button type="button" style={chipStyle(false)} data-testid="flow-v3-anchor-open"
+            disabled={openAnchor == null} onClick={() => setAnchorTo(openAnchor)}>
+            session open
+          </button>
+          <button type="button" style={chipStyle(false)} data-testid="flow-v3-anchor-swing" disabled={swingAnchor == null}
+            onClick={() => setAnchorTo(swingAnchor)} title="The end of the last confirmed swing (swing size: the stored Flow v2 setting)">
+            last swing
+          </button>
+          <button type="button" style={chipStyle(false)} data-testid="flow-v3-anchor-clear" disabled={anchor == null && !anchorArmed && !endArmed}
+            onClick={() => { onAnchorArmedChange?.(false); onEndArmedChange?.(false); onEndChange?.(null); onAnchorChange?.(null) }}>
+            clear
+          </button>
+        </span>
+        <span data-testid="flow-v3-group-edges" style={groupStyle}>
+          <button type="button" style={chipStyle(layers.edges)} aria-pressed={Boolean(layers.edges)} data-testid="flow-v3-edges-toggle"
+            onClick={() => onLayersChange?.((l) => ({ ...l, edges: !l.edges }))} title="Edges from the anchor: close box, contracts at each edge, held / broke; stats in a popup on the price chart — visual aid, untested">
+            Edges {layers.edges ? 'on' : 'off'}
+          </button>
+          <button type="button" style={{ ...chipStyle(edgeEffortOn && !edgeEffortWhy), opacity: edgeEffortWhy ? 0.5 : 1, cursor: edgeEffortWhy ? 'default' : 'pointer' }}
+            aria-pressed={Boolean(edgeEffortOn)} data-testid="flow-v3-edge-effort-toggle" disabled={Boolean(edgeEffortWhy)}
+            onClick={() => onEdgeEffortChange?.(!edgeEffortOn)}
+            title={edgeEffortWhy || 'Edge effort strip: aggressive contracts within 1 pt of each edge per minute, both sides — visual aid, untested'}>
+            Edge effort {edgeEffortOn ? 'on' : 'off'}
+          </button>
+        </span>
+        <span data-testid="flow-v3-group-display" style={groupStyle}>
+          <button type="button" style={chipStyle(layers.levels)} aria-pressed={Boolean(layers.levels)} data-testid="flow-v3-levels-toggle"
+            onClick={() => onLayersChange?.((l) => ({ ...l, levels: !l.levels }))} title="Absorption levels (exact data only) — visual aid, untested">
+            Absorption levels {layers.levels ? 'on' : 'off'}
+          </button>
+          <button type="button" style={chipStyle(layers.profile)} aria-pressed={layers.profile} data-testid="flow-v3-profile-toggle"
+            onClick={() => onLayersChange?.((l) => ({ ...l, profile: !l.profile }))} title="Volume profile at the right edge, from the anchor (or session open) — visual aid, untested">
+            Profile {layers.profile ? 'on' : 'off'}
+          </button>
+          <button type="button" style={chipStyle(effortOn)} aria-pressed={effortOn} data-testid="flow-v3-effort-toggle"
+            onClick={() => onEffortChange?.(!effortOn)}
+            title="Label each confirmed swing on the price chart: points · volume · contracts per point · × the previous swing the same way">
+            Effort {effortOn ? 'on' : 'off'}
+          </button>
+        </span>
+        {(anyLayer && (approxCells || cellsLoading || cellsError)) || ((layers.marks || layers.levels) && marksNote && !approxCells) ? (
+          <span style={groupStyle}>
+            {anyLayer && approxCells && (
+              <span data-testid="flow-v3-approx-note" title="each second: sells at its low, buys at its high"
+                style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap', flex: '0 0 auto' }}>
+                approx data — absorption &amp; edges off
+              </span>
+            )}
+            {anyLayer && cellsLoading && <span style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>loading cells…</span>}
+            {anyLayer && cellsError && <span style={{ fontSize: '11px', color: '#cbd5e1', whiteSpace: 'nowrap' }} title={cellsError}>cells failed</span>}
+            {(layers.marks || layers.levels) && marksNote && !approxCells && <span data-testid="flow-v3-marks-note" style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>{marksNote}</span>}
           </span>
-        )}
-        <button type="button" style={{ ...chipStyle(edgeEffortOn && !edgeEffortWhy), opacity: edgeEffortWhy ? 0.5 : 1, cursor: edgeEffortWhy ? 'default' : 'pointer' }}
-          aria-pressed={Boolean(edgeEffortOn)} data-testid="flow-v3-edge-effort-toggle" disabled={Boolean(edgeEffortWhy)}
-          onClick={() => onEdgeEffortChange?.(!edgeEffortOn)}
-          title={edgeEffortWhy || 'Edge effort strip: aggressive contracts within 1 pt of each edge per minute, both sides — visual aid, untested'}>
-          Edge effort {edgeEffortOn ? 'on' : 'off'}
-        </button>
-        {anyLayer && approxCells && (
-          <span data-testid="flow-v3-approx-note" title="each second: sells at its low, buys at its high"
-            style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap', flex: '0 0 auto' }}>
-            approx data — absorption &amp; edges off
-          </span>
-        )}
-        {anyLayer && cellsLoading && <span style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>loading cells…</span>}
-        {anyLayer && cellsError && <span style={{ fontSize: '11px', color: '#cbd5e1', whiteSpace: 'nowrap' }} title={cellsError}>cells failed</span>}
-        {(layers.marks || layers.levels) && marksNote && !approxCells && <span data-testid="flow-v3-marks-note" style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>{marksNote}</span>}
-        <button type="button" style={chipStyle(effortOn)} aria-pressed={effortOn} data-testid="flow-v3-effort-toggle"
-          onClick={() => onEffortChange?.(!effortOn)}
-          title="Label each confirmed swing on the price chart: points · volume · contracts per point · × the previous swing the same way (the Flow v2 Effort switch)">
-          Effort {effortOn ? 'on' : 'off'}
-        </button>
-        <button type="button" style={iconStyle} title="How to read Flow v3" aria-label="How to read Flow v3" onClick={() => setGuideOpen(true)}>?</button>
+        ) : null}
+        <span style={{ ...groupStyle, marginLeft: 'auto' }}>
+          <button type="button" style={iconStyle} title="Flow v3 settings" aria-label="Open Flow v3 settings" onClick={() => setSettingsOpen(true)}>⚙</button>
+          <button type="button" style={iconStyle} title="How to read Flow v3" aria-label="How to read Flow v3" onClick={() => setGuideOpen(true)}>?</button>
+        </span>
       </div>
       {guideOpen && <Modal title="How to read Flow v3" onClose={() => setGuideOpen(false)}><GuideBody /></Modal>}
       {settingsOpen && (
