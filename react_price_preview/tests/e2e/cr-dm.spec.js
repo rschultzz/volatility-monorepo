@@ -10,6 +10,7 @@ import { test, expect } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { volumeCap } from '../../src/flowV3.js'
 
 const API_BASE = process.env.CRDF_API_BASE || 'http://127.0.0.1:8065'
 const BASELINE = process.env.CRDF_BASELINE_URL || 'http://localhost:5187'
@@ -19,6 +20,8 @@ const FLOW_KEYS = ['ib-react-flow-mode', 'ib-react-flow-v2-markers', 'ib-react-f
   'ib-react-flow-v3-settings', 'ib-react-flow-v3-layers', 'ib-react-flow-v3-edge-effort', 'ib-react-flow-panel-height']
 const V3 = { 'ib-react-flow-mode-v3': '1' }
 const EFFORT = { ...V3, 'ib-react-flow-v2-effort': '1' }
+// ⚙ rolling net delta on (stored as the settings dialog's Apply stores it)
+const ROLLING_ON = { ...V3, 'ib-react-flow-v3-settings': JSON.stringify({ rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: true, liveMinMove: 4, breakHoldMin: 5 }) }
 const LIVE_ID = 'cr-dm-live-effort'
 
 const log = (name, obj) => {
@@ -86,7 +89,7 @@ const CHARTS_FN = `(() => {
   return { priceEl, flowEl, price, flow }
 })()`
 
-// Pane layout and the middle / lower series (baseline: rolling is on 'right' and there is no volume series).
+// Pane layout and the middle / lower series.
 const layout = (page) => page.evaluate((fn) => {
   const { flow } = eval(fn) // eslint-disable-line no-eval
   const c = flow.chart
@@ -116,6 +119,7 @@ async function v2Payload(request, day, until = null) {
   return r.json()
 }
 
+// Baseline = origin/main after CR-DM (re-pointed in CR-DN amendment 4; the pre-CR-DM comparison is in CR-DM's smoke).
 test('default: volume per minute in the middle slot; pane height and slots as origin/main', async ({ browser, request }) => {
   test.setTimeout(300_000)
   const res = {}
@@ -133,17 +137,18 @@ test('default: volume per minute in the middle slot; pane height and slots as or
   expect(branch.panel).toBe(220)
   expect(branch.panel).toBe(main.panel)
   expect(branch.price).toBe(main.price)
-  expect(branch.margins.cvd).toEqual(main.margins.cvd)
-  expect(branch.margins.right).toEqual(main.margins.right) // the slot rolling had
-  expect(branch.margins.delta).toEqual(main.margins.delta)
-  expect(main.mid).toBe('rolling')
+  expect(branch.margins).toEqual(main.margins)
+  expect(branch.px).toEqual(main.px)
+  expect(main.mid).toBe('vol')
   expect(branch.mid).toBe('vol')
   expect(branch.rolling).toEqual([]) // off by default (C2 deviation approved)
   expect(branch.readout).toContain('volume per minute')
-  // the volume bars are the payload's per-minute `vol` (the same rows the delta bars draw)
+  // the volume bars are the payload's per-minute `vol` (the same rows the delta bars draw), drawn at most at the
+  // session's p98 minute volume (CR-DN item 6; hover keeps the true volume)
   const p = await v2Payload(request, '2026-10-27')
-  const want = p.bars.filter((b) => b.seg === 'rth').map((b) => [shift(b.time), b.vol])
-  expect(branch.vol).toEqual(want)
+  const rows = p.bars.filter((b) => b.seg === 'rth')
+  const cap = volumeCap(rows)
+  expect(branch.vol).toEqual(rows.map((b) => [shift(b.time), Math.min(b.vol, cap)]))
 })
 
 test('hover a minute: time, volume, delta and delta share', async ({ page, request }) => {
@@ -175,9 +180,10 @@ test('hover a minute: time, volume, delta and delta share', async ({ page, reque
 
 test('⚙ rolling net delta on: old series back in its slot, volume one slot down, pane grows by one slot', async ({ browser }) => {
   test.setTimeout(300_000)
+  // origin/main with rolling on (stored setting): the layout the toggle must reach
   const ctxMain = await browser.newContext()
   const main = await ctxMain.newPage()
-  await open(main, '2026-10-27', { base: BASELINE, storage: V3 })
+  await open(main, '2026-10-27', { base: BASELINE, storage: ROLLING_ON })
   await settle(main)
   const mainL = await layout(main)
   await ctxMain.close()
@@ -210,14 +216,17 @@ test('⚙ rolling net delta on: old series back in its slot, volume one slot dow
   expect(on.panel - off.panel).toBe(51) // one slot (0.32 × pane 0 of 160 px)
   expect(off.price - on.price).toBe(51)
   expect(on.mid).toBe('rolling')
-  expect(on.rolling).toEqual(mainL.rolling) // same behaviour as today
+  expect(on.panel).toBe(mainL.panel)
+  expect(on.mid).toBe(mainL.mid)
+  expect(on.rolling).toEqual(mainL.rolling) // same series as origin/main with rolling on
   expect(on.vol).toEqual(off.vol)
+  expect(on.margins).toEqual(mainL.margins)
   const near = (a, b) => expect(Math.abs(a - b)).toBeLessThanOrEqual(0.6)
   const len = (s) => s[1] - s[0]
   near(len(on.px.cvd), len(mainL.px.cvd))
-  near(len(on.px.mid), len(mainL.px.mid)) // rolling keeps its px height
+  near(len(on.px.mid), len(mainL.px.mid))
   near(len(on.px.delta), len(mainL.px.delta))
-  near(len(on.px.vol), len(mainL.px.mid)) // volume gets a slot the same height
+  near(len(on.px.vol), len(on.px.mid)) // volume gets a slot the same height as rolling
   expect(on.px.vol[0]).toBeGreaterThan(on.px.mid[1])
   expect(on.px.delta[0]).toBeGreaterThan(on.px.vol[1])
   expect(on.readout).toContain('rolling 10 min')
