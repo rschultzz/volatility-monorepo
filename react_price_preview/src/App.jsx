@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PriceChart from './components/PriceChart'
 import AggressorFlowPanel from './components/AggressorFlowPanel'
-import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS, effortChartMarkers } from './components/AggressorFlowV2Panel'
+import AggressorFlowV2Panel, { DEFAULT_MARKER_SETTINGS, alignV2ToCandles, effortChartMarkers } from './components/AggressorFlowV2Panel'
 import AggressorFlowV3Panel from './components/AggressorFlowV3Panel'
-import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, LIVE_EFFORT_ID, edgeReadout, edgeStripDrawn, flattenBars, liveEffortLabel, makeShifter, rollingExtraHeight } from './flowV3'
+import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, LIVE_EFFORT_ID, boxSegments, edgeReadout, edgeStripDrawn, endFromPick, flattenBars, liveEffortLabel, makeShifter, rollingExtraHeight, rowCloses, segmentReadouts } from './flowV3'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import { PANEL_WIDTH as ANALOGUES_PANEL_WIDTH } from './components/AnaloguesPanel'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
@@ -592,6 +592,12 @@ export default function App() {
   })
   const [flowAnchor, setFlowAnchor] = useState(null)
   const [flowAnchorArmed, setFlowAnchorArmed] = useState(false)
+  // CR-DN item 1: the window's end (shifted PT epoch of its last 1-minute bar), like the anchor: App state only.
+  const [flowEnd, setFlowEnd] = useState(null)
+  // CR-DN item 7: the price chart's right price axis width (px); the Flow v3 pane pins its axis to it.
+  const [priceAxisWidth, setPriceAxisWidth] = useState(null)
+  const [flowEndArmed, setFlowEndArmed] = useState(false)
+  const flowEndPickRef = useRef({ anchor: null, last: null, step: 60 })
   const [flowCellsLoaded, setFlowCellsLoaded] = useState({ url: null, payload: null })
   const [flowCellsLoading, setFlowCellsLoading] = useState(false)
   const [flowCellsError, setFlowCellsError] = useState('')
@@ -1273,14 +1279,31 @@ export default function App() {
     setFlowMode(mode === 'v2' ? 'v2' : 'current')
   }, [])
   const handleAnchorPick = useCallback((t) => {
+    // CR-DN item 1: while "set end" is armed the click sets the end; a bar at or before the anchor or after the
+    // payload's last bar is ignored (still armed).
+    if (flowEndPickRef.current.armed) {
+      const { anchor, last, step } = flowEndPickRef.current
+      const end = endFromPick(t, step, anchor, last)
+      if (end == null) return
+      setFlowEnd(end)
+      setFlowEndArmed(false)
+      return
+    }
     setFlowAnchor(Number.isFinite(Number(t)) ? Number(t) : null)
     setFlowAnchorArmed(false)
   }, [])
-  // DC5: the anchor belongs to the selected session and view.
+  // DC5: the anchor belongs to the selected session and view (CR-DN: and so does the end).
   useEffect(() => {
     setFlowAnchor(null)
     setFlowAnchorArmed(false)
+    setFlowEnd(null)
+    setFlowEndArmed(false)
   }, [tradeDate, flowSession, flowV3])
+  // CR-DN item 1: clearing the anchor clears the end; a new anchor at or after the end drops it.
+  useEffect(() => {
+    if (flowAnchor == null) setFlowEndArmed(false)
+    setFlowEnd((e) => (e != null && (flowAnchor == null || e <= flowAnchor) ? null : e))
+  }, [flowAnchor])
 
   useEffect(() => {
     try {
@@ -1589,6 +1612,23 @@ export default function App() {
   // pane re-align every session to the candles several times a second during drag/zoom, which
   // crashed Chrome 155's renderer (SIGTRAP, "Error code: 5").
   const flowV2PanePayloads = useMemo(() => flowV2Payloads.map((p) => p.payload), [flowV2Payloads])
+  // CR-DN item 1: the payload's last bar with flow (shifted; live = now, replay / review = until), the latest an end
+  // may be. If the payload shrinks before the end (until moved earlier), the end is dropped.
+  const flowLastShifted = useMemo(() => {
+    let last = null
+    for (const p of flowV2PanePayloads) {
+      for (const b of Array.isArray(p?.bars) ? p.bars : []) {
+        if (!Number.isFinite(Number(b?.delta))) continue
+        const st = utcEpochShowingZoneTime(Number(b.time))
+        if (Number.isFinite(st) && (last == null || st > last)) last = st
+      }
+    }
+    return last
+  }, [flowV2PanePayloads])
+  flowEndPickRef.current = { armed: flowEndArmed, anchor: flowAnchor, last: flowLastShifted, step: interval === '5min' ? 300 : 60 }
+  useEffect(() => {
+    if (flowEnd != null && flowLastShifted != null && flowEnd > flowLastShifted) setFlowEnd(null)
+  }, [flowEnd, flowLastShifted])
 
   // CR-CD A5: swing effort labels for the price chart — only while Flow v2 is shown with Effort on
   // (null otherwise, so the chart draws nothing extra). CR-DG item 4: also in Flow v3, on the same switch.
@@ -1999,8 +2039,21 @@ export default function App() {
   const flowCellsBars = useMemo(() => (flowCells ? flattenBars(flowCells) : null), [flowCells])
   const flowV3Edges = useMemo(() => {
     if (!flowV3 || !flowV3Layers.edges || !flowCells || flowAnchor == null) return null
-    return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin)
-  }, [flowV3, flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin])
+    return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin, flowEnd,
+      flowV3Settings.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin)
+  }, [flowV3, flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin, flowEnd, flowV3Settings.breakHoldMin])
+
+  // CR-DN item 3: with Edges on and an anchor, each drawn box is a CVD segment. Spans come from the edge readout (cells
+  // payload); the readouts run on the same aligned v2 rows the pane draws (alignV2ToCandles + anchorReadout), once here
+  // for both the pane (CVD per segment, header) and the price chart (box labels). Null with Edges off: today's view.
+  const flowV3Segments = useMemo(() => {
+    const seg = boxSegments(flowV3Edges, flowV3Shift)
+    if (!seg) return null
+    const allBars = flowV2PanePayloads.flatMap((p) => (Array.isArray(p?.bars) ? p.bars : []))
+    const rows = alignV2ToCandles(allBars, mergedBarsWithLiveTimeline)
+    const readouts = segmentReadouts(rows, rowCloses(rows, mergedBarsWithLiveTimeline, flowV3Shift), seg.spans)
+    return { ...seg, readouts }
+  }, [flowV3Edges, flowV3Shift, flowV2PanePayloads, mergedBarsWithLiveTimeline])
 
   // CR-DI amendment 2: while the Edge effort strip is drawn the Flow v3 pane grows by its height (the price pane
   // above gives it up), so the pane's other series keep their heights; otherwise the pane is unchanged.
@@ -2019,11 +2072,19 @@ export default function App() {
       marks: flowV3Layers.marks,
       levels: flowV3Layers.levels,
       edges: flowV3Edges,
+      segments: flowV3Segments, // CR-DN item 3: per-box readouts for the box labels (drawnBoxes order)
       sellLayer: flowV3Settings.sellLayer,
       buyLayer: flowV3Settings.buyLayer,
       profileFrom: flowAnchor,
+      // CR-DN item 1: the profile stops after the end's minute ([from, to) on cell minute starts); null without an end.
+      profileTo: flowAnchor != null && flowEnd != null ? flowEnd + 60 : null,
     }
-  }, [flowV3AnyLayer, flowCells, flowV3Layers, flowV3Edges, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowAnchor])
+  }, [flowV3AnyLayer, flowCells, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowAnchor, flowEnd])
+  // CR-DN item 1: the anchor → end window, shaded on the price chart (any layer); null without an end.
+  const flowV3Window = useMemo(
+    () => (flowV3 && flowAnchor != null && flowEnd != null ? { from: flowAnchor, to: flowEnd } : null),
+    [flowV3, flowAnchor, flowEnd]
+  )
   const flowV3SessionPayload = useMemo(() => {
     if (!flowV3) return null
     const hit = flowV2Payloads.find((p) => p.dateStr === flowCellsDate) || flowV2Payloads.find((p) => p.dateStr === tradeDate)
@@ -2523,6 +2584,7 @@ export default function App() {
                 onApplyGexLevelsMode={handleGexLevelsModeChange}
                 onApplyIntervalChange={handleIntervalChange}
                 onVisibleLogicalRangeChange={handleSharedLogicalRangeChange}
+                onPriceAxisWidthChange={setPriceAxisWidth}
                 onLinkedCrosshairChange={handleLinkedCrosshairChange}
                 onInteractionActiveChange={handleInteractionActiveChange}
                 skewData={skewData}
@@ -2557,7 +2619,8 @@ export default function App() {
                 effortMarkers={effortMarkers}
                 liveEffort={flowLiveEffort}
                 flowV3={flowV3Chart}
-                anchorPickArmed={flowV3 && flowAnchorArmed}
+                flowWindow={flowV3Window}
+                anchorPickArmed={flowV3 && (flowAnchorArmed || flowEndArmed)}
                 onAnchorPick={handleAnchorPick}
               />
             </div>
@@ -2587,6 +2650,7 @@ export default function App() {
                 >
                   {flowPaneMode === 'v3' ? (
                     <AggressorFlowV3Panel
+                      priceAxisWidth={priceAxisWidth}
                       payloads={flowV2PanePayloads}
                       sessionPayload={flowV3SessionPayload}
                       cellsPayload={flowCells}
@@ -2606,10 +2670,15 @@ export default function App() {
                       layers={flowV3Layers}
                       onLayersChange={setFlowV3Layers}
                       edges={flowV3Edges}
+                      segments={flowV3Segments}
                       anchor={flowAnchor}
                       onAnchorChange={setFlowAnchor}
                       anchorArmed={flowAnchorArmed}
-                      onAnchorArmedChange={setFlowAnchorArmed}
+                      onAnchorArmedChange={(v) => { if (v) setFlowEndArmed(false); setFlowAnchorArmed(v) }}
+                      end={flowEnd}
+                      onEndChange={setFlowEnd}
+                      endArmed={flowEndArmed}
+                      onEndArmedChange={(v) => { if (v) setFlowAnchorArmed(false); setFlowEndArmed(v) }}
                       effortOn={flowEffort}
                       onEffortChange={setFlowEffort}
                       edgeEffortOn={flowEdgeEffort}

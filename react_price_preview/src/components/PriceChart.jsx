@@ -25,8 +25,8 @@ import {
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { LIVE_EFFORT_ID, absorptionLevels, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
-import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive } from './flowV3Primitives'
+import { LIVE_EFFORT_ID, absorptionLevels, boxLabelText, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
+import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, WindowShadePrimitive } from './flowV3Primitives'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
 const ETH_BG_COLOR = '#1f2937'
@@ -839,6 +839,8 @@ export default function PriceChart({
   onApplyGexLevelsMode,
   onApplyIntervalChange,
   onVisibleLogicalRangeChange,
+  // CR-DN item 7: reports the right price axis width (px) so the Flow v3 pane can match it.
+  onPriceAxisWidthChange,
   onLinkedCrosshairChange,
   onInteractionActiveChange,
   skewData = [],
@@ -900,12 +902,16 @@ export default function PriceChart({
   // primitive is attached (the chart is exactly as before). While `anchorPickArmed`, the next bar click
   // is consumed and reported to `onAnchorPick(shifted time)` instead of toggling a timeslice (DC3).
   flowV3 = null,
+  // CR-DN item 1 — the Flow v3 anchor → end window { from, to } (shifted PT epochs), shaded lightly; null without an end.
+  flowWindow = null,
   anchorPickArmed = false,
   onAnchorPick = null,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
   const chartRef = useRef(null)
+  const onPriceAxisWidthChangeRef = useRef(onPriceAxisWidthChange)
+  onPriceAxisWidthChangeRef.current = onPriceAxisWidthChange
   const seriesRef = useRef(null)
   const liveTradeSeriesRef = useRef(null)
   const gexSeriesRefs = useRef([])
@@ -1665,6 +1671,19 @@ export default function PriceChart({
 
     chartRef.current = chart
     seriesRef.current = candleSeries
+
+    // CR-DN item 7: lightweight-charts lays the chart out as a table; the first row's last cell is the right price axis.
+    // Its width follows the tick labels, so it is observed rather than read once.
+    const axisCell = container.querySelector('.tv-lightweight-charts table tr td:last-child')
+    let lastAxisWidth = null
+    const reportAxisWidth = () => {
+      const w = Math.round(chart.priceScale('right').width())
+      if (w === lastAxisWidth) return
+      lastAxisWidth = w
+      if (typeof onPriceAxisWidthChangeRef.current === 'function') onPriceAxisWidthChangeRef.current(w)
+    }
+    const axisObserver = axisCell && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(reportAxisWidth) : null
+    if (axisObserver) axisObserver.observe(axisCell)
     liveTradeSeriesRef.current = liveTradeSeries
 
     const setManualPriceScale = () => {
@@ -2187,6 +2206,7 @@ export default function PriceChart({
       if (resizeObserver) {
         resizeObserver.disconnect()
       }
+      if (axisObserver) axisObserver.disconnect()
       stage.removeEventListener('wheel', handleWheel, { capture: true })
       stage.removeEventListener('mousedown', handleMouseDown, { capture: true })
       stage.removeEventListener('mouseleave', handleMouseLeave)
@@ -2665,18 +2685,20 @@ export default function PriceChart({
   const v3Marks = useMemo(() => (v3MarksOn ? chartMarks(v3Payload, v3Times, v3Shift) : null), [v3MarksOn, v3Payload, v3Times, v3Shift])
   const v3ProfileOn = Boolean(flowV3?.profile && v3Flat)
   const v3ProfileFrom = flowV3?.profileFrom ?? null
+  const v3ProfileTo = flowV3?.profileTo ?? null // CR-DN item 1: the end's minute + 60 s, or null (to now)
   const v3Profile = useMemo(() => {
     if (!v3ProfileOn) return null
-    const r1 = profileTotals(v3Flat, v3ProfileFrom == null ? -Infinity : v3ProfileFrom)
+    const r1 = profileTotals(v3Flat, v3ProfileFrom == null ? -Infinity : v3ProfileFrom, v3ProfileTo == null ? Infinity : v3ProfileTo)
     const r2 = mergeRows(r1, 2)
     const mx = (rows) => rows.reduce((m, r) => Math.max(m, r.buy + r.sell), 0)
     return { rows: { 1: r1, 2: r2 }, max: { 1: mx(r1), 2: mx(r2) } }
-  }, [v3ProfileOn, v3Flat, v3ProfileFrom])
+  }, [v3ProfileOn, v3Flat, v3ProfileFrom, v3ProfileTo])
   // CR-DF — absorption levels (exact marks as fading lines: magenta buyers absorbed, orange sellers absorbed, CR-DG)
   // and the edge readout's dashed lines.
   const v3LevelsOn = Boolean(flowV3?.levels && v3Payload)
   const v3Levels = useMemo(() => (v3LevelsOn ? absorptionLevels(v3Payload, v3Times, v3Shift) : null), [v3LevelsOn, v3Payload, v3Times, v3Shift])
   const v3EdgeReadout = flowV3?.edges || null
+  const v3Segments = flowV3?.segments || null // CR-DN item 3: per-box readouts (drawnBoxes order)
   const v3Edges = useMemo(() => {
     if (!v3EdgeReadout || !v3Times.length) return null
     const snap = (utc) => {
@@ -2686,26 +2708,44 @@ export default function PriceChart({
     // CR-DI amendment 9: the last 4 frozen boxes (faded, to their break minute) and the current box.
     const { boxes, dropped } = drawnBoxes(v3EdgeReadout)
     const out = []
-    for (const b of boxes) {
+    boxes.forEach((b, k) => {
       const frozen = b !== v3EdgeReadout
       const from = snap(b.from)
       const to = snap(frozen ? b.breakAt : b.to)
-      if (from == null || to == null) continue
-      out.push({ from, to, top: b.top.price, bottom: b.bottom.price, frozen, box: frozen ? { ...b, dropped } : null })
+      if (from == null || to == null) return
+      // CR-DN item 3b: every drawn box carries its label and hover data (frozen: broke; current: set end / current).
+      const readout = v3Segments?.readouts?.[k] || null
+      const ended = frozen ? { kind: 'broke', dir: b.dir, at: b.breakAt }
+        : v3EdgeReadout.end != null ? { kind: 'end', at: v3EdgeReadout.end } : { kind: 'current' }
+      const pending = frozen ? null : v3EdgeReadout.pending
+      out.push({
+        from, to, top: b.top.price, bottom: b.bottom.price, frozen,
+        label: readout ? boxLabelText(readout) : '',
+        box: { ...b, dropped, readout, ended, pending },
+      })
+    })
+    // CR-DN item 2: a tick per probe (cancelled break) of the drawn boxes, at its edge and break minute.
+    const probes = []
+    for (const b of boxes) {
+      for (const pr of b.probes || []) {
+        const at = snap(pr.at)
+        if (at != null) probes.push({ time: at, price: pr.edge, up: pr.dir === 'up', label: `probe ${formatShiftedHHMM(v3Shift(pr.at))}`, probe: pr })
+      }
     }
-    return out.length ? { boxes: out } : null
-  }, [v3EdgeReadout, v3Times, v3Shift])
+    return out.length ? { boxes: out, probes } : null
+  }, [v3EdgeReadout, v3Segments, v3Times, v3Shift])
   const v3SellLayer = flowV3?.sellLayer !== false
   const v3BuyLayer = flowV3?.buyLayer !== false
-  const v3PrimRef = useRef({ series: null, heat: null, marks: null, profile: null, levels: null, edges: null })
+  const v3PrimRef = useRef({ series: null, heat: null, marks: null, profile: null, levels: null, edges: null, window: null })
   const [v3Hover, setV3Hover] = useState(null)
   const [v3LevelHover, setV3LevelHover] = useState(null)
   const [v3BoxHover, setV3BoxHover] = useState(null)
+  const [v3ProbeHover, setV3ProbeHover] = useState(null) // CR-DN item 2
   useEffect(() => {
     const series = seriesRef.current
     if (!series) return
     const reg = v3PrimRef.current
-    if (reg.series !== series) v3PrimRef.current = { series, heat: null, marks: null, profile: null, levels: null, edges: null }
+    if (reg.series !== series) v3PrimRef.current = { series, heat: null, marks: null, profile: null, levels: null, edges: null, window: null }
     const r = v3PrimRef.current
     const feed = (key, make, data) => {
       if (!data && !r[key]) return
@@ -2721,16 +2761,22 @@ export default function PriceChart({
     feed('profile', () => new ProfilePrimitive(), v3Profile)
     feed('levels', () => new AbsorptionLevelsPrimitive((level, pt) => setV3LevelHover(level ? { level, pt } : null)),
       v3Levels ? { levels: v3Levels, times: v3Times } : null)
-    feed('edges', () => new EdgeLinesPrimitive((box, pt) => setV3BoxHover(box ? { box, pt } : null)), v3Edges)
+    feed('edges', () => new EdgeLinesPrimitive((box, pt) => setV3BoxHover(box ? { box, pt } : null),
+      (probe, pt) => setV3ProbeHover(probe ? { probe, pt } : null)), v3Edges)
+    feed('window', () => new WindowShadePrimitive(), flowWindow ? { ...flowWindow, times: v3Times } : null)
     // CR-DG: an open hover re-reads its mark / level from the new payload, so held minutes update on a refresh
     // while the pointer is still (gone from the new list = hover closed).
     setV3Hover((h) => relinkHover(h, 'mark', v3Marks, 'time'))
     setV3LevelHover((h) => relinkHover(h, 'level', v3Levels, 'start'))
     setV3BoxHover((h) => {
-      const hit = h && v3Edges?.boxes.find((b) => b.frozen && b.box.from === h.box.from)
+      const hit = h && v3Edges?.boxes.find((b) => b.box.from === h.box.from)
       return hit ? { ...h, box: hit.box } : null
     })
-  }, [v3Columns, v3Marks, v3Profile, v3Levels, v3Edges, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
+    setV3ProbeHover((h) => {
+      const hit = h && v3Edges?.probes.find((q) => q.probe.at === h.probe.at && q.probe.dir === h.probe.dir)
+      return hit ? { ...h, probe: hit.probe } : null
+    })
+  }, [v3Columns, v3Marks, v3Profile, v3Levels, v3Edges, flowWindow, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
 
   // CR-CD A3 — when a candidate loads in replay (not yet revealed), fit the price axis to the
   // setup zone/range (range box, zone band, level, extreme, entry, stop) ± max(25 pts, 0.5·IM) instead of the full GEX-line
@@ -3728,13 +3774,47 @@ export default function PriceChart({
                 const b = v3BoxHover.box
                 const hm = (t) => formatShiftedHHMM(v3Shift(t))
                 const n = (v) => (v == null ? 'exact data only' : kfmt(v))
+                const heldE = (e) => (e.heldMin == null ? 'not touched' : `held ${e.heldMin} min`)
+                // CR-DN item 3b: how the box ended (broke ↑/↓ hh:mm, set end hh:mm, or current)
+                const ended = b.ended?.kind === 'broke' ? `broke ${dirArrow(b.ended.dir)} ${hm(b.ended.at)}`
+                  : b.ended?.kind === 'end' ? `set end ${hm(b.ended.at)}` : 'current'
+                const until = b.ended?.kind === 'broke' ? b.ended.at : b.to
+                const probes = b.probes?.length || 0
                 return (
                   <>
-                    <div style={{ fontWeight: 700, color: '#f0abfc' }}>Box {hm(b.from)}–{hm(b.breakAt)} · broke {hm(b.breakAt)} {dirArrow(b.dir)}</div>
-                    <div>Top {b.top.price.toFixed(2)}: buyers {n(b.top.contracts)} / sellers {n(b.top.opposite)}</div>
-                    <div>Bottom {b.bottom.price.toFixed(2)}: sellers {n(b.bottom.contracts)} / buyers {n(b.bottom.opposite)}</div>
-                    <div>held {b.heldMin} min{b.dropped ? ` · ${b.dropped} older box${b.dropped === 1 ? '' : 'es'} not drawn` : ''}</div>
+                    <div style={{ fontWeight: 700, color: '#f0abfc' }}>Box {hm(b.from)}–{hm(until)} · {ended}</div>
+                    {b.readout && <div>{boxLabelText(b.readout)}</div>}
+                    <div>Top {b.top.price.toFixed(2)}: buyers {n(b.top.contracts)} / sellers {n(b.top.opposite)} · {heldE(b.top)}</div>
+                    <div>Bottom {b.bottom.price.toFixed(2)}: sellers {n(b.bottom.contracts)} / buyers {n(b.bottom.opposite)} · {heldE(b.bottom)}</div>
+                    <div>{probes} probe{probes === 1 ? '' : 's'}{b.pending ? ` · testing break ${hm(b.pending.at)} ${dirArrow(b.pending.dir)}${b.ended?.kind === 'end' ? ' (pending at the end)' : ''}` : ''}{b.dropped ? ` · ${b.dropped} older box${b.dropped === 1 ? '' : 'es'} not drawn` : ''}</div>
                     <div style={{ color: '#94a3b8' }}>visual aid — untested</div>
+                  </>
+                )
+              })()}
+            </div>
+          )}
+
+          {v3ProbeHover && (
+            <div
+              data-testid="flow-v3-probe-tooltip"
+              style={{
+                position: 'absolute',
+                left: Math.max(0, (hostRef.current?.offsetLeft || 0) + v3ProbeHover.pt.x + 12),
+                top: Math.max(0, (hostRef.current?.offsetTop || 0) + v3ProbeHover.pt.y - 10),
+                zIndex: 6, pointerEvents: 'none', background: 'rgba(2,6,23,0.92)', border: '1px solid #86198f',
+                borderRadius: 8, padding: '6px 8px', fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4, maxWidth: 300,
+              }}
+            >
+              {(() => {
+                const q = v3ProbeHover.probe
+                const hm = (t) => formatShiftedHHMM(v3Shift(t))
+                const n = (v) => (v == null ? 'exact data only' : kfmt(v))
+                return (
+                  <>
+                    <div style={{ fontWeight: 700, color: '#f0abfc' }}>Probe {hm(q.at)} {dirArrow(q.dir)} · {q.dir === 'up' ? 'top' : 'bottom'} {q.edge.toFixed(2)}</div>
+                    <div>extreme {q.extreme.toFixed(2)} ({Math.abs(q.extreme - q.edge).toFixed(2)} pts beyond) · {q.minutesOutside} min outside · back inside {hm(q.back)}</div>
+                    <div>beyond the edge: buyers {n(q.buy)} / sellers {n(q.sell)}</div>
+                    <div style={{ color: '#94a3b8' }}>break cancelled: a close came back inside within A min — visual aid, untested</div>
                   </>
                 )
               })()}

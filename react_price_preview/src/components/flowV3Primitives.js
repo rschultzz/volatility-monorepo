@@ -8,6 +8,8 @@ import { CROWDED_TICK_PX, TICK, floorIndex } from '../flowV3.js'
 const SELL_RGB = '229,231,235'
 const BUY_RGB = '96,165,250'
 const SLATE = '#94a3b8'
+// The chart's tag background (the price chart's crosshair label colour, #1e293b), for small label pills (CR-DN).
+export const TAG_BG = (alpha) => `rgba(30,41,59,${alpha})`
 
 function visibleIndexRange(chart, times) {
   const vr = chart.timeScale().getVisibleRange?.()
@@ -258,12 +260,25 @@ const levelRgb = (kind) => (kind === 'sellers_absorbed' ? ORANGE_RGB : MAGENTA_R
 
 // Absorption levels: one horizontal line per level from its start minute to its break bar or now, width from
 // contracts absorbed, opacity from age, with its label at the right end. data: { levels (flowV3.absorptionLevels),
-// times }. Hover: `onHover(level | null, point)` within 5 px of a line.
+// times }. Hover: `onHover(level | null, point)` within 5 px of a line. CR-DN item 5: drawn above the candles
+// ('top'), opacity `drawAlpha` (unbroken levels fade to 0.5), labels on a dark pill (the chart's tag background), and a
+// price-axis tag in the side colour for each unbroken level in view (at most LEVELS_MAX: the data holds no more).
+const LEVEL_TAG_TEXT = '#0f172a'
 export class AbsorptionLevelsPrimitive extends BasePrimitive {
   constructor(onHover) {
     super()
     this._onHover = onHover
     this._hit = []
+    this._tags = []
+    const self = this
+    this._tagViews = Array.from({ length: 8 }, (_, k) => ({
+      coordinate: () => self._tagY(k),
+      text: () => (self._tags[k] ? self._tags[k].price.toFixed(2) : ''),
+      textColor: () => LEVEL_TAG_TEXT,
+      backColor: () => (self._tags[k] ? `rgb(${levelRgb(self._tags[k].kind)})` : 'rgba(0,0,0,0)'),
+      visible: () => Boolean(self._tags[k]) && self._tagY(k) != null,
+      tickVisible: () => Boolean(self._tags[k]),
+    }))
     this._move = (param) => {
       const pt = param?.point
       let best = null
@@ -297,6 +312,27 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
     return 'top'
   }
 
+  _tagY(k) {
+    const lv = this._tags[k]
+    const y = lv && this._series ? this._series.priceToCoordinate(lv.price) : null
+    return y == null ? null : y
+  }
+
+  // CR-DN item 5d: the unbroken levels in the visible time range get axis tags (recomputed on each view update).
+  updateAllViews() {
+    const chart = this._chart
+    const d = this._data
+    this._tags = []
+    if (!chart || !d?.levels?.length) return
+    const range = visibleIndexRange(chart, d.times)
+    if (!range) return
+    this._tags = d.levels.filter((lv) => !lv.broken && lv.endIdx >= range[0] && lv.idx <= range[1]).slice(0, this._tagViews.length)
+  }
+
+  priceAxisViews() {
+    return this._tagViews
+  }
+
   paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }, chart, series, d) {
     this._hit = []
     const range = visibleIndexRange(chart, d.times)
@@ -318,13 +354,13 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
       const lw = Math.max(1, Math.round(lv.width * vr))
       const yy = Math.round(y * vr) + (lw % 2 ? 0.5 : 0)
       const rgb = levelRgb(lv.kind)
-      ctx.strokeStyle = `rgba(${rgb},${lv.alpha})`
+      const alpha = lv.drawAlpha ?? lv.alpha
+      ctx.strokeStyle = `rgba(${rgb},${alpha})`
       ctx.lineWidth = lw
       ctx.beginPath()
       ctx.moveTo(Math.round(x0 * hr), yy)
       ctx.lineTo(Math.round(Math.max(x1, x0 + 2) * hr), yy)
       ctx.stroke()
-      ctx.fillStyle = `rgba(${rgb},${Math.max(0.55, lv.alpha)})`
       const tw = ctx.measureText(lv.label).width / hr
       const lx = Math.min(x1 + 4, plotW - tw - 2)
       const base = y - lv.width / 2 - 2
@@ -332,6 +368,9 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
         const box = { x0: lx, x1: lx + tw, y0: base + dy - 11, y1: base + dy }
         if (!free(box)) continue
         placed.push(box)
+        ctx.fillStyle = TAG_BG(0.85) // CR-DN item 5b: the pill, inside the collision box (placement unchanged)
+        ctx.fillRect(Math.round((lx - 2) * hr), Math.round((base + dy - 11) * vr), Math.round((tw + 4) * hr), Math.round(12 * vr))
+        ctx.fillStyle = `rgba(${rgb},${Math.max(0.55, alpha)})`
         ctx.fillText(lv.label, Math.round(lx * hr), Math.round((base + dy) * vr))
         break
       }
@@ -345,16 +384,35 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
 // data: { boxes: [{ from, to (shifted epochs), top, bottom (prices), frozen, box }] }. Hover: `onHover(box | null, pt)`
 // within 5 px of a frozen box's line (the current box is the header's).
 export const FROZEN_EDGE_ALPHA = 0.35
+// CR-DN item 2: probes (cancelled breaks) = a short magenta tick from the edge outward at the break minute, low opacity,
+// with a small "probe hh:mm" label. data.probes: [{ time (shifted), price (edge), up, label, probe }]. Hover:
+// `onProbeHover(probe | null, pt)` within 6 px of a tick.
+export const PROBE_ALPHA = 0.45
+const PROBE_TICK_PX = 7
 export class EdgeLinesPrimitive extends BasePrimitive {
-  constructor(onHover) {
+  constructor(onHover, onProbeHover) {
     super()
     this._onHover = onHover
+    this._onProbeHover = onProbeHover
     this._hit = []
+    this._probeHit = []
     this._move = (param) => {
       const pt = param?.point
+      let probe = null
+      if (pt) {
+        let bd = 7
+        for (const h of this._probeHit) {
+          const dd = Math.hypot(pt.x - h.x, pt.y - h.y)
+          if (dd < bd) {
+            bd = dd
+            probe = h
+          }
+        }
+      }
+      this._onProbeHover?.(probe ? probe.probe : null, probe ? { x: probe.x, y: probe.y } : null)
       let best = null
       let bestD = 6
-      if (pt) {
+      if (pt && !probe) {
         for (const h of this._hit) {
           if (pt.x < h.x0 - 3 || pt.x > h.x1 + 3) continue
           const dd = Math.abs(pt.y - h.y)
@@ -376,6 +434,7 @@ export class EdgeLinesPrimitive extends BasePrimitive {
   detached() {
     this._chart?.unsubscribeCrosshairMove(this._move)
     this._onHover?.(null, null)
+    this._onProbeHover?.(null, null)
     super.detached()
   }
 
@@ -385,6 +444,7 @@ export class EdgeLinesPrimitive extends BasePrimitive {
 
   paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }, chart, series, d) {
     this._hit = []
+    this._probeHit = []
     const ts = chart.timeScale()
     const plotW = bitmapSize.width / hr
     const vrange = ts.getVisibleRange?.()
@@ -407,8 +467,43 @@ export class EdgeLinesPrimitive extends BasePrimitive {
         ctx.moveTo(Math.round(x0 * hr), yy)
         ctx.lineTo(Math.round(Math.max(x1, x0 + 2) * hr), yy)
         ctx.stroke()
-        if (b.frozen) this._hit.push({ x0, x1, y, box: b.box })
+        if (b.box) this._hit.push({ x0, x1, y, box: b.box })
       }
+      // CR-DN item 3b: the box's label inside its top-left corner, on a small dark pill (the chart's tag background).
+      const yt = series.priceToCoordinate(b.top)
+      if (b.label && yt != null && x1 - x0 > 40) {
+        ctx.save()
+        ctx.setLineDash([])
+        ctx.font = `${Math.round(10 * vr)}px sans-serif`
+        ctx.textBaseline = 'top'
+        const tw = ctx.measureText(b.label).width / hr
+        const lx = Math.max(0, x0) + 3
+        const ly = yt + 3
+        ctx.fillStyle = TAG_BG(b.frozen ? 0.6 : 0.8)
+        ctx.fillRect(Math.round((lx - 2) * hr), Math.round((ly - 1) * vr), Math.round((tw + 4) * hr), Math.round(13 * vr))
+        ctx.fillStyle = `rgba(${MAGENTA_RGB},${b.frozen ? 0.6 : 0.95})`
+        ctx.fillText(b.label, Math.round(lx * hr), Math.round(ly * vr))
+        ctx.restore()
+      }
+    }
+    ctx.setLineDash([])
+    ctx.strokeStyle = `rgba(${MAGENTA_RGB},${PROBE_ALPHA})`
+    ctx.fillStyle = `rgba(${MAGENTA_RGB},${PROBE_ALPHA + 0.2})`
+    ctx.font = `${Math.round(9 * vr)}px sans-serif`
+    for (const q of d.probes || []) {
+      if (q.time < Number(vrange.from) || q.time > Number(vrange.to)) continue
+      const x = ts.timeToCoordinate(q.time)
+      const y = series.priceToCoordinate(q.price)
+      if (x == null || y == null) continue
+      const y1 = q.up ? y - PROBE_TICK_PX : y + PROBE_TICK_PX
+      const xx = Math.round(x * hr) + 0.5
+      ctx.beginPath()
+      ctx.moveTo(xx, Math.round(y * vr))
+      ctx.lineTo(xx, Math.round(y1 * vr))
+      ctx.stroke()
+      ctx.textBaseline = q.up ? 'bottom' : 'top'
+      ctx.fillText(q.label, Math.round((x + 2) * hr), Math.round((q.up ? y1 : y1) * vr))
+      this._probeHit.push({ x, y: (y + y1) / 2, probe: q.probe })
     }
     ctx.restore()
   }
@@ -481,5 +576,59 @@ export class EdgeEffortPrimitive extends BasePrimitive {
         ctx.fillText(v.text, Math.round(x0 * hr), Math.round(y * vr))
       }
     }
+  }
+}
+
+// CR-DN item 6 — cap marks on the Flow v3 volume bars: for each bar clipped at the scale cap, a 2 px line at its top
+// across the histogram column, in the bars' slate, brighter. data: { times (shifted), cap (value), color }.
+export class VolumeCapPrimitive extends BasePrimitive {
+  zOrder() {
+    return 'top'
+  }
+
+  paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr }, chart, series, d) {
+    if (!d.times?.length || d.cap == null) return
+    const y = series.priceToCoordinate(d.cap)
+    if (y == null) return
+    const ts = chart.timeScale()
+    const spacing = Number(ts.options().barSpacing) || 6
+    // lightweight-charts' histogram column: round(barSpacing × pr) minus a 1-device-px gap when there is room
+    const gap = Math.ceil(spacing * hr) <= 1 ? 0 : Math.max(1, Math.floor(hr))
+    const w = Math.max(1, Math.round(spacing * hr) - gap)
+    const h = Math.max(1, Math.round(2 * vr))
+    const top = Math.round(y * vr)
+    ctx.fillStyle = d.color
+    for (const t of d.times) {
+      const x = ts.timeToCoordinate(t)
+      if (x == null) continue
+      ctx.fillRect(Math.round(x * hr) - Math.floor(w / 2), top, w, h)
+    }
+  }
+}
+
+// CR-DN item 1 — the Flow v3 anchor → end window, shaded lightly behind the candles (existing slate, low opacity; C1).
+// data: { from, to (shifted epochs; `to` = the end's last 1-minute bar), times (shifted candle times) }: the shade runs
+// from the anchor candle's left edge to the end candle's right edge, half a bar spacing either side.
+export const WINDOW_SHADE_RGBA = 'rgba(148,163,184,0.08)'
+export class WindowShadePrimitive extends BasePrimitive {
+  zOrder() {
+    return 'bottom'
+  }
+
+  paint({ context: ctx, horizontalPixelRatio: hr, bitmapSize }, chart, series, d) {
+    const times = Array.isArray(d.times) ? d.times : []
+    const i0 = floorIndex(times, d.from)
+    const i1 = floorIndex(times, d.to)
+    if (i0 < 0 || i1 < i0) return
+    const ts = chart.timeScale()
+    const xa = ts.timeToCoordinate(times[i0])
+    const xb = ts.timeToCoordinate(times[i1])
+    const half = (Number(ts.options().barSpacing) || 6) / 2
+    const plotW = bitmapSize.width / hr
+    const x0 = xa == null ? (xb == null ? null : 0) : xa - half
+    const x1 = xb == null ? (xa == null ? null : plotW) : xb + half
+    if (x0 == null || x1 == null || x1 <= 0 || x0 >= plotW) return
+    ctx.fillStyle = WINDOW_SHADE_RGBA
+    ctx.fillRect(Math.round(Math.max(0, x0) * hr), 0, Math.round((Math.min(plotW, x1) - Math.max(0, x0)) * hr), bitmapSize.height)
   }
 }

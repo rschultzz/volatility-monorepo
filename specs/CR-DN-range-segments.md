@@ -1,0 +1,437 @@
+# CR-DN — Flow v3 ranges as segments: set end, breaks need acceptance, CVD and stats per box
+
+Spec copied from the vault session note `sessions/2026-10-29 - CR-DN — Range Segments.md` (Ryan's kickoff, chat
+2026-10-29).
+
+Branch `feat/CR-DN-range-segments`, worktree `../volatility-monorepo-cr-dn`. **Started off `origin/main` `78a50fb`
+before CR-DM merged**, by Ryan's instruction in chat 2026-10-29: spec freeze and Step 0 only, no code. Implementation
+starts only after CR-DM is merged: rebase onto `origin/main`, re-check Step 0 against CR-DM's code, record that here,
+then items 1–3. CR-DM's worktree and branch are not touched.
+
+## Why (Ryan, chat 2026-10-29)
+
+Ryan anchors ranges by hand and wants to study each range on its own: its delta trend and stats, start to finish,
+and to set where a window ends. Today one CVD line runs across every box, and a failed break splits a range in two.
+On 2026-10-29, anchored at 06:49, a 07:34 close above the top froze the box though price came straight back inside,
+and the new box grew back over the old range.
+
+## Spec (Ryan, chat 2026-10-29)
+
+1. **Set end.**
+   - a. A "set end" button beside 📍 set anchor, enabled once an anchor is set: click it, then click a price bar
+     after the anchor. The end must be after the anchor and not after the payload's last bar (live: now; replay /
+     review: the until time). Esc while picking cancels; "clear" removes anchor and end; a small "clear end"
+     removes only the end.
+   - b. With an end set, everything anchored uses anchor → end only: anchored CVD and readout, Edges box(es) (the
+     last one ends at the end), the Edge effort strip, the volume Profile.
+   - c. After the end: CVD isn't drawn; boxes and the strip stop. Per-bar series (delta bars, volume bars, rolling
+     delta if on) and absorption levels / marks are unchanged.
+   - d. The window is shaded lightly on the price chart (existing slate, low opacity, C1); the header shows e.g.
+     "06:49 → 06:57 · 8 min".
+   - e. Same persistence as the anchor today (stated in Step 0).
+2. **A break needs acceptance** (replaces the single-close break from CR-DI item 9).
+   - a. A close more than 2 pts beyond an edge that has held N min starts a pending break. The box freezes only if
+     no 1-minute close comes back inside within A minutes (⚙ "Break must hold A min", default 5, range 1–15). The
+     freeze time and the new box's start are the original break bar.
+   - b. If a close comes back inside within A minutes, the break is cancelled: the box is unchanged (edges don't
+     move), and a "probe hh:mm" tick is drawn at that edge (existing magenta, low opacity). Hover: probe extreme,
+     minutes outside, contracts traded beyond the edge.
+   - c. While pending, the header shows "testing break hh:mm"; nothing freezes or grows until it resolves.
+   - d. Edge growth for a box younger than N min (CR-DI) is unchanged.
+3. **Boxes as segments.**
+   - a. With Edges on and an anchor set, each box is a segment: the anchored CVD restarts at 0 at each segment
+     start and is drawn per segment, with a small gap or tick at each boundary.
+   - b. Each box gets a small label inside its top-left: "Δ +1.2k · +7.5 pts · 45 m · 1.8k/pt". Hover: top /
+     bottom, edge counts by side (main / opposite, as the Edge effort strip), held minutes per edge, probe count,
+     and how it ended (broke ↑/↓ hh:mm, set end hh:mm, or current).
+   - c. The header readout shows the current box (or the last one, if an end is set).
+   - d. At most the 4 most recent boxes are drawn (as CR-DI); older segments' CVD is not drawn either, and the
+     hover notes how many are hidden.
+4. **Edges off:** CVD and readout behave exactly as today (one anchored line, anchor → now / end), apart from
+   item 1.
+
+## Standing rulings conformance (UI CR)
+
+Read `research/standing-rulings.md` (2026-10-29 copy, last ruling A22, last change-log line CR-DM) before the freeze.
+
+| Ruling | Status | Note |
+|---|---|---|
+| A1 — a range develops in a zone around the level | n/a (context) | display of hand-anchored ranges; no level or zone logic |
+| A2 — 2–3 min is not a range; no duration limit | n/a (display simplification) | N (hold), A (break must hold) and the end are ⚙ / hand-set drawing aids, not range definitions; the box label's minutes are a readout |
+| A3–A18 | n/a | no setup, level, entry, exit or outcome logic |
+| A19 — in-range confirmation, both sides | n/a (context) | per-box CVD and edge counts display flow inside a range; not a confirmation rule |
+| A20 — trade the range edges | n/a (context) | display only; no entry logic |
+| A21, A22 | n/a | |
+| A23–A28 (Ryan's drafts, undecided) | n/a — not rulings | Ryan, chat 2026-10-29: A23–A28 are drafts, not rulings. The legend quotes the idea "a failed probe can strengthen the fade" as **an untested idea**, without citing it as A27; nothing is added to `standing-rulings.md` |
+| B1–B7 | n/a | no hypothesis tested, no data split read beyond what the chart already displays |
+| B8 — Code smoke labels are never Ryan's | honoured | no review labels written; smoke runs against a read-only backend |
+| C1 — no green / red; Dash palette | honoured | end window in the existing slate at low opacity; probe ticks in the existing magenta (`#e879f9`, CR-DF) at low opacity; per-box CVD in the existing CVD colour; labels in the pane's label style |
+| C2 — new display features off by default, existing views unchanged | item 1 honoured; items 2–3 **deviate — APPROVED by Ryan in chat 2026-10-29** | item 1 is a new control: nothing changes until an end is set. Items 2 and 3 change existing behaviour with Edges on (a break needs acceptance; CVD restarts per box; per-box labels). Change-log line added to `standing-rulings.md` |
+
+Nothing in "Revoked / superseded" (R1–R7) is used. A, M and N (kickoff wording; M = CR-DM's live effort min move) and
+the end are display settings, not tested thresholds; the legend says so and notes the untested idea "a failed probe can strengthen the fade" (not cited as a ruling).
+
+## Step 0 (commit before implementation)
+
+- How the anchor is stored and persisted today.
+- Where CR-DI's break / restart and header counting live.
+- How the anchored CVD and readout are computed, so the per-segment version reuses that code path.
+- On 2026-10-29 anchored at 06:49: every break CR-DI's current rule produces and what each becomes under item 2
+  (A = 5) — probe or held.
+- (Ryan, chat 2026-10-29) Anything that depends on CR-DM's pane changes (volume row, rolling delta in ⚙), to be
+  re-checked after the rebase.
+
+## Commits
+
+spec freeze → Step 0 → (after CR-DM merges: rebase + Step 0 re-check) → one commit per item (1, 2, 3) → smoke + wrap.
+
+## Smoke (read-only backend)
+
+- No end, Edges off → identical to origin/main.
+- 2026-10-29, anchor 06:49, Edges on:
+  - the 07:34 close above the top becomes a probe; one box runs from 06:49 to now, unless a later break holds;
+  - with A = 1 the old split appears, with the CVD restarting at 07:34;
+  - per-box labels equal hand sums from the minute data;
+  - set end at 06:57 gives a single box 06:49–06:57, with the readout, strip and profile using only those minutes.
+- A date with a break that holds still freezes and restarts.
+- Replay never uses bars after until.
+- Existing specs green.
+
+## Constraints
+
+- Work only in `../volatility-monorepo-cr-dn`; CR-DM's worktree and branch are not touched.
+- One DB-backed local server at a time; check first and never stop another session's server without asking Ryan.
+- Never print connection strings: catch DB errors and print the error type only.
+- Rebase onto origin/main before the PR. PR not merged; not deployed. Logs copied to the main checkout at wrap.
+
+## Step 0 findings (read-only, against `origin/main` `78a50fb`; CR-DM not merged)
+
+Data: `/flow/cells` payloads built by `flow_v3.build_cells_payload` through one read-only connection, no server
+(`scripts/logs/cr-dn/step0/dump_cells.py`, CR-DI's dumper with DB errors printed as type only). 2026-10-29 RTH
+dumped live at 15:23 UTC (bars 06:30–08:23 PT, 114, exact on every bar); 2026-10-28 RTH complete. Breaks from
+`scripts/logs/cr-dn/step0/breaks.mjs`, which runs the shipped `flattenBars` + `edgeReadout` and simulates item 2.
+Outputs in `scripts/logs/cr-dn/step0/` (git-ignored; copied to the main checkout at wrap).
+
+### 0a — how the anchor is stored and persisted
+
+- **App state only, no persistence.** `App.jsx:593` `const [flowAnchor, setFlowAnchor] = useState(null)` and
+  `flowAnchorArmed` (`:594`). No localStorage / URL key (the localStorage keys in App are the Flow mode, v3 on,
+  `FLOW_V3_SETTINGS`, `FLOW_V3_LAYERS`, Edge effort chip, heights; not the anchor).
+- **Value:** a *shifted* PT epoch (the price chart's candle time). Set by `handleAnchorPick` (`App.jsx:1275`) from
+  the price chart's click while armed (`PriceChart.jsx:1933`: an armed pick consumes the click, no timeslice / GEX
+  popup), or by the panel's "session open" / "last swing" buttons (`setAnchorTo`, panel `:519`).
+- **Cleared** on a change of trade date, Flow session or v3 on/off (`App.jsx:1279–1283`, DC5), by Esc when not armed
+  (panel `:315–326`; Esc while armed only disarms) and by "clear". A page reload loses it. Not cleared when the review
+  `until` changes.
+- **So item 1e = the same: the end is `useState` in App beside the anchor, cleared by everything that clears the
+  anchor** (and by "clear end"), not persisted.
+
+### 0b — where CR-DI's break / restart and header counting live
+
+All in `react_price_preview/src/flowV3.js`, computed once in App and passed down:
+
+- `edgeReadout(payload, bars, anchorShifted, shift, holdMin)` (`flowV3.js:484`): the box loop over the cells
+  payload's 1-minute closes (`flattenBars`, UTC bar starts). A close > `EDGE_BREAK_PTS` (2) beyond an edge grows the
+  box while that edge has stood < `holdMin` (⚙ N, `DEFAULT_V3_SETTINGS.boxHoldMin` 15) since it was set; otherwise it
+  is a break, pushed to `spans` as `[j0, i−1, dir]`, and the new box starts at bar i with top = bottom = its close
+  (both edges set there). **This loop is where item 2's pending state goes**; nothing else decides a break.
+- `boxStats(...)` (`:437`): one box's edges, first touches, growth moves, and the per-minute edge cells from
+  `edgeCounts` (`:396`, ±1 pt inclusive against the box's final edges). Frozen boxes add `breakAt`, `dir`,
+  `heldMin`, per-edge `heldMin`.
+- `drawnBoxes` (`:548`, last `FROZEN_BOXES_MAX` = 4 frozen + current), `edgeEffortSeries` (`:557`, the strip's
+  minutes per drawn box), `edgeVisits`, `edgeStripColumns`, `edgeText` (`:663`, header text "Box from hh:mm ↑ · Top …
+  | Bottom …").
+- App: `flowV3Edges = edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin)`
+  (`App.jsx:2004–2007`) → the panel (`edges` prop: header text, strip) and the price chart (`flowV3Chart.edges` →
+  `PriceChart.jsx:2645–2662` → `EdgeLinesPrimitive` in `flowV3Primitives.js:348`, boxes + frozen-box hover).
+- The volume Profile: `profileTotals(flat, fromShifted, toShifted = Infinity)` (`flowV3.js:213`), called in
+  `PriceChart.jsx:2635–2641` with `flowV3Chart.profileFrom = flowAnchor` and no `to`. **It already takes an end**;
+  item 1b passes `to` = the end bar's start + 60 s (shifted; cells are minute starts, `[from, to)`).
+
+### 0c — how the anchored CVD and readout are computed
+
+- Both run in the panel (`AggressorFlowV3Panel.jsx:254–262`) on **the v2 flow payload's bars** aligned to the candles
+  (`alignV2ToCandles(allBars, candles)` → `aligned` rows with shifted `time`, `delta`, `vol`, `seg`), **not on the
+  cells payload** the boxes come from. Both payloads are truncated server-side at the review `until` (every flow URL
+  in App sets `until`, e.g. `App.jsx:1958`, `:2063`).
+- `anchoredCvd(rows, anchorTime)` (`flowV3.js:50`): `floorIndex` of the anchor in the rows; `out[a] = 0`; adds
+  `delta` from bar a + 1 on; null before the anchor. **The anchor bar's own delta is not counted.**
+- `anchorReadout(rows, closes, anchorTime)` (`flowV3.js:68`): over bars a + 1 … last with data: Σ delta, Σ vol;
+  dPrice = close[last] − close[a]; minutes = (t[last] − t[a]) / 60; cpp = vol / |dPrice|. Header (panel `:611–613`):
+  "since hh:mm: Δ … · ±x.xx pts · m min · k/pt". `vol` is the flow volume (CR-DM Step 0: buy + sell + unknown).
+- **Per-segment version, reusing that path:** add an optional end (`endTime`) to `anchoredCvd` / `anchorReadout`
+  (null = today's behaviour, so Edges off and no end are byte-identical), and build the per-box series by calling them
+  once per box with (box start, box end), concatenated into one array aligned to `aligned` (null at gaps). Box spans
+  come from `edgeReadout` (UTC) mapped with `shift`. Consequences, stated so the smoke's hand sums use the same rule:
+  - each box's CVD starts at 0 on its first bar and adds bars first + 1 … last (the CR-DC anchor convention);
+  - a frozen box ends on the bar before its break, so **the break bar's own delta is in neither box** (it is the
+    0-point of the next one) — exactly what anchoring at the break bar does today;
+  - box label numbers = `anchorReadout` over (box start, box end): "Δ {delta} · {dPrice} pts · {minutes} m ·
+    {cpp}/pt".
+- **The per-box readout must move up to App** (or a pure helper both call with the same inputs): the label is drawn on
+  the price chart (inside the box) but the CVD rows live in the panel. Plan: App aligns the v2 bars once (the same
+  `alignV2ToCandles` call), computes the box readouts with `edgeReadout`'s spans, and passes them to both.
+
+### 0d — 2026-10-29, anchor 06:49 (close 7736.00), N = 15, bars to 08:23 PT
+
+**CR-DI's current rule produces one break:**
+
+| Box | Edges | Ended | Top buy / sell | Bottom sell / buy |
+|---|---|---|---|---|
+| 06:49–07:33 | 7736.00–7756.25 | **broke 07:34 ↑** (close 7760.00, 3.75 beyond) | 11,839 / 10,424 | 5,130 / 4,730 |
+| 07:34– (current) | 7738.25–7760.00 | current | 7,887 / 6,479 | 4,839 / 4,729 |
+
+Closes after the 07:34 break: 07:35 **7756.25** (exactly at the top) · 07:36 7758.00 · 07:37 7760.25 · 07:38
+**7756.00** · 07:39 7759.50 · 07:40 7756.75 · 07:41 7751.00 · …
+
+**Under item 2 (A = 5) it is a probe.** The answer depends on what "a close back inside" means at the edge price
+itself, and only the strict reading matches the kickoff's A = 1 expectation:
+
+| "Inside" | 07:34 at A = 5 | 07:34 at A = 1 | Item 2 from 06:49, A = 5 |
+|---|---|---|---|
+| **strict** (bottom < close < top) | probe, back 07:38, 4 min outside | **held → old split at 07:34** (as the smoke expects) | one box 06:49– 7736.00–7756.25; probes 07:34 (ext 7761.00, 4 min, 8,025 buy / 7,432 sell beyond the edge), 07:39 (7760.50, 2 min, 3,031 / 2,789), 08:10 (7760.50, 5 min, 7,605 / 7,058) |
+| inclusive (bottom ≤ close ≤ top) | probe, back 07:35, 1 min outside | probe (07:35 closed at 7756.25) → no split until 07:39 | one box; probes 07:34, 07:37, 07:39, 08:10, 08:14 |
+
+With strict "inside" and A = 1 the split is identical to CR-DI's (frozen 06:49–07:33, current 07:34– 7738.25–
+7760.00). **Strict — approved by Ryan in chat 2026-10-29** (see Amendment 1). As of 08:23 PT no
+later break holds; the smoke re-checks on the complete session.
+
+**Held-break date for the smoke: 2026-10-28, anchor 07:00** (complete session, bars to 12:51 PT). Under item 2,
+A = 5, strict: 08:16 ↑, 08:39 ↑, 09:54 ↑ and 11:05 ↓ still freeze and restart exactly as CR-DI (same boxes); the
+later CR-DI breaks 11:29 ↑, 12:12 ↓ and 12:36 ↑ become probes, and the boxes after 11:05 differ (frozen 11:05–11:32
+↑, 11:33–12:05 ↓, 12:06–12:45 ↑, current from 12:46). Output: `breaks_1028_0700_N15_strict.txt`.
+
+**Definitions used (to implement exactly, unless Ryan says otherwise):**
+- *Within A minutes* = the closes of the A bars after the break bar (break + 1 … break + A); a close inside on bar
+  break + A still cancels. If none is inside, the break holds, the box freezes at the bar before the break bar and the
+  new box starts at the break bar and replays from there with the normal growth rule.
+- *Pending:* closes during the A minutes neither grow nor break either edge. A close beyond the *other* edge while
+  pending is ignored until the pending break resolves (none on 2026-10-29 / 10-28).
+- *After a probe* the edge is unchanged and keeps its set time, so the next close > 2 pts beyond starts a new pending
+  break at once (07:39 right after the 07:34 probe).
+- *Probe hover:* extreme = highest high (↑) / lowest low (↓) from the break bar to the bar before the return;
+  minutes outside = return bar − break bar; contracts beyond = aggressor buy and sell of cells strictly beyond the edge
+  price over the same minutes (exact data only, as the edge counts).
+- *An end inside a pending window:* the box ends at the end unchanged and its hover says "break pending at end";
+  nothing freezes.
+- *Live:* a pending break at the last bar shows "testing break hh:mm"; it resolves on later refreshes.
+
+### 0e — items that depend on CR-DM's pane changes (re-check after the rebase)
+
+CR-DM (`feat/CR-DM-volume-strip-live-effort`, read with `git diff 78a50fb …`, not touched) changes the same panel.
+On `78a50fb` rolling net delta is always drawn and there is no volume series.
+
+1. **Item 1c's "unchanged" list** names volume bars and "rolling delta if on": both exist only after CR-DM (volume
+   series `s.vol`, `settings.rollingOn`). Re-check that an end leaves both untouched.
+2. **CVD series and `setData` block** (panel `:340–428`): CR-DM adds `s.vol`, moves rolling to its own scale
+   (`priceScaleId: 'rolling'`, `rolling` null when off) and rewrites the same `setData` effect. Per-segment CVD edits
+   that block → implement only on the rebased code.
+3. **Pane slot layout:** CR-DM's `paneSlotMargins` / `applySlots` set the `cvd` scale's margins. Per-segment CVD stays
+   one series on `priceScaleId: 'cvd'` (one array with resets and whitespace gaps), so `applySlots` keeps working;
+   re-check with rolling on (pane grows) and with the Edge effort strip on.
+4. **⚙ settings:** CR-DM adds `rollingOn` and `liveMinMove` to `DEFAULT_V3_SETTINGS` and the form. Item 2's
+   `breakHoldMin` (A, default 5, 1–15) goes into the same object and form → merge there.
+5. **Header readout / hover JSX:** CR-DM changes the no-anchor text ("CVD from session open · … volume per minute")
+   and the minute hover (`minuteFlow`). Item 3c changes the anchored text in the same block; the hover keeps
+   `cvd[hoverIdx]` (the per-segment array is still aligned to rows).
+6. **App:** CR-DM's `flowPaneExtra` adds `rollingExtraHeight`; CR-DN changes no heights. `flowLiveEffort` (live
+   effort label) is swing-based, not anchored, so an end does not change it (not in item 1c's list; re-check).
+7. **PriceChart:** CR-DM adds the live-effort hover and an import; CR-DN adds the end shading, probe ticks and box
+   labels near `EdgeLinesPrimitive` — no overlap beyond the import line.
+8. **Volume field:** the box label's `/pt` uses `aligned[i].vol`, already on `78a50fb` (CR-DM uses the same field
+   for its bars). No backend change for CR-DN.
+
+### 0f — other notes
+
+- **A27 is not a ruling** (A23–A28 are Ryan's undecided drafts, chat 2026-10-29). The legend quotes the idea as an
+  untested idea, not as A27; nothing is added to the rulings file.
+- 5-minute chart: a click picks a 5-min candle; the end is taken as **the last 1-minute bar inside that candle**
+  (so the box, strip and profile include the whole candle). On the 1-minute chart it is that minute.
+- Replay: if `until` moves before the end (the payload shrinks), the end is dropped (as if "clear end") rather than
+  clamped.
+- No backend change is needed for items 1–3.
+
+## Amendment 1 (Ryan, chat 2026-10-29) — strict "inside"; A27 not a ruling
+
+- **Strict reading approved.** A close exactly on an edge is **not** back inside. Only a close strictly inside the box
+  (below the top / above the bottom: bottom < close < top) cancels a pending break. A break that retests the edge
+  (closes on it) and holds stays a break.
+- The A = 1 smoke stays as written: it reproduces the 07:34 split (Step 0d, strict row).
+- A23–A28 are Ryan's drafts, undecided. The legend quotes "a failed probe can strengthen the fade" as an untested
+  idea, not as A27.
+- Standing rulings conformance unchanged (C2 deviation as approved; A23–A28 n/a, not rulings).
+
+## Amendment 2 (Ryan, chat 2026-10-29) — item 5, absorption levels readable over candles (display only)
+
+Amended before any implementation; implemented as its own commit after items 1–3.
+
+5. **Absorption levels readable over candles** (display only):
+   - a. Absorption level lines draw above the candles (z-order), 1–2 px by contracts as today, not thicker.
+   - b. Labels sit on a small dark pill (the chart's tag background), same text, nudge / collision rules unchanged.
+   - c. Fade: unbroken levels fade from full to a floor of 50 % (was 25 %) over 60 min; broken levels keep today's
+     fade.
+   - d. Each unbroken drawn level gets a price-axis tag in its side colour (magenta buyers absorbed, orange sellers
+     absorbed), price only; tags follow the existing at-most-8 rule.
+   - e. Absorbed (marks) triangles, the Edges boxes and everything else unchanged.
+
+**Rulings (item 5).**
+
+| Ruling | Status | Note |
+|---|---|---|
+| C1 | honoured | existing magenta `#e879f9` (CR-DF) and orange `#fb923c` (CR-DG); pill = the chart's existing crosshair label background `#1e293b` |
+| C2 | **deviates — approved by Ryan in chat 2026-10-29** | an existing display changes (level opacity floor, label pill, axis tags); change-log line added to `standing-rulings.md` |
+
+**Smoke (item 5).** 2026-10-29: the 330-contract buyers-absorbed level is visible over candles with a readable label
+and an axis tag; a broken level still fades as before; a pixel check that nothing else on the chart moved.
+
+**Step 0 for item 5 (read-only, `78a50fb`; re-checked after the rebase — CR-DM touches only PriceChart's imports and
+its live-effort hover here):**
+
+- **Code path:** `flowV3.absorptionLevels` (`flowV3.js:342`: confirmed marks → levels, `alpha = levelAlpha(age)`,
+  `width = levelWidth(contracts)`, `score = contracts × alpha`, top `LEVELS_MAX` = 8 by score) →
+  `AbsorptionLevelsPrimitive` (`flowV3Primitives.js:262`), attached to the **candle series** (`seriesRef.current =
+  candleSeries`, `PriceChart.jsx:1663`) via `feed('levels', …)` (`:2689`). Label: 10 px text at the line's right end,
+  `rgba(side, max(0.55, alpha))`, nudged 0 / −11 / +11+w / −22 px, dropped if all collide.
+- **5a — z-order is already `'top'`** (`AbsorptionLevelsPrimitive.zOrder()` returns `'top'`; `BasePrimitive` passes it
+  to the pane view). In lightweight-charts 5 a `'top'` primitive on the candle series paints after the candles, so the
+  lines may already be above them and what reads as "under" is the 25 % opacity floor plus thin lines and unbacked
+  text. **To verify in the browser before changing anything** (pixel sample on the 330-contract level's row over a
+  candle body); if already on top, 5a is a no-op recorded by that check.
+- **5a — width today is 1–5 px, not 1–2.** `levelWidth`: 1 px ≤ 50 contracts, log scale to 5 px at ≥ 1,500 (CR-DF
+  Step 0: p50 350, max 1,426). A 330-contract level is ≈ 3.2 px. The kickoff says "1–2 px by contracts as today, not
+  thicker": **implemented as "widths unchanged (today's `levelWidth`)"** — nothing gets thicker. Capping at 2 px would
+  be a further visible change. **Ruled by Ryan in chat 2026-10-29: keep today's widths (1–5 px by contracts), no
+  cap** — the 1–2 px in the amendment was chat's guess at current widths, not a request.
+- **5c — selection must not move.** `score = contracts × alpha` picks the 8 drawn levels. Raising the unbroken floor
+  to 0.5 would change which levels are kept (5e: nothing else changes). So: the score keeps today's `levelAlpha`
+  (floor 0.25); only the drawn opacity of an unbroken level uses the 0.5 floor. Broken levels: drawn and scored exactly
+  as today.
+- **5b — pill:** filled rounded rect behind each placed label, `#1e293b` (the price chart's crosshair
+  `labelBackgroundColor`, `PriceChart.jsx:1616`), sized to the measured text plus padding inside the same box the
+  collision test already uses (so placement is unchanged).
+- **5d — axis tags:** `priceAxisViews()` on the levels primitive, one per drawn unbroken level (≤ 8 by construction),
+  text = price, background = side colour. Lightweight-charts does not de-collide primitive axis labels against the GEX
+  line / last-price labels; overlaps are reported in the smoke, not re-laid out (no rule for that in the spec).
+- No backend change.
+
+Commits: … item 3 → **item 5** → smoke + wrap.
+
+## Rebase + Step 0 re-check (after CR-DM merged)
+
+Rebased onto `origin/main` `48858d2` (CR-DM merge `782ca3a` + its test-only follow-up PR #120); no conflicts (the
+branch held only this spec). Step 0e re-checked against the merged code:
+
+| # | Point | Result on `48858d2` |
+|---|---|---|
+| 1 | Item 1c's unchanged series | holds: `s.vol` (volume per minute) and `rolling` (null unless `settings.rollingOn`) are set from `aligned` per bar, not from the anchor; an end does not touch them |
+| 2 | CVD series / `setData` effect | holds: CR-DM's effect (panel `:427–451`) still sets one `s.cvd` series from one `cvd` array (`anchoredCvd(aligned, anchor)`, `:280`); the per-segment array replaces that array only |
+| 3 | Pane slots | holds: `applySlots` (`:405–421`) sets the `cvd` scale's margins from `paneSlotMargins`; CVD stays one BaselineSeries on `priceScaleId: 'cvd'` |
+| 4 | ⚙ settings | holds: `DEFAULT_V3_SETTINGS` (`flowV3.js:13`) now has `rollingOn`, `liveMinMove`; `Settings.apply` (`:141–161`) clamps each with `n(...)`; `breakHoldMin` (A) is added beside `boxHoldMin` the same way |
+| 5 | Header readout / hover | holds: the readout JSX (`:657–662`) has CR-DM's no-anchor text; the anchored text is the only part item 3c changes. The hover (`minuteFlow`) reads `cvd[hoverIdx]`, kept aligned to rows |
+| 6 | App heights / live effort | holds: `flowPaneExtra` = strip + `flowRollingExtra` (`App.jsx:2008–2010`), unchanged by CR-DN; `flowLiveEffort` (`:2035`) uses the v2 `live_leg`, not the anchor — an end does not change it |
+| 7 | PriceChart | holds: CR-DM added `LIVE_EFFORT_ID` to the `flowV3` import and the live-effort hover; the edges / levels / profile code CR-DN changes (`v3Profile`, `v3Edges`, `feed(...)`) is untouched by CR-DM |
+| 8 | Volume field | holds: `aligned[i].vol` is the field CR-DM draws; the box label's `/pt` uses it through `anchorReadout` |
+
+Step 0's line numbers for App / panel shifted by CR-DM; the functions and their behaviour are as Step 0 states.
+
+## Amendment 3 (Ryan, chat 2026-10-29) — item 6, volume strip scale
+
+Received while the item 1–5 smoke was running; amended before any item-6 code. Implemented as its own commit after
+item 5.
+
+6. **Volume strip scale** (CR-DM's volume-per-minute bars):
+   - a. The strip's scale tops out at the 98th-percentile minute volume of the bars currently loaded for the session
+     (recomputed when data loads or refreshes), not the single largest minute.
+   - b. Bars taller than that are drawn at full height with a small cap mark (a 2 px line at the top in the bar's own
+     colour, brighter) so clipped minutes are obvious. Hover still shows the true volume.
+   - c. Nothing else changes: bar colours, slot position and height, hover fields, rolling delta.
+
+**Rulings (item 6).** C1 honoured (the bars' slate, brighter for the cap mark). C2 **deviates — approved by Ryan in
+chat 2026-10-29** (an existing display changes); change-log line added to `standing-rulings.md`. A display scale, no
+research meaning.
+
+**Smoke (item 6).** 2026-10-27 full-day zoom: the 57k closing minute is capped and the rest of the session's bars are
+readable; zoomed in, a normal stretch looks as today if it holds no clipped minute; hover on a capped bar shows its
+true volume.
+
+**Step 0 for item 6 (read-only, on the rebased code):**
+- Volume bars: `s.vol`, a HistogramSeries (`SLATE_RGBA(0.55)`) on the visible `right` scale (on its hidden `vol`
+  scale with rolling on), data `aligned[i].vol` (panel `setData` effect). Its scale autoscales to the **visible**
+  bars' max (lightweight-charts default), so today a full-day view is scaled by the largest minute and a zoomed-in
+  stretch by its own largest minute.
+- Rule that satisfies 6a and the "zoomed in looks as today" smoke together: the drawn value is `min(vol, cap)` with
+  cap = the 98th percentile (nearest rank) of the loaded rows' positive volumes; the scale keeps autoscaling, so it
+  tops out at min(visible max, cap). A stretch with no minute above the cap draws exactly as today; a view holding the
+  57k minute tops out at the cap.
+- Cap mark: a primitive on the volume series draws, for each clipped bar, a 2 px line at the bar's top across the
+  histogram column width (lightweight-charts: `round(barSpacing × pr) − gap`), in the slate at 0.95.
+- Hover reads `minuteFlow(row)` from the rows, not the series, so it keeps the true volume with no change.
+- On the 5-minute chart the rows are 5-minute sums; the cap is the 98th percentile of those rows (the bars drawn).
+
+## Smoke (2026-10-29, on 48858d2 + items 1–6)
+
+Servers: read-only backend `scripts/cr_dm_smoke_backend.py` on 8066 (one DB-backed server), branch frontend 5188,
+origin/main frontend 5189 (detached worktree). Spec `react_price_preview/tests/e2e/cr-dn.spec.js`, 9/9. Logs:
+`scripts/logs/cr-dn/smoke/`; screenshots: `specs/assets/cr-dn/`. Unit 64/64.
+
+| Check | Result |
+|---|---|
+| No end, Edges off (item 4) | 2026-10-28 and 2026-10-29: price chart pixel-identical to origin/main; Flow v3 CVD / delta / rolling data identical; readout identical. The Flow v3 pane's pixels differ by item 6 only (volume bars), so it is compared by its other series' data. 10-29 is live: a pair counts only when both loads saw the same last bars before and after the capture (the first run caught a 7740.50 → 7740.75 last-price tick between capture and read; the test now brackets the capture; 4 tries) |
+| 10-29 anchor 06:49, A = 5 (item 2) | 07:34 is a probe (back inside 07:38, 4 min outside, extreme 7761.00, 8,025 buyers / 7,432 sellers beyond the edge); probes 07:39 and 08:10 too; one box from 06:49 until a later break **holds at 08:24 ↑** (box 06:49–08:23), then 08:45 ↓, 09:12 ↓ (until 09:30) |
+| 10-29 anchor 06:49, A = 1 | the old split at 07:34 (06:49–07:33 / 07:34–…); CVD reads −334 on 07:33 with a gap, restarts at 0 on 07:34; every box label = hand sums from the v2 bars and candle closes (4/4) |
+| Set end 06:57 (item 1) | one box 06:49–06:57; readout `box from 06:49: Δ -724 · +1.00 pts · 8 min · 43.9k/pt` = hand sums; strip 7 minutes; profile only those minutes; header `06:49 → 06:57 · 8 min` |
+| 10-28 anchor 07:00, held breaks | 08:16 / 08:39 / 09:54 / 11:05 hold as in CR-DI (plus 11:33 / 12:06 / 12:46 later in the session), no probes; labels on the 5 drawn boxes |
+| Replay until 10-28 08:09 | no bar after until in the boxes or the CVD (box 07:00–08:08); an end after until is ignored |
+| Item 5, 10-29 until 08:26 | the 330-contract buyers-absorbed level (7760.25) paints over both candles that reach it, drawAlpha 0.90, pill label, magenta axis tag; outside the level's line / label / tag the chart is pixel-identical to origin/main (0 px); GEX lines identical |
+| Item 5, 10-29 until 09:30 | 7760.25 broke at 08:27: it keeps today's fade (0.25) and has no axis tag; the unbroken 7751.25 sellers level has its orange tag |
+| Item 6, 10-27 | cap 7,326 (p98 of the loaded minutes); 7 minutes capped incl. 12:59 (57,094); hover `12:59 · vol 57.1k …`; 10:00–11:00 has no clipped minute and the same bar values and scale range as origin/main once the page is loaded at that zoom |
+
+**Item 6 side effect (not in the spec):** the flow pane's price axis sizes to its tick labels, so with the scale topped
+at 7,326 instead of 57,094 the axis on 10-27 is 52 px wide instead of 60 px, and the flow plot sits a few px off the
+price chart's time axis (on origin/main it is already ~5 px off at 10:30). Not pinned in this CR; listed in the session
+note for Ryan.
+
+**Existing specs** (same servers; `scripts/logs/cr-dn/smoke/e2e-recent.txt`): cr-di 6/6, cr-df 6/6, cr-dg 4 + 1
+skipped (live), cr-dk 7/7, cr-dc 6/6, cr-de 7/7, cr-db 4/5, cr-dm 3/5, cr-dh price chart 3/3.
+- cr-di / cr-df updated for intended changes: cr-df reads the anchor from the panel's new `data-anchor` attribute and
+  accepts the `box from` readout; cr-di expects `broke ↑ hh:mm` in the box tooltip and compares the Flow v3 series data
+  instead of its pixels (item 6 changes the volume bars).
+- cr-db `keys T / S / U` fails on origin/main too (known, CR-DM wrap).
+- cr-dm `default: volume…` and `rolling net delta on` assert a **pre-CR-DM** baseline (`main.mid === 'rolling'`); they
+  fail identically with origin/main on both sides (`e2e-crdm-main-vs-main.txt`), so baseline, not CR-DN.
+- The run also picked up older specs (cr-bv, cr-cd, cr-cd-a5, cr-ch, cr-ck, cr-cq, cr-dh Dashboard) that need their own
+  servers / ports (8062, 8064, 5176–5179, a Dash server); they time out on connection, not on CR-DN code.
+
+## Amendment 4 (Ryan, chat 2026-10-29) — item 7, axis alignment; cr-dm specs; merge
+
+7. Pin the Flow v3 pane's right price-axis width to the price chart's right price-axis width (same px, tracked if the
+   price chart's axis width changes), so the two time axes align exactly. Check 2026-10-27 and 2026-10-29 at 06:30,
+   10:30 and 12:59 PT: bar centres in both panes at the same x (±1 px). Expected to close CR-DK's open question
+   (Flow v3 bars ≈ 9 px right of the price chart); recorded in both session notes.
+8. Re-point the two cr-dm layout specs to the post-CR-DM baseline (origin/main). Test-only.
+9. Re-run cr-dn, cr-dm, cr-di, cr-dk; merge PR #122 with a merge commit; confirm on origin/main. No deploy.
+
+**Rulings (item 7).** C1 n/a (no colour). C2: a layout change to an existing view, requested by Ryan in this amendment
+(it fixes a misalignment, nothing is added); recorded here and in the session note.
+
+**Step 0 for item 7 (measured before any code, `scripts/logs/cr-dn/smoke/align-main.json` / `align-branch.json`,
+1440 × 900, full-day frame).** Both charts are 1428 px wide at x = 0 and share the logical range, so bar x differs only
+by plot width (chart width − right axis):
+
+| | price axis | flow axis | dx 06:30 | dx 10:30 | dx 12:59 |
+|---|---|---|---|---|---|
+| origin/main, 10-27 and 10-29 | 70 | 60 | +0.1 | +6.2 | +9.9 |
+| branch before item 7, 10-27 | 70 | 52 | +0.1 | +11.1 | +17.9 |
+| branch before item 7, 10-29 | 70 | 58 | +0.1 | +7.4 | +11.9 |
+
+The ≈ 9–10 px at the session's right end is CR-DK's offset; item 6 widened it on 10-27. Rule: the flow chart's
+`rightPriceScale.minimumWidth` = the price chart's right-axis width, reported by PriceChart through a ResizeObserver
+on its price-axis cell (lightweight-charts lays the axis out as a table cell), so a change in the price chart's labels
+is tracked. `minimumWidth` cannot shrink an axis; the flow axis's own labels (k-formatted, ≤ 60 px measured) are
+narrower than the price axis (70 px), and the smoke asserts equality.
+
+**Smoke (amendment 4, 2026-10-29).** Item 7: 2026-10-27 and 10-29 at 06:30 / 10:30 / 12:59 PT, Flow v3 bar centres
+at the price chart's x, dx 0 / 0 / 0 px (was +0.1 / +6.2 / +9.9 on origin/main); axes 70 / 70; widening the price axis
+to 96 px moves the flow axis to 96 (`align-branch.json`, `align-main.json`). CR-DK's ≈ 9 px open question closed.
+Item 8: cr-dm's two layout tests re-pointed, pass. Re-run (`e2e-amend4.txt`): cr-dn 10/10 (+ the origin/main
+measurement, skipped by default), cr-dm 5/5, cr-di 6/6, cr-dk 7/7. Unit 64/64.

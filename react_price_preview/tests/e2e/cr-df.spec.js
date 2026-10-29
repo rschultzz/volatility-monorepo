@@ -138,15 +138,14 @@ const pathOf = (u) => {
 async function setAnchor(page) {
   const swing = page.getByTestId('flow-v3-anchor-swing')
   await page.getByTestId(await swing.isEnabled() ? 'flow-v3-anchor-swing' : 'flow-v3-anchor-open').click()
-  await expect(page.getByTestId('flow-v3-readout')).toContainText('since ', { timeout: 20_000 })
+  // CR-DN item 3c: with Edges on the readout reads the current box ("box from hh:mm"), so the anchor is read from the
+  // panel's data-anchor (the shifted anchor time) instead of the readout text
+  await expect(page.getByTestId('flow-v3-readout')).toContainText(/since |box from /, { timeout: 20_000 })
 }
 
-async function anchorFromReadout(page, day) {
-  const txt = await page.getByTestId('flow-v3-readout').innerText()
-  const m = /since (\d{2}):(\d{2})/.exec(txt)
-  if (!m) return null
-  // ETH starts 15:00 PT the day before the session (RTH ends 13:00), so a time >= 15:00 is on the prior day
-  return shifted(`${day}T${m[1]}:${m[2]}`) - (Number(m[1]) >= 15 ? 86400 : 0)
+async function anchorFromReadout(page, day) { // eslint-disable-line no-unused-vars
+  const v = await page.getByTestId('flow-v3-panel').getAttribute('data-anchor')
+  return v ? Number(v) : null
 }
 
 // Levels and readout on one date: the drawn levels and the header text are the payload's.

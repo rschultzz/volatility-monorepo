@@ -10,7 +10,10 @@ export const CROWDED_TICK_PX = 3 // DC7: one tick shorter than this -> 0.5-pt ce
 export const ROLLING_CHOICES = [5, 10, 15]
 // CR-DM: rolling net delta is a ⚙ option, off by default (volume per minute takes its slot); liveMinMove = the live
 // effort label's minimum move in points (⚙, a display default, not a tested threshold).
-export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: false, liveMinMove: 4 }
+export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: false, liveMinMove: 4, breakHoldMin: 5 }
+// CR-DN item 2: a break must hold A minutes (no 1-minute close strictly back inside the box) before the box freezes (⚙;
+// a display default, not a tested threshold).
+export const BREAK_HOLD_MIN_RANGE = [1, 15]
 export const LIVE_MIN_MOVE_RANGE = [2, 12]
 // CR-DI amendment 9: an Edges box edge must hold this many minutes before a close beyond it freezes the box (⚙; a display
 // default, not a tested threshold).
@@ -49,8 +52,9 @@ export function floorIndex(times, t) {
 const fin = (v) => Number.isFinite(Number(v)) && v !== null
 
 // DC5: CVD from 0 at the anchor bar, accumulating from the next bar; null before the anchor. With no
-// anchor the v2 CVD (from the session open) is returned unchanged.
-export function anchoredCvd(rows, anchorTime) {
+// anchor the v2 CVD (from the session open) is returned unchanged. CR-DN item 1: with `endTime` (shifted), null
+// after the last row at or before it.
+export function anchoredCvd(rows, anchorTime, endTime = null) {
   const list = Array.isArray(rows) ? rows : []
   if (anchorTime == null) return list.map((r) => (fin(r.cvd) ? Number(r.cvd) : null))
   const a = floorIndex(list.map((r) => r.time), anchorTime)
@@ -59,6 +63,7 @@ export function anchoredCvd(rows, anchorTime) {
   let acc = 0
   out[a] = 0
   for (let i = a + 1; i < list.length; i += 1) {
+    if (endTime != null && list[i].time > endTime) break
     if (!fin(list[i].delta)) continue
     acc += Number(list[i].delta)
     out[i] = acc
@@ -67,14 +72,16 @@ export function anchoredCvd(rows, anchorTime) {
 }
 
 // DC5 header readout: delta, price change, minutes and contracts per point from the anchor bar to the
-// last bar with data. `closes[i]` is the candle close aligned with rows[i]. Null without an anchor.
-export function anchorReadout(rows, closes, anchorTime) {
+// last bar with data. `closes[i]` is the candle close aligned with rows[i]. Null without an anchor. CR-DN item 1:
+// with `endTime` (shifted), the last bar with data at or before it.
+export function anchorReadout(rows, closes, anchorTime, endTime = null) {
   const list = Array.isArray(rows) ? rows : []
   if (anchorTime == null || !list.length) return null
   const a = floorIndex(list.map((r) => r.time), anchorTime)
   if (a < 0) return null
   let last = -1
   for (let i = list.length - 1; i > a; i -= 1) {
+    if (endTime != null && list[i].time > endTime) continue
     if (fin(list[i].delta)) {
       last = i
       break
@@ -153,6 +160,16 @@ export function paneSlotMargins(pane0Px, extraPx) {
     low: m(0.74 * B, 0.70 * B + X),
     delta: m(0.74 * B + X, 0.98 * B + X),
   }
+}
+
+// CR-DN item 6: the volume bars' scale cap = the 98th percentile (nearest rank) of the loaded rows' positive volumes
+// (null with no volume). Bars are drawn at min(vol, cap) and the scale keeps autoscaling, so it tops out at
+// min(visible max, cap): a stretch with no minute above the cap draws as before. A display scale, no research meaning.
+export const VOLUME_CAP_Q = 0.98
+export function volumeCap(rows, q = VOLUME_CAP_Q) {
+  const v = (Array.isArray(rows) ? rows : []).map((r) => Number(r?.vol)).filter((x) => Number.isFinite(x) && x > 0).sort((a, b) => a - b)
+  if (!v.length) return null
+  return v[Math.min(v.length - 1, Math.max(0, Math.ceil(q * v.length) - 1))]
 }
 
 // CR-DM item 3: the live effort label for the leg in progress (the payload's `live_leg`: swing_legs' end state with
@@ -347,6 +364,9 @@ export const kfmt = (v) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(1)}k` : 
 export const LEVELS_MAX = 8 // DF3
 export const LEVEL_FADE_MIN = 60 // DF2: opacity 1 at 0 min -> LEVEL_ALPHA_MIN at 60 min, then flat
 export const LEVEL_ALPHA_MIN = 0.25
+// CR-DN item 5c: an unbroken level is *drawn* fading to this floor (broken levels keep LEVEL_ALPHA_MIN). The selection
+// score keeps levelAlpha with LEVEL_ALPHA_MIN, so the drawn set of LEVELS_MAX levels is unchanged.
+export const LEVEL_ALPHA_MIN_UNBROKEN = 0.5
 export const EDGE_BREAK_PTS = 2 // DF4 (CR-CP A1.1 / A1.2): only a close > 2 pts beyond moves the edge
 export const EDGE_NEAR_PTS = 1 // contracts and first touch within 1 pt of the edge
 
@@ -357,9 +377,9 @@ export function levelWidth(contracts) {
   return Math.min(5, 1 + (4 * Math.log(c / 50)) / Math.log(30))
 }
 
-export function levelAlpha(ageMin) {
+export function levelAlpha(ageMin, floor = LEVEL_ALPHA_MIN) {
   const a = Math.max(0, Number(ageMin) || 0)
-  return 1 - (1 - LEVEL_ALPHA_MIN) * (Math.min(a, LEVEL_FADE_MIN) / LEVEL_FADE_MIN)
+  return 1 - (1 - floor) * (Math.min(a, LEVEL_FADE_MIN) / LEVEL_FADE_MIN)
 }
 
 // End of the last 1-minute bar in the payload (UTC epoch), or null.
@@ -407,6 +427,7 @@ export function absorptionLevels(payload, candleTimes, shift, max = LEVELS_MAX) 
       all.push({
         kind: mk.kind, price: Number(mk.price), start, end, broken, contracts, opposite: Number(mk.opposite),
         heldMin: held, ageMin, alpha, width: levelWidth(contracts), score: contracts * alpha,
+        drawAlpha: broken ? alpha : levelAlpha(ageMin, LEVEL_ALPHA_MIN_UNBROKEN), // CR-DN item 5c
         label: `${side} absorbed ${kfmt(contracts)} · ${held} min`,
       })
     }
@@ -481,28 +502,44 @@ export function edgeCounts(payload, t0, t1, top, bottom) {
 
 const total = (a) => a.reduce((x, v) => x + v, 0)
 
-// One box over bars [j0, j1]: edges from j0's close, moved by closes > EDGE_BREAK_PTS beyond (growth); first touch
-// within EDGE_NEAR_PTS; contracts from edgeCounts against the final edges (null when not exact).
-function boxStats(payload, bars, j0, j1, exact) {
-  let top = bars.c[j0]
-  let bottom = bars.c[j0]
-  let topMoved = null
-  let bottomMoved = null
-  let topMoves = 0
-  let bottomMoves = 0
-  for (let i = j0 + 1; i <= j1; i += 1) {
-    const c = bars.c[i]
-    if (c > top + EDGE_BREAK_PTS + 1e-9) {
-      top = c
-      topMoved = bars.t[i]
-      topMoves += 1
-    }
-    if (c < bottom - EDGE_BREAK_PTS - 1e-9) {
-      bottom = c
-      bottomMoved = bars.t[i]
-      bottomMoves += 1
+// CR-DN item 2: one cancelled break (a probe) from break bar `p.i` to the bar before the close back inside (`back`):
+// the extreme beyond the edge, minutes outside, and the aggressor contracts of cells strictly beyond the edge over those
+// minutes (null when not exact). `box` = the start (UTC) of the box it belongs to.
+function probeStats(payload, bars, p, back, edge, box, exact) {
+  const up = p.dir === 'up'
+  let ext = up ? -Infinity : Infinity
+  for (let k = p.i; k < back; k += 1) ext = up ? Math.max(ext, bars.h[k]) : Math.min(ext, bars.l[k])
+  let buy = null
+  let sell = null
+  if (exact) {
+    buy = 0
+    sell = 0
+    const e = Math.round(edge / TICK)
+    const t0 = bars.t[p.i]
+    const t1 = bars.t[back - 1]
+    for (const s of Array.isArray(payload?.segments) ? payload.segments : []) {
+      const c = s?.cells || {}
+      const n = Array.isArray(c.t) ? c.t.length : 0
+      for (let j = 0; j < n; j += 1) {
+        const t = Number(c.t[j])
+        if (t < t0 || t > t1) continue
+        const pr = Number(c.p[j])
+        if (up ? pr > e : pr < e) {
+          buy += Number(c.buy[j]) || 0
+          sell += Number(c.sell[j]) || 0
+        }
+      }
     }
   }
+  return { at: bars.t[p.i], dir: p.dir, edge, extreme: ext, minutesOutside: back - p.i, back: bars.t[back], buy, sell, box }
+}
+
+// One box over bars [j0, j1] with its final edges `e` as edgeReadout's loop left them (CR-DN item 2: a probe's closes
+// never move an edge, so the edges can't be re-derived from the closes): { top, bottom, topMoved, bottomMoved,
+// topMoves, bottomMoves } (growth moves); first touch within EDGE_NEAR_PTS; contracts from edgeCounts against the final
+// edges (null when not exact).
+function boxStats(payload, bars, j0, j1, exact, e) {
+  const { top, bottom, topMoved, bottomMoved, topMoves, bottomMoves } = e
   let topTouch = null
   let bottomTouch = null
   for (let i = j0; i <= j1 && (topTouch == null || bottomTouch == null); i += 1) {
@@ -529,8 +566,15 @@ function boxStats(payload, bars, j0, j1, exact) {
 // only when every bar since the anchor is on an exact segment (else null and `exact` false); `minutes` are the same
 // cells per minute (CR-DI strip), so the contracts are their sums. First touch: the first minute of the box whose high
 // (top) / low (bottom) came within EDGE_NEAR_PTS of the edge; `brokeAt` / `breaks` on an edge = its growth moves.
-// `holdMin` is a display default (⚙), not a tested threshold. Null without an anchor or bars.
-export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAULT_V3_SETTINGS.boxHoldMin) {
+// `holdMin` is a display default (⚙), not a tested threshold. Null without an anchor or bars. CR-DN item 1: with
+// `endShifted`, bars after it are ignored (the last box ends on the last bar at or before it; `end` = that bar).
+// CR-DN item 2 (replaces the single-close break): such a close starts a *pending* break; the box freezes only if no
+// close comes back strictly inside it (bottom < close < top) within `breakHoldMin` (A) bars, and then the freeze and
+// the new box's start are the original break bar. A close back inside cancels it: the box is unchanged and the break
+// is a probe (`probes` on its box: break bar, extreme, minutes outside, contracts beyond the edge). While pending,
+// nothing grows or breaks; `pending` is the unresolved break at the last bar (or the end), else null.
+export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAULT_V3_SETTINGS.boxHoldMin, endShifted = null,
+  breakHoldMin = DEFAULT_V3_SETTINGS.breakHoldMin) {
   if (anchorShifted == null || !bars?.t?.length) return null
   let i0 = -1
   for (let i = 0; i < bars.t.length; i += 1) {
@@ -540,41 +584,66 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
     }
   }
   if (i0 < 0) return null
-  const last = bars.t.length - 1
+  let last = bars.t.length - 1
+  if (endShifted != null) while (last > i0 && shift(bars.t[last]) > endShifted) last -= 1
   let exact = true
   for (let i = i0; i <= last; i += 1) if (!bars.exact[i]) exact = false
   const hold = Math.max(0, Number(holdMin) || 0) * 60
+  const accept = Math.max(1, Math.round(Number(breakHoldMin) || 1))
   const spans = [] // [first bar, last bar, dir of the break that ended it]
+  const probes = [] // CR-DN item 2: cancelled breaks, oldest first
+  let pending = null // CR-DN item 2: { i: break bar, dir }
   let j0 = i0
   let top = bars.c[i0]
   let bottom = bars.c[i0]
   let topSet = bars.t[i0]
   let bottomSet = bars.t[i0]
+  let moves = { topMoved: null, bottomMoved: null, topMoves: 0, bottomMoves: 0 }
+  const edgesNow = () => ({ top, bottom, ...moves })
   for (let i = i0 + 1; i <= last; i += 1) {
     const c = bars.c[i]
+    if (pending) {
+      // Strictly inside (Amendment 1): a close on the edge is not back inside. Inside within A bars = a probe.
+      if (c < top - 1e-9 && c > bottom + 1e-9) {
+        probes.push(probeStats(payload, bars, pending, i, pending.dir === 'up' ? top : bottom, bars.t[j0], exact))
+        pending = null
+        continue
+      }
+      if (i - pending.i < accept) continue
+      // held: the box freezes on the bar before the break bar, the new box starts at the break bar and replays from it
+      const ib = pending.i
+      spans.push([j0, ib - 1, pending.dir, edgesNow()])
+      pending = null
+      j0 = ib
+      top = bars.c[ib]
+      bottom = bars.c[ib]
+      topSet = bars.t[ib]
+      bottomSet = bars.t[ib]
+      moves = { topMoved: null, bottomMoved: null, topMoves: 0, bottomMoves: 0 }
+      i = ib
+      continue
+    }
     const up = c > top + EDGE_BREAK_PTS + 1e-9
     const down = c < bottom - EDGE_BREAK_PTS - 1e-9
     if ((up && bars.t[i] - topSet >= hold) || (down && bars.t[i] - bottomSet >= hold)) {
-      spans.push([j0, i - 1, up ? 'up' : 'down'])
-      j0 = i
-      top = c
-      bottom = c
-      topSet = bars.t[i]
-      bottomSet = bars.t[i]
+      pending = { i, dir: up ? 'up' : 'down' }
       continue
     }
     if (up) {
       top = c
       topSet = bars.t[i]
+      moves = { ...moves, topMoved: bars.t[i], topMoves: moves.topMoves + 1 }
     }
     if (down) {
       bottom = c
       bottomSet = bars.t[i]
+      moves = { ...moves, bottomMoved: bars.t[i], bottomMoves: moves.bottomMoves + 1 }
     }
   }
   const tLast = bars.t[last]
-  const frozen = spans.map(([a, z, dir]) => {
-    const box = boxStats(payload, bars, a, z, exact)
+  const probesOf = (from) => probes.filter((p) => p.box === from)
+  const frozen = spans.map(([a, z, dir, e]) => {
+    const box = { ...boxStats(payload, bars, a, z, exact, e), probes: probesOf(bars.t[a]) }
     const end = bars.t[z + 1]
     const held = (e) => (e.firstTouch == null ? null : Math.round((end - e.firstTouch) / 60))
     return {
@@ -582,10 +651,11 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
       top: { ...box.top, heldMin: held(box.top) }, bottom: { ...box.bottom, heldMin: held(box.bottom) },
     }
   })
-  const cur = boxStats(payload, bars, j0, last, exact)
+  const cur = { ...boxStats(payload, bars, j0, last, exact, edgesNow()), probes: probesOf(bars.t[j0]) }
   const held = (e) => (e.firstTouch == null ? null : Math.round((tLast - e.firstTouch) / 60))
   return {
-    ...cur, anchor: bars.t[i0], exact, holdMin: Number(holdMin), frozen,
+    ...cur, anchor: bars.t[i0], exact, holdMin: Number(holdMin), breakHoldMin: accept, frozen, end: endShifted == null ? null : bars.t[last],
+    pending: pending ? { at: bars.t[pending.i], dir: pending.dir, edge: pending.dir === 'up' ? top : bottom } : null,
     startDir: frozen.length ? frozen[frozen.length - 1].dir : null,
     top: { ...cur.top, heldMin: held(cur.top) }, bottom: { ...cur.bottom, heldMin: held(cur.bottom) },
   }
@@ -718,5 +788,74 @@ export function edgeText(r, hhmm) {
     return `${name} ${e.price.toFixed(2)} · ${vol}${held}${moved}`
   }
   const box = r.frozen?.length ? `Box from ${hhmm(r.from)} ${dirArrow(r.startDir)} · ` : ''
-  return `${box}${one('Top', r.top, 'buyers')} | ${one('Bottom', r.bottom, 'sellers')}`
+  const testing = r.pending ? `testing break ${hhmm(r.pending.at)} ${dirArrow(r.pending.dir)} · ` : '' // CR-DN item 2
+  return `${testing}${box}${one('Top', r.top, 'buyers')} | ${one('Bottom', r.bottom, 'sellers')}`
+}
+
+// CR-DN item 3 — boxes as segments. The drawn boxes (drawnBoxes: the last FROZEN_BOXES_MAX frozen + the current) as
+// CVD segments in shifted time, oldest first: from = the box's first bar, to = its last bar (a frozen box ends on the
+// bar before its break; the current one on the last bar or the end). `dropped` = older boxes whose segments aren't drawn.
+export function boxSegments(r, shift, max = FROZEN_BOXES_MAX) {
+  if (!r) return null
+  const { boxes, dropped } = drawnBoxes(r, max)
+  return { spans: boxes.map((b) => ({ from: shift(b.from), to: shift(b.to) })), dropped }
+}
+
+// The candle close aligned with each pane row (rows[i].time = shifted candle time), as the anchored readout uses.
+export function rowCloses(rows, candles, shift) {
+  const m = new Map()
+  for (const c of Array.isArray(candles) ? candles : []) m.set(shift(c.time), Number(c.close))
+  return (Array.isArray(rows) ? rows : []).map((r) => m.get(r.time))
+}
+
+// Per-segment anchored CVD through the same anchoredCvd: each span restarts at 0 on its first bar and runs to its last
+// bar; rows outside every span are null. `gapAt` = the last row of each span but the newest: the pane draws the line
+// from there to the next span's 0 transparent, so segments don't join.
+export function segmentCvd(rows, spans) {
+  const list = Array.isArray(rows) ? rows : []
+  const out = new Array(list.length).fill(null)
+  const owner = new Array(list.length).fill(-1)
+  ;(spans || []).forEach((sp, k) => {
+    const c = anchoredCvd(list, sp.from, sp.to)
+    for (let i = 0; i < c.length; i += 1) {
+      if (c[i] == null) continue
+      out[i] = c[i] // a later span's 0 overwrites the previous span's last value on a shared (5-min) row
+      owner[i] = k
+    }
+  })
+  const gapAt = new Set()
+  for (let i = 0; i + 1 < list.length; i += 1) if (owner[i] >= 0 && owner[i + 1] >= 0 && owner[i + 1] !== owner[i]) gapAt.add(i)
+  return { cvd: out, gapAt }
+}
+
+// The anchored readout of each span (anchorReadout over [from, to]), in span order.
+export function segmentReadouts(rows, closes, spans) {
+  return (spans || []).map((sp) => anchorReadout(rows, closes, sp.from, sp.to))
+}
+
+// Box label: "Δ +1.2k · +7.5 pts · 45 m · 1.8k/pt".
+export function boxLabelText(ro) {
+  if (!ro) return ''
+  const d = Number(ro.delta) || 0
+  const pts = ro.dPrice == null ? '–' : `${ro.dPrice >= 0 ? '+' : ''}${ro.dPrice.toFixed(1)} pts`
+  return `Δ ${d >= 0 ? '+' : '-'}${kfmt(Math.abs(d))} · ${pts} · ${ro.minutes} m · ${ro.cpp == null ? '–' : kfmt(ro.cpp)}/pt`
+}
+
+// CR-DN item 1 — set end. The picked end (shifted candle time) is stored as the last 1-minute bar inside that candle
+// (`stepSec` = the chart's candle step: 60 on the 1-minute chart, 300 on 5-minute), so a 5-minute pick keeps the whole
+// candle. Valid only after the anchor and not after the payload's last bar (`lastShifted`: live = now, replay /
+// review = the until time); else null (the pick is ignored).
+export function endFromPick(t, stepSec, anchor, lastShifted) {
+  const v = Number(t)
+  if (!Number.isFinite(v) || anchor == null) return null
+  const end = v + Math.max(0, (Number(stepSec) || 60) - 60)
+  if (!(v > anchor)) return null
+  if (lastShifted != null && v > lastShifted) return null
+  return lastShifted != null ? Math.min(end, lastShifted) : end
+}
+
+// "06:49 → 06:57 · 8 min" for the header (hhmm formats a shifted epoch).
+export function endWindowText(anchor, end, hhmm) {
+  if (anchor == null || end == null) return ''
+  return `${hhmm(anchor)} → ${hhmm(end)} · ${Math.round((end - anchor) / 60)} min`
 }
