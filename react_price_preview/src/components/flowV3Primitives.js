@@ -606,6 +606,31 @@ export class VolumeCapPrimitive extends BasePrimitive {
   }
 }
 
+// CR-DP item 6b — cap marks on the anchored delta-share line: for each bar beyond the fixed ±10 % scale (drawn clipped
+// at ±10 %), a short 2 px tick at the clip, one bar spacing wide. data: { marks: [{ time (shifted), up }], cap, color }.
+export class ShareCapPrimitive extends BasePrimitive {
+  zOrder() {
+    return 'top'
+  }
+
+  paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr }, chart, series, d) {
+    if (!d.marks?.length || d.cap == null) return
+    const yUp = series.priceToCoordinate(d.cap)
+    const yDn = series.priceToCoordinate(-d.cap)
+    if (yUp == null || yDn == null) return
+    const ts = chart.timeScale()
+    const w = Math.max(3, Math.round((Number(ts.options().barSpacing) || 6) * hr))
+    const h = Math.max(1, Math.round(2 * vr))
+    ctx.fillStyle = d.color
+    for (const m of d.marks) {
+      const x = ts.timeToCoordinate(m.time)
+      if (x == null) continue
+      const y = Math.round((m.up ? yUp : yDn) * vr)
+      ctx.fillRect(Math.round(x * hr) - Math.floor(w / 2), m.up ? y - h : y, w, h)
+    }
+  }
+}
+
 // CR-DN item 1 — the Flow v3 anchor → end window, shaded lightly behind the candles (existing slate, low opacity; C1).
 // data: { from, to (shifted epochs; `to` = the end's last 1-minute bar), times (shifted candle times) }: the shade runs
 // from the anchor candle's left edge to the end candle's right edge, half a bar spacing either side.

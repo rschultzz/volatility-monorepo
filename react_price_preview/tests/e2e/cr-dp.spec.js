@@ -258,3 +258,125 @@ test('item 4: 2026-10-29 anchor 06:49, Edges on — popup near the box with orig
   await ctxB.close()
   await ctxM.close()
 })
+
+const ptShift = (utc) => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    .formatToParts(new Date(utc * 1000)).map((x) => [x.type, x.value]))
+  return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) / 1000
+}
+const hm = (shiftedT) => new Date(shiftedT * 1000).toISOString().slice(11, 16)
+const lineData = (page) => page.evaluate((fn) => {
+  const { flow } = eval(fn) // eslint-disable-line no-eval
+  return flow.reg.cvd.data().map((p) => ({ time: p.time, value: p.value ?? null }))
+}, CHARTS_FN)
+
+async function pickAt(page, testId, shiftedT) {
+  await page.getByTestId(testId).click()
+  const p = await page.evaluate(({ t, fn }) => {
+    const { priceEl, price } = eval(fn) // eslint-disable-line no-eval
+    const rect = priceEl.getBoundingClientRect()
+    const bar = price.series.data().find((x) => x.time === t)
+    return { x: rect.x + price.chart.timeScale().timeToCoordinate(t), y: rect.y + price.series.priceToCoordinate(bar.close) }
+  }, { t: shiftedT, fn: CHARTS_FN })
+  await page.mouse.click(p.x, p.y)
+  await page.waitForTimeout(1500)
+}
+
+const v2Payload = (page, until) => page.evaluate(async ({ api, day, until: u }) => {
+  const url = new URL(`${api}/api/ironbeam/flow`)
+  Object.entries({ trade_date: day, session: 'RTH', mode: 'v2', m_swing: 8, m_push: 500, m_div: 300, m_fade: 0.1, m_gap: 30, effort: 1, until: u })
+    .forEach(([k, v]) => url.searchParams.set(k, String(v)))
+  return (await fetch(url, { credentials: 'include' })).json()
+}, { api: API_BASE, day: D29, until })
+
+// Σ delta ÷ Σ vol of the v2 minute bars after `from` up to `last` (shifted PT epochs), straight from the payload.
+const handShare = (payload, from, last) => {
+  let sd = 0
+  let sv = 0
+  for (const bar of payload.bars) {
+    const t = ptShift(Number(bar.time))
+    if (t > from && t <= last) {
+      sd += Number(bar.delta) || 0
+      sv += Number(bar.vol) || 0
+    }
+  }
+  return { sd, sv, share: sd / sv }
+}
+
+test('item 6: delta-share line (2026-10-29): box 10:15–10:34 ≈ +1 % = hand Σ delta ÷ Σ volume; per box with Edges on; fixed ±10 % with guides; raw CVD / no anchor = origin/main', async ({ browser }) => {
+  const until = process.env.CRDP_D29_UNTIL_FULL || `${D29}T13:00`
+  const a = shifted(`${D29}T10:15`)
+  const e = shifted(`${D29}T10:34`)
+  const ctxB = await browser.newContext()
+  const ctxM = await browser.newContext()
+  const b = await ctxB.newPage()
+  const m = await ctxM.newPage()
+  await open(b, D29, { storage: EDGES, until })
+  await open(m, D29, { base: BASELINE, storage: EDGES, until })
+
+  // no anchor: session CVD, identical to origin/main
+  expect(await lineData(b)).toEqual(await lineData(m))
+
+  // box 10:15 → 10:34 (anchor + set end, Edges on): one segment
+  await anchorAt(b, a, a + 3600)
+  await pickAt(b, 'flow-v3-end-pick', e)
+  const payload = await v2Payload(b, until)
+  const h = handShare(payload, a, e)
+  const line = await lineData(b)
+  const boxes = await b.evaluate((fn) => {
+    const { price } = eval(fn) // eslint-disable-line no-eval
+    return price.prims.edges._data.boxes.map((x) => ({ from: x.from, lastUtc: x.box.to, frozen: x.frozen, readout: x.box.readout }))
+  }, CHARTS_FN)
+  const popupHead = await b.getByTestId('flow-v3-box-popup-head').innerText()
+  const rec = { boxes: boxes.map((x) => ({ from: hm(x.from), last: hm(ptShift(x.lastUtc)), frozen: x.frozen, share: x.readout ? x.readout.delta / x.readout.vol : null })),
+    hand: h, lineAtEnd: line.find((p) => p.time === e)?.value ?? null, popupHead }
+  log('item6-1015-1034.json', rec)
+  expect(boxes.length).toBe(1) // no break inside 10:15–10:34
+  expect(Math.abs(rec.lineAtEnd - Math.max(-0.1, Math.min(0.1, h.share)))).toBeLessThan(1e-9)
+  expect(Math.abs(boxes[0].readout.delta / boxes[0].readout.vol - h.share)).toBeLessThan(1e-9)
+  expect(popupHead).toContain(`share ${h.share >= 0 ? '+' : ''}${(h.share * 100).toFixed(2)} %`)
+  expect(Math.abs(h.share - 0.01)).toBeLessThan(0.01) // "near +1 %"
+  expect(line.find((p) => p.time === a)?.value ?? null).toBeNull() // nothing summed at the start bar
+  expect(line.filter((p) => p.value != null && (p.time <= a || p.time > e))).toEqual([]) // only the window is drawn
+
+  // the fixed scale and guides
+  const scale = await b.evaluate((fn) => {
+    const { flow } = eval(fn) // eslint-disable-line no-eval
+    const r = flow.reg.cvd.priceScale().getVisibleRange()
+    return { from: r.from, to: r.to }
+  }, CHARTS_FN)
+  log('item6-scale.json', scale)
+  expect(scale.from).toBeLessThanOrEqual(-0.1 + 1e-9)
+  expect(scale.to).toBeGreaterThanOrEqual(0.1 - 1e-9)
+  expect(scale.to - scale.from).toBeLessThan(0.25)
+
+  // anchor 06:49 with Edges on (no end): each box restarts; each box's last value = its readout's share = hand sums
+  await b.getByTestId('flow-v3-anchor-clear').click()
+  await anchorAt(b, shifted(`${D29}T06:49`), shifted(`${D29}T13:00`))
+  const segs = await b.evaluate((fn) => {
+    const { price } = eval(fn) // eslint-disable-line no-eval
+    return price.prims.edges._data.boxes.map((x) => ({ from: x.from, lastUtc: x.box.to, readout: x.box.readout }))
+  }, CHARTS_FN)
+  const line2 = await lineData(b)
+  const perBox = segs.map((x) => {
+    const last = ptShift(x.lastUtc)
+    const hs = handShare(payload, x.from, last)
+    return { from: hm(x.from), last: hm(last), hand: hs.share, line: line2.find((p) => p.time === last)?.value ?? null, start: line2.find((p) => p.time === x.from)?.value ?? null }
+  })
+  log('item6-boxes-0649.json', perBox)
+  for (const x of perBox) {
+    expect(Math.abs(x.line - Math.max(-0.1, Math.min(0.1, x.hand)))).toBeLessThan(1e-9)
+    expect(x.start).toBeNull()
+  }
+
+  // ⚙ raw CVD: the line is origin/main's anchored (per-box) CVD again
+  await anchorAt(m, shifted(`${D29}T06:49`), shifted(`${D29}T13:00`))
+  await b.getByRole('button', { name: 'Open Flow v3 settings' }).click()
+  await b.getByTestId('flow-v3-anchored-line').selectOption('raw')
+  await b.getByRole('button', { name: 'Apply' }).click()
+  await b.waitForTimeout(1200)
+  expect(await lineData(b)).toEqual(await lineData(m))
+  await ctxB.close()
+  await ctxM.close()
+})

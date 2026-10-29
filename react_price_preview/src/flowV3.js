@@ -10,7 +10,8 @@ export const CROWDED_TICK_PX = 3 // DC7: one tick shorter than this -> 0.5-pt ce
 export const ROLLING_CHOICES = [5, 10, 15]
 // CR-DM: rolling net delta is a ⚙ option, off by default (volume per minute takes its slot); liveMinMove = the live
 // effort label's minimum move in points (⚙, a display default, not a tested threshold).
-export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: false, liveMinMove: 4, breakHoldMin: 5 }
+// CR-DP item 6d: anchoredLine = what the anchored line plots ('share' = cumulative delta share, the default; 'raw' = CVD).
+export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: false, liveMinMove: 4, breakHoldMin: 5, anchoredLine: 'share' }
 // CR-DN item 2: a break must hold A minutes (no 1-minute close strictly back inside the box) before the box freezes (⚙;
 // a display default, not a tested threshold).
 export const BREAK_HOLD_MIN_RANGE = [1, 15]
@@ -827,6 +828,63 @@ export function segmentCvd(rows, spans) {
   for (let i = 0; i + 1 < list.length; i += 1) if (owner[i] >= 0 && owner[i + 1] >= 0 && owner[i + 1] !== owner[i]) gapAt.add(i)
   return { cvd: out, gapAt }
 }
+
+// CR-DP item 6a — cumulative delta share from a segment start: at each row after the start bar, Σ delta ÷ Σ volume over
+// the bars after the start bar up to that row (the bars anchorReadout sums, so a segment's last value = readoutShare of
+// its readout). The start bar itself is null (nothing summed yet), as are rows without delta, rows after `endTime` and
+// rows where Σ volume is still 0. Also returns the running sums for the hover. A display aid, no research meaning.
+export function anchoredShare(rows, anchorTime, endTime = null) {
+  const list = Array.isArray(rows) ? rows : []
+  const share = new Array(list.length).fill(null)
+  const sumDelta = new Array(list.length).fill(null)
+  const sumVol = new Array(list.length).fill(null)
+  if (anchorTime == null) return { share, sumDelta, sumVol }
+  const a = floorIndex(list.map((r) => r.time), anchorTime)
+  if (a < 0) return { share, sumDelta, sumVol }
+  let d = 0
+  let v = 0
+  for (let i = a + 1; i < list.length; i += 1) {
+    if (endTime != null && list[i].time > endTime) break
+    if (fin(list[i].vol)) v += Number(list[i].vol)
+    if (!fin(list[i].delta)) continue
+    d += Number(list[i].delta)
+    sumDelta[i] = d
+    sumVol[i] = v
+    share[i] = v > 0 ? d / v : null
+  }
+  return { share, sumDelta, sumVol }
+}
+
+// Per-segment delta share (Edges on: one segment per drawn box, as segmentCvd): each span restarts at its own start
+// bar; `gapAt` = rows whose line to the next row joins two spans (drawn transparent), as segmentCvd.
+export function segmentShare(rows, spans) {
+  const list = Array.isArray(rows) ? rows : []
+  const share = new Array(list.length).fill(null)
+  const sumDelta = new Array(list.length).fill(null)
+  const sumVol = new Array(list.length).fill(null)
+  const owner = new Array(list.length).fill(-1)
+  ;(spans || []).forEach((sp, k) => {
+    const s = anchoredShare(list, sp.from, sp.to)
+    for (let i = 0; i < list.length; i += 1) {
+      if (s.share[i] == null && s.sumDelta[i] == null) continue
+      share[i] = s.share[i]
+      sumDelta[i] = s.sumDelta[i]
+      sumVol[i] = s.sumVol[i]
+      owner[i] = k
+    }
+    const a = floorIndex(list.map((r) => r.time), sp.from)
+    if (a >= 0) { share[a] = null; sumDelta[a] = null; sumVol[a] = null; owner[a] = -1 } // a new span's start bar
+  })
+  const gapAt = new Set()
+  for (let i = 0; i + 1 < list.length; i += 1) if (owner[i] >= 0 && owner[i + 1] >= 0 && owner[i + 1] !== owner[i]) gapAt.add(i)
+  return { share, sumDelta, sumVol, gapAt }
+}
+
+// CR-DP item 6b — the share line's fixed scale (±10 %) and guides (0, ±2 %, ±5 %); a value beyond the scale is drawn at
+// ±SHARE_SCALE with a cap mark, its hover keeps the true value.
+export const SHARE_SCALE = 0.10
+export const SHARE_GUIDES = [0, 0.02, -0.02, 0.05, -0.05]
+export const clipShare = (v) => Math.max(-SHARE_SCALE, Math.min(SHARE_SCALE, v))
 
 // The anchored readout of each span (anchorReadout over [from, to]), in span order.
 export function segmentReadouts(rows, closes, spans) {

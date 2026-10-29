@@ -26,6 +26,8 @@ import {
   LIVE_MIN_MOVE_RANGE,
   ROLLING_CHOICES,
   anchoredCvd,
+  anchoredShare,
+  clipShare,
   anchorReadout,
   EDGE_STRIP_HEIGHT,
   edgeEffortBlock,
@@ -44,10 +46,15 @@ import {
   rollingDelta,
   rowCloses,
   segmentCvd,
+  segmentShare,
+  SHARE_GUIDES,
+  SHARE_SCALE,
+  readoutShare,
+  sharePctText,
   volumeCap,
   sessionOpenAnchor,
 } from '../flowV3'
-import { EdgeEffortPrimitive, ORANGE_RGB, VolumeCapPrimitive } from './flowV3Primitives'
+import { EdgeEffortPrimitive, ORANGE_RGB, ShareCapPrimitive, VolumeCapPrimitive } from './flowV3Primitives'
 
 const BG_COLOR = '#1f2937'
 const PANE_SEPARATOR_PX = 1 // CR-DI: the strip's 64 px include the 1-px pane separator, so pane 0 keeps its height
@@ -112,7 +119,7 @@ function GuideBody() {
   return (
     <div>
       <div style={h}>This pane</div>
-      <div><b>Anchored CVD</b> (line, top): buying minus selling added up from the anchor bar, starting at 0. Set the anchor with 📍 and a click on a price bar, or with "session open" / "last swing" (the end of the last confirmed swing, ⚙ swing size of Flow v2). Esc or "clear" removes it; without an anchor the line is the session CVD. The readout shows delta, price change, minutes and contracts per point since the anchor. With Edges on, each drawn box is its own segment: the line restarts at 0 at each box's first bar (a gap at each boundary), older boxes than the drawn ones aren't drawn, and the readout ("box from hh:mm") is the current box (the last one with an end set). Each box on the price chart is labelled "Δ · pts · minutes · contracts/pt" from the same numbers; hover a box line for its edges, contracts on both sides, held minutes, probes and how it ended.{tag}</div>
+      <div><b>Anchored line</b> (top): with an anchor, the <b>delta share</b> since the anchor: buying minus selling added up from the bar after the anchor, divided by all contracts traded over the same bars (the volume bars' volume), on a fixed ±10 % scale with faint guides at 0, ±2 % and ±5 %. A value beyond ±10 % is drawn at the edge with a small cap mark; hover shows the true value, Σ delta and Σ volume. ⚙ "Anchored line: raw CVD" plots the anchored CVD instead (buying minus selling from the anchor bar, starting at 0). Set the anchor with 📍 and a click on a price bar, or with "session open" / "last swing" (the end of the last confirmed swing; swing size: the stored Flow v2 setting). Esc or "clear" removes it; without an anchor the line is the session CVD. With Edges off the readout at the top left shows delta, delta share, price change, minutes and contracts per point since the anchor. With Edges on, each drawn box is its own segment: the line restarts at each box's first bar (a gap at each boundary) and older boxes than the drawn ones aren't drawn; the current box's stats are in a popup on the price chart (below). Each box on the price chart is labelled "Δ · pts · minutes · contracts/pt" from the same numbers; hover a box line for its edges, contracts on both sides, held minutes, probes and how it ended. Delta share is a display aid with no research meaning.{tag}</div>
       <div><span style={sw(SLATE_RGBA(0.25))} /><b>Set end</b> (with an anchor): click "set end", then a price bar after the anchor (not after the last bar: now, or the replay / review until time). Anchored CVD and its readout, the Edges box(es), the Edge effort strip and the Profile then use anchor → end only; after the end CVD isn't drawn and the boxes and strip stop. Delta, volume and rolling bars and the absorption levels / marks are unchanged. The window is shaded lightly on the price chart and the header shows "hh:mm → hh:mm · N min". Esc while picking cancels; "clear end" removes only the end, "clear" removes anchor and end. On the 5-minute chart the end is the last minute of the clicked candle.{tag}</div>
       <div><span style={sw(SLATE_RGBA(0.55))} /><b>Volume per minute</b> (middle bars, slate grey): all contracts traded in each 1-minute bar (the flow's volume, every print, including the rare unknown-side ones), from the same data as the delta bars. Hover a minute for its volume, delta and delta share (delta ÷ volume). The scale tops out at the session's 98th-percentile minute (of the bars loaded), so one huge minute (e.g. the close) doesn't flatten the rest: taller minutes are drawn at full height with a brighter cap line, and their hover shows the true volume. A display scale only.{tag}</div>
       <div><span style={sw(BUY_RGBA(0.7))} /><span style={sw(SELL_RGBA(0.6))} /><b>Rolling net delta</b> (⚙, off by default): buying minus selling over the last N minutes (5 / 10 / 15). When on it draws in the middle slot, volume moves to the slot below it and the pane grows by one slot.{tag}</div>
@@ -120,10 +127,10 @@ function GuideBody() {
       <div style={h}>On the price chart</div>
       <div><b>Live effort</b> (with Effort on): the leg in progress — from the end of the last confirmed swing to the running extreme since — gets a dimmed label at that extreme, e.g. "↑ +6.5 pts so far · 1.2× vs last ↑": contracts per point vs the previous leg the same way, as the confirmed labels. Shown once the leg has moved at least M pts (⚙ "Live effort min move", default 4) and a previous leg the same way exists. It moves with the extreme on each refresh and becomes the normal label once the swing is confirmed; in a review replay it uses bars up to the replay time only. Hover it for the numbers. The label and M are display aids, not tested thresholds.{tag}</div>
       <div><span style={sw(ORANGE_RGBA(0.9))} /><span style={sw(MAGENTA_RGBA(0.9))} /><b>Absorption levels</b> (orange and magenta lines): a price where aggressive selling ("sellers absorbed", a floor, orange) or buying ("buyers absorbed", a ceiling, magenta) hit the Absorbed rule below. The line starts at the minute the volume built up, appears once the hold window has passed, and ends when price trades through it (else it runs to now). Thicker = more contracts absorbed; it fades from full to 25 % over 60 minutes. At most 8 are drawn, the largest after fading. The label says side, contracts and minutes held; hover for start, opposite-side contracts and where it broke. Exact data only.{tag}</div>
-      <div><span style={{ ...sw('transparent'), borderTop: `2px dashed ${MAGENTA_RGBA(0.8)}`, height: 0 }} /><b>Edge readout</b> (header, with an anchor; dashed magenta lines): the box starts at the anchor minute's close. A close up to 2 pts beyond an edge is a test and the edge stays; a close more than 2 pts beyond moves the edge or breaks the box (below). For each edge: aggressive contracts traded within 1 pt of it since the box started (buyers at the top, sellers at the bottom; exact data only) and minutes since price first came within 1 pt of it.{tag}
-        <div style={{ marginTop: '4px' }}><b>Restart on a break</b> (CR-DI, CR-DN): while an edge is younger than N minutes (⚙, default 15) a close more than 2 pts beyond it moves the edge out ("moved hh:mm") and the box grows. Once the edge has held N minutes, such a close starts a <b>pending break</b> (header "testing break hh:mm"; nothing grows or freezes meanwhile). If no 1-minute close comes back strictly inside the box (a close exactly on the edge does not count) within A minutes (⚙ "Break must hold A min", default 5), the break holds: the box freezes (drawn faded, ending at the break minute) and a new box starts at the break bar from that bar's close. If a close does come back inside, the break is cancelled: the box is unchanged and a faint magenta <b>probe</b> tick marks it at that edge (hover: the extreme reached, minutes outside, contracts traded beyond the edge). The header and the Edge effort strip use the current box; the last 4 frozen boxes are drawn; clearing or moving the anchor removes all boxes. N and A are display defaults, not tested thresholds. An idea, untested: a failed probe can strengthen the fade.</div>
+      <div><span style={{ ...sw('transparent'), borderTop: `2px dashed ${MAGENTA_RGBA(0.8)}`, height: 0 }} /><b>Edges</b> (with an anchor; dashed magenta lines and a <b>box stats popup</b> near the current box: box from hh:mm (→ end) · Δ · Δ share · pts · minutes · contracts/pt, then each edge's price, contracts on both sides, held minutes and state — moved / probe / testing break. Drag it anywhere on the chart; it stays there until a new anchor; × hides it until the next anchor): the box starts at the anchor minute's close. A close up to 2 pts beyond an edge is a test and the edge stays; a close more than 2 pts beyond moves the edge or breaks the box (below). For each edge: aggressive contracts traded within 1 pt of it since the box started (buyers at the top, sellers at the bottom; exact data only) and minutes since price first came within 1 pt of it.{tag}
+        <div style={{ marginTop: '4px' }}><b>Restart on a break</b> (CR-DI, CR-DN): while an edge is younger than N minutes (⚙, default 15) a close more than 2 pts beyond it moves the edge out ("moved hh:mm") and the box grows. Once the edge has held N minutes, such a close starts a <b>pending break</b> (popup "testing break hh:mm"; nothing grows or freezes meanwhile). If no 1-minute close comes back strictly inside the box (a close exactly on the edge does not count) within A minutes (⚙ "Break must hold A min", default 5), the break holds: the box freezes (drawn faded, ending at the break minute) and a new box starts at the break bar from that bar's close. If a close does come back inside, the break is cancelled: the box is unchanged and a faint magenta <b>probe</b> tick marks it at that edge (hover: the extreme reached, minutes outside, contracts traded beyond the edge). The popup and the Edge effort strip use the current box; the last 4 frozen boxes are drawn; clearing or moving the anchor removes all boxes. N and A are display defaults, not tested thresholds. An idea, untested: a failed probe can strengthen the fade.</div>
       </div>
-      <div><span style={sw(BUY_RGBA(0.85))} /><span style={sw(SELL_RGBA(0.38))} /><span style={sw(SELL_RGBA(0.72))} /><span style={sw(BUY_RGBA(0.38))} /><b>Edge effort</b> (header chip, needs Edges and an anchor; a strip under the delta bars): per minute since the anchor, the same aggressive contracts the edge readout counts, within 1 pt of each edge, both sides. Top edge, drawn up: buyers (blue) with sellers beside them (thinner, lighter grey). Bottom edge, drawn down: sellers (grey) with buyers beside them (thinner, lighter blue). Each minute is counted against the box it belongs to (the drawn boxes: the last 4 frozen and the current one). Over the current box, the blue bars at the top and the grey bars at the bottom add up to the header's numbers; when an edge of the current box moves, its minutes are re-counted against the new edge, as the header is. A visit is a run of minutes with bars at that edge, allowing gaps of up to 2 minutes, and never crosses a break; its label says main side / other side (top buyers / sellers, bottom sellers / buyers). Hover a minute for both sides, the net and the visit's running totals. Exact data only. Visit sizes are effort, not a tested signal; Ironbeam live data understates volume.{tag}
+      <div><span style={sw(BUY_RGBA(0.85))} /><span style={sw(SELL_RGBA(0.38))} /><span style={sw(SELL_RGBA(0.72))} /><span style={sw(BUY_RGBA(0.38))} /><b>Edge effort</b> (header chip, needs Edges and an anchor; a strip under the delta bars): per minute since the anchor, the same aggressive contracts the edge readout counts, within 1 pt of each edge, both sides. Top edge, drawn up: buyers (blue) with sellers beside them (thinner, lighter grey). Bottom edge, drawn down: sellers (grey) with buyers beside them (thinner, lighter blue). Each minute is counted against the box it belongs to (the drawn boxes: the last 4 frozen and the current one). Over the current box, the blue bars at the top and the grey bars at the bottom add up to the popup's numbers; when an edge of the current box moves, its minutes are re-counted against the new edge, as the popup is. A visit is a run of minutes with bars at that edge, allowing gaps of up to 2 minutes, and never crosses a break; its label says main side / other side (top buyers / sellers, bottom sellers / buyers). Hover a minute for both sides, the net and the visit's running totals. Exact data only. Visit sizes are effort, not a tested signal; Ironbeam live data understates volume.{tag}
         <div style={{ marginTop: '4px', color: '#cbd5e1' }}><i>How to read, untested</i> (bottom edge; mirror it for the top):
           <ul style={{ margin: '2px 0 0 18px', padding: 0 }}>
             <li>heavy aggressive selling at the low, CVD falls, price holds = passive defense (resting bids absorb);</li>
@@ -164,6 +171,7 @@ function Settings({ value, layers, onApply, onClose }) {
       breakHoldMin: Math.round(n('breakHoldMin', BREAK_HOLD_MIN_RANGE[0], BREAK_HOLD_MIN_RANGE[1], DEFAULT_V3_SETTINGS.breakHoldMin)),
       rollingOn: Boolean(draft.rollingOn),
       liveMinMove: n('liveMinMove', LIVE_MIN_MOVE_RANGE[0], LIVE_MIN_MOVE_RANGE[1], DEFAULT_V3_SETTINGS.liveMinMove),
+      anchoredLine: draft.anchoredLine === 'raw' ? 'raw' : 'share',
     })
   }
   const label = (text) => <div style={{ fontSize: '12px', color: '#cbd5e1', marginBottom: '4px' }}>{text}</div>
@@ -173,6 +181,14 @@ function Settings({ value, layers, onApply, onClose }) {
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
           <input type="checkbox" aria-label="Rolling net delta" data-testid="flow-v3-rolling-toggle" checked={Boolean(draft.rollingOn)} onChange={(e) => setDraft((d) => ({ ...d, rollingOn: e.target.checked }))} />
           Rolling net delta ({draft.rollingMin} min) — middle bars; volume moves one slot down
+        </label>
+        <label style={{ display: 'block', marginBottom: '10px' }}>
+          {label('Anchored line (with an anchor)')}
+          <select aria-label="Anchored line" data-testid="flow-v3-anchored-line" value={draft.anchoredLine === 'raw' ? 'raw' : 'share'} style={input}
+            onChange={(e) => setDraft((d) => ({ ...d, anchoredLine: e.target.value }))}>
+            <option value="share">delta share (Σ delta ÷ Σ volume, ±10 %)</option>
+            <option value="raw">raw CVD</option>
+          </select>
         </label>
         <label style={{ display: 'block', marginBottom: '10px' }}>
           {label('Rolling net delta window (minutes)')}
@@ -300,6 +316,13 @@ export default function AggressorFlowV3Panel({
   const plainCvd = useMemo(() => (cvdSeg ? null : anchoredCvd(aligned, anchor, end)), [cvdSeg, aligned, anchor, end])
   const cvd = cvdSeg ? cvdSeg.cvd : plainCvd
   const cvdGaps = cvdSeg ? cvdSeg.gapAt : null
+  // CR-DP item 6: with an anchor the line plots cumulative delta share (Σ delta ÷ Σ volume from each segment's start: per
+  // box with Edges on, else anchor → now / end) on a fixed ±10 % scale; ⚙ "raw CVD" keeps the CVD. No anchor: session CVD.
+  const shareMode = anchor != null && settings.anchoredLine !== 'raw'
+  const shareSeries = useMemo(() => {
+    if (!shareMode) return null
+    return segments?.spans?.length ? segmentShare(aligned, segments.spans) : { ...anchoredShare(aligned, anchor, end), gapAt: null }
+  }, [shareMode, aligned, segments, anchor, end])
   const rollingOn = Boolean(settings.rollingOn)
   const rolling = useMemo(() => (rollingOn ? rollingDelta(aligned, settings.rollingMin) : null), [aligned, rollingOn, settings.rollingMin])
   // CR-DN item 3c: with segments, the header reads the current box (the last one when an end is set).
@@ -404,7 +427,9 @@ export default function AggressorFlowV3Panel({
     })
     chart.priceScale('cvd').applyOptions({ visible: false, scaleMargins: { top: 0.04, bottom: 0.62 } })
     chartRef.current = chart
-    seriesRef.current = { delta, rolling: rollingS, cvd: cvdS, vol: volS, volCap }
+    const shareCap = new ShareCapPrimitive() // CR-DP item 6b
+    cvdS.attachPrimitive(shareCap)
+    seriesRef.current = { delta, rolling: rollingS, cvd: cvdS, vol: volS, volCap, shareCap }
 
     const refreshDecorations = () => {
       const w = stageRef.current?.clientWidth || 0
@@ -493,9 +518,19 @@ export default function AggressorFlowV3Panel({
     s.vol.setData(aligned.map((r) => (Number.isFinite(r.vol) ? { time: r.time, value: cap == null ? r.vol : Math.min(r.vol, cap) } : ws(r))))
     s.volCap.setData({ cap, color: SLATE_RGBA(0.95), times: cap == null ? [] : aligned.filter((r) => Number.isFinite(r.vol) && r.vol > cap).map((r) => r.time) })
     const gap = 'rgba(0,0,0,0)' // CR-DN item 3a: the line from a box's last bar to the next box's 0 is not drawn
-    s.cvd.setData(aligned.map((r, i) => (cvd[i] != null
-      ? (cvdGaps?.has(i) ? { time: r.time, value: cvd[i], topLineColor: gap, bottomLineColor: gap } : { time: r.time, value: cvd[i] })
-      : ws(r))))
+    if (shareSeries) {
+      // CR-DP item 6b: fixed ±10 % (values beyond are drawn at the clip with a cap mark; hover reads the true value)
+      const sh = shareSeries.share
+      s.cvd.setData(aligned.map((r, i) => (sh[i] != null
+        ? (shareSeries.gapAt?.has(i) ? { time: r.time, value: clipShare(sh[i]), topLineColor: gap, bottomLineColor: gap } : { time: r.time, value: clipShare(sh[i]) })
+        : ws(r))))
+      s.shareCap.setData({ cap: SHARE_SCALE, color: SLATE_RGBA(0.95), marks: aligned.flatMap((r, i) => (sh[i] != null && Math.abs(sh[i]) > SHARE_SCALE ? [{ time: r.time, up: sh[i] > 0 }] : [])) })
+    } else {
+      s.cvd.setData(aligned.map((r, i) => (cvd[i] != null
+        ? (cvdGaps?.has(i) ? { time: r.time, value: cvd[i], topLineColor: gap, bottomLineColor: gap } : { time: r.time, value: cvd[i] })
+        : ws(r))))
+      s.shareCap.setData({ marks: [] })
+    }
     const shared = normalizeLogicalRange(visibleLogicalRange)
     if (chartRef.current && candleTimes.length >= 2 && !shared) {
       chartRef.current.timeScale().fitContent()
@@ -509,7 +544,23 @@ export default function AggressorFlowV3Panel({
       }
     }
     requestAnimationFrame(() => refreshDecorationsRef.current())
-  }, [aligned, rolling, cvd, cvdGaps, candleTimes, visibleLogicalRange])
+  }, [aligned, rolling, cvd, cvdGaps, shareSeries, candleTimes, visibleLogicalRange])
+
+  // CR-DP item 6b: in share mode the line's scale is fixed at ±10 % with faint slate guides at 0, ±2 % and ±5 % (no axis
+  // labels); raw CVD autoscales as before.
+  useEffect(() => {
+    const s = seriesRef.current
+    if (!s.cvd) return undefined
+    if (!shareMode) {
+      s.cvd.applyOptions({ autoscaleInfoProvider: (original) => original() })
+      return undefined
+    }
+    s.cvd.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: -SHARE_SCALE, maxValue: SHARE_SCALE } }) })
+    const lines = SHARE_GUIDES.map((v) => s.cvd.createPriceLine({
+      price: v, color: SLATE_RGBA(v === 0 ? 0.4 : 0.22), lineWidth: 1, lineStyle: v === 0 ? 0 : 2, axisLabelVisible: false, title: '',
+    }))
+    return () => { for (const l of lines) { try { s.cvd.removePriceLine(l) } catch (e) { /* chart gone */ } } }
+  }, [shareMode])
 
   // CR-DI amendment 2: the pane (App) grows by EDGE_STRIP_HEIGHT with the strip, so size the chart to the stage and
   // the strip pane to its height now and on the next frame, before a ResizeObserver pass could split the new height
@@ -720,6 +771,7 @@ export default function AggressorFlowV3Panel({
           <div data-testid="flow-v3-readout" style={{ position: 'absolute', top: 4, left: 8, zIndex: 4, pointerEvents: 'none', fontSize: '11px', color: '#cbd5e1', background: 'rgba(15,23,42,0.72)', borderRadius: 6, padding: '2px 6px' }}>
             {readout
               ? `since ${formatShiftedHHMM(readout.anchorTime)}: Δ ${sfmt(readout.delta)} · ${readout.dPrice == null ? '–' : `${readout.dPrice >= 0 ? '+' : ''}${readout.dPrice.toFixed(2)} pts`} · ${readout.minutes} min · ${readout.cpp == null ? '–' : kfmt(readout.cpp)}/pt`
+                + (shareMode ? ` · share ${sharePctText(readoutShare(readout))} (line: Δ share, ±10 %)` : '')
                 + mixedNote
               : `CVD from session open · ${rollingOn ? `rolling ${settings.rollingMin} min · ` : ''}volume per minute`}
           </div>
@@ -734,7 +786,9 @@ export default function AggressorFlowV3Panel({
               const f = minuteFlow(hoverRow)
               return `${formatShiftedHHMM(hoverRow.time)} · vol ${f.vol == null ? '–' : kfmt(f.vol)} · Δ ${sfmt(hoverRow.delta)} · share ${shareFmt(f.share)}`
                 + (rolling ? ` · ${settings.rollingMin}-min ${rolling[hoverIdx] == null ? '–' : sfmt(rolling[hoverIdx])}` : '')
-                + ` · CVD ${cvd[hoverIdx] == null ? '–' : sfmt(cvd[hoverIdx])}`
+                + (shareSeries
+                  ? ` · share so far ${sharePctText(shareSeries.share[hoverIdx])} · ΣΔ ${shareSeries.sumDelta[hoverIdx] == null ? '–' : sfmt(shareSeries.sumDelta[hoverIdx])} · Σvol ${shareSeries.sumVol[hoverIdx] == null ? '–' : kfmt(shareSeries.sumVol[hoverIdx])}`
+                  : ` · CVD ${cvd[hoverIdx] == null ? '–' : sfmt(cvd[hoverIdx])}`)
             })()}
           </div>
         )}
