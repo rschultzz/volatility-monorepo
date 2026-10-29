@@ -1,7 +1,7 @@
 # CR-DP — Chart cleanup, box stats popup, delta-share box line, adjustable flow pane and y-axis zoom
 
-Branch `feat/CR-DP-chart-cleanup`, worktree `../volatility-monorepo-cr-dp`, off `origin/main` `6860fc5`
-(CR-DN merge, PR #122). UI CR, no research claims. Spec: Ryan, chat 2026-10-29 (revised kickoff, superseding the
+Branch `feat/CR-DP-chart-cleanup`, worktree `../volatility-monorepo-cr-dp`, off `origin/main` `6860fc5`, rebased onto `ce854ce`
+(CR-DN merge, PR #122; CR-DO merge PR #123, no frontend overlap). UI CR, no research claims. Spec: Ryan, chat 2026-10-29 (revised kickoff, superseding the
 first CR-DP kickoff the same day; frozen below, lightly formatted).
 
 ## Spec (Ryan, chat 2026-10-29)
@@ -110,3 +110,97 @@ spec freeze → Step 0 → one commit per item → smoke + wrap.
 
 Session note, PR (don't merge), logs copied. Don't deploy. Only one DB-backed local server at a time; never stop
 another session's server without asking Ryan. Never print connection strings. Don't touch CR-DO's worktree.
+
+## Step 0 — findings (2026-10-29, on `6860fc5`)
+
+### S0.1 Stop check — Signals writes `bt_signals` (reported; Ryan decided)
+
+- `SignalPanel` (`PriceChart.jsx:4045`) is **mounted whenever the chart is not in a review replay, whether its SIGNALS
+  pill is open or collapsed** (the pill only toggles `collapsed`).
+- Self-managed: when `tradeDate === new Date().toISOString().slice(0, 10)` (UTC date) it POSTs
+  `/api/backtests-v2/signals/scan` on mount / date change and **every 60 s** while the tab is open
+  (`SignalPanel.jsx:243–262`). `scan_signals_api` (`apps/web/modules/BacktestsV2/routes.py:1072`) runs the default
+  strategy's scan and **upserts `bt_signals`** (UPDATE `:1193` / INSERT `:1216`, labels preserved).
+- Its label buttons POST `/api/backtests-v2/signals/label` → UPDATE `bt_signals` (`routes.py:1299`), only on a click.
+- No other caller of `/signals/scan` in the repo (no cron, no Dash page): the React price chart open on today was the
+  only thing filling `bt_signals`. The Analogues backend (`apps/web/modules/Analogues/routes.py`) reads its labels.
+- **Ryan's decision (chat 2026-10-29):** remove the Signals panel, its 60 s scan and the button. `bt_signals` stops
+  filling from 2026-10-29. Keep the table and both endpoints (history stays readable). Recorded in CLAUDE.md. Remove
+  Analogues as specced.
+- Analogues: GET `/api/analogues` only while its panel is open; the module has no DB writes. No side effects.
+- Flow Current: GET `/api/ironbeam/flow` (`apps/web/modules/Ironbeam/callbacks.py:3134`) only in Current mode (plus a
+  live poll at `App.jsx:1864`, Current only); the handler writes nothing. Flow v2: the same v2 payload v3 loads. Side
+  effects: localStorage only.
+
+### S0.2 Inventory — what goes, what stays
+
+| Thing | Where | Imported by | Fate |
+|---|---|---|---|
+| `AggressorFlowPanel.jsx` (Flow Current pane) | default export + `FlowModeToggle` | App; helpers by V2 / V3 panels | pane + toggle removed; helpers V3 imports (`utcEpochShowingZoneTime`, `formatShiftedHHMM`, `normalizeLogicalRange`, `rangesClose`, `normalizeShiftedCandleTimes`, `inferStepSeconds`, `computeSessionBands`, `coordinateForLinkedCrosshair`) move to `src/flowShared.js` |
+| `AggressorFlowV2Panel.jsx` (Flow v2 pane) | default export | App; `alignV2ToCandles` by V3 | pane removed; `alignV2ToCandles`, `DEFAULT_MARKER_SETTINGS`, `effortLabel`, `effortIsHot`, `effortChartMarkers` (App: effort labels on the price chart) move to `flowShared.js` |
+| App Current-only state | `flowPoints` / `flowLoading` / `flowError`, the two `/api/ironbeam/flow` effects (`:1512`, `:1864`), `flowEmaMinutes` + `ib-react-flow-ema-minutes`, `flowHistAlpha`, `flowPointsSignature` | Current pane | removed |
+| App mode state | `flowMode` (`ib-react-flow-mode`), `flowV3` (`ib-react-flow-mode-v3`), `handleFlowModeChange`, `flowPaneMode`, `flowV2Data` | toggle / panes | removed; Flow is always v3. Both keys are no longer read or written (a stored `current` / `v2` simply opens v3); the stale keys are removed once on load |
+| `flowMarkerSettings` (`ib-react-flow-v2-markers`) | swing size, push / div / fade / gap, effortRatio | **v3**: v2 payload request (`m_swing` → legs → "last swing", effort labels), effort label ratio | **kept** (same key). Its only editor was the Flow v2 ⚙; after this CR it is read-only (stored value or defaults). Open question for Ryan, not added (no spec language) |
+| `flowEffort` (`ib-react-flow-v2-effort`) | Effort switch | **v3** header "Effort" | kept (same key) |
+| `SignalPanel.jsx` | floating panel, 60 s scan | PriceChart | removed (S0.1 decision); `signalsCollapsed` state and SIGNALS pill removed; stale keys `ib-signal-panel-pos` / `-size` no longer read |
+| `AnaloguesPanel.jsx`, `AnalogueDetailModal.jsx` | right-docked panel + modal | PriceChart (render), App (`PANEL_WIDTH`) | removed; App `analogues*` state, `/api/analogues` fetch, `reviewRightOffset`'s analogues term and the PriceChart props / pill removed |
+| `ChartToggleBar` | pills | PriceChart | kept (SMILE, GEX, LANDSCAPE, REVIEW); its header comment updated |
+
+Backend endpoints (`/api/ironbeam/flow` all modes, `/signals/scan`, `/signals/label`, `/api/analogues`) unchanged.
+
+### S0.3 Header readout and per-box label (items 4, 6 reuse them)
+
+- Edges: `flowV3.edgeReadout` (App `:2041`, memo `flowV3Edges`) → the header's `edgeText()` line
+  (`flow-v3-edge-readout`) and the price chart's boxes (`PriceChart` `v3Edges`, `:2702`).
+- Per-box stats: App `flowV3Segments` (`:2047`) = `boxSegments` + `segmentReadouts` (= `anchorReadout` per span) over
+  the same aligned v2 rows the pane draws. The pane's in-pane line (`flow-v3-readout`) uses
+  `segments.readouts[last]` (or `anchorReadout` without Edges); the price chart's box label is
+  `boxLabelText(readout)` and its hover (`flow-v3-box-tooltip`) adds top / bottom contracts, held, probes, pending.
+- `anchorReadout` already returns `vol` (Σ volume, same `vol` field as the CR-DM volume bars), so **Δ share =
+  `delta / vol`** comes from the same object; the popup is built from `v3Edges`' current (non-frozen) box: its
+  `readout`, `top` / `bottom` (`price`, `contracts`, `opposite`, `heldMin`, `brokeAt`), `pending`, `probes`, `ended`.
+- Item 6 segments: `segmentCvd(rows, spans)` (Edges on) / `anchoredCvd(rows, anchor, end)` (Edges off). A parallel
+  `segmentShare` / `anchoredShare` runs over the same spans and rows (Σ delta and Σ vol from the bar after the segment
+  start, as `anchorReadout`), so the line's last value equals the popup's Δ share.
+
+### S0.4 Overlay positioning (for the popup)
+
+Price-chart overlays are either canvas primitives (boxes, labels, levels; `v3PrimRef`) or React divs placed from the
+chart's own transforms (`series.priceToCoordinate`, `timeScale().timeToCoordinate`) plus
+`hostRef.offsetLeft / offsetTop` (box / level / probe tooltips, `:3763`), re-read on an animation frame (review shapes,
+`:2830`). The popup is a React div in the same container, default position from the current box's `to` / `top`
+coordinates, clamped to the plot (host width minus the price axis, pane height minus the time axis).
+
+### S0.5 Chart library (lightweight-charts 5.1.0 installed, `^5.0.8`)
+
+- `IPriceScaleApi.setVisibleRange` / `getVisibleRange` / `setAutoScale` exist for **any** price scale id, overlay
+  scales included; `handleScale.axisPressedMouseMove` and `axisDoubleClickReset` act only on the visible axis scale.
+- **8a:** the price chart already has `axisPressedMouseMove: true` (drag on the axis scales the price, library) and a
+  custom wheel zoom; the library's default `axisDoubleClickReset` re-fits. New: remember the manual range (per trade
+  date, localStorage) and restore it after a reload; a double-click or a date change clears it. Live refreshes call
+  `setData` only (no `setAutoScale(true)` outside review fit and IV), so a manual zoom already survives them; verified
+  in the smoke.
+- **8b: per slot.** The Flow v3 pane's slots are separate price scales in pane 0 (`cvd`, `right` = volume / rolling,
+  `vol`, `delta`) placed by `scaleMargins`. A custom drag on the pane's right axis finds the slot under the pointer
+  from the margins and calls `setVisibleRange` on that slot's scale (stretch / compress about the slot's centre);
+  double-click returns that slot to auto-fit. A stretched slot's series can draw past its slot's edge (the library has
+  no per-scale clipping).
+- **7a:** slot heights are those margins, so dividers are DOM handles over the pane at the slot boundaries that rewrite
+  `paneSlotMargins` from stored fractions (min 24 px each; the pane's height unchanged). The Edge effort strip is its
+  own pane (fixed 64 px), not a slot.
+- **Item 6:** fixed ±10 % via the line series' `autoscaleInfoProvider`; guides as price lines on that series (slate, no
+  axis label); values beyond ±10 % drawn at ±10 % with a cap mark (a small primitive like CR-DN's `VolumeCapPrimitive`).
+
+### S0.6 Feasibility of 7c — **already in place**
+
+A draggable splitter between the price chart and the Flow pane exists (`App.jsx:2629`, `.panel-splitter`,
+`beginResize`): it sets `flowPanelHeight` (clamped `FLOW_MIN_HEIGHT`–`FLOW_MAX_HEIGHT`), remembered in
+`ib-react-flow-panel-height`; the price chart takes the rest (flex). No App layout rework: 7c = keep it and have ⚙
+"Reset layout" also restore the default height (220).
+
+### S0.7 Tests that assert removed controls (to retire / update)
+
+`cr-cd.spec.js` (Current / v2 toggle), `cr-ch.spec.js` (v2 pane fiber), `cr-cd-a5.spec.js` (v2 pane / storage),
+`cr-dc.spec.js` (mode toggle, `ib-react-flow-mode-v3`), `cr-cc.spec.js` (SIGNALS pill hidden in replay / restored on
+reveal), plus any v3 assertions on `flow-v3-source`, `flow-v3-cells-badge`, `flow-v3-readout`,
+`flow-v3-edge-readout`. Final list with what changed per assertion goes in the smoke commit.
