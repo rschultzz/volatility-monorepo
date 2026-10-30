@@ -266,9 +266,25 @@ served by the smoke backend).
 
 ### Open questions (for Ryan)
 
-1. **Swing size has no editor now.** The v2 marker settings (`ib-react-flow-v2-markers`: swing size for "last swing" /
-   the legs, effort ratio) were only editable in Flow v2's ⚙. They keep their stored value (or defaults: swing 8,
-   ratio 1.5). Add "Swing size" to Flow v3 ⚙?
-2. **Mixed-sources note.** The Edges-on "box from…" line carried " · mixed sources (Ironbeam + Databento)" when a box
-   spans ETH and RTH from different sources; the popup doesn't show it. Add it?
+1. ~~**Swing size has no editor now.**~~ Closed by amendment 1 (below).
+2. ~~**Mixed-sources note.**~~ Closed by amendment 2 (below).
 3. `bt_signals` stops filling from 2026-10-29 (Ryan's decision): the repo has no other caller of `/signals/scan` (no cron, no Dash page).
+
+## Amendment (Ryan, chat 2026-10-29, before merging)
+
+1. **Flow v3 ⚙: "Swing size (pts)" and "Effort highlight ratio".** The same stored setting as Flow v2's ⚙
+   (`ib-react-flow-v2-markers`, App's `flowMarkerSettings`), same defaults (8 / 1.5), same ranges and clamping on
+   Apply (swing 1–50, ratio 1–10; inputs `min=0` as v2's, values clamped, not blocked); ⚙ Defaults restores both.
+   Both feed exactly what v2's did: swing → the v2 request's `m_swing` → the legs ("last swing", Effort labels); ratio →
+   `effortChartMarkers` highlight. Labelled as display settings: A7's volatility-scaled swing is the research
+   definition, not this.
+2. **Box popup: mixed sources.** `flowV3.mixedSourcesText(readout, segments)` — when the box readout's first and last
+   bars are in different segments whose data differ by source (Databento / Ironbeam) or exactness (exact / approx
+   1-s cells, from the cells payload), the popup adds a last line "mixed sources (A + B)" (e.g. "Ironbeam approx +
+   Databento"). The Edges-off in-pane readout uses the same helper on the v2 payload (source only, as before).
+
+Smoke: `cr-dp.spec.js` **8 / 8** (two new: `amendment-1-swing.json` — ⚙ shows 8 / 1.5, 4 / 2 stored and requested as
+`m_swing=4`, 99 / 0.2 clamp to 50 / 1, Defaults → 8 / 1.5; `amendment-2-mixed.json` — 2026-05-01 FULL (ETH Ironbeam
+approx, RTH Databento exact), anchor 06:20 + end 06:32: box eth → rth, popup "mixed sources (Ironbeam approx +
+Databento)"; RTH-only box 07:00–07:40: no line). Unit **75 / 75** (+1 `mixedSourcesText` / popup). Build clean.
+

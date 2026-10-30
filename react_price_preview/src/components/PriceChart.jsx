@@ -2730,8 +2730,8 @@ export default function PriceChart({
   const v3Anchor = flowV3?.anchor ?? null
   const v3CurrentBox = useMemo(() => v3Edges?.boxes.find((b) => !b.frozen) || null, [v3Edges])
   const v3PopupLines = useMemo(
-    () => (v3CurrentBox ? boxPopupLines(v3CurrentBox.box, (t) => formatShiftedHHMM(v3Shift(t))) : null),
-    [v3CurrentBox, v3Shift]
+    () => (v3CurrentBox ? boxPopupLines(v3CurrentBox.box, (t) => formatShiftedHHMM(v3Shift(t)), v3Payload?.segments) : null),
+    [v3CurrentBox, v3Shift, v3Payload]
   )
   const [boxPopupDrag, setBoxPopupDrag] = useState(null) // { left, top } in stage px once dragged
   const [boxPopupClosed, setBoxPopupClosed] = useState(false)
@@ -3948,6 +3948,7 @@ export default function PriceChart({
               <div data-testid="flow-v3-box-popup-head" style={{ color: '#f0abfc' }}>{v3PopupLines.head}</div>
               <div data-testid="flow-v3-box-popup-top">{v3PopupLines.top}</div>
               <div data-testid="flow-v3-box-popup-bottom">{v3PopupLines.bottom}</div>
+              {v3PopupLines.mixed && <div data-testid="flow-v3-box-popup-mixed" style={{ color: '#fbbf24' }}>{v3PopupLines.mixed}</div>}
               <button
                 type="button"
                 data-popup-close="1"

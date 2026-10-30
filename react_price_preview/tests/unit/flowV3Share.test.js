@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  DEFAULT_V3_SETTINGS, SHARE_GUIDES, SHARE_SCALE, anchorReadout, anchoredShare, boxPopupLines, clipShare, readoutShare,
+  DEFAULT_V3_SETTINGS, SHARE_GUIDES, SHARE_SCALE, anchorReadout, anchoredShare, boxPopupLines, clipShare, mixedSourcesText, readoutShare,
   segmentReadouts, segmentShare, sharePctText,
 } from '../../src/flowV3.js'
 
@@ -73,4 +73,19 @@ test('boxPopupLines: head, edges and states from the box fields', () => {
   assert.equal(l.head, 'box from t1 → t10 · Δ +1.2k · share +2.00 % · +7.5 pts · 45 m · 8.0k/pt')
   assert.equal(l.top, 'Top 7724.75 · buyers 1.8k / sellers 900 · held 9 m · probe t8 (2)')
   assert.equal(l.bottom, 'Bottom 7715.25 · sellers exact data only / buyers exact data only · not touched · testing break t9 ↓')
+})
+
+test('mixed sources (CR-DP amendment): by source or exactness across the box\'s segments; one line in the popup', () => {
+  const segs = [{ name: 'eth', source: 'ironbeam', exact: true }, { name: 'rth', source: 'databento', exact: true }]
+  assert.equal(mixedSourcesText({ fromSeg: 'eth', toSeg: 'rth' }, segs), ' · mixed sources (Ironbeam + Databento)')
+  assert.equal(mixedSourcesText({ fromSeg: 'rth', toSeg: 'rth' }, segs), '')
+  const ib = [{ name: 'eth', source: 'ironbeam', exact: false }, { name: 'rth', source: 'ironbeam', exact: true }]
+  assert.equal(mixedSourcesText({ fromSeg: 'eth', toSeg: 'rth' }, ib), ' · mixed sources (Ironbeam approx + Ironbeam)')
+  const same = [{ name: 'eth', source: 'ironbeam' }, { name: 'rth', source: 'ironbeam' }] // v2 payload: source only
+  assert.equal(mixedSourcesText({ fromSeg: 'eth', toSeg: 'rth' }, same), '')
+  assert.equal(mixedSourcesText({ fromSeg: 'eth', toSeg: 'rth' }, null), '')
+  const box = { from: 1, readout: { delta: 10, vol: 100, dPrice: 1, minutes: 5, cpp: 100, fromSeg: 'eth', toSeg: 'rth' },
+    top: { price: 1, contracts: 1, opposite: 1, heldMin: 1 }, bottom: { price: 0, contracts: 1, opposite: 1, heldMin: 1 } }
+  assert.equal(boxPopupLines(box, String, segs).mixed, 'mixed sources (Ironbeam + Databento)')
+  assert.equal(boxPopupLines(box, String).mixed, '')
 })

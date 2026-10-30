@@ -2296,6 +2296,8 @@ export default function App() {
                     onEffortChange={setFlowEffort}
                     edgeEffortOn={flowEdgeEffort}
                     onEdgeEffortChange={setFlowEdgeEffort}
+                    markerSettings={flowMarkerSettings}
+                    onMarkerSettingsChange={setFlowMarkerSettings}
                   />
                 </div>
               </>

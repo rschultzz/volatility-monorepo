@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createChart, CrosshairMode, ColorType, BaselineSeries, HistogramSeries, LineSeries } from 'lightweight-charts'
 import {
   alignV2ToCandles,
+  DEFAULT_MARKER_SETTINGS,
   coordinateForLinkedCrosshair,
   computeSessionBands,
   formatShiftedHHMM,
@@ -57,6 +58,7 @@ import {
   SHARE_GUIDES,
   SHARE_SCALE,
   readoutShare,
+  mixedSourcesText,
   sharePctText,
   volumeCap,
   sessionOpenAnchor,
@@ -148,7 +150,7 @@ function GuideBody() {
   return (
     <div>
       <div style={h}>This pane</div>
-      <div><b>Anchored line</b> (top): with an anchor, the <b>delta share</b> since the anchor: buying minus selling added up from the bar after the anchor, divided by all contracts traded over the same bars (the volume bars' volume), on a fixed ±10 % scale with faint guides at 0, ±2 % and ±5 %. A value beyond ±10 % is drawn at the edge with a small cap mark; hover shows the true value, Σ delta and Σ volume. ⚙ "Anchored line: raw CVD" plots the anchored CVD instead (buying minus selling from the anchor bar, starting at 0). Set the anchor with 📍 and a click on a price bar, or with "session open" / "last swing" (the end of the last confirmed swing; swing size: the stored Flow v2 setting). Esc or "clear" removes it; without an anchor the line is the session CVD. With Edges off the readout at the top left shows delta, delta share, price change, minutes and contracts per point since the anchor. With Edges on, each drawn box is its own segment: the line restarts at each box's first bar (a gap at each boundary) and older boxes than the drawn ones aren't drawn; the current box's stats are in a popup on the price chart (below). Each box on the price chart is labelled "Δ · pts · minutes · contracts/pt" from the same numbers; hover a box line for its edges, contracts on both sides, held minutes, probes and how it ended. Delta share is a display aid with no research meaning.{tag}</div>
+      <div><b>Anchored line</b> (top): with an anchor, the <b>delta share</b> since the anchor: buying minus selling added up from the bar after the anchor, divided by all contracts traded over the same bars (the volume bars' volume), on a fixed ±10 % scale with faint guides at 0, ±2 % and ±5 %. A value beyond ±10 % is drawn at the edge with a small cap mark; hover shows the true value, Σ delta and Σ volume. ⚙ "Anchored line: raw CVD" plots the anchored CVD instead (buying minus selling from the anchor bar, starting at 0). Set the anchor with 📍 and a click on a price bar, or with "session open" / "last swing" (the end of the last confirmed swing; swing size: ⚙). Esc or "clear" removes it; without an anchor the line is the session CVD. With Edges off the readout at the top left shows delta, delta share, price change, minutes and contracts per point since the anchor. With Edges on, each drawn box is its own segment: the line restarts at each box's first bar (a gap at each boundary) and older boxes than the drawn ones aren't drawn; the current box's stats are in a popup on the price chart (below). Each box on the price chart is labelled "Δ · pts · minutes · contracts/pt" from the same numbers; hover a box line for its edges, contracts on both sides, held minutes, probes and how it ended. Delta share is a display aid with no research meaning.{tag}</div>
       <div><span style={sw(SLATE_RGBA(0.25))} /><b>Set end</b> (with an anchor): click "set end", then a price bar after the anchor (not after the last bar: now, or the replay / review until time). Anchored CVD and its readout, the Edges box(es), the Edge effort strip and the Profile then use anchor → end only; after the end CVD isn't drawn and the boxes and strip stop. Delta, volume and rolling bars and the absorption levels / marks are unchanged. The window is shaded lightly on the price chart and the header shows "hh:mm → hh:mm · N min". Esc while picking cancels; "clear end" removes only the end, "clear" removes anchor and end. On the 5-minute chart the end is the last minute of the clicked candle.{tag}</div>
       <div><span style={sw(SLATE_RGBA(0.55))} /><b>Volume per minute</b> (middle bars, slate grey): all contracts traded in each 1-minute bar (the flow's volume, every print, including the rare unknown-side ones), from the same data as the delta bars. Hover a minute for its volume, delta and delta share (delta ÷ volume). The scale tops out at the session's 98th-percentile minute (of the bars loaded), so one huge minute (e.g. the close) doesn't flatten the rest: taller minutes are drawn at full height with a brighter cap line, and their hover shows the true volume. A display scale only.{tag}</div>
       <div><span style={sw(BUY_RGBA(0.7))} /><span style={sw(SELL_RGBA(0.6))} /><b>Rolling net delta</b> (⚙, off by default): buying minus selling over the last N minutes (5 / 10 / 15). When on it draws in the middle slot, volume moves to the slot below it and the pane grows by one slot.{tag}</div>
@@ -156,7 +158,7 @@ function GuideBody() {
       <div style={h}>On the price chart</div>
       <div><b>Live effort</b> (with Effort on): the leg in progress — from the end of the last confirmed swing to the running extreme since — gets a dimmed label at that extreme, e.g. "↑ +6.5 pts so far · 1.2× vs last ↑": contracts per point vs the previous leg the same way, as the confirmed labels. Shown once the leg has moved at least M pts (⚙ "Live effort min move", default 4) and a previous leg the same way exists. It moves with the extreme on each refresh and becomes the normal label once the swing is confirmed; in a review replay it uses bars up to the replay time only. Hover it for the numbers. The label and M are display aids, not tested thresholds.{tag}</div>
       <div><span style={sw(ORANGE_RGBA(0.9))} /><span style={sw(MAGENTA_RGBA(0.9))} /><b>Absorption levels</b> (orange and magenta lines): a price where aggressive selling ("sellers absorbed", a floor, orange) or buying ("buyers absorbed", a ceiling, magenta) hit the Absorbed rule below. The line starts at the minute the volume built up, appears once the hold window has passed, and ends when price trades through it (else it runs to now). Thicker = more contracts absorbed; it fades from full to 25 % over 60 minutes. At most 8 are drawn, the largest after fading. The label says side, contracts and minutes held; hover for start, opposite-side contracts and where it broke. Exact data only.{tag}</div>
-      <div><span style={{ ...sw('transparent'), borderTop: `2px dashed ${MAGENTA_RGBA(0.8)}`, height: 0 }} /><b>Edges</b> (with an anchor; dashed magenta lines and a <b>box stats popup</b> near the current box: box from hh:mm (→ end) · Δ · Δ share · pts · minutes · contracts/pt, then each edge's price, contracts on both sides, held minutes and state — moved / probe / testing break. Drag it anywhere on the chart; it stays there until a new anchor; × hides it until the next anchor): the box starts at the anchor minute's close. A close up to 2 pts beyond an edge is a test and the edge stays; a close more than 2 pts beyond moves the edge or breaks the box (below). For each edge: aggressive contracts traded within 1 pt of it since the box started (buyers at the top, sellers at the bottom; exact data only) and minutes since price first came within 1 pt of it.{tag}
+      <div><span style={{ ...sw('transparent'), borderTop: `2px dashed ${MAGENTA_RGBA(0.8)}`, height: 0 }} /><b>Edges</b> (with an anchor; dashed magenta lines and a <b>box stats popup</b> near the current box: box from hh:mm (→ end) · Δ · Δ share · pts · minutes · contracts/pt, then each edge's price, contracts on both sides, held minutes and state — moved / probe / testing break; a last line "mixed sources (A + B)" when the box spans segments whose data differ (Databento / Ironbeam, or exact / approx). Drag it anywhere on the chart; it stays there until a new anchor; × hides it until the next anchor): the box starts at the anchor minute's close. A close up to 2 pts beyond an edge is a test and the edge stays; a close more than 2 pts beyond moves the edge or breaks the box (below). For each edge: aggressive contracts traded within 1 pt of it since the box started (buyers at the top, sellers at the bottom; exact data only) and minutes since price first came within 1 pt of it.{tag}
         <div style={{ marginTop: '4px' }}><b>Restart on a break</b> (CR-DI, CR-DN): while an edge is younger than N minutes (⚙, default 15) a close more than 2 pts beyond it moves the edge out ("moved hh:mm") and the box grows. Once the edge has held N minutes, such a close starts a <b>pending break</b> (popup "testing break hh:mm"; nothing grows or freezes meanwhile). If no 1-minute close comes back strictly inside the box (a close exactly on the edge does not count) within A minutes (⚙ "Break must hold A min", default 5), the break holds: the box freezes (drawn faded, ending at the break minute) and a new box starts at the break bar from that bar's close. If a close does come back inside, the break is cancelled: the box is unchanged and a faint magenta <b>probe</b> tick marks it at that edge (hover: the extreme reached, minutes outside, contracts traded beyond the edge). The popup and the Edge effort strip use the current box; the last 4 frozen boxes are drawn; clearing or moving the anchor removes all boxes. N and A are display defaults, not tested thresholds. An idea, untested: a failed probe can strengthen the fade.</div>
       </div>
       <div><span style={sw(BUY_RGBA(0.85))} /><span style={sw(SELL_RGBA(0.38))} /><span style={sw(SELL_RGBA(0.72))} /><span style={sw(BUY_RGBA(0.38))} /><b>Edge effort</b> (header chip, needs Edges and an anchor; a strip under the delta bars): per minute since the anchor, the same aggressive contracts the edge readout counts, within 1 pt of each edge, both sides. Top edge, drawn up: buyers (blue) with sellers beside them (thinner, lighter grey). Bottom edge, drawn down: sellers (grey) with buyers beside them (thinner, lighter blue). Each minute is counted against the box it belongs to (the drawn boxes: the last 4 frozen and the current one). Over the current box, the blue bars at the top and the grey bars at the bottom add up to the popup's numbers; when an edge of the current box moves, its minutes are re-counted against the new edge, as the popup is. A visit is a run of minutes with bars at that edge, allowing gaps of up to 2 minutes, and never crosses a break; its label says main side / other side (top buyers / sellers, bottom sellers / buyers). Hover a minute for both sides, the net and the visit's running totals. Exact data only. Visit sizes are effort, not a tested signal; Ironbeam live data understates volume.{tag}
@@ -182,8 +184,10 @@ function GuideBody() {
   )
 }
 
-function Settings({ value, layers, onApply, onClose, onResetLayout }) {
-  const [draft, setDraft] = useState({ ...value, heat: Boolean(layers?.heat), marks: Boolean(layers?.marks) })
+function Settings({ value, layers, markers = DEFAULT_MARKER_SETTINGS, onApply, onClose, onResetLayout }) {
+  const [draft, setDraft] = useState({
+    ...value, heat: Boolean(layers?.heat), marks: Boolean(layers?.marks), swing: markers.swing, effortRatio: markers.effortRatio,
+  })
   const input = { width: '100%', background: '#020617', color: '#e2e8f0', border: '1px solid #334155', borderRadius: '10px', padding: '8px 10px', fontSize: '14px' }
   const apply = (e) => {
     e.preventDefault()
@@ -203,6 +207,11 @@ function Settings({ value, layers, onApply, onClose, onResetLayout }) {
       rollingOn: Boolean(draft.rollingOn),
       liveMinMove: n('liveMinMove', LIVE_MIN_MOVE_RANGE[0], LIVE_MIN_MOVE_RANGE[1], DEFAULT_V3_SETTINGS.liveMinMove),
       anchoredLine: draft.anchoredLine === 'raw' ? 'raw' : 'share',
+    }, {
+      // CR-DP amendment item 1: the Flow v2 marker settings, same ranges as v2's ⚙ (swing 1–50, ratio 1–10)
+      ...markers,
+      swing: n('swing', 1, 50, DEFAULT_MARKER_SETTINGS.swing),
+      effortRatio: n('effortRatio', 1, 10, DEFAULT_MARKER_SETTINGS.effortRatio),
     })
   }
   const label = (text) => <div style={{ fontSize: '12px', color: '#cbd5e1', marginBottom: '4px' }}>{text}</div>
@@ -271,9 +280,23 @@ function Settings({ value, layers, onApply, onClose, onResetLayout }) {
           <input type="checkbox" aria-label="Buy heat layer" checked={Boolean(draft.buyLayer)} onChange={(e) => setDraft((d) => ({ ...d, buyLayer: e.target.checked }))} />
           Heatmap: buy layer (blue)
         </label>
+        <label style={{ display: 'block', marginBottom: 8 }}>
+          {label('Swing size (pts)')}
+          <input type="number" step={0.25} min={0} aria-label="Swing size (pts)" data-testid="flow-v3-swing-size"
+            value={draft.swing} style={input} onChange={(e) => setDraft((d) => ({ ...d, swing: e.target.value }))} />
+          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>A swing high / low is confirmed after price retraces this far; sets "last swing" and the Effort labels (1–50, default 8). A display setting: A7's volatility-scaled swing is the research definition, not this.</div>
+        </label>
+        <label style={{ display: 'block', marginBottom: 8 }}>
+          {label('Effort highlight ratio')}
+          <input type="number" step={0.1} min={0} aria-label="Effort highlight ratio" data-testid="flow-v3-effort-ratio"
+            value={draft.effortRatio} style={input} onChange={(e) => setDraft((d) => ({ ...d, effortRatio: e.target.value }))} />
+          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>An Effort label is highlighted when its contracts per point is at least this multiple of the previous swing the same way (1–10, default 1.5). A display setting.</div>
+        </label>
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', marginTop: '14px' }}>
           <span style={{ display: 'flex', gap: '6px' }}>
-            <button type="button" style={chipStyle(false)} onClick={() => setDraft({ ...DEFAULT_V3_SETTINGS, heat: false, marks: false })}>Defaults</button>
+            <button type="button" style={chipStyle(false)} onClick={() => setDraft({
+              ...DEFAULT_V3_SETTINGS, heat: false, marks: false, swing: DEFAULT_MARKER_SETTINGS.swing, effortRatio: DEFAULT_MARKER_SETTINGS.effortRatio,
+            })}>Defaults</button>
             <button type="button" style={chipStyle(false)} data-testid="flow-v3-reset-layout" onClick={onResetLayout}
               title="Slot heights in this pane and the price chart / Flow split back to their defaults">Reset layout</button>
           </span>
@@ -320,6 +343,8 @@ export default function AggressorFlowV3Panel({
   edgeEffortOn = false, // CR-DI: the Edge effort strip (stored per viewer); draws only with Edges on, an anchor and exact data
   onEdgeEffortChange,
   zoomResetKey = null, // CR-DP item 8b: the trade date; a change resets the slot zoom
+  markerSettings = DEFAULT_MARKER_SETTINGS, // CR-DP amendment item 1: swing size / effort ratio (the stored Flow v2 settings)
+  onMarkerSettingsChange,
   onResetLayout, // CR-DP item 7: App restores the price chart / Flow split (7c); the pane clears its slot layout
 }) {
   const stageRef = useRef(null)
@@ -376,13 +401,7 @@ export default function AggressorFlowV3Panel({
   }, [segments, aligned, closes, anchor, end])
   const windowText = useMemo(() => endWindowText(anchor, end, formatShiftedHHMM), [anchor, end])
   // An anchor in ETH sums Ironbeam ETH delta with the RTH segment's delta; say so when the sources differ.
-  const mixedNote = useMemo(() => {
-    if (!readout || readout.fromSeg === readout.toSeg) return ''
-    const src = Object.fromEntries((sessionPayload?.segments || []).map((g) => [g.name, g.source]))
-    const a = src[readout.fromSeg]
-    const b = src[readout.toSeg]
-    return a && b && a !== b ? ` · mixed sources (${SOURCE_LABEL[a] || a} + ${SOURCE_LABEL[b] || b})` : ''
-  }, [readout, sessionPayload])
+  const mixedNote = useMemo(() => mixedSourcesText(readout, sessionPayload?.segments), [readout, sessionPayload])
   const sources = useMemo(() => {
     const s = new Set()
     for (const p of payloads || []) for (const seg of p?.segments || []) if (seg.name === 'rth') s.add(seg.source)
@@ -863,7 +882,7 @@ export default function AggressorFlowV3Panel({
             session open
           </button>
           <button type="button" style={chipStyle(false)} data-testid="flow-v3-anchor-swing" disabled={swingAnchor == null}
-            onClick={() => setAnchorTo(swingAnchor)} title="The end of the last confirmed swing (swing size: the stored Flow v2 setting)">
+            onClick={() => setAnchorTo(swingAnchor)} title="The end of the last confirmed swing (swing size: ⚙)">
             last swing
           </button>
           <button type="button" style={chipStyle(false)} data-testid="flow-v3-anchor-clear" disabled={anchor == null && !anchorArmed && !endArmed}
@@ -918,8 +937,8 @@ export default function AggressorFlowV3Panel({
       </div>
       {guideOpen && <Modal title="How to read Flow v3" onClose={() => setGuideOpen(false)}><GuideBody /></Modal>}
       {settingsOpen && (
-        <Settings value={settings} layers={layers} onClose={() => setSettingsOpen(false)} onResetLayout={() => { resetLayout(); setSettingsOpen(false) }}
-          onApply={(lay, v) => { onLayersChange?.((l) => ({ ...l, ...lay })); onSettingsChange?.(v); setSettingsOpen(false) }} />
+        <Settings value={settings} layers={layers} markers={markerSettings} onClose={() => setSettingsOpen(false)} onResetLayout={() => { resetLayout(); setSettingsOpen(false) }}
+          onApply={(lay, v, mk) => { onLayersChange?.((l) => ({ ...l, ...lay })); onSettingsChange?.(v); onMarkerSettingsChange?.(mk); setSettingsOpen(false) }} />
       )}
       <div ref={stageRef} className="flow-stage" style={{ width: '100%' }}>
         <div ref={hostRef} className="flow-host" style={{ width: '100%', height: '100%' }} />

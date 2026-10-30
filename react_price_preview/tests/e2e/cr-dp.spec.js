@@ -555,3 +555,69 @@ test('item 8: price axis drag zooms, survives a reload and live refreshes, doubl
   expect((f4.cvd.to - f4.cvd.from) / (f0.cvd.to - f0.cvd.from)).toBeGreaterThan(0.9)
   expect(f4.delta.to - f4.delta.from).toBeGreaterThan(1.2 * (f0.delta.to - f0.delta.from))
 })
+
+test('amendment 1: ⚙ swing size / effort ratio default 8 / 1.5, write the stored v2 setting and feed the legs request', async ({ page }) => {
+  await open(page, D29, { storage: EDGES, until: D29_UNTIL })
+  const swingReqs = []
+  page.on('request', (r) => {
+    const u = new URL(r.url())
+    if (u.pathname.endsWith('/api/ironbeam/flow') && u.searchParams.get('mode') === 'v2') swingReqs.push(u.searchParams.get('m_swing'))
+  })
+  await page.getByLabel('Open Flow v3 settings').click()
+  await expect(page.getByTestId('flow-v3-swing-size')).toHaveValue('8')
+  await expect(page.getByTestId('flow-v3-effort-ratio')).toHaveValue('1.5')
+  await page.getByTestId('flow-v3-swing-size').fill('4')
+  await page.getByTestId('flow-v3-effort-ratio').fill('2')
+  await page.getByRole('button', { name: 'Apply' }).click()
+  await page.waitForTimeout(2500)
+  const stored = await page.evaluate(() => JSON.parse(window.localStorage.getItem('ib-react-flow-v2-markers')))
+  expect(stored.swing).toBe(4)
+  expect(stored.effortRatio).toBe(2)
+  expect(swingReqs).toContain('4')
+  // out-of-range values clamp to v2's ranges; Defaults restores 8 / 1.5
+  await page.getByLabel('Open Flow v3 settings').click()
+  await expect(page.getByTestId('flow-v3-swing-size')).toHaveValue('4')
+  await page.getByTestId('flow-v3-swing-size').fill('99')
+  await page.getByTestId('flow-v3-effort-ratio').fill('0.2')
+  await page.getByRole('button', { name: 'Apply' }).click()
+  const clamped = await page.evaluate(() => JSON.parse(window.localStorage.getItem('ib-react-flow-v2-markers')))
+  expect([clamped.swing, clamped.effortRatio]).toEqual([50, 1])
+  await page.getByLabel('Open Flow v3 settings').click()
+  await page.getByRole('button', { name: 'Defaults' }).click()
+  await page.getByRole('button', { name: 'Apply' }).click()
+  const def = await page.evaluate(() => JSON.parse(window.localStorage.getItem('ib-react-flow-v2-markers')))
+  expect([def.swing, def.effortRatio]).toEqual([8, 1.5])
+  log('amendment-1-swing.json', { stored, swingReqs: [...new Set(swingReqs)], clamped, def })
+})
+
+test('amendment 2: a box spanning ETH (Ironbeam approx) and RTH (Databento exact) shows "mixed sources" in the popup; an RTH-only box does not', async ({ page }) => {
+  const day = '2026-05-01'
+  await open(page, day, { storage: EDGES, session: 'FULL' })
+  const segs = await page.evaluate(async ({ api, d }) => {
+    const r = await fetch(`${api}/api/ironbeam/flow/cells?trade_date=${d}&session=FULL&a_k=3&a_m=3`)
+    return (await r.json()).segments.map((s) => [s.name, s.source, s.exact])
+  }, { api: API_BASE, d: day })
+  // a box that spans the 06:30 PT open (the open often breaks the box, so try a few anchor / end pairs)
+  const tried = []
+  let box = null
+  for (const [a, e] of [['06:20', '06:32'], ['06:25', '06:31'], ['06:15', '06:35'], ['06:28', '06:31'], ['05:50', '06:40']]) {
+    await page.keyboard.press('Escape')
+    await anchorAt(page, shifted(`${day}T${a}`), shifted(`${day}T08:00`))
+    await pickAt(page, 'flow-v3-end-pick', shifted(`${day}T${e}`))
+    box = await currentBoxLabel(page)
+    tried.push({ a, e, from: box?.readout?.fromSeg, to: box?.readout?.toSeg })
+    if (box?.readout?.fromSeg === 'eth' && box?.readout?.toSeg === 'rth') break
+  }
+  const mixed = page.getByTestId('flow-v3-box-popup-mixed')
+  const text = (await mixed.count()) ? await mixed.innerText() : null
+  log('amendment-2-mixed.json', { segs, tried, readout: box?.readout, text })
+  expect(box?.readout?.fromSeg).toBe('eth')
+  expect(box?.readout?.toSeg).toBe('rth')
+  expect(text).toBe('mixed sources (Ironbeam approx + Databento)')
+  // RTH only (anchor 07:00, end 07:40): no line
+  await page.keyboard.press('Escape')
+  await anchorAt(page, shifted(`${day}T07:00`), shifted(`${day}T09:00`))
+  await pickAt(page, 'flow-v3-end-pick', shifted(`${day}T07:40`))
+  await expect(page.getByTestId('flow-v3-box-popup-head')).toBeVisible()
+  await expect(page.getByTestId('flow-v3-box-popup-mixed')).toHaveCount(0)
+})

@@ -1009,7 +1009,21 @@ export function edgeStateText(box, side, hhmm) {
 //   "box from 06:49 → 07:10 · Δ +1.2k · share +1.02 % · +7.5 pts · 45 m · 1.8k/pt"
 //   "Top 7724.75 · buyers 1.8k / sellers 900 · held 9 m · probe 07:34"
 //   "Bottom 7715.25 · sellers 4.1k / buyers 2.0k · held 6 m"
-export function boxPopupLines(box, hhmm) {
+// CR-DP amendment item 2: " · mixed sources (A + B)" when a readout spans two segments whose data differ, by source
+// (Databento / Ironbeam) or by exactness (exact / approx 1-s cells); '' otherwise. `segments`: a payload's segments
+// ({ name, source, exact? }) — the cells payload (source and exactness) or the v2 payload (source only).
+const SOURCE_LABEL = { databento: 'Databento', ironbeam: 'Ironbeam' }
+export function mixedSourcesText(readout, segments) {
+  if (!readout || readout.fromSeg == null || readout.fromSeg === readout.toSeg) return ''
+  const by = Object.fromEntries((Array.isArray(segments) ? segments : []).map((g) => [g.name, g]))
+  const a = by[readout.fromSeg]
+  const b = by[readout.toSeg]
+  if (!a?.source || !b?.source) return ''
+  const name = (g) => `${SOURCE_LABEL[g.source] || g.source}${g.exact === false ? ' approx' : ''}`
+  return name(a) !== name(b) ? ` · mixed sources (${name(a)} + ${name(b)})` : ''
+}
+
+export function boxPopupLines(box, hhmm, segments = null) {
   if (!box) return null
   const ro = box.readout
   const n = (v) => (v == null ? 'exact data only' : kfmt(v))
@@ -1026,6 +1040,7 @@ export function boxPopupLines(box, hhmm) {
     head: `box from ${hhmm(box.from)}${end}${stats}`,
     top: edge('Top', 'top', 'buyers', 'sellers'),
     bottom: edge('Bottom', 'bottom', 'sellers', 'buyers'),
+    mixed: ro ? mixedSourcesText(ro, segments).replace(/^ · /, '') : '',
   }
 }
 
