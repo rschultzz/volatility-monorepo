@@ -43,7 +43,7 @@ test('segmentShare restarts at each span; the next span\'s start bar is a gap', 
   const spans = [{ from: 0, to: 120 }, { from: 180, to: 300 }]
   const s = segmentShare(rows, spans)
   assert.deepEqual(s.share, [null, 0.1, -20 / 300, null, 20 / 100, 25 / 100])
-  assert.equal(s.gapAt.size, 0) // the null start bar already separates the two lines
+  assert.deepEqual([...s.gapAt], [2]) // the line from box 1's last value to box 2's first is drawn transparent
   const ros = segmentReadouts(rows, closes, spans)
   assert.equal(readoutShare(ros[0]), s.share[2])
   assert.equal(readoutShare(ros[1]), s.share[5])

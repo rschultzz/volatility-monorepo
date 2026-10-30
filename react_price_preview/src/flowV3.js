@@ -926,7 +926,8 @@ export function anchoredShare(rows, anchorTime, endTime = null) {
 }
 
 // Per-segment delta share (Edges on: one segment per drawn box, as segmentCvd): each span restarts at its own start
-// bar; `gapAt` = rows whose line to the next row joins two spans (drawn transparent), as segmentCvd.
+// bar; `gapAt` = each span's last row with a value when the next row with a value belongs to another span: the chart
+// would join them across the empty start bar, so the pane draws that segment transparent (as segmentCvd).
 export function segmentShare(rows, spans) {
   const list = Array.isArray(rows) ? rows : []
   const share = new Array(list.length).fill(null)
@@ -946,7 +947,12 @@ export function segmentShare(rows, spans) {
     if (a >= 0) { share[a] = null; sumDelta[a] = null; sumVol[a] = null; owner[a] = -1 } // a new span's start bar
   })
   const gapAt = new Set()
-  for (let i = 0; i + 1 < list.length; i += 1) if (owner[i] >= 0 && owner[i + 1] >= 0 && owner[i + 1] !== owner[i]) gapAt.add(i)
+  let prev = -1
+  for (let i = 0; i < list.length; i += 1) {
+    if (share[i] == null) continue
+    if (prev >= 0 && owner[i] !== owner[prev]) gapAt.add(prev)
+    prev = i
+  }
   return { share, sumDelta, sumVol, gapAt }
 }
 
