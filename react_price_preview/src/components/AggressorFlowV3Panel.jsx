@@ -931,12 +931,14 @@ export default function AggressorFlowV3Panel({
         )}
         {slotBounds && slotBounds.bounds.slice(0, -1).map((b, k) => {
           const y = (b.bottom + slotBounds.bounds[k + 1].top) / 2
+          // the handle stays inside the gap between the two slots, so hovering a slot keeps its tooltip
+          const hit = Math.max(4, Math.min(8, Math.floor(slotBounds.bounds[k + 1].top - b.bottom)))
           return (
             <div key={`div-${slotBounds.order.length}-${k}`} data-testid={`flow-v3-slot-divider-${k}`} className="flow-v3-slot-divider"
               onPointerDown={onDividerDown(k)} onPointerMove={onDividerMove} onPointerUp={onDividerUp} onPointerCancel={onDividerUp}
               title="Drag to resize these slots (⚙ Reset layout restores)"
-              style={{ position: 'absolute', left: 0, right: priceAxisWidth || 60, top: Math.round(y) - 4, height: 8, cursor: 'row-resize', zIndex: 4, touchAction: 'none' }}>
-              <div style={{ position: 'absolute', left: 0, right: 0, top: 4, height: 0, borderTop: `1px solid ${SLATE_RGBA(0.18)}` }} />
+              style={{ position: 'absolute', left: 0, right: priceAxisWidth || 60, top: Math.round(y - hit / 2), height: hit, cursor: 'row-resize', zIndex: 4, touchAction: 'none' }}>
+              <div style={{ position: 'absolute', left: 0, right: 0, top: Math.floor(hit / 2), height: 0, borderTop: `1px solid ${SLATE_RGBA(0.18)}` }} />
             </div>
           )
         })}
