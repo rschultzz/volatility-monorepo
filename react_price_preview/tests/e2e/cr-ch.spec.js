@@ -56,7 +56,8 @@ async function snapshotPane(page, slot) {
   }, slot)
 }
 
-test('Flow v2: interaction re-renders the pane without recomputing its alignment', async ({ page }) => {
+// CR-DP: retired — tests the Flow Current / v2 pane or the mode toggle, removed by CR-DP item 1 (Flow is v3 only)
+test.skip('Flow v2: interaction re-renders the pane without recomputing its alignment', async ({ page }) => {
   await open(page, '2026-05-01', { 'ib-react-flow-mode': 'v2' })
   await expect(page.getByTestId('flow-v2-panel')).toBeVisible()
   const before = await snapshotPane(page, 'before')

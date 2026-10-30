@@ -204,3 +204,71 @@ A draggable splitter between the price chart and the Flow pane exists (`App.jsx:
 `cr-dc.spec.js` (mode toggle, `ib-react-flow-mode-v3`), `cr-cc.spec.js` (SIGNALS pill hidden in replay / restored on
 reveal), plus any v3 assertions on `flow-v3-source`, `flow-v3-cells-badge`, `flow-v3-readout`,
 `flow-v3-edge-readout`. Final list with what changed per assertion goes in the smoke commit.
+
+## Implementation notes (deltas found while building; no spec change)
+
+- **Item 4:** the popup's plot clamp uses the time scale's width — the pane element is the chart's table row, price axis
+  included. With Edges off the in-pane "since hh:mm" readout stays (now with Δ share); only the Edges-on "box from…" line
+  is gone. The header's Edges hints ("edges: set an anchor / loading…") left with the readout.
+- **Item 6:** a box's first one or two minutes are single-minute shares, often beyond ±10 % (drawn clipped with a cap
+  mark). The chart draws through a box's empty start bar, so the joining segment is transparent (`gapAt`, as CR-DN's CVD).
+  The smoke's "box 10:15–10:34" is anchor 10:15 + set end 10:34 (anchored at 06:49 no box starts at 10:15; boxes run
+  10:12–10:40 and 10:41–12:25).
+- **Item 7:** a divider's handle stays inside the gap between its slots (4–8 px) so a slot's hover keeps its tooltip.
+- **Item 8:** price-chart axis drag / double-click are the library's (unchanged); new is the per-date memory. Flow v3 zoom
+  is a factor on each slot's auto range (autoscale stays on), so live refreshes keep it; a stretched slot can draw past its
+  slot's edge (no per-scale clipping in the library).
+
+## Smoke (2026-10-29, read-only backend `scripts/cr_dp_smoke_backend.py` :8067; branch :5191, origin/main `ce854ce` :5192)
+
+`tests/e2e/cr-dp.spec.js` **6 / 6** (logs `scripts/logs/cr-dp/`):
+
+| Smoke item | Result |
+|---|---|
+| Header groups in order; no toggle, no pills; approx note | 10-29: `Flow v3 · Ironbeam` / `📍 set anchor · set end · session open · last swing · clear` / `Edges · Edge effort` / `Absorption levels · Profile · Effort` / `⚙ · ?` (right edge); a stored `ib-react-flow-mode=v2` opens v3 and the retired keys are removed. 10-20 (approx): one note "approx data — absorption & edges off", no pills, no "Absorbed: exact data only" |
+| 06:49 anchor, Edges on: popup = origin/main's numbers + Δ share | replay to 11:00 (current box 10:41): branch label = origin/main label `Δ -1.3k · -5.8 pts · 18 m · 9.5k/pt`; popup head `box from 10:41 · Δ -1.3k · share -2.39 % · -5.8 pts · 18 m · 9.5k/pt`; Top 7738.25 · buyers 4.9k · held 18 m and Bottom 7728.75 · sellers 4.4k · held 12 m · moved 10:53 = origin/main's header readout. Default place right of the box top-right (clamped in the plot), < 8 % of the plot |
+| drags and stays; clear removes; new anchor resets; × / Esc / Edges off | drag −220 / +112 px held across Profile on/off and a pan / zoom; clear → gone; new anchor → default place; × hides until the next anchor; Esc and Edges off remove it |
+| Box 10:15–10:34 ≈ +1 % (hand Σ delta ÷ Σ volume) | **+1.39 %** = 591 / 42,591 from the v2 minute bars = line value at 10:34 = popup share; nothing drawn outside the window; every 06:49 box's last value = its hand sums; scale ±10 % |
+| No anchor = raw CVD as origin/main; ⚙ raw CVD | line data identical to origin/main (no anchor; and anchored 06:49 with ⚙ raw CVD) |
+| Slot dividers; persist; Reset layout | +12 px moves one boundary only (middle slot floors at 24 px), pane height unchanged; kept after reload; the existing price / Flow splitter (7c) +60 px remembered; Reset layout restores slots and 220 px |
+| Axis drag zooms; double-click resets; live refresh keeps it | 2026-10-30 (live): price range held while a new bar arrived (66 → 67 bars) and after a reload; double-click → autoscale, key cleared. Flow v3: drag over the line slot stretched it ×1.65 (volume / delta unchanged), delta slot compressed; both kept after reload; double-click reset only the line slot |
+| Signals / Analogues gone; REVIEW and LANDSCAPE work | pills `SMILE / GEX / LANDSCAPE / REVIEW`; `/api/gex-landscape` 200; REVIEW panel opens; no `/signals/*` or `/api/analogues` request in 65 s |
+
+Unit **74 / 74** (`flowV3Share` 6, `flowV3Slots` 4 new). Build clean.
+
+### Existing specs (all run against the branch and origin/main)
+
+First run 54 passed / 38 failed / 4 skipped (`existing-specs.log`); after the updates below, the 11 changed files
+re-ran 40 passed / 17 skipped / 3 failed (`rerun-specs.log`), then the cr-db pixel test passed with its clip moved
+below the pill shadow. Remaining failures, all also failing on origin/main or not runnable here:
+`cr-db` "keys T / S / U" (fails on main, as noted in CR-DN), `cr-dn` item 6 "57k closing minute" (asserts origin/main
+does not cap — stale since CR-DN merged; fails with both sides = main), `cr-dh` Dashboard ×4 (need the Dash app; not
+served by the smoke backend).
+
+**Retired (`test.skip`, reason in the file)** — they test removed controls:
+- Flow Current / v2 / mode toggle (item 1): `cr-cd` ×3 (toggle; markers; screenshots + marker counts), `cr-ch` ×1,
+  `cr-cd-a5` ×2 (Current / v2 unchanged when off; v2 Effort toggle), `cr-dc` ×2 (Current / v2 pixel-identical; v3
+  defaults "back to Current"), `cr-df` ×2 (Current / v2 unchanged; defaults via the toggle), `cr-dg` ×1 (one Effort
+  switch for v2 and v3), `cr-dm` ×1 (Flow v2 draws no live label).
+- `cr-di` "chip off: pixel-identical to origin/main" — with an anchor + Edges the popup (4), the share line (6) and the
+  pill row (5) differ by design.
+
+**Updated:**
+- `cr-cc`: SIGNALS is not restored on reveal (count 0).
+- `cr-dc`: exact / approximate pills → the approx note (approximate) or none (exact) ×3; no "Absorbed: exact data only"
+  on approximate data; the narrow-header mode-toggle width check removed.
+- `cr-df`: anchor read from `data-anchor` (no Edges-on readout); "edges: set an anchor" → no popup; the header edge
+  readout ×3 → the popup's Top / Bottom lines (`boxPopupLines` of the same `edgeReadout`).
+- `cr-di`: header edge readout → popup Top / Bottom (×3 cases); the approximate log reads the popup.
+- `cr-dn`: header edge readout ×4 → popup Top / Bottom; in-pane "box from…" ×3 → popup head; these tests check the
+  anchored CVD, so they run with ⚙ raw CVD (`anchoredLine: 'raw'`).
+- `cr-db` pixel: compared below the pill row and its shadow (top 96 px).
+
+### Open questions (for Ryan)
+
+1. **Swing size has no editor now.** The v2 marker settings (`ib-react-flow-v2-markers`: swing size for "last swing" /
+   the legs, effort ratio) were only editable in Flow v2's ⚙. They keep their stored value (or defaults: swing 8,
+   ratio 1.5). Add "Swing size" to Flow v3 ⚙?
+2. **Mixed-sources note.** The Edges-on "box from…" line carried " · mixed sources (Ironbeam + Databento)" when a box
+   spans ETH and RTH from different sources; the popup doesn't show it. Add it?
+3. `bt_signals` stops filling from 2026-10-29 (Ryan's decision): the repo has no other caller of `/signals/scan` (no cron, no Dash page).

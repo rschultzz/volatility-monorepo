@@ -188,7 +188,9 @@ test('pixel: price chart with the review panel closed is identical to origin/mai
     await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => {})
     await page.waitForTimeout(1500)
     await page.mouse.move(1, 1)
-    shots[name] = await page.locator('.tv-lightweight-charts').first().screenshot({ path: path.join(ASSETS, `chart-closed-${name}.png`) })
+    // CR-DP item 5: the pill row (top 8–40 px, its drop shadow to ~80 px) lost SIGNALS / ANALOGUES by design, so compare the chart below it
+    const cb = await page.locator('.tv-lightweight-charts').first().boundingBox()
+    shots[name] = await page.screenshot({ path: path.join(ASSETS, `chart-closed-${name}.png`), clip: { x: cb.x, y: cb.y + 96, width: cb.width, height: cb.height - 96 } })
     await ctx.close()
   }
   expect(shots.branch.equals(shots.branch2)).toBe(true) // the capture itself is deterministic

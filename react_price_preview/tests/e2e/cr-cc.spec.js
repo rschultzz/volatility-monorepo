@@ -326,7 +326,7 @@ test('A2 (read-only): on a revealed candidate, snapshots after entry are selecta
   await openReview(page)
   await activate(page, c.id, c.session_date, { revealed: true })
   await expect(page.getByTestId('review-banner')).toContainText('revealed')
-  await expect(page.getByRole('button', { name: 'Show SIGNALS' })).toHaveCount(1) // restored on reveal
+  await expect(page.getByRole('button', { name: 'Show SIGNALS' })).toHaveCount(0) // CR-DP item 5: SIGNALS removed (was: restored on reveal)
   await assertLaterSnapshotsSelectable(page, c, smileUrls)
 })
 
