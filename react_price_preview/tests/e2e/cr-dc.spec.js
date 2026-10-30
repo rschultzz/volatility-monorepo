@@ -126,7 +126,8 @@ async function headerParts(page) {
   return { left, right, toggle: tb }
 }
 
-test('unchanged: Current and v2 are pixel-identical to origin/main (toggle aside), same requests', async ({ browser }) => {
+// CR-DP: retired — tests the Flow Current / v2 pane or the mode toggle, removed by CR-DP item 1 (Flow is v3 only)
+test.skip('unchanged: Current and v2 are pixel-identical to origin/main (toggle aside), same requests', async ({ browser }) => {
   for (const storage of [{}, { 'ib-react-flow-mode': 'v2' }]) {
     const out = {}
     for (const [name, base] of [['branch', ''], ['main', BASELINE]]) {
@@ -188,7 +189,8 @@ test('unchanged: Current and v2 are pixel-identical to origin/main (toggle aside
   }
 })
 
-test('v3 defaults: layers off, no cells request, price chart unchanged, remembered, back to Current', async ({ page }) => {
+// CR-DP: retired — tests the Flow Current / v2 pane or the mode toggle, removed by CR-DP item 1 (Flow is v3 only) (its "back to Current" and toggle steps)
+test.skip('v3 defaults: layers off, no cells request, price chart unchanged, remembered, back to Current', async ({ page }) => {
   const urls = track(page)
   await open(page, '2026-05-01')
   await settle(page)
@@ -241,10 +243,13 @@ test('v3 on 2026-05-01: approximate cells, no marks, anchor pick and readout', a
   expect([eth.name, eth.tier, eth.marks]).toEqual(['eth', 'seconds', null])
   expect(rth.name).toBe('rth')
   expect(rth.source).toBe('databento')
-  await expect(page.getByTestId('flow-v3-cells-badge')).toHaveText([`ETH ${badge.seconds}`, `RTH ${badge[rth.tier]}`])
+  // CR-DP item 2: the ETH / RTH exact / approximate pills are one "approx data" note when either segment is approximate
+  void badge
+  await expect(page.getByTestId('flow-v3-cells-badge')).toHaveCount(0)
+  await expect(page.getByTestId('flow-v3-approx-note')).toHaveText('approx data — absorption & edges off')
   if (rth.tier === 'seconds') {
     expect(rth.marks).toBeNull()
-    await expect(page.getByTestId('flow-v3-marks-note')).toHaveText('Absorbed: exact data only')
+    await expect(page.getByTestId('flow-v3-marks-note')).toHaveCount(0) // CR-DP item 2: the approx note says it
   } else {
     expect(Array.isArray(rth.marks)).toBeTruthy()
     await expect(page.getByTestId('flow-v3-marks-note')).toHaveCount(0)
@@ -284,7 +289,7 @@ test('exact marks: 2026-10-27 (retained trades) draws absorption marks with a ho
   test.skip(rth.tier === 'seconds', '2026-10-27 is no longer in the trades table (2-day retention)')
   expect(rth.exact).toBeTruthy()
   expect(rth.marks.length).toBeGreaterThan(0)
-  await expect(page.getByTestId('flow-v3-cells-badge').nth(1)).toContainText('RTH exact: ')
+  await expect(page.getByTestId('flow-v3-approx-note')).toHaveCount(0) // CR-DP item 2: exact sessions show no note (was the RTH exact pill)
   const mk = rth.marks[0]
   const t = mk.time - 7 * 3600 // PDT
   await frame(page, t - 20 * 60, t + 40 * 60)
@@ -322,7 +327,7 @@ test('live: the live session renders v3 with exact cells', async ({ page }) => {
   await expect(page.getByTestId('flow-v3-panel')).toBeVisible()
   expect(cells.segments.length).toBeGreaterThan(0)
   for (const s of cells.segments) expect(['trades', 'price_1m']).toContain(s.tier)   // live = exact
-  await expect(page.getByTestId('flow-v3-cells-badge').first()).toContainText('exact: ')
+  await expect(page.getByTestId('flow-v3-approx-note')).toHaveCount(0) // CR-DP item 2: exact sessions show no note (was the exact pill)
   await page.screenshot({ path: path.join(ASSETS, `v3-live-${day}.png`) })
 })
 
@@ -363,8 +368,7 @@ test('replay: until on the cells request, nothing after it', async ({ page }) =>
   }
   for (const b of v2.bars) expect(b.time).toBeLessThan(until)
   await page.screenshot({ path: path.join(ASSETS, 'v3-replay-2026-05-01.png') })
-  // the narrow header (review panel open) keeps the mode toggle usable
-  expect((await page.getByTestId('flow-v3-panel').locator('[role=group][aria-label="Flow pane mode"]').boundingBox()).width).toBeGreaterThan(100)
+  // (CR-DP item 1: the mode toggle this checked in the narrow header is removed)
   await page.getByRole('button', { name: 'Exit review' }).click()
   await expect(page.getByTestId('review-banner')).toHaveCount(0)
 })

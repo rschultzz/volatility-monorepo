@@ -265,3 +265,8 @@ body.resizing-panels {
   line-height: 1.4;
   max-width: 560px;
 }
+
+/* CR-DP item 7a: Flow v3 slot dividers brighten on hover (existing slate) */
+.flow-v3-slot-divider:hover > div {
+  border-top-color: rgba(148, 163, 184, 0.6) !important;
+}

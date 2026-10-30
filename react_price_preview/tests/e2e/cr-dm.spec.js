@@ -356,7 +356,8 @@ test('review replay 2026-10-29: the provisional label is the hand computation, u
   log('replay.json', out)
 })
 
-test('Flow v2 with Effort on draws no live label (Flow v3 only)', async ({ page }) => {
+// CR-DP: retired — tests the Flow Current / v2 pane or the mode toggle, removed by CR-DP item 1 (Flow is v3 only)
+test.skip('Flow v2 with Effort on draws no live label (Flow v3 only)', async ({ page }) => {
   test.setTimeout(300_000)
   await open(page, '2026-10-27', { storage: { 'ib-react-flow-mode': 'v2', 'ib-react-flow-v2-effort': '1' } })
   await settle(page)

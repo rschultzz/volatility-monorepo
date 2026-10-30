@@ -1,5 +1,5 @@
 // Horizontal row of toggle pills that sit above the Price chart and
-// collapse/expand the SMILE, SIGNALS, and GEX sub-panels. Adding a new
+// collapse/expand the SMILE and GEX sub-panels (and LANDSCAPE / REVIEW). Adding a new
 // toggle is a matter of appending an entry to the `pills` prop — the
 // container owns layout, the parent only owns state.
 //

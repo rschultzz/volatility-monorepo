@@ -11,7 +11,13 @@ import { test, expect } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { dirArrow, drawnBoxes, edgeEffortSeries, edgeReadout, edgeText, edgeVisits, flattenBars, kfmt, makeShifter } from '../../src/flowV3.js'
+import { dirArrow, drawnBoxes, edgeEffortSeries, edgeReadout, edgeText, edgeVisits, flattenBars, kfmt, makeShifter, boxPopupLines } from '../../src/flowV3.js'
+
+// CR-DP item 4: the header edge readout and the in-pane "box from…" line moved to the price chart's box stats popup; its
+// Top / Bottom lines are flowV3.boxPopupLines of the same edgeReadout (the current box), its head carries the box label.
+const popupEdges = async (page) => ((await page.getByTestId('flow-v3-box-popup').count())
+  ? `${await page.getByTestId('flow-v3-box-popup-top').innerText()} | ${await page.getByTestId('flow-v3-box-popup-bottom').innerText()}` : '')
+const popupWant = (r, hm) => { const l = boxPopupLines(r, hm); return `${l.top} | ${l.bottom}` }
 
 const API_BASE = process.env.CRDF_API_BASE || 'http://127.0.0.1:8064'
 const BASELINE = process.env.CRDF_BASELINE_URL || 'http://localhost:5184'
@@ -165,7 +171,8 @@ async function canvasHash(page, selector) {
   }, selector)
 }
 
-test('chip off: price chart and Flow v3 pane pixel-identical to origin/main (2026-10-27, 2026-10-28)', async ({ browser }) => {
+// CR-DP: retired — with an anchor and Edges on the branch draws the box stats popup (CR-DP item 4) and the delta-share line (item 6), and the pill row lost SIGNALS / ANALOGUES (item 5): not pixel-identical by design; the strip off / on behaviour is in the tests below
+test.skip('chip off: price chart and Flow v3 pane pixel-identical to origin/main (2026-10-27, 2026-10-28)', async ({ browser }) => {
   test.setTimeout(600_000)
   const shot = async (base, day, storage, anchorOpen) => {
     const ctx = await browser.newContext()
@@ -248,7 +255,7 @@ for (const until of [`${TODAY}T07:40`, `${TODAY}T08:09`, null]) {
     await anchorAt(page, anchor)
     const r = edgeReadout(cells, flattenBars(cells), anchor, ptShift, 15)
     const want = edgeText(r, pt)
-    await expect.poll(async () => page.getByTestId('flow-v3-edge-readout').innerText(), { timeout: 20_000 }).toBe(want)
+    await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
     await expect(page.getByTestId('flow-v3-edge-effort-toggle')).toHaveAttribute('aria-pressed', 'true')
     await expect(page.getByTestId('flow-v3-edge-effort-toggle')).toBeEnabled()
     const st = await stripState(page)
@@ -368,7 +375,7 @@ test('approximate-data session: no strip, chip disabled with the reason', async 
   await expect(chip).toHaveAttribute('title', /exact data only.*approximate \(1-s\)/)
   const st = await stripState(page)
   expect(st.panes).toBe(1)
-  log('approximate.json', { day, title: await chip.getAttribute('title'), panes: st.panes, readout: await page.getByTestId('flow-v3-edge-readout').innerText() })
+  log('approximate.json', { day, title: await chip.getAttribute('title'), panes: st.panes, readout: await popupEdges(page) })
 })
 
 test('chip gating and the ⚙ box hold setting', async ({ page }) => {

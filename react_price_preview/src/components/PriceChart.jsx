@@ -9,13 +9,9 @@ import {
   createSeriesMarkers,
 } from 'lightweight-charts'
 import SmileChart from './SmileChart'
-import SignalPanel from './SignalPanel'
 import ChartToggleBar from './ChartToggleBar'
 import TradeAnnotationPanel from './TradeAnnotationPanel'
 import CondorPricingPanel from './CondorPricingPanel'
-import AnaloguesPanel, {
-  PANEL_WIDTH as ANALOGUES_PANEL_WIDTH,
-} from './AnaloguesPanel'
 import {
   GexLandscape,
   PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH,
@@ -25,8 +21,8 @@ import {
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { LIVE_EFFORT_ID, absorptionLevels, boxLabelText, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
-import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, WindowShadePrimitive } from './flowV3Primitives'
+import { LIVE_EFFORT_ID, absorptionLevels, boxLabelText, boxPopupLines, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
+import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
 const ETH_BG_COLOR = '#1f2937'
@@ -223,6 +219,8 @@ const REVIEW_ZONE_COLOR = '251, 191, 36' // amber #fbbf24 (confluence)
 
 // CR-CD A3: replay price-axis fit pads the setup zone by max(this, 0.5·IM) points.
 const REVIEW_FIT_MIN_PTS = 25
+// CR-DP item 8a: the manual price range (axis drag, wheel zoom, plot pan) for one trade date, per browser.
+const PRICE_ZOOM_STORAGE_KEY = 'ib-react-price-zoom'
 const REVIEW_LINE_COLORS = {
   level: '#e879f9',
   extreme: '#94a3b8',
@@ -869,18 +867,8 @@ export default function PriceChart({
   landscapeData = null,
   landscapeSpotMode = 'LIVE',
   onLandscapeSpotModeChange = null,
-  // Day Analogue Comparison panel (CR-013). State + fetch lifecycle live
-  // in App.jsx; PriceChart only owns the ANALOGUES pill and renders the
-  // docked panel.
-  analoguesOpen = false,
-  onToggleAnalogues = null,
-  analoguesData = null,
-  analoguesLoading = false,
-  analoguesError = null,
-  analoguesK = 5,
-  onAnaloguesKChange = null,
   // Setup review (CR-CC). State, fetches and the panel live in App.jsx; PriceChart
-  // owns the REVIEW pill, hides SIGNALS / smile / condor while the replay cutoff is
+  // owns the REVIEW pill, hides smile / condor while the replay cutoff is
   // active (reviewHide), and draws the active candidate's lines and markers.
   reviewOpen = false,
   onToggleReview = null,
@@ -1190,13 +1178,6 @@ export default function PriceChart({
   // under different keys, just not the open/closed state.
   const [smileCollapsed, setSmileCollapsed] = useState(true)
   const smileResizeRef = useRef(null)
-
-  // SIGNALS panel collapsed state — owned here (lifted from SignalPanel) so all
-  // three chart-toggle pills follow the same prop-driven pattern.
-  const [signalsCollapsed, setSignalsCollapsed] = useState(true)
-  const toggleSignalsCollapsed = useCallback(() => {
-    setSignalsCollapsed(prev => !prev)
-  }, [])
 
   // ── Trade annotation mode ─────────────────────────────────────
   const [annotationState, setAnnotationState] = useState(null)
@@ -2741,6 +2722,95 @@ export default function PriceChart({
   const [v3LevelHover, setV3LevelHover] = useState(null)
   const [v3BoxHover, setV3BoxHover] = useState(null)
   const [v3ProbeHover, setV3ProbeHover] = useState(null) // CR-DN item 2
+
+  // CR-DP item 4 — box stats popup for the current (unfrozen) box, with Edges on and an anchor (v3EdgeReadout is null
+  // otherwise, so clear / Esc / Edges off remove it). Default place: just right of the box's top-right, kept inside the
+  // plot, following the box on pans and zooms; once dragged it stays where it was put. A new anchor resets the
+  // position and the × (closed until the next anchor). Text: flowV3.boxPopupLines, the box label's own numbers.
+  const v3Anchor = flowV3?.anchor ?? null
+  const v3CurrentBox = useMemo(() => v3Edges?.boxes.find((b) => !b.frozen) || null, [v3Edges])
+  const v3PopupLines = useMemo(
+    () => (v3CurrentBox ? boxPopupLines(v3CurrentBox.box, (t) => formatShiftedHHMM(v3Shift(t)), v3Payload?.segments) : null),
+    [v3CurrentBox, v3Shift, v3Payload]
+  )
+  const [boxPopupDrag, setBoxPopupDrag] = useState(null) // { left, top } in stage px once dragged
+  const [boxPopupClosed, setBoxPopupClosed] = useState(false)
+  const [boxPopupAuto, setBoxPopupAuto] = useState(null) // { left, top, pane } default place + plot rect (stage px)
+  const boxPopupRef = useRef(null)
+  const boxPopupDragRef = useRef(null)
+  useEffect(() => {
+    setBoxPopupDrag(null)
+    setBoxPopupClosed(false)
+  }, [v3Anchor])
+  const boxPopupOn = Boolean(v3PopupLines && !boxPopupClosed)
+  useEffect(() => {
+    if (!boxPopupOn || !v3CurrentBox) {
+      setBoxPopupAuto(null)
+      return undefined
+    }
+    let raf = 0
+    let lastKey = ''
+    const tick = () => {
+      raf = requestAnimationFrame(tick)
+      const chart = chartRef.current
+      const series = seriesRef.current
+      const stage = stageRef.current
+      const paneEl = chart?.panes?.()[0]?.getHTMLElement?.()
+      if (!chart || !series || !stage || !paneEl) return
+      const sr = stage.getBoundingClientRect()
+      const pr = paneEl.getBoundingClientRect()
+      // the pane element is the chart's table row (price axis included): the plot is the time scale's width
+      const pane = { left: pr.left - sr.left, top: pr.top - sr.top, width: chart.timeScale().width() || pr.width, height: pr.height }
+      const w = boxPopupRef.current?.offsetWidth || 0
+      const h = boxPopupRef.current?.offsetHeight || 0
+      const x = chart.timeScale().timeToCoordinate(v3CurrentBox.to)
+      const y = series.priceToCoordinate(v3CurrentBox.top)
+      const rawLeft = pane.left + (x == null ? pane.width : x + 8)
+      const rawTop = pane.top + (y == null ? 0 : y - 2)
+      const next = {
+        left: Math.max(pane.left, Math.min(rawLeft, pane.left + pane.width - w - 4)),
+        top: Math.max(pane.top, Math.min(rawTop, pane.top + pane.height - h - 4)),
+        pane,
+      }
+      const key = JSON.stringify(next, (k, v) => (typeof v === 'number' ? Math.round(v) : v))
+      if (key !== lastKey) {
+        lastKey = key
+        setBoxPopupAuto(next)
+      }
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [boxPopupOn, v3CurrentBox])
+  const clampToPlot = (left, top) => {
+    const pane = boxPopupAuto?.pane
+    const w = boxPopupRef.current?.offsetWidth || 0
+    const h = boxPopupRef.current?.offsetHeight || 0
+    if (!pane) return { left, top }
+    return {
+      left: Math.max(pane.left, Math.min(left, pane.left + pane.width - w)),
+      top: Math.max(pane.top, Math.min(top, pane.top + pane.height - h)),
+    }
+  }
+  const onBoxPopupPointerDown = (e) => {
+    if (e.button !== 0 || e.target?.closest?.('[data-popup-close]')) return
+    const el = boxPopupRef.current
+    if (!el) return
+    e.preventDefault()
+    e.stopPropagation()
+    el.setPointerCapture?.(e.pointerId)
+    boxPopupDragRef.current = { x: e.clientX, y: e.clientY, left: el.offsetLeft, top: el.offsetTop }
+  }
+  const onBoxPopupPointerMove = (e) => {
+    const d = boxPopupDragRef.current
+    if (!d) return
+    setBoxPopupDrag(clampToPlot(d.left + e.clientX - d.x, d.top + e.clientY - d.y))
+  }
+  const onBoxPopupPointerUp = (e) => {
+    if (!boxPopupDragRef.current) return
+    boxPopupDragRef.current = null
+    boxPopupRef.current?.releasePointerCapture?.(e.pointerId)
+  }
+  const boxPopupPlace = boxPopupDrag ? clampToPlot(boxPopupDrag.left, boxPopupDrag.top) : boxPopupAuto
   useEffect(() => {
     const series = seriesRef.current
     if (!series) return
@@ -2777,6 +2847,70 @@ export default function PriceChart({
       return hit ? { ...h, probe: hit.probe } : null
     })
   }, [v3Columns, v3Marks, v3Profile, v3Levels, v3Edges, flowWindow, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
+
+  // CR-DP item 8a — y-axis zoom memory. Dragging the right price axis stretches / compresses the scale (lightweight-charts'
+  // axisPressedMouseMove, as before; the wheel zoom and plot drag also set a manual range) and a double-click on the
+  // axis returns to auto-fit (the library's axisDoubleClickReset). New: the manual range is remembered for the trade date
+  // (localStorage), so it survives reloads; live refreshes only set data and never re-enable autoscale. A date change or
+  // a double-click clears it. The view only: the data are unchanged.
+  const tradeDateRef = useRef(tradeDate)
+  tradeDateRef.current = tradeDate
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return undefined
+    let timer = 0
+    const save = () => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        const scale = chartRef.current?.priceScale('right')
+        // not before this date's stored range has been restored (a click while loading must not drop it)
+        if (!scale || priceZoomRef.current.date !== tradeDateRef.current) return
+        try {
+          const r = scale.options().autoScale ? null : scale.getVisibleRange()
+          if (r && Number.isFinite(r.from) && Number.isFinite(r.to)) {
+            window.localStorage.setItem(PRICE_ZOOM_STORAGE_KEY, JSON.stringify({ date: tradeDateRef.current, from: r.from, to: r.to }))
+          } else {
+            window.localStorage.removeItem(PRICE_ZOOM_STORAGE_KEY)
+          }
+        } catch (err) { /* storage unavailable */ }
+      }, 250)
+    }
+    stage.addEventListener('wheel', save, { capture: true, passive: true })
+    stage.addEventListener('dblclick', save, true)
+    window.addEventListener('mouseup', save)
+    return () => {
+      window.clearTimeout(timer)
+      stage.removeEventListener('wheel', save, { capture: true })
+      stage.removeEventListener('dblclick', save, true)
+      window.removeEventListener('mouseup', save)
+    }
+  }, [])
+  const priceZoomRef = useRef({ date: null, chart: null })
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !displayCandles?.length) return
+    const prev = priceZoomRef.current
+    if (prev.date === tradeDate && prev.chart === chart) return
+    const dateChanged = prev.chart === chart && prev.date != null && prev.date !== tradeDate
+    priceZoomRef.current = { date: tradeDate, chart }
+    let stored = null
+    try { stored = JSON.parse(window.localStorage.getItem(PRICE_ZOOM_STORAGE_KEY) || 'null') } catch (err) { stored = null }
+    const scale = chart.priceScale('right')
+    if (stored && stored.date === tradeDate && Number.isFinite(stored.from) && Number.isFinite(stored.to) && stored.to > stored.from) {
+      requestAnimationFrame(() => {
+        if (chartRef.current !== chart) return
+        try {
+          scale.setAutoScale(false)
+          scale.setVisibleRange({ from: stored.from, to: stored.to })
+        } catch (err) { /* ignore */ }
+      })
+      return
+    }
+    try { if (stored) window.localStorage.removeItem(PRICE_ZOOM_STORAGE_KEY) } catch (err) { /* ignore */ }
+    if (dateChanged) {
+      try { scale.setAutoScale(true) } catch (err) { /* ignore */ }
+    }
+  }, [tradeDate, displayCandles])
 
   // CR-CD A3 — when a candidate loads in replay (not yet revealed), fit the price axis to the
   // setup zone/range (range box, zone band, level, extreme, entry, stop) ± max(25 pts, 0.5·IM) instead of the full GEX-line
@@ -3608,17 +3742,13 @@ export default function PriceChart({
 
           <ChartToggleBar
             pills={[
-              // CR-CC A2: SMILE stays during a review replay (capped at the cutoff);
-              // SIGNALS is hidden until reveal (A1.3).
+              // CR-CC A2: SMILE stays during a review replay (capped at the cutoff). CR-DP item 5: SIGNALS and
+              // ANALOGUES (and their panels) are removed.
               { key: 'smile', label: 'SMILE', isOpen: !smileCollapsed, onToggle: toggleSmileCollapsed },
-              ...(reviewHide
-                ? []
-                : [{ key: 'signals', label: 'SIGNALS', isOpen: !signalsCollapsed, onToggle: toggleSignalsCollapsed }]),
               ...(Array.isArray(normalizedGexSegments) && normalizedGexSegments.length > 0 && gexEnabled
                 ? [{ key: 'gex', label: 'GEX', isOpen: gexPanelOpen, onToggle: () => setGexPanelOpen(o => !o), title: 'Show GEX legend' }]
                 : []),
               { key: 'landscape', label: 'LANDSCAPE', isOpen: landscapeOpen, onToggle: onToggleLandscape || (() => {}), title: 'Show GEX landscape panel' },
-              { key: 'analogues', label: 'ANALOGUES', isOpen: analoguesOpen, onToggle: onToggleAnalogues || (() => {}), title: 'Show day analogue comparison panel' },
               { key: 'review', label: 'REVIEW', isOpen: reviewOpen, onToggle: onToggleReview || (() => {}), title: 'Show setup review panel' },
             ]}
           />
@@ -3794,6 +3924,45 @@ export default function PriceChart({
             </div>
           )}
 
+          {boxPopupOn && (
+            <div
+              ref={boxPopupRef}
+              data-testid="flow-v3-box-popup"
+              data-dragged={boxPopupDrag ? '1' : '0'}
+              onPointerDown={onBoxPopupPointerDown}
+              onPointerMove={onBoxPopupPointerMove}
+              onPointerUp={onBoxPopupPointerUp}
+              onPointerCancel={onBoxPopupPointerUp}
+              title="Current box (drag to move) — visual aid, untested"
+              style={{
+                position: 'absolute',
+                left: boxPopupPlace?.left ?? 0,
+                top: boxPopupPlace?.top ?? 0,
+                visibility: boxPopupPlace ? 'visible' : 'hidden',
+                zIndex: 5, cursor: 'move', userSelect: 'none', touchAction: 'none',
+                background: TAG_BG(0.92), border: '1px solid rgba(232,121,249,0.35)', borderRadius: 4,
+                padding: '3px 18px 3px 6px', fontSize: '10px', fontFamily: 'sans-serif', color: '#e2e8f0', lineHeight: 1.35,
+                maxWidth: 340,
+              }}
+            >
+              <div data-testid="flow-v3-box-popup-head" style={{ color: '#f0abfc' }}>{v3PopupLines.head}</div>
+              <div data-testid="flow-v3-box-popup-top">{v3PopupLines.top}</div>
+              <div data-testid="flow-v3-box-popup-bottom">{v3PopupLines.bottom}</div>
+              {v3PopupLines.mixed && <div data-testid="flow-v3-box-popup-mixed" style={{ color: '#fbbf24' }}>{v3PopupLines.mixed}</div>}
+              <button
+                type="button"
+                data-popup-close="1"
+                data-testid="flow-v3-box-popup-close"
+                aria-label="Hide box stats until the next anchor"
+                title="Hide until the next anchor"
+                onClick={() => setBoxPopupClosed(true)}
+                style={{ position: 'absolute', top: 1, right: 2, width: 14, height: 14, padding: 0, border: 'none', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontSize: '11px', lineHeight: '14px' }}
+              >
+                ×
+              </button>
+            </div>
+          )}
+
           {v3ProbeHover && (
             <div
               data-testid="flow-v3-probe-tooltip"
@@ -3842,18 +4011,6 @@ export default function PriceChart({
               crosshairDash={CROSSHAIR_LINE_DASH}
               lastPrice={lastBarClose}
               showGexAxis
-            />
-          )}
-
-          {analoguesOpen && (
-            <AnaloguesPanel
-              data={analoguesData}
-              loading={analoguesLoading}
-              error={analoguesError}
-              k={analoguesK}
-              onKChange={onAnaloguesKChange || undefined}
-              onClose={onToggleAnalogues || undefined}
-              rightOffset={landscapeOpen ? LANDSCAPE_PANEL_WIDTH : 0}
             />
           )}
 
@@ -4035,18 +4192,6 @@ export default function PriceChart({
               tradeDate={tradeDate}
               onSaved={clearAnnotationState}
               onCancel={clearAnnotationState}
-            />
-          )}
-
-          {/* Signal Panel — separate floating window, self-managed fetch.
-              Unmounted during a review replay (CR-CC A1.3) so it neither shows
-              nor scans the day's signals. */}
-          {!reviewHide && (
-            <SignalPanel
-              tradeDate={tradeDate}
-              isToday={tradeDate === new Date().toISOString().slice(0, 10)}
-              collapsed={signalsCollapsed}
-              onToggleCollapsed={toggleSignalsCollapsed}
             />
           )}
 

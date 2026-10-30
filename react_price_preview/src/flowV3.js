@@ -10,7 +10,8 @@ export const CROWDED_TICK_PX = 3 // DC7: one tick shorter than this -> 0.5-pt ce
 export const ROLLING_CHOICES = [5, 10, 15]
 // CR-DM: rolling net delta is a ⚙ option, off by default (volume per minute takes its slot); liveMinMove = the live
 // effort label's minimum move in points (⚙, a display default, not a tested threshold).
-export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: false, liveMinMove: 4, breakHoldMin: 5 }
+// CR-DP item 6d: anchoredLine = what the anchored line plots ('share' = cumulative delta share, the default; 'raw' = CVD).
+export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: false, liveMinMove: 4, breakHoldMin: 5, anchoredLine: 'share' }
 // CR-DN item 2: a break must hold A minutes (no 1-minute close strictly back inside the box) before the box freezes (⚙;
 // a display default, not a tested threshold).
 export const BREAK_HOLD_MIN_RANGE = [1, 15]
@@ -160,6 +161,76 @@ export function paneSlotMargins(pane0Px, extraPx) {
     low: m(0.74 * B, 0.70 * B + X),
     delta: m(0.74 * B + X, 0.98 * B + X),
   }
+}
+
+// CR-DP item 7 — adjustable slots. A slot = one price scale's band in pane 0, in px from the pane top. Without a stored
+// layout the slots are exactly paneSlotMargins' (today's). A stored layout is the slots' heights as fractions of the
+// content height C = H − (n + ½)·G, where G = 0.04 × the base height (H minus the rolling extra): the same top pad (G),
+// gaps (G) and bottom pad (½G) as the default, so the pane's total height never changes. Each slot ≥ SLOT_MIN_PX.
+export const SLOT_MIN_PX = 24
+export function slotOrder(rollingOn) {
+  return rollingOn ? ['cvd', 'mid', 'low', 'delta'] : ['cvd', 'mid', 'delta']
+}
+export function slotGapPx(pane0Px, extraPx) {
+  return 0.04 * (Number(pane0Px) - (Number(extraPx) || 0))
+}
+// [{ top, bottom }] px of each slot from paneSlotMargins-shaped margins (in slotOrder).
+export function marginsToBounds(pane0Px, margins, order) {
+  const H = Number(pane0Px)
+  return order.map((k) => ({ top: margins[k].top * H, bottom: (1 - margins[k].bottom) * H }))
+}
+export function boundsToMargins(pane0Px, bounds, order) {
+  const H = Number(pane0Px)
+  const out = { cvd: null, mid: null, low: null, delta: null }
+  order.forEach((k, i) => { out[k] = { top: bounds[i].top / H, bottom: (H - bounds[i].bottom) / H } })
+  return out
+}
+// Bounds from stored fractions (null / wrong length → null: use the default). Slots below the minimum are raised to
+// it (taken from the largest) when the pane is big enough.
+export function boundsFromFracs(pane0Px, fracs, gapPx, minPx = SLOT_MIN_PX) {
+  const H = Number(pane0Px)
+  const n = Array.isArray(fracs) ? fracs.length : 0
+  if (!(n >= 2) || !(H > 0) || fracs.some((f) => !(Number(f) > 0))) return null
+  const G = Number(gapPx)
+  const C = H - (n + 0.5) * G
+  if (!(C > 0)) return null
+  const sum = fracs.reduce((a, f) => a + Number(f), 0)
+  const h = fracs.map((f) => (Number(f) / sum) * C)
+  if (C >= n * minPx) {
+    for (let i = 0; i < n; i += 1) {
+      if (h[i] >= minPx) continue
+      const need = minPx - h[i]
+      h[i] = minPx
+      const j = h.indexOf(Math.max(...h))
+      h[j] -= need
+    }
+  }
+  const out = []
+  let y = G
+  for (let i = 0; i < n; i += 1) {
+    out.push({ top: y, bottom: y + h[i] })
+    y += h[i] + G
+  }
+  return out
+}
+// Move the divider between slot k and slot k+1 by dy px (down = slot k grows): both stay ≥ minPx, the rest unchanged.
+// Returns the new heights as fractions of their sum (what is stored).
+export function dragSlotFracs(bounds, k, dy, minPx = SLOT_MIN_PX) {
+  const h = bounds.map((b) => b.bottom - b.top)
+  const d = Math.max(minPx - h[k], Math.min(Number(dy) || 0, h[k + 1] - minPx))
+  h[k] += d
+  h[k + 1] -= d
+  const sum = h.reduce((a, x) => a + x, 0)
+  return h.map((x) => x / sum)
+}
+
+// CR-DP item 8b — a slot's y zoom: its auto range ({ minValue, maxValue }) scaled by `f` (> 1 stretches) about 0 when 0
+// is in range (bars, delta, delta share), else about the middle (raw CVD). The view only.
+export function zoomRange(range, f) {
+  if (!range || !(f > 0) || f === 1) return range
+  const { minValue: lo, maxValue: hi } = range
+  const a = lo <= 0 && hi >= 0 ? 0 : (lo + hi) / 2
+  return { minValue: a + (lo - a) / f, maxValue: a + (hi - a) / f }
 }
 
 // CR-DN item 6: the volume bars' scale cap = the 98th percentile (nearest rank) of the loaded rows' positive volumes
@@ -828,17 +899,149 @@ export function segmentCvd(rows, spans) {
   return { cvd: out, gapAt }
 }
 
+// CR-DP item 6a — cumulative delta share from a segment start: at each row after the start bar, Σ delta ÷ Σ volume over
+// the bars after the start bar up to that row (the bars anchorReadout sums, so a segment's last value = readoutShare of
+// its readout). The start bar itself is null (nothing summed yet), as are rows without delta, rows after `endTime` and
+// rows where Σ volume is still 0. Also returns the running sums for the hover. A display aid, no research meaning.
+export function anchoredShare(rows, anchorTime, endTime = null) {
+  const list = Array.isArray(rows) ? rows : []
+  const share = new Array(list.length).fill(null)
+  const sumDelta = new Array(list.length).fill(null)
+  const sumVol = new Array(list.length).fill(null)
+  if (anchorTime == null) return { share, sumDelta, sumVol }
+  const a = floorIndex(list.map((r) => r.time), anchorTime)
+  if (a < 0) return { share, sumDelta, sumVol }
+  let d = 0
+  let v = 0
+  for (let i = a + 1; i < list.length; i += 1) {
+    if (endTime != null && list[i].time > endTime) break
+    if (fin(list[i].vol)) v += Number(list[i].vol)
+    if (!fin(list[i].delta)) continue
+    d += Number(list[i].delta)
+    sumDelta[i] = d
+    sumVol[i] = v
+    share[i] = v > 0 ? d / v : null
+  }
+  return { share, sumDelta, sumVol }
+}
+
+// Per-segment delta share (Edges on: one segment per drawn box, as segmentCvd): each span restarts at its own start
+// bar; `gapAt` = each span's last row with a value when the next row with a value belongs to another span: the chart
+// would join them across the empty start bar, so the pane draws that segment transparent (as segmentCvd).
+export function segmentShare(rows, spans) {
+  const list = Array.isArray(rows) ? rows : []
+  const share = new Array(list.length).fill(null)
+  const sumDelta = new Array(list.length).fill(null)
+  const sumVol = new Array(list.length).fill(null)
+  const owner = new Array(list.length).fill(-1)
+  ;(spans || []).forEach((sp, k) => {
+    const s = anchoredShare(list, sp.from, sp.to)
+    for (let i = 0; i < list.length; i += 1) {
+      if (s.share[i] == null && s.sumDelta[i] == null) continue
+      share[i] = s.share[i]
+      sumDelta[i] = s.sumDelta[i]
+      sumVol[i] = s.sumVol[i]
+      owner[i] = k
+    }
+    const a = floorIndex(list.map((r) => r.time), sp.from)
+    if (a >= 0) { share[a] = null; sumDelta[a] = null; sumVol[a] = null; owner[a] = -1 } // a new span's start bar
+  })
+  const gapAt = new Set()
+  let prev = -1
+  for (let i = 0; i < list.length; i += 1) {
+    if (share[i] == null) continue
+    if (prev >= 0 && owner[i] !== owner[prev]) gapAt.add(prev)
+    prev = i
+  }
+  return { share, sumDelta, sumVol, gapAt }
+}
+
+// CR-DP item 6b — the share line's fixed scale (±10 %) and guides (0, ±2 %, ±5 %); a value beyond the scale is drawn at
+// ±SHARE_SCALE with a cap mark, its hover keeps the true value.
+export const SHARE_SCALE = 0.10
+export const SHARE_GUIDES = [0, 0.02, -0.02, 0.05, -0.05]
+export const clipShare = (v) => Math.max(-SHARE_SCALE, Math.min(SHARE_SCALE, v))
+
 // The anchored readout of each span (anchorReadout over [from, to]), in span order.
 export function segmentReadouts(rows, closes, spans) {
   return (spans || []).map((sp) => anchorReadout(rows, closes, sp.from, sp.to))
 }
 
-// Box label: "Δ +1.2k · +7.5 pts · 45 m · 1.8k/pt".
+// Box label: "Δ +1.2k · +7.5 pts · 45 m · 1.8k/pt". CR-DP item 4: built from boxLabelParts, which the popup shares.
+export function boxLabelParts(ro) {
+  const d = Number(ro.delta) || 0
+  return {
+    delta: `Δ ${d >= 0 ? '+' : '-'}${kfmt(Math.abs(d))}`,
+    pts: ro.dPrice == null ? '–' : `${ro.dPrice >= 0 ? '+' : ''}${ro.dPrice.toFixed(1)} pts`,
+    minutes: `${ro.minutes} m`,
+    cpp: `${ro.cpp == null ? '–' : kfmt(ro.cpp)}/pt`,
+  }
+}
 export function boxLabelText(ro) {
   if (!ro) return ''
-  const d = Number(ro.delta) || 0
-  const pts = ro.dPrice == null ? '–' : `${ro.dPrice >= 0 ? '+' : ''}${ro.dPrice.toFixed(1)} pts`
-  return `Δ ${d >= 0 ? '+' : '-'}${kfmt(Math.abs(d))} · ${pts} · ${ro.minutes} m · ${ro.cpp == null ? '–' : kfmt(ro.cpp)}/pt`
+  const p = boxLabelParts(ro)
+  return `${p.delta} · ${p.pts} · ${p.minutes} · ${p.cpp}`
+}
+
+// CR-DP items 4 / 6 — delta share = Σ delta ÷ Σ volume over the readout's bars (anchorReadout's `vol`: the same volume
+// field as the CR-DM volume bars); null without volume. Shown as a percentage with two decimals. A display aid.
+export function readoutShare(ro) {
+  return ro && Number(ro.vol) > 0 ? Number(ro.delta) / Number(ro.vol) : null
+}
+export const sharePctText = (v) => (v == null || !Number.isFinite(v) ? '–' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)} %`)
+
+// CR-DP item 4 — one edge's state for the box stats popup: "testing break hh:mm ↑" while a break at that edge is pending,
+// else "moved hh:mm" (its last growth move) and / or "probe hh:mm" (its last cancelled break, "(n)" when several); ''
+// when none. Same fields as the box hover and edgeText.
+export function edgeStateText(box, side, hhmm) {
+  const dir = side === 'top' ? 'up' : 'down'
+  if (box.pending && box.pending.dir === dir) return `testing break ${hhmm(box.pending.at)} ${dirArrow(dir)}`
+  const e = box[side]
+  const probes = (box.probes || []).filter((p) => p.dir === dir)
+  const out = []
+  if (e?.brokeAt != null) out.push(`moved ${hhmm(e.brokeAt)}`)
+  if (probes.length) out.push(`probe ${hhmm(probes[probes.length - 1].at)}${probes.length > 1 ? ` (${probes.length})` : ''}`)
+  return out.join(' · ')
+}
+
+// CR-DP item 4 — the popup's three lines for the current box (PriceChart's v3Edges box: drawnBoxes' box + its segment
+// readout + ended / pending). `hhmm` formats a UTC epoch as PT hh:mm.
+//   "box from 06:49 → 07:10 · Δ +1.2k · share +1.02 % · +7.5 pts · 45 m · 1.8k/pt"
+//   "Top 7724.75 · buyers 1.8k / sellers 900 · held 9 m · probe 07:34"
+//   "Bottom 7715.25 · sellers 4.1k / buyers 2.0k · held 6 m"
+// CR-DP amendment item 2: " · mixed sources (A + B)" when a readout spans two segments whose data differ, by source
+// (Databento / Ironbeam) or by exactness (exact / approx 1-s cells); '' otherwise. `segments`: a payload's segments
+// ({ name, source, exact? }) — the cells payload (source and exactness) or the v2 payload (source only).
+const SOURCE_LABEL = { databento: 'Databento', ironbeam: 'Ironbeam' }
+export function mixedSourcesText(readout, segments) {
+  if (!readout || readout.fromSeg == null || readout.fromSeg === readout.toSeg) return ''
+  const by = Object.fromEntries((Array.isArray(segments) ? segments : []).map((g) => [g.name, g]))
+  const a = by[readout.fromSeg]
+  const b = by[readout.toSeg]
+  if (!a?.source || !b?.source) return ''
+  const name = (g) => `${SOURCE_LABEL[g.source] || g.source}${g.exact === false ? ' approx' : ''}`
+  return name(a) !== name(b) ? ` · mixed sources (${name(a)} + ${name(b)})` : ''
+}
+
+export function boxPopupLines(box, hhmm, segments = null) {
+  if (!box) return null
+  const ro = box.readout
+  const n = (v) => (v == null ? 'exact data only' : kfmt(v))
+  const held = (e) => (e.heldMin == null ? 'not touched' : `held ${e.heldMin} m`)
+  const end = box.ended?.kind === 'end' ? ` → ${hhmm(box.ended.at)}` : ''
+  const p = ro ? boxLabelParts(ro) : null
+  const stats = p ? ` · ${p.delta} · share ${sharePctText(readoutShare(ro))} · ${p.pts} · ${p.minutes} · ${p.cpp}` : ''
+  const edge = (name, side, main, opp) => {
+    const e = box[side]
+    const st = edgeStateText(box, side, hhmm)
+    return `${name} ${e.price.toFixed(2)} · ${main} ${n(e.contracts)} / ${opp} ${n(e.opposite)} · ${held(e)}${st ? ` · ${st}` : ''}`
+  }
+  return {
+    head: `box from ${hhmm(box.from)}${end}${stats}`,
+    top: edge('Top', 'top', 'buyers', 'sellers'),
+    bottom: edge('Bottom', 'bottom', 'sellers', 'buyers'),
+    mixed: ro ? mixedSourcesText(ro, segments).replace(/^ · /, '') : '',
+  }
 }
 
 // CR-DN item 1 — set end. The picked end (shifted candle time) is stored as the last 1-minute bar inside that candle

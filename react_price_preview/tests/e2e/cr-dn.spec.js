@@ -15,8 +15,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  absorptionLevels, boxLabelText, drawnBoxes, edgeReadout, edgeText, flattenBars, flattenCells, kfmt, makeShifter, profileTotals,
+  absorptionLevels, boxLabelText, boxPopupLines, drawnBoxes, edgeReadout, edgeText, flattenBars, flattenCells, kfmt, makeShifter, profileTotals,
 } from '../../src/flowV3.js'
+
+// CR-DP item 4: the header edge readout and the in-pane "box from…" line moved to the price chart's box stats popup; its
+// Top / Bottom lines are flowV3.boxPopupLines of the same edgeReadout (the current box), its head carries the box label.
+const popupEdges = async (page) => ((await page.getByTestId('flow-v3-box-popup').count())
+  ? `${await page.getByTestId('flow-v3-box-popup-top').innerText()} | ${await page.getByTestId('flow-v3-box-popup-bottom').innerText()}` : '')
+const popupWant = (r, hm) => { const l = boxPopupLines(r, hm); return `${l.top} | ${l.bottom}` }
 
 const API_BASE = process.env.CRDF_API_BASE || 'http://127.0.0.1:8066'
 const BASELINE = process.env.CRDF_BASELINE_URL || 'http://localhost:5189'
@@ -28,7 +34,8 @@ const FLOW_KEYS = ['ib-react-flow-mode', 'ib-react-flow-v2-markers', 'ib-react-f
 const V3 = { 'ib-react-flow-mode-v3': '1' }
 const layers = (o) => ({ 'ib-react-flow-v3-layers': JSON.stringify({ levels: false, edges: false, profile: false, heat: false, marks: false, ...o }) })
 const EDGES = { ...V3, ...layers({ edges: true }) }
-const settings = (o) => ({ 'ib-react-flow-v3-settings': JSON.stringify({ rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: false, liveMinMove: 4, breakHoldMin: 5, ...o }) })
+// CR-DP item 6: the anchored line defaults to delta share; these tests check the anchored CVD, so they keep ⚙ raw CVD
+const settings = (o) => ({ 'ib-react-flow-v3-settings': JSON.stringify({ rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: false, liveMinMove: 4, breakHoldMin: 5, anchoredLine: 'raw', ...o }) })
 const D29 = '2026-10-29'
 const D28 = '2026-10-28'
 // The live 2026-10-29 session gains a bar a minute and its two flow payloads refresh apart; the hand-sum checks replay it
@@ -59,6 +66,7 @@ async function open(page, day, { base = '', storage = {}, session = 'RTH', until
     try {
       if (!window.sessionStorage.getItem('crdn-init')) {
         for (const k of keys) window.localStorage.removeItem(k)
+        if (!('ib-react-flow-v3-settings' in values)) window.localStorage.setItem('ib-react-flow-v3-settings', JSON.stringify({ anchoredLine: 'raw' })) // CR-DP item 6
         for (const [k, v] of Object.entries(values)) window.localStorage.setItem(k, v)
         window.localStorage.setItem('ib-react-gex-min-abs-b', '40')
         window.sessionStorage.setItem('crdn-init', '1')
@@ -297,7 +305,7 @@ test('2026-10-29 anchor 06:49, Edges on, A = 5: 07:34 is a probe; one box from 0
   await page.waitForTimeout(1500)
   const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, 15, null, 5)
   expect(ptShift(flattenBars(got.cells).t.at(-1)), 'cells cut at until').toBeLessThan(shifted(D29_UNTIL))
-  await expect.poll(async () => page.getByTestId('flow-v3-edge-readout').innerText(), { timeout: 20_000 }).toBe(edgeText(r, pt))
+  await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
   const d = await drawn(page)
   const allProbes = [...r.frozen, r].flatMap((b) => b.probes)
   const probe0734 = allProbes.find((p) => pt(p.at) === '07:34')
@@ -324,9 +332,10 @@ test('2026-10-29 anchor 06:49, Edges on, A = 5: 07:34 is a probe; one box from 0
   res.labels = hand
   // the header readout is the current box
   const cur = hand.at(-1)
-  await expect(page.getByTestId('flow-v3-readout')).toContainText(`box from ${hhmm(d.boxes.at(-1).from)}: Δ`)
-  res.readout = await page.getByTestId('flow-v3-readout').innerText()
-  expect(res.readout).toContain(`${cur.minutes} min`)
+  // CR-DP item 4: the current box's stats are the popup's head (was the in-pane "box from…" line)
+  await expect(page.getByTestId('flow-v3-box-popup-head')).toContainText(`box from ${hhmm(d.boxes.at(-1).from)} · Δ`)
+  res.readout = await page.getByTestId('flow-v3-box-popup-head').innerText()
+  expect(res.readout).toContain(`${cur.minutes} m `)
   // CVD: one segment from 06:49, 0 there, last value = the box's hand delta; nothing before the anchor
   const cvd = d.cvd.filter((p) => p.value != null)
   expect(cvd[0].time).toBe(d.boxes[0].from)
@@ -359,7 +368,7 @@ test('2026-10-29 anchor 06:49, A = 1: the old split at 07:34, CVD restarts at 0 
   await pickAt(page, 'flow-v3-anchor-pick', anchor)
   await page.waitForTimeout(1500)
   const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, 15, null, 1)
-  await expect.poll(async () => page.getByTestId('flow-v3-edge-readout').innerText(), { timeout: 20_000 }).toBe(edgeText(r, pt))
+  await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
   expect(r.frozen.length).toBeGreaterThanOrEqual(1)
   expect({ from: pt(r.frozen[0].from), broke: pt(r.frozen[0].breakAt), dir: r.frozen[0].dir, bottom: r.frozen[0].bottom.price, top: r.frozen[0].top.price })
     .toEqual({ from: '06:49', broke: '07:34', dir: 'up', bottom: 7736, top: 7756.25 })
@@ -402,7 +411,7 @@ test('2026-10-29 set end 06:57: one box 06:49–06:57; readout, strip and profil
   await expect(page.getByTestId('flow-v3-window')).toHaveText('06:49 → 06:57 · 8 min')
   await page.waitForTimeout(1500)
   const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, 15, end, 5)
-  await expect.poll(async () => page.getByTestId('flow-v3-edge-readout').innerText(), { timeout: 20_000 }).toBe(edgeText(r, pt))
+  await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
   expect(r.frozen.length).toBe(0)
   expect([pt(r.from), pt(r.to)]).toEqual(['06:49', '06:57'])
   const d = await drawn(page)
@@ -411,9 +420,9 @@ test('2026-10-29 set end 06:57: one box 06:49–06:57; readout, strip and profil
   expect([hhmm(d.boxes[0].from), hhmm(d.boxes[0].to)]).toEqual(['06:49', '06:57'])
   expect(d.boxes[0].label).toBe(boxLabelText(h))
   expect(h.minutes).toBe(8)
-  const readout = await page.getByTestId('flow-v3-readout').innerText()
-  expect(readout).toContain(`box from 06:49: Δ`)
-  expect(readout).toContain('8 min')
+  const readout = await page.getByTestId('flow-v3-box-popup-head').innerText() // CR-DP item 4: the popup head
+  expect(readout).toContain(`box from 06:49 → 06:57 · Δ`)
+  expect(readout).toContain(' 8 m ')
   // CVD drawn only 06:49 … 06:57
   const cvd = d.cvd.filter((p) => p.value != null)
   expect([hhmm(cvd[0].time), hhmm(cvd.at(-1).time)]).toEqual(['06:49', '06:57'])
@@ -436,7 +445,7 @@ test('2026-10-29 set end 06:57: one box 06:49–06:57; readout, strip and profil
   await expect(page.getByTestId('flow-v3-window')).toHaveCount(0)
   // the end is gone: the boxes run on to until again and the readout is the current (latest) box
   await expect.poll(async () => (await drawn(page)).boxes.length, { timeout: 20_000 }).toBeGreaterThan(1)
-  await expect(page.getByTestId('flow-v3-readout')).toContainText('box from ')
+  await expect(page.getByTestId('flow-v3-box-popup-head')).toContainText('box from ') // CR-DP item 4
   fs.mkdirSync(ASSETS, { recursive: true })
   await pickAt(page, 'flow-v3-end-pick', end, anchor - 10 * 60)
   await frame(page, anchor - 15 * 60, end + 20 * 60)
@@ -457,7 +466,7 @@ test('2026-10-28 anchor 07:00: breaks that hold still freeze and restart; replay
   await pickAt(page, 'flow-v3-anchor-pick', anchor)
   await page.waitForTimeout(1500)
   const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, 15, null, 5)
-  await expect.poll(async () => page.getByTestId('flow-v3-edge-readout').innerText(), { timeout: 20_000 }).toBe(edgeText(r, pt))
+  await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
   const broke = r.frozen.map((f) => `${pt(f.breakAt)} ${f.dir}`)
   expect(broke.slice(0, 4)).toEqual(['08:16 up', '08:39 up', '09:54 up', '11:05 down']) // Step 0d
   const d = await drawn(page)

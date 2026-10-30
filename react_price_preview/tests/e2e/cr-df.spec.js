@@ -18,7 +18,13 @@ import { test, expect } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { absorptionLevels, edgeReadout, edgeText, flattenBars, makeShifter } from '../../src/flowV3.js'
+import { absorptionLevels, boxPopupLines, edgeReadout, edgeText, flattenBars, makeShifter } from '../../src/flowV3.js'
+
+// CR-DP item 4: the header edge readout and the in-pane "box from…" line moved to the price chart's box stats popup; its
+// Top / Bottom lines are flowV3.boxPopupLines of the same edgeReadout (the current box), its head carries the box label.
+const popupEdges = async (page) => ((await page.getByTestId('flow-v3-box-popup').count())
+  ? `${await page.getByTestId('flow-v3-box-popup-top').innerText()} | ${await page.getByTestId('flow-v3-box-popup-bottom').innerText()}` : '')
+const popupWant = (r, hm) => { const l = boxPopupLines(r, hm); return `${l.top} | ${l.bottom}` }
 
 const API_BASE = process.env.CRDF_API_BASE || 'http://127.0.0.1:8064'
 const BASELINE = process.env.CRDF_BASELINE_URL || 'http://localhost:5180'
@@ -140,7 +146,8 @@ async function setAnchor(page) {
   await page.getByTestId(await swing.isEnabled() ? 'flow-v3-anchor-swing' : 'flow-v3-anchor-open').click()
   // CR-DN item 3c: with Edges on the readout reads the current box ("box from hh:mm"), so the anchor is read from the
   // panel's data-anchor (the shifted anchor time) instead of the readout text
-  await expect(page.getByTestId('flow-v3-readout')).toContainText(/since |box from /, { timeout: 20_000 })
+  // CR-DP item 4: with Edges on there is no in-pane readout; the popup (or, Edges off, the "since" line) shows the anchor
+  await expect.poll(async () => page.getByTestId('flow-v3-panel').getAttribute('data-anchor'), { timeout: 20_000 }).not.toBe('')
 }
 
 async function anchorFromReadout(page, day) { // eslint-disable-line no-unused-vars
@@ -160,11 +167,12 @@ async function levelsAndReadout(page, day, tag) {
     const r = edgeReadout(latest, flattenBars(latest), a, ptShift)
     return edgeText(r, (t) => hhmm(ptShift(t)))
   }
+  const popupFor = (a) => popupWant(edgeReadout(latest, flattenBars(latest), a, ptShift), (t) => hhmm(ptShift(t)))
   await open(page, day, { storage: { 'ib-react-flow-mode-v3': '1', 'ib-react-flow-v3-layers': JSON.stringify(ALL_NEW) } })
   await settle(page)
   const cells = await (await resp).json()
   await expect(page.getByTestId('flow-v3-levels-toggle')).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByTestId('flow-v3-edge-readout')).toHaveText('edges: set an anchor')
+  await expect(page.getByTestId('flow-v3-box-popup')).toHaveCount(0) // CR-DP item 4: no anchor, no popup (was 'edges: set an anchor')
   const rth = cells.segments.find((s) => s.name === 'rth')
   const times = await candleTimes(page)
   const levels = absorptionLevels(cells, times, ptShift)
@@ -181,7 +189,7 @@ async function levelsAndReadout(page, day, tag) {
   await setAnchor(page)
   const anchor = await anchorFromReadout(page, day)
   expect(anchor).not.toBeNull()
-  await expect.poll(async () => (await page.getByTestId('flow-v3-edge-readout').innerText()) === textFor(anchor), { timeout: 20_000 }).toBeTruthy()
+  await expect.poll(async () => (await popupEdges(page)) === popupFor(anchor), { timeout: 20_000 }).toBeTruthy()
   const want = textFor(anchor)
   // CR-DI amendment 9: an edge's growth move reads "moved"; after a break the current box is prefixed "Box from hh:mm ↑/↓ · "
   expect(want).toMatch(/^(Box from \d{2}:\d{2} [↑↓] · )?Top \d+\.\d{2} · (\S+ buyers|exact data only)( · held \d+ m)?( · moved \d{2}:\d{2})? \| Bottom \d+\.\d{2} · (\S+ sellers|exact data only)( · held \d+ m)?( · moved \d{2}:\d{2})?$/)
@@ -199,7 +207,7 @@ async function levelsAndReadout(page, day, tag) {
     const r2 = edgeReadout(cells, flattenBars(cells), a2, ptShift)
     expect(r2.exact).toBeTruthy()
     expect(r2.top.contracts).not.toBeNull()
-    await expect.poll(async () => (await page.getByTestId('flow-v3-edge-readout').innerText()) === textFor(a2), { timeout: 20_000 }).toBeTruthy()
+    await expect.poll(async () => (await popupEdges(page)) === popupFor(a2), { timeout: 20_000 }).toBeTruthy()
     out.anchor_rth = hhmm(a2)
     out.readout_rth = edgeText(r2, (x) => hhmm(ptShift(x)))
     await frame(page, a2 - 10 * 60, ptShift(r2.to) + 5 * 60)
@@ -227,7 +235,8 @@ async function levelsAndReadout(page, day, tag) {
   return { cells, levels }
 }
 
-test('unchanged: Current and v2 are pixel-identical to origin/main, same requests', async ({ browser }) => {
+// CR-DP: retired — tests the Flow Current / v2 pane or the mode toggle, removed by CR-DP item 1 (Flow is v3 only)
+test.skip('unchanged: Current and v2 are pixel-identical to origin/main, same requests', async ({ browser }) => {
   test.setTimeout(480_000) // four cold page loads
   for (const storage of [{}, { 'ib-react-flow-mode': 'v2' }]) {
     const out = {}
@@ -256,7 +265,8 @@ test('unchanged: Current and v2 are pixel-identical to origin/main, same request
   }
 })
 
-test('defaults: new layers off, Heatmap / Absorbed off in ⚙, no cells request; stored CR-DC layers carry over', async ({ page }) => {
+// CR-DP: retired — tests the Flow Current / v2 pane or the mode toggle, removed by CR-DP item 1 (Flow is v3 only) (it switches Current → v3 with the toggle)
+test.skip('defaults: new layers off, Heatmap / Absorbed off in ⚙, no cells request; stored CR-DC layers carry over', async ({ page }) => {
   const urls = track(page)
   await open(page, '2026-05-01')
   await settle(page)
@@ -352,7 +362,7 @@ test('replay: levels and edges read nothing after until', async ({ page }) => {
   const r = edgeReadout(cells, flattenBars(cells), anchor, ptShift)
   expect(r.to).toBeLessThan(until)
   for (const e of [r.top, r.bottom]) if (e.brokeAt != null) expect(e.brokeAt).toBeLessThan(until)
-  await expect(page.getByTestId('flow-v3-edge-readout')).toHaveText(edgeText(r, (t) => hhmm(ptShift(t))))
+  await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, (t) => hhmm(ptShift(t))))
   fs.mkdirSync(ASSETS, { recursive: true })
   await page.screenshot({ path: path.join(ASSETS, 'replay-2026-05-01.png') })
   fs.writeFileSync(path.join(ASSETS, 'replay-2026-05-01.json'), JSON.stringify({ until: cells.until, levels: levels.length,

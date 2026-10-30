@@ -74,7 +74,8 @@ async function frame(page, from, to) {
   await page.waitForTimeout(800)
 }
 
-test('toggle: default Current, v2 sends mode=v2, persists, back to Current', async ({ page }) => {
+// CR-DP: retired — tests the Flow Current / v2 pane or the mode toggle, removed by CR-DP item 1 (Flow is v3 only)
+test.skip('toggle: default Current, v2 sends mode=v2, persists, back to Current', async ({ page }) => {
   const flowUrls = []
   page.on('request', (r) => {
     if (r.url().includes('/api/ironbeam/flow')) flowUrls.push(r.url())
@@ -102,7 +103,8 @@ test('toggle: default Current, v2 sends mode=v2, persists, back to Current', asy
   await expect(page.getByTestId('flow-mode-current')).toHaveAttribute('aria-pressed', 'true')
 })
 
-test('markers on, settings change the request parameters, guide opens', async ({ page }) => {
+// CR-DP: retired — tests the Flow Current / v2 pane or the mode toggle, removed by CR-DP item 1 (Flow is v3 only)
+test.skip('markers on, settings change the request parameters, guide opens', async ({ page }) => {
   await open(page, '2026-05-01', { mode: 'v2' })
   await settle(page)
   await page.getByTestId('flow-v2-markers-toggle').click()
@@ -121,7 +123,8 @@ test('markers on, settings change the request parameters, guide opens', async ({
   await expect(page.getByRole('dialog', { name: 'How to read Flow v2' })).toContainText('opposite sign')
 })
 
-test('screenshots and marker counts on 3 train days', async ({ page, request }) => {
+// CR-DP: retired — tests the Flow Current / v2 pane or the mode toggle, removed by CR-DP item 1 (Flow is v3 only)
+test.skip('screenshots and marker counts on 3 train days', async ({ page, request }) => {
   const counts = {}
   for (const day of DAYS) {
     const row = {}

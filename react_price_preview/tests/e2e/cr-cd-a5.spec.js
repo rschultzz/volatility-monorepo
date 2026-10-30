@@ -118,7 +118,8 @@ function trackFlow(page) {
   return urls
 }
 
-test('unchanged when off: Current and v2 (Effort off) are pixel-identical to the pre-A5 frontend', async ({ browser }) => {
+// CR-DP: retired — tests the Flow Current / v2 pane or the mode toggle, removed by CR-DP item 1 (Flow is v3 only)
+test.skip('unchanged when off: Current and v2 (Effort off) are pixel-identical to the pre-A5 frontend', async ({ browser }) => {
   for (const storage of [{}, { 'ib-react-flow-mode': 'v2' }]) {
     const shots = {}
     for (const [name, base] of [['a5', ''], ['baseline', BASELINE]]) {
@@ -177,7 +178,8 @@ test('unchanged when off: Current and v2 (Effort off) are pixel-identical to the
   await ctx.close()
 })
 
-test('effort on: effort=1, persisted, one label per leg, threshold in settings', async ({ page }) => {
+// CR-DP: retired — tests the Flow Current / v2 pane or the mode toggle, removed by CR-DP item 1 (Flow is v3 only); Effort in v3 is cr-dg / cr-dm
+test.skip('effort on: effort=1, persisted, one label per leg, threshold in settings', async ({ page }) => {
   const urls = trackFlow(page)
   await open(page, '2026-05-01', { storage: { 'ib-react-flow-mode': 'v2' } })
   await settle(page)

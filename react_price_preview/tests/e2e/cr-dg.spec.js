@@ -354,7 +354,8 @@ async function priceChart(page, base, storage) {
   return page.locator('.react-top-pane').screenshot()
 }
 
-test('effort in v3: off = chart unchanged, on = the v2 labels, one switch for both modes', async ({ browser }) => {
+// CR-DP: retired — tests the Flow Current / v2 pane or the mode toggle, removed by CR-DP item 1 (Flow is v3 only); v3 Effort on / off is covered by cr-dm
+test.skip('effort in v3: off = chart unchanged, on = the v2 labels, one switch for both modes', async ({ browser }) => {
   test.setTimeout(600_000)
   const V3 = { 'ib-react-flow-mode-v3': '1' }
   const V2 = { 'ib-react-flow-mode': 'v2' }
