@@ -726,6 +726,7 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
   const held = (e) => (e.firstTouch == null ? null : Math.round((tLast - e.firstTouch) / 60))
   return {
     ...cur, anchor: bars.t[i0], exact, holdMin: Number(holdMin), breakHoldMin: accept, frozen, end: endShifted == null ? null : bars.t[last],
+    lastClose: bars.c[last], // CR-DQ item 7: where price sits in the current box (its last bar's close)
     pending: pending ? { at: bars.t[pending.i], dir: pending.dir, edge: pending.dir === 'up' ? top : bottom } : null,
     startDir: frozen.length ? frozen[frozen.length - 1].dir : null,
     top: { ...cur.top, heldMin: held(cur.top) }, bottom: { ...cur.bottom, heldMin: held(cur.bottom) },
@@ -1162,6 +1163,99 @@ export function pctBadgeTitle(kind, pc, rules = BOX_RULES_DEFAULTS) {
   return `${pctText(p)}: this box's ${what}, in the ${src} baseline (${pc.sessions} train sessions ${pc.first} → ${pc.last}; `
     + `FOMC days and the March 2026 roll week left out; same source as the box, no adjustment).${noise} `
     + `Tiers: notable ≥ p${rules.notable}, strong ≥ p${rules.strong}. Display aid — untested.`
+}
+
+// CR-DQ item 7 — verdict line for the current box (Ryan's draft rules applied mechanically; a display aid, untested).
+// FOMC decision days (A22): the last day of each scheduled 2026 meeting, from federalreserve.gov/monetarypolicy/
+// fomccalendars.htm (checked 2026-10-31), until an events table exists.
+export const FOMC_2026_DECISION_DAYS = ['2026-01-28', '2026-03-18', '2026-04-29', '2026-06-17', '2026-07-29', '2026-09-16', '2026-10-28', '2026-12-09']
+const levelSide = (lv) => (lv.kind === 'sellers_absorbed' ? 'sellers' : 'buyers')
+// Absorption levels (absorptionLevels: the chart's top 8) standing at the box's last bar: started at or before it and not
+// broken by then; `where` = 'top' / 'bottom' (within absorbPts of that edge) or 'in' (inside the box), else not counted.
+export function boxLevels(levels, box, lastT, absorbPts) {
+  const out = []
+  for (const lv of Array.isArray(levels) ? levels : []) {
+    if (!(lv.start <= lastT) || (lv.broken && lv.end <= lastT)) continue
+    const nearTop = Math.abs(lv.price - box.top) <= absorbPts + 1e-9
+    const nearBottom = Math.abs(lv.price - box.bottom) <= absorbPts + 1e-9
+    const inside = lv.price <= box.top + 1e-9 && lv.price >= box.bottom - 1e-9
+    const where = nearTop && (!nearBottom || Math.abs(lv.price - box.top) <= Math.abs(lv.price - box.bottom)) ? 'top'
+      : nearBottom ? 'bottom' : inside ? 'in' : null
+    if (where) out.push({ ...lv, side: levelSide(lv), where })
+  }
+  return out
+}
+// Verdict, checked in order (spec item 7b + Ryan's Step 0 decision 3):
+//   NO TRADES (A22) → CONFLICT (A24) → NO ACTION two-sided absorption → SHORT / LONG READ (A19 + A23) → WATCH BREAK (idea)
+//   → NO ACTION nothing notable.
+// `box` = the current box (top / bottom, readout, lastClose, to), `pct` = boxPercentiles (or null), `levels` =
+// absorptionLevels, `hhmm` formats a UTC epoch as PT hh:mm. Returns { kind, label, evidence, rules, title }.
+export function boxVerdict({ box, pct, levels, tradeDate, rules: r0 = null, hhmm = String, fomc = FOMC_2026_DECISION_DAYS }) {
+  const r = boxRules(r0)
+  const ro = box?.readout || null
+  const title = (ids) => `Rules: ${ids.join(' + ') || 'none'}. Thresholds: notable ≥ p${r.notable} (Δ share and contracts/pt), `
+    + `near an edge ≤ ${r.nearPts} pts, no advance ≤ ${r.progressPts} pts, absorption within ${r.absorbPts} pts of an edge. `
+    + 'Order: A22 → A24 → two-sided absorption → A19 + A23 reads → watch break (idea) → nothing notable. Draft rules, untested — a display aid.'
+  const out = (kind, label, evidence, ids) => ({ kind, label, evidence, rules: ids, title: title(ids) })
+  if (tradeDate && fomc.includes(String(tradeDate).slice(0, 10))) {
+    return out('no-trades', 'NO TRADES — event day', `FOMC decision day ${String(tradeDate).slice(0, 10)}: no new trades all session`, ['A22'])
+  }
+  if (!box || !ro) return out('none', 'NO ACTION — nothing notable', 'no box stats yet', [])
+  const share = readoutShare(ro)
+  const sp = pct?.share?.p ?? null
+  const cp = pct?.cpp?.p ?? null
+  const lean = share != null && sp != null && sp >= r.notable ? Math.sign(share) : 0
+  const shareTxt = `share ${sharePctText(share)}${sp == null ? '' : ` ${pctText(sp)}`}`
+  const cppTxt = `c/pt ${cp == null ? '–' : pctText(cp)}`
+  const lastT = box.ended?.kind === 'broke' ? box.ended.at : box.to
+  const lv = boxLevels(levels, box, lastT, r.absorbPts)
+  const lvTxt = (l) => `${l.side} absorbed ${l.price.toFixed(2)} (${hhmm(l.start)})${l.where === 'in' ? ' in the box' : ` at the ${l.where}`}`
+  const buyersAbs = lv.filter((l) => l.side === 'buyers')
+  const sellersAbs = lv.filter((l) => l.side === 'sellers')
+  // A24: flow lean and absorption point opposite ways
+  const against = lean > 0 ? sellersAbs : lean < 0 ? buyersAbs : []
+  if (against.length) {
+    return out('conflict', 'CONFLICT → NO ACTION', `${shareTxt} (${lean > 0 ? 'buyers' : 'sellers'} leaning) vs ${against.map(lvTxt).join(', ')}`, ['A24'])
+  }
+  // Ryan, Step 0 decision 3 (not A24): absorption on both sides and no notable flow lean
+  if (lean === 0 && buyersAbs.length && sellersAbs.length) {
+    return out('two-sided', 'NO ACTION — two-sided absorption', `${lvTxt(buyersAbs[0])} · ${lvTxt(sellersAbs[0])}; no notable flow lean (${shareTxt})`, [])
+  }
+  const px = Number(box.lastClose)
+  const dp = Number(ro.dPrice)
+  const nearTop = Number.isFinite(px) && box.top - px <= r.nearPts + 1e-9
+  const nearBottom = Number.isFinite(px) && px - box.bottom <= r.nearPts + 1e-9
+  const effort = cp != null && cp >= r.notable
+  const posTxt = (side) => `price ${Math.abs(side === 'top' ? box.top - px : px - box.bottom).toFixed(2)} from the ${side}`
+  const absTop = buyersAbs.filter((l) => l.where === 'top')
+  const absBottom = sellersAbs.filter((l) => l.where === 'bottom')
+  // A19 + A23: short at the top — buyers leaning and / or buyers absorbed at the top, no advance
+  const shortWhy = lean > 0 || absTop.length
+  const shortStall = effort || (Number.isFinite(dp) && dp <= r.progressPts + 1e-9)
+  if (nearTop && shortWhy && shortStall) {
+    const ev = [posTxt('top'), lean > 0 ? `${shareTxt} buyers leaning` : null, ...absTop.map(lvTxt),
+      effort ? `${cppTxt} (effort)` : `no advance ${Number.isFinite(dp) ? `${dp >= 0 ? '+' : ''}${dp.toFixed(1)} pts` : ''}`]
+    return out('short', 'SHORT READ at top', ev.filter(Boolean).join(' · '), absTop.length ? ['A19', 'A23'] : ['A19'])
+  }
+  const longWhy = lean < 0 || absBottom.length
+  const longStall = effort || (Number.isFinite(dp) && dp >= -r.progressPts - 1e-9)
+  if (nearBottom && longWhy && longStall) {
+    const ev = [posTxt('bottom'), lean < 0 ? `${shareTxt} sellers leaning` : null, ...absBottom.map(lvTxt),
+      effort ? `${cppTxt} (effort)` : `no decline ${Number.isFinite(dp) ? `${dp >= 0 ? '+' : ''}${dp.toFixed(1)} pts` : ''}`]
+    return out('long', 'LONG READ at bottom', ev.filter(Boolean).join(' · '), absBottom.length ? ['A19', 'A23'] : ['A19'])
+  }
+  // idea only: the pushing side winning at an edge (moving easily, nothing absorbing it)
+  if (cp != null && cp < r.notable) {
+    if (nearTop && lean > 0 && !absTop.length) {
+      return out('watch-up', 'WATCH BREAK ↑ (idea)', `${posTxt('top')} · ${shareTxt} · ${cppTxt} (moving easily) · no buyers absorbed at the top — wait for an accepted break`, ['idea'])
+    }
+    if (nearBottom && lean < 0 && !absBottom.length) {
+      return out('watch-down', 'WATCH BREAK ↓ (idea)', `${posTxt('bottom')} · ${shareTxt} · ${cppTxt} (moving easily) · no sellers absorbed at the bottom — wait for an accepted break`, ['idea'])
+    }
+  }
+  const where = !Number.isFinite(px) ? '' : nearTop ? posTxt('top') : nearBottom ? posTxt('bottom') : 'price mid-box'
+  const lvs = lv.length ? ` · ${lv.map(lvTxt).join(', ')}` : ''
+  return out('none', 'NO ACTION — nothing notable', [where, shareTxt, cppTxt].filter(Boolean).join(' · ') + lvs, [])
 }
 
 // CR-DQ item 3 — the panel's place. Stored as px from the plot's left and bottom edges (so it stays bottom-anchored when

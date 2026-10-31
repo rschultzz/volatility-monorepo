@@ -56,9 +56,30 @@ function Stats({ s, testid, rules }) {
   )
 }
 
+// CR-DQ item 7 — the current box's verdict pill + one evidence line. C1: NO ACTION / NO TRADES in muted slate, reads in
+// brighter text, the watch idea in between; no red / green. Hover: rule IDs, thresholds, "draft rules, untested".
+const VERDICT_STYLE = {
+  'no-trades': { color: MUTED, border: `1px solid rgba(148,163,184,0.6)` },
+  conflict: { color: MUTED, border: `1px solid rgba(148,163,184,0.6)` },
+  'two-sided': { color: MUTED, border: `1px solid rgba(148,163,184,0.6)` },
+  none: { color: MUTED, border: `1px solid rgba(148,163,184,0.35)` },
+  short: { color: '#ffffff', fontWeight: 700, border: '1px solid rgba(255,255,255,0.7)' },
+  long: { color: '#ffffff', fontWeight: 700, border: '1px solid rgba(255,255,255,0.7)' },
+  'watch-up': { color: TEXT, border: '1px dashed rgba(226,232,240,0.6)' },
+  'watch-down': { color: TEXT, border: '1px dashed rgba(226,232,240,0.6)' },
+}
+function Verdict({ v }) {
+  return (
+    <div data-testid="flow-v3-box-verdict" data-kind={v.kind} title={v.title} style={{ cursor: 'help', marginBottom: 2 }}>
+      <span data-testid="flow-v3-box-verdict-pill" style={{ display: 'inline-block', borderRadius: 3, padding: '0 6px', ...VERDICT_STYLE[v.kind] }}>{v.label}</span>
+      <div data-testid="flow-v3-box-verdict-evidence" style={{ color: v.kind === 'short' || v.kind === 'long' ? TEXT : MUTED }}>{v.evidence}</div>
+    </div>
+  )
+}
+
 export default function BoxPanel({
   panel, place, panelRef, maxHeight, dragged, onClose, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp,
-  onHeaderDoubleClick, renderCurrentTop, rules = BOX_RULES_DEFAULTS,
+  onHeaderDoubleClick, rules = BOX_RULES_DEFAULTS, verdict = null,
 }) {
   const [open, setOpen] = useState({}) // section key -> expanded
   const toggle = (k) => setOpen((o) => ({ ...o, [k]: !o[k] }))
@@ -111,7 +132,7 @@ export default function BoxPanel({
                 ? { marginTop: 4, padding: '3px 6px', border: `1px solid rgba(${MAGENTA},0.8)`, borderRadius: 3 }
                 : { marginTop: 2, padding: '0 6px', color: '#cbd5e1' }}
             >
-              {s.current && renderCurrentTop?.(s)}
+              {s.current && verdict && <Verdict v={verdict} />}
               <div
                 role="button"
                 tabIndex={0}

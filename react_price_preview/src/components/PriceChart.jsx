@@ -23,7 +23,7 @@ import BoxPanel from './BoxPanel'
 import boxBaseline from '../data/boxBaseline.json'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { LIVE_EFFORT_ID, absorptionLevels, boxPanelOffset, boxPanelPlace, boxPanelSections, boxPercentiles, boxRules, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
+import { LIVE_EFFORT_ID, absorptionLevels, boxPanelOffset, boxPanelPlace, boxPanelSections, boxPercentiles, boxRules, boxVerdict, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
 import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, BoxShadePrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
@@ -2696,8 +2696,12 @@ export default function PriceChart({
   }, [v3ProfileOn, v3Flat, v3ProfileFrom, v3ProfileTo])
   // CR-DF — absorption levels (exact marks as fading lines: magenta buyers absorbed, orange sellers absorbed, CR-DG)
   // and the edge readout's dashed lines.
+  // CR-DQ item 7 (Ryan, Step 0 decision 4): the verdict reads the same top-8 levels the chart draws, also when the
+  // Absorption levels layer is off, so they are computed once whenever either needs them.
   const v3LevelsOn = Boolean(flowV3?.levels && v3Payload)
-  const v3Levels = useMemo(() => (v3LevelsOn ? absorptionLevels(v3Payload, v3Times, v3Shift) : null), [v3LevelsOn, v3Payload, v3Times, v3Shift])
+  const v3LevelsNeeded = Boolean(v3Payload && (flowV3?.levels || flowV3?.edges))
+  const v3LevelsAll = useMemo(() => (v3LevelsNeeded ? absorptionLevels(v3Payload, v3Times, v3Shift) : null), [v3LevelsNeeded, v3Payload, v3Times, v3Shift])
+  const v3Levels = v3LevelsOn ? v3LevelsAll : null
   const v3EdgeReadout = flowV3?.edges || null
   const v3Segments = flowV3?.segments || null // CR-DN item 3: per-box readouts (drawnBoxes order)
   const v3Edges = useMemo(() => {
@@ -2757,6 +2761,13 @@ export default function PriceChart({
     const pctOf = (b) => boxPercentiles(b.readout, ptMin(b.from), v3Payload?.segments, boxBaseline)
     return boxPanelSections(v3Edges.boxes, (t) => formatShiftedHHMM(v3Shift(t)), v3Payload?.segments, pctOf)
   }, [v3Edges, v3Shift, v3Payload])
+  // CR-DQ item 7: the current box's verdict from the panel's own inputs (its percentiles, the levels above, the trade date).
+  const v3Verdict = useMemo(() => {
+    const cur = v3BoxPanel?.sections.find((sct) => sct.current)
+    const entry = v3Edges?.boxes.find((b) => !b.frozen)
+    if (!cur || !entry) return null
+    return boxVerdict({ box: entry.box, pct: cur.pct, levels: v3LevelsAll, tradeDate, rules: v3Rules, hhmm: (t) => formatShiftedHHMM(v3Shift(t)) })
+  }, [v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift])
   const [boxPopupClosed, setBoxPopupClosed] = useState(false)
   const [boxPanelGeom, setBoxPanelGeom] = useState(null) // { pane, w, h } plot rect (stage px) + panel size
   const [boxPanelPos, setBoxPanelPos] = useState(() => readBoxPanelPos()) // { left, bottom } or null (default)
@@ -3913,6 +3924,7 @@ export default function PriceChart({
               onHeaderPointerUp={onBoxPopupPointerUp}
               onHeaderDoubleClick={onBoxPanelDoubleClick}
               rules={v3Rules}
+              verdict={v3Verdict}
             />
           )}
 
