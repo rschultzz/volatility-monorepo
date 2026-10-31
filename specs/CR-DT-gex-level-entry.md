@@ -134,3 +134,55 @@ Script: `scripts/cr_dt_level_entry.py step0` (output `scripts/logs/cr_dt/step0.j
    the variants are not independent tests.
 6. **Baseline check planned at the run** (T10): the edge limit recomputed through the same loop must reproduce every
    card's stored fill status, fill time, fill price and ±10 result; the run asserts it before any variant is summarised.
+
+## Run (once, 2026-10-31) and wrap
+
+`scripts/cr_dt_level_entry.py run` → `scripts/logs/cr_dt/{trades,results}.json`, `run_stdout.log` (git-ignored).
+**Baseline check passed:** the edge limit through the T9 loop reproduces all 119 cards' stored fill status, fill time,
+fill price and ±10 result. Edge baseline: takes 17 / 12 (59 %, 95 % 41–75), net +50; skips 19 / 26, −70; all 36 / 38,
+−20 (= the learning-set note). Without card 37 (no levels; a skip, edge fill, loss): skips 19 / 25, all 36 / 37. No
+same-minute ties anywhere.
+
+### Primary — gross ≥ 40 $bn levels (cards with a level; level entry vs the edge entry on the same cards)
+
+| Variant | Group | Cards | Level fill / won / lost (win %, 95 %) / net | Edge fill / won / lost / net | Both filled: better / same / worse | Edge only (edge net) | Mean Δ net / card (95 %) | B1 |
+|---|---|---|---|---|---|---|---|---|
+| D2 | takes | 11 | 9 / 4 / 3 (57 %, 25–84) / +10 | 9 / 3 / 4 / −10 | 1 / 8 / 0 | 0 | +1.8 (0.0, 5.5) | inconclusive |
+| D2 | skips | 24 | 17 / 7 / 6 (54 %, 29–77) / +10 | 19 / 6 / 10 / −40 | 5 / 12 / 0 | 2 (+20) | +2.1 (−0.4, 5.0) | inconclusive |
+| D2 | all | 35 | 26 / 11 / 9 (55 %, 34–74) / +20 | 28 / 9 / 14 / −50 | 6 / 20 / 0 | 2 (+20) | +2.0 (0.0, 4.3) | inconclusive |
+| D4 | takes | 23 | 14 / 7 / 5 (58 %, 32–81) / +20 | 17 / 8 / 7 / +10 | 2 / 12 / 0 | 3 (+30) | +0.4 (−2.2, 3.5) | inconclusive |
+| D4 | skips | 46 | 28 / 10 / 10 (50 %, 30–70) / 0 | 35 / 10 / 17 / −70 | 7 / 21 / 0 | 7 (+40) | +1.5 (−0.4, 3.7) | inconclusive |
+| D4 | all | 69 | 42 / 17 / 15 (53 %, 36–69) / +20 | 52 / 18 / 24 / −60 | 9 / 33 / 0 | 10 (+70) | +1.2 (−0.4, 2.9) | inconclusive |
+| D6 | takes | 33 | 20 / 9 / 9 (50 %, 29–71) / 0 | 25 / 12 / 11 / +10 | 2 / 18 / 0 | 5 (+50) | −0.3 (−2.4, 2.1) | inconclusive |
+| D6 | skips | 58 | 32 / 12 / 12 (50 %, 31–69) / 0 | 45 / 15 / 22 / −70 | 9 / 23 / 0 | 13 (+80) | +1.2 (−0.9, 3.3) | inconclusive |
+| D6 | all | 91 | 52 / 21 / 21 (50 %, 36–65) / 0 | 70 / 27 / 33 / −60 | 11 / 41 / 0 | 18 (+130) | +0.7 (−0.9, 2.2) | inconclusive |
+| inside 2 | takes | 14 | 11 / 5 / 5 / 0 | 11 / 5 / 5 / 0 | 0 / 11 / 0 | 0 | 0.0 | inconclusive |
+| inside 2 | skips | 15 | 13 / 2 / 7 / −50 | 13 / 2 / 7 / −50 | 0 / 13 / 0 | 0 | 0.0 | inconclusive |
+| inside 2 | all | 29 | 24 / 7 / 12 / −50 | 24 / 7 / 12 / −50 | 0 / 24 / 0 | 0 | 0.0 | inconclusive |
+
+"Level only" is 0 in every cell by construction (a level at or beyond the edge can only be touched on or after the
+bar that touches the edge limit). Unresolved fills count 0 in net; marking them to the 12:59 close moves no cell by
+more than 13 pts (results.json `net_mtc`).
+
+**Where the difference comes from (both-filled vs edge-only, all cards):** at D4 the level entry is a median 3.0 pts
+better and fills a median 3 min later. On the 42 cards where both filled it never did worse: 6 edge losses became
+wins, 2 became unresolved, 1 unresolved became a win (+150 pts). But on 10 cards price turned before reaching the
+level and the edge trade it missed went 8 won / 1 lost / 1 unresolved (+70). Net +80 over 69 cards. The same
+shape at D2 (+90 / −20) and D6 (+190 / −130): the deeper the level, the more of the edge's winners it misses. On
+takes the missed winners nearly cancel the gain (D4 +40 / −30; D6 +40 / −50). "Just inside" levels sit a median
+0.5 pt from the edge limit and change nothing.
+
+### Readout — A12 strong levels
+
+6 / 10 / 11 / 2 cards (D2 / D4 / D6 / inside), 0–5 on takes. Every cell inconclusive (all-card means +2.0, +2.0,
++1.8, 0.0 pts / card; CIs straddle 0). On these cards both entries mostly lose (edge all-card D6: 1 / 7). Too few to
+read.
+
+### Verdicts (B1)
+
+**24 of 24 cells inconclusive; none pass, none refuted.** The level entry is ahead on net in most "all" and "skips"
+cells (better price, never worse when both fill) but gives back most of it on the edge trades it misses; on takes
+it is flat. Learning set (69 of 119 revealed), 24 cells disclosed (B2): nothing here is a finding. **Hypothesis for
+blind set 2 (H-DT1):** a resting limit at the nearest gross ≥ 40 level 0–4 pts beyond the fade edge improves the
+edge entry's net per card — test as "D4, all cards" with the same definitions; note its cost is the edge's quick
+winners.
