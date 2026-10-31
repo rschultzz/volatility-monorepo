@@ -379,6 +379,8 @@ export default function AggressorFlowV3Panel({
   onEndArmedChange,
   effortOn = false, // CR-DG item 4: the Flow v2 Effort switch (same state), labels on the price chart
   onEffortChange,
+  myTradesOn = false,
+  onMyTradesChange,
   edgeEffortOn = false, // CR-DI: the Edge effort strip (stored per viewer); draws only with Edges on, an anchor and exact data
   onEdgeEffortChange,
   zoomResetKey = null, // CR-DP item 8b: the trade date; a change resets the slot zoom
@@ -954,6 +956,11 @@ export default function AggressorFlowV3Panel({
             onClick={() => onEffortChange?.(!effortOn)}
             title="Label each confirmed swing on the price chart: points · volume · contracts per point · × the previous swing the same way">
             Effort {effortOn ? 'on' : 'off'}
+          </button>
+          <button type="button" style={chipStyle(myTradesOn)} aria-pressed={myTradesOn} data-testid="flow-v3-my-trades-toggle"
+            onClick={() => onMyTradesChange?.(!myTradesOn)}
+            title="Your logged trades on the price chart: ▲ / ▼ entry, × exit, resting stop (dashed) and target (dotted) while open; click a marker to review it">
+            My trades {myTradesOn ? 'on' : 'off'}
           </button>
         </span>
         {(anyLayer && (approxCells || cellsLoading || cellsError)) || ((layers.marks || layers.levels) && marksNote && !approxCells) ? (

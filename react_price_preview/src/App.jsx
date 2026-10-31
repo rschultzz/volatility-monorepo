@@ -1026,6 +1026,38 @@ export default function App() {
     [centerLoadedDates, extraLoadedDates]
   )
 
+  // CR-DR item 2 — "My trades" (Flow v3 Display group): off by default (C2), not remembered. While on, Ryan's trades
+  // for the loaded dates come from /api/trade-log/chart; a marker click selects a trade (the review panel, item 3).
+  const [myTradesOn, setMyTradesOn] = useState(false)
+  const [myTrades, setMyTrades] = useState(null)
+  const [myTradesReload, setMyTradesReload] = useState(0)
+  const [selectedTradeId, setSelectedTradeId] = useState(null)
+  const myTradesRange = useMemo(() => {
+    const ds = [...loadedFlowDates, tradeDate].filter(Boolean).map((d) => String(d).slice(0, 10)).sort()
+    return ds.length ? `${ds[0]}|${ds[ds.length - 1]}` : null
+  }, [loadedFlowDates, tradeDate])
+  useEffect(() => {
+    if (!myTradesOn || !myTradesRange) {
+      setMyTrades(null)
+      return undefined
+    }
+    const controller = new AbortController()
+    const [from, to] = myTradesRange.split('|')
+    const url = new URL(`${apiBase}/api/trade-log/chart`)
+    url.searchParams.set('from', from)
+    url.searchParams.set('to', to)
+    fetch(url.toString(), { credentials: 'include', signal: controller.signal, cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => setMyTrades(Array.isArray(j?.trades) ? j.trades : []))
+      .catch((err) => {
+        if (err?.name !== 'AbortError') setMyTrades([])
+      })
+    return () => controller.abort()
+  }, [apiBase, myTradesOn, myTradesRange, myTradesReload])
+  useEffect(() => {
+    if (!myTradesOn) setSelectedTradeId(null)
+  }, [myTradesOn])
+
   useEffect(() => {
     try {
       window.localStorage.setItem(FLOW_HEIGHT_STORAGE_KEY, String(flowPanelHeight))
@@ -2240,6 +2272,9 @@ export default function App() {
                 flowWindow={flowV3Window}
                 anchorPickArmed={flowAnchorArmed || flowEndArmed}
                 onAnchorPick={handleAnchorPick}
+                myTrades={myTradesOn ? myTrades : null}
+                selectedTradeId={selectedTradeId}
+                onTradeSelect={setSelectedTradeId}
               />
             </div>
 
@@ -2298,6 +2333,8 @@ export default function App() {
                     onEndArmedChange={(v) => { if (v) setFlowAnchorArmed(false); setFlowEndArmed(v) }}
                     effortOn={flowEffort}
                     onEffortChange={setFlowEffort}
+                    myTradesOn={myTradesOn}
+                    onMyTradesChange={setMyTradesOn}
                     edgeEffortOn={flowEdgeEffort}
                     onEdgeEffortChange={setFlowEdgeEffort}
                     markerSettings={flowMarkerSettings}

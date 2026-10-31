@@ -20,6 +20,7 @@ import {
 } from 'web-shared'
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import BoxPanel from './BoxPanel'
+import { TradeMarksPrimitive } from './tradePrimitives'
 import boxBaseline from '../data/boxBaseline.json'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
@@ -914,6 +915,12 @@ export default function PriceChart({
   flowWindow = null,
   anchorPickArmed = false,
   onAnchorPick = null,
+  // CR-DR item 2 — "My trades" (Flow v3 Display group, off by default): Ryan's trades from /api/trade-log/chart
+  // ({ id, direction, entry_pt, entry_price, exit_pt, exit_price, lines }); null while off, and then no primitive is
+  // attached. A click on a trade marker reports its id to onTradeSelect (and toggles no timeslice).
+  myTrades = null,
+  selectedTradeId = null,
+  onTradeSelect = null,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -922,6 +929,7 @@ export default function PriceChart({
   onPriceAxisWidthChangeRef.current = onPriceAxisWidthChange
   const seriesRef = useRef(null)
   const liveTradeSeriesRef = useRef(null)
+  const tradeMarksRef = useRef({ series: null, prim: null }) // CR-DR item 2
   const gexSeriesRefs = useRef([])
   // Map<LineSeries, segment> — lets the click handler look up which segment was hit
   const gexSegmentBySeriesRef = useRef(new Map())
@@ -1958,6 +1966,12 @@ export default function PriceChart({
         onAnchorPickRef.current?.(Number(param.time))
         return
       }
+      // CR-DR item 3: a click on a trade marker opens its review panel (no GEX popup, no timeslice toggle).
+      const tradeHit = tradeMarksRef.current.prim?.hitTest(param?.point)
+      if (tradeHit != null) {
+        onTradeSelectRef.current?.(tradeHit)
+        return
+      }
       // GEX line hit-test first: if the click landed near a GEX horizontal line,
       // show the per-expiration popup and short-circuit before toggling a timeslice.
       if (param?.point && gexSeriesRefs.current.length > 0) {
@@ -2612,6 +2626,8 @@ export default function PriceChart({
   const liveEffortMarkerRef = useRef(null) // CR-DM: the live label's marker as drawn (snapped time, position)
   const anchorPickArmedRef = useRef(false)
   const onAnchorPickRef = useRef(null)
+  const onTradeSelectRef = useRef(null)
+  onTradeSelectRef.current = onTradeSelect
   useEffect(() => {
     anchorPickArmedRef.current = Boolean(anchorPickArmed)
     onAnchorPickRef.current = onAnchorPick
@@ -2680,6 +2696,38 @@ export default function PriceChart({
     return d.length ? d[Math.floor(d.length / 2)] : 60
   }, [v3Times])
   const v3Flat = useMemo(() => (v3Payload ? flattenCells(v3Payload, v3Shift) : null), [v3Payload, v3Shift])
+
+  // CR-DR item 2 — My trades: one primitive, attached on first use (off: never attached, the chart is as before).
+  const myTradeMarks = useMemo(() => {
+    if (!Array.isArray(myTrades)) return null
+    return myTrades.map((t) => ({
+      id: t.id,
+      direction: t.direction,
+      entryT: ptIsoToShiftedEpoch(t.entry_pt),
+      entryPrice: Number(t.entry_price),
+      exitT: ptIsoToShiftedEpoch(t.exit_pt),
+      exitPrice: Number(t.exit_price),
+      lines: (t.lines || []).map((l) => ({ kind: l.kind, price: Number(l.price), fromT: ptIsoToShiftedEpoch(l.from_pt), toT: ptIsoToShiftedEpoch(l.to_pt) })),
+    }))
+  }, [myTrades])
+  useEffect(() => {
+    const series = seriesRef.current
+    if (!series) return
+    const reg = tradeMarksRef.current
+    if (reg.series !== series) tradeMarksRef.current = { series, prim: null }
+    const r = tradeMarksRef.current
+    if (!myTradeMarks && !r.prim) return
+    if (!r.prim) {
+      r.prim = new TradeMarksPrimitive()
+      series.attachPrimitive(r.prim)
+    }
+    r.prim.setData(myTradeMarks ? { trades: myTradeMarks, times: v3Times, step: v3Step, selectedId: selectedTradeId } : null)
+  }, [myTradeMarks, v3Times, v3Step, selectedTradeId])
+  // The smoke spec reads where the markers were drawn (css px in the plot) and the candle under each.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.__crDrTradeHits = () => tradeMarksRef.current.prim?.hits() || []
+  }, [])
   const v3HeatOn = Boolean(flowV3?.heat && v3Flat)
   const v3Columns = useMemo(() => (v3HeatOn ? buildHeatColumns(v3Flat, v3Times, v3Step) : null), [v3HeatOn, v3Flat, v3Times, v3Step])
   const v3MarksOn = Boolean(flowV3?.marks && v3Payload)

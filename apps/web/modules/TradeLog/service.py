@@ -657,7 +657,25 @@ def _format_trade(row: dict) -> dict:
         'context_computed_at':      _ts(row.get('context_computed_at')),
         'created_at':               _ts(row.get('created_at')),
         'updated_at':               _ts(row.get('updated_at')),
+        # CR-DR: naive PT wall-clock strings (the price chart's time axis is PT) and Ryan's review fields
+        'entry_pt':                 _pt_naive(row.get('entry_ts_pt')),
+        'exit_pt':                  _pt_naive(row.get('exit_ts_pt')),
+        'anchor_pt':                _pt_naive(row.get('anchor_ts_pt')),
+        'setup_chips':              list(row.get('setup_chips') or []),
+        'pre_trade_reason':         row.get('pre_trade_reason'),
+        'mistake_chips':            list(row.get('mistake_chips') or []),
+        'checklist_followed':       row.get('checklist_followed'),
+        'lesson':                   row.get('lesson'),
+        'grade':                    row.get('grade'),
+        'holdout':                  is_holdout_date(row.get('trade_date')),
     }
+
+
+def _pt_naive(v):
+    """A timestamptz as a naive PT wall-clock ISO string ('2026-10-30T07:49:17'), or None."""
+    if v is None or not isinstance(v, datetime):
+        return None
+    return v.astimezone(PT).replace(tzinfo=None).isoformat(timespec='seconds')
 
 
 def list_trades(date_filter: str | None = None) -> list[dict]:
@@ -783,6 +801,160 @@ def get_aggregate(date_filter: str | None = None) -> dict:
             'avg_loser':          avg_l,
             'risk_reward':        rr,
             'total_fees':         _f(row['total_fees']),
+        }
+    finally:
+        conn.close()
+
+
+# ══════════════════════════════════════════════════════════════
+# Price chart and review panel (CR-DR items 2 / 3)
+# ══════════════════════════════════════════════════════════════
+
+_STOP_TYPES = ('stop', 'stop loss', 'stop limit', 'trailing stop')
+
+
+def order_lines_for_trade(trade: dict, orders: list[dict]) -> list[dict]:
+    """
+    The exit-side orders resting while the position was open, clipped to [entry, exit]:
+    stops (a stop price) and targets (a limit price: Take Profit / Limit). Market and
+    rejected orders, and the entry order itself, are not lines. Times are tz-aware.
+    """
+    entry_ts, exit_ts = trade.get('entry_ts_pt'), trade.get('exit_ts_pt')
+    if entry_ts is None or exit_ts is None:
+        return []
+    exit_side = 'S' if trade['direction'] == 'long' else 'B'
+    lines = []
+    for o in orders:
+        if o['symbol'] != trade['symbol'] or o['side'] != exit_side or o['order_id'] == trade.get('entry_order_id'):
+            continue
+        if (o.get('status') or '').lower() == 'rejected':
+            continue
+        stop_px, limit_px = o.get('stop_price'), o.get('limit_price')
+        is_stop = stop_px is not None or (o.get('order_type') or '').lower() in _STOP_TYPES
+        price = stop_px if is_stop else limit_px
+        if price is None or o.get('placing_time_pt') is None:
+            continue
+        ended = o.get('status_time_pt') if (o.get('status') or '').lower() in ('filled', 'cancelled', 'canceled', 'expired') else None
+        start = max(o['placing_time_pt'], entry_ts)
+        end = min(ended or exit_ts, exit_ts)
+        if start >= end:
+            continue
+        lines.append({
+            'order_id':   o['order_id'],
+            'kind':       'stop' if is_stop else 'target',
+            'order_type': o.get('order_type'),
+            'status':     o.get('status'),
+            'price':      float(price),
+            'from_pt':    _pt_naive(start),
+            'to_pt':      _pt_naive(end),
+            'from_ts':    start,
+        })
+    lines.sort(key=lambda l: (l['from_ts'], l['kind']))
+    return lines
+
+
+def _stop_at_entry(trade: dict, lines: list[dict]) -> dict:
+    """Whether a stop was resting at entry, else after how many seconds one was placed (None: never)."""
+    stops = [l for l in lines if l['kind'] == 'stop']
+    if not stops:
+        return {'stop_at_entry': False, 'stop_after_s': None}
+    after = (stops[0]['from_ts'] - trade['entry_ts_pt']).total_seconds()
+    return {'stop_at_entry': after <= 0, 'stop_after_s': max(0, int(round(after)))}
+
+
+def _load_orders(cur, symbols: list[str], t0, t1) -> list[dict]:
+    cur.execute("""
+        SELECT order_id, symbol, side, order_type, qty, limit_price, stop_price, status,
+               placing_time_pt, status_time_pt
+        FROM trade_log_orders
+        WHERE symbol = ANY(%s) AND placing_time_pt <= %s
+          AND (status_time_pt IS NULL OR status_time_pt >= %s)
+    """, (symbols, t1, t0))
+    out = []
+    for r in cur.fetchall():
+        row = dict(r)
+        for k in ('limit_price', 'stop_price'):
+            row[k] = float(row[k]) if row[k] is not None else None
+        out.append(row)
+    return out
+
+
+def _strip_lines(lines):
+    return [{k: v for k, v in l.items() if k != 'from_ts'} for l in lines]
+
+
+def chart_trades(date_from: str, date_to: str) -> list[dict]:
+    """Trades with trade_date in [date_from, date_to] and their resting stop / target lines (CR-DR item 2)."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT * FROM trade_log_trades
+                WHERE trade_date BETWEEN %s AND %s
+                ORDER BY entry_ts_pt ASC
+            """, (date_from, date_to))
+            rows = [dict(r) for r in cur.fetchall()]
+            if not rows:
+                return []
+            t0 = min(r['entry_ts_pt'] for r in rows if r['entry_ts_pt'])
+            t1 = max(r['exit_ts_pt'] for r in rows if r['exit_ts_pt'])
+            orders = _load_orders(cur, sorted({r['symbol'] for r in rows}), t0, t1)
+        out = []
+        for r in rows:
+            lines = order_lines_for_trade(r, orders)
+            out.append({**_format_trade(r), **_stop_at_entry(r, lines), 'lines': _strip_lines(lines)})
+        return out
+    finally:
+        conn.close()
+
+
+def trade_review(trade_id: int) -> dict | None:
+    """
+    Facts for the trade review panel (CR-DR item 3a): the trade, $ by contract multiplier,
+    time in trade, resting stop / target lines and whether a stop rested at entry, and
+    MFE / MAE in points from ES 1-minute bars (es_minutes) from the entry minute through the
+    exit minute. MES fills vs ES bars agree to ± 1 tick (Step 0 S0.7); the entry and exit
+    minutes' bars include prices traded before the entry / after the exit within that minute.
+    B4: no MFE / MAE on holdout dates.
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT * FROM trade_log_trades WHERE id = %s', (trade_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            r = dict(row)
+            orders = _load_orders(cur, [r['symbol']], r['entry_ts_pt'], r['exit_ts_pt']) if r['entry_ts_pt'] and r['exit_ts_pt'] else []
+            lines = order_lines_for_trade(r, orders)
+            mfe = mae = None
+            holdout = is_holdout_date(r['trade_date'])
+            if not holdout and r['entry_ts_pt'] and r['exit_ts_pt']:
+                cur.execute("""
+                    SELECT max(high) AS hi, min(low) AS lo, count(*) AS n
+                    FROM es_minutes
+                    WHERE ts_utc >= date_trunc('minute', %s::timestamptz)
+                      AND ts_utc <= date_trunc('minute', %s::timestamptz)
+                """, (r['entry_ts_pt'], r['exit_ts_pt']))
+                b = cur.fetchone()
+                if b and b['n']:
+                    entry = float(r['entry_price'])
+                    hi, lo = float(b['hi']), float(b['lo'])
+                    if r['direction'] == 'long':
+                        mfe, mae = hi - entry, entry - lo
+                    else:
+                        mfe, mae = entry - lo, hi - entry
+        t = _format_trade(r)
+        mult = get_multiplier(extract_root(r['symbol']))
+        held = (r['exit_ts_pt'] - r['entry_ts_pt']).total_seconds() if r['entry_ts_pt'] and r['exit_ts_pt'] else None
+        return {
+            **t,
+            'multiplier':      mult,
+            'held_s':          int(held) if held is not None else None,
+            'mfe_pts':         round(mfe, 2) if mfe is not None else None,
+            'mae_pts':         round(mae, 2) if mae is not None else None,
+            **_stop_at_entry(r, lines),
+            'lines':           _strip_lines(lines),
         }
     finally:
         conn.close()

@@ -222,3 +222,12 @@ B4 freezes 2026-06-06 → 2026-10-26 and sets the forward log from 2026-10-27; t
 | **id 23 (new)** short −5.75 | 1353070885 S Limit 7125.50 @12:19 → 1353080861 B Stop Loss 7131.25 @12:21 | inserted | — | — (annotations = entry / exit placeholders; ORATS context computed, train date) |
 
 Also inserted: the 8 April order rows into `trade_log_orders` (from their fills; the April export's cancelled orders were never stored), and `detected_tz = 'PT'` on the 8 April fills. A dry run of Ryan's 2026-10-31 export afterwards: PT 18 / 18, 32 orders, 18 fills, 9 new trades, no April trade re-created.
+
+### Item 2 — My trades on the price chart
+
+- `GET /api/trade-log/chart?from=&to=` → trades in the date range with PT wall-clock strings (`entry_pt`, `exit_pt`) and `lines`: the exit-side orders from `trade_log_orders` resting while the position was open (stop = a stop price, target = a limit price; market, rejected and the entry order excluded), each clipped to [max(placing, entry), min(fill / cancel, exit)]; plus `stop_at_entry` / `stop_after_s`.
+- Flow v3 Display group: **My trades on / off**, off by default (C2), not remembered; App fetches for the loaded dates while on.
+- `TradeMarksPrimitive` (`components/tradePrimitives.js`), one primitive, attached on first use: ▲ long / ▼ short with its tip on the entry fill price, × at the exit price, a 1 px line between them (2 px when selected), stop lines dashed and targets dotted with a small "stop" / "TP" tag at their end. Blue `96,165,250` long, slate `148,163,184` short (C1). A fill sits inside its own candle by its seconds (x = candle x + (offset / bar − ½) × bar spacing).
+- A click within 10 px of a marker selects the trade (the chart's click handler checks it right after the anchor pick, so no timeslice toggles and no GEX popup).
+- Data check (`scripts/logs/cr-dr/item2_chart_trades.txt`): 9 imported trades; e.g. #2 (10-27) stop 7718.75 at 07:25:40 (111 s after entry), then stop 7728.75 + TP 7736 from 07:26:03 — as in the vault log; #5 TP 7642 07:51:03–07:51:06, then the OCO pair 07:51:06–08:08:12.
+- Unit: `tests/unit/tradeMarks.test.js` (time inside the bar, palette, hits, hit test); 97 / 97.

@@ -95,6 +95,27 @@ def list_trades():
         return jsonify({'ok': False, 'error': str(e)}), 500
 
 
+# ── Price chart (CR-DR item 2) ────────────────────────────────
+
+@trade_log_bp.get('/chart')
+def chart_trades():
+    """
+    GET /api/trade-log/chart?from=YYYY-MM-DD&to=YYYY-MM-DD
+
+    Trades in the date range with PT wall-clock times and the exit-side
+    orders (stop / target) resting while each position was open.
+    """
+    date_from = request.args.get('from') or request.args.get('date')
+    date_to = request.args.get('to') or date_from
+    if not date_from:
+        return jsonify({'ok': False, 'error': 'from (or date) is required'}), 400
+    try:
+        return jsonify({'ok': True, 'trades': service.chart_trades(date_from, date_to)})
+    except Exception as e:
+        log.exception('chart_trades failed')
+        return jsonify({'ok': False, 'error': type(e).__name__}), 500
+
+
 # ── Single trade ──────────────────────────────────────────────
 
 @trade_log_bp.get('/trades/<int:trade_id>')
