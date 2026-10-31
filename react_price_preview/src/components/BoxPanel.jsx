@@ -65,8 +65,10 @@ export const VERDICT_TONE = {
   short: 'good', long: 'good', conflict: 'bad', 'watch-up': 'idea', 'watch-down': 'idea',
   'no-trades': 'neutral', forming: 'neutral', 'two-sided': 'neutral', none: 'neutral',
 }
-// CR-DS item 6 sets the status colours; until then every tone draws slate.
-export const TONE_COLOR = { good: MUTED, bad: MUTED, idea: MUTED, neutral: MUTED }
+// CR-DS item 6 (C1 deviation approved by Ryan 2026-10-31, this panel only): flat, muted status colours — green =
+// agreement, red = contradiction, amber = idea, slate = neutral. Drawn only as a 3 px bar / border; text stays light
+// (Step 0 S0.3: bars ≥ 3.3:1 against the panel, light text 12:1).
+export const TONE_COLOR = { good: '#6f8f72', bad: '#a86464', idea: '#b08a4a', neutral: '#64748b' }
 
 function EvidenceTable({ rows, testid }) {
   if (!rows.length) return null
