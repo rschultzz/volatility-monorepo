@@ -282,3 +282,19 @@ cut-off:
    ACTION). Keep as written, or also treat two-sided absorption as CONFLICT?
 4. **Absorption set for the verdict:** the same top-8 levels the chart would draw, also when the Absorption levels layer is
    off (the panel says which level it used).
+
+## Step 0 decisions (Ryan, chat 2026-10-31)
+
+1. **Time-of-day split:** yes, for Δ share only (box start in open 06:30–07:30 / mid 07:30–11:00 / late 11:00–13:00 PT).
+   Contracts/pt stays all-day.
+2. **Same-source baselines, no adjustment:** yes. The badge hover states the cross-feed noise (median ~9 percentile points
+   on Δ share), so a badge near a cut-off can flip.
+3. **Conflict scope:** A24 as written (flow lean vs absorption = CONFLICT). New separate no-action reason, checked right
+   after CONFLICT and before the reads: when both a buyers-absorbed and a sellers-absorbed level sit at the box (within
+   2 pts) and there is no notable flow lean, the verdict is **"NO ACTION — two-sided absorption"**, naming both levels.
+   Not labelled A24.
+4. **Absorption levels for the verdict:** the same top 8 the chart draws, used even when the Absorption levels layer is off;
+   the panel names the level it used.
+
+Verdict order as built: NO TRADES (A22) → CONFLICT (A24) → NO ACTION two-sided absorption → SHORT / LONG READ (A19 + A23)
+→ WATCH BREAK (idea) → NO ACTION nothing notable.
