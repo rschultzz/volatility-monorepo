@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PriceChart from './components/PriceChart'
 import { DEFAULT_MARKER_SETTINGS, alignV2ToCandles, effortChartMarkers } from './flowShared'
 import AggressorFlowV3Panel from './components/AggressorFlowV3Panel'
-import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, LIVE_EFFORT_ID, boxSegments, edgeReadout, edgeStripDrawn, endFromPick, flattenBars, liveEffortLabel, makeShifter, rollingExtraHeight, rowCloses, segmentReadouts } from './flowV3'
+import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, LIVE_EFFORT_ID, boxRules, boxSegments, edgeReadout, edgeStripDrawn, endFromPick, flattenBars, liveEffortLabel, makeShifter, rollingExtraHeight, rowCloses, segmentReadouts } from './flowV3'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
+import TradeReviewPanel from './components/TradeReviewPanel'
+import boxBaseline from './data/boxBaseline.json'
+import { ptToShifted } from './tradeContext'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
 import {
   GEX_MIN_ABS_B_LEGACY_STORAGE_KEY,
@@ -1057,6 +1060,22 @@ export default function App() {
   useEffect(() => {
     if (!myTradesOn) setSelectedTradeId(null)
   }, [myTradesOn])
+  // CR-DR item 3: the selected trade, the day's trades for N / P, and the chart focus for each.
+  const selectedTrade = useMemo(() => (Array.isArray(myTrades) ? myTrades.find((t) => t.id === selectedTradeId) || null : null),
+    [myTrades, selectedTradeId])
+  const selectedDayTrades = useMemo(() => {
+    if (!selectedTrade || !Array.isArray(myTrades)) return []
+    return myTrades.filter((t) => t.trade_date === selectedTrade.trade_date).sort((a, b) => String(a.entry_pt).localeCompare(String(b.entry_pt)))
+  }, [myTrades, selectedTrade])
+  const focusTrade = useMemo(() => (selectedTrade
+    ? { key: selectedTrade.id, entryT: ptToShifted(selectedTrade.entry_pt), exitT: ptToShifted(selectedTrade.exit_pt) } : null),
+  [selectedTrade])
+  const handleAnnotationTrade = useCallback((id) => {
+    setMyTradesOn(true)
+    setSelectedTradeId(id)
+  }, [])
+  const handleTradeSaved = useCallback(() => setMyTradesReload((n) => n + 1), [])
+  const flowV3Rules = useMemo(() => boxRules(flowV3Settings.boxRules), [flowV3Settings.boxRules])
 
   useEffect(() => {
     try {
@@ -2275,7 +2294,26 @@ export default function App() {
                 myTrades={myTradesOn ? myTrades : null}
                 selectedTradeId={selectedTradeId}
                 onTradeSelect={setSelectedTradeId}
+                focusTrade={focusTrade}
+                onAnnotationTrade={handleAnnotationTrade}
               />
+              {myTradesOn && selectedTrade && (
+                <TradeReviewPanel
+                  apiBase={apiBase}
+                  trade={selectedTrade}
+                  dayTrades={selectedDayTrades}
+                  onSelect={setSelectedTradeId}
+                  onClose={() => setSelectedTradeId(null)}
+                  onSaved={handleTradeSaved}
+                  chartAnchor={flowAnchor}
+                  priceAxisWidth={priceAxisWidth}
+                  flowSession={flowSession}
+                  flowSettings={flowV3Settings}
+                  markerSettings={flowMarkerSettings}
+                  rules={flowV3Rules}
+                  baseline={boxBaseline}
+                />
+              )}
             </div>
 
             {flowEnabled && (

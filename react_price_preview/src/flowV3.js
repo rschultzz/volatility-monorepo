@@ -1476,3 +1476,60 @@ export function readHistoryText(ranges, hhmm, short = false) {
   if (!list.length) return short ? '' : 'Read live: none'
   return `${short ? 'read' : 'Read live:'} ${list.map((x) => `${hhmm(x.from)}${x.to !== x.from ? `–${hhmm(x.to)}` : ''} (${x.side})`).join(' · ')}`
 }
+
+// CR-DR — the price chart's drawn boxes, panel sections and current verdict as pure functions (moved unchanged from
+// PriceChart's v3Edges / v3BoxPanel / v3Verdict memos), so the trade review panel's "at entry" context runs exactly the
+// chart's code on an until-replay payload. `fmt` formats a shifted epoch as HH:MM.
+//
+// edgeBoxEntries: { boxes: [{ from, to, top, bottom, frozen, box }], probes } on the shifted candle times, or null.
+export function edgeBoxEntries(edgeReadout, segments, times, shift, fmt) {
+  if (!edgeReadout || !times.length) return null
+  const snap = (utc) => {
+    const i = floorIndex(times, shift(utc))
+    return i < 0 ? null : times[i]
+  }
+  // CR-DI amendment 9: the last 4 frozen boxes (faded, to their break minute) and the current box.
+  const { boxes, dropped } = drawnBoxes(edgeReadout)
+  const out = []
+  boxes.forEach((b, k) => {
+    const frozen = b !== edgeReadout
+    const from = snap(b.from)
+    const to = snap(frozen ? b.breakAt : b.to)
+    if (from == null || to == null) return
+    // CR-DN item 3b: every drawn box carries its panel data (frozen: broke; current: set end / current). CR-DQ item 1:
+    // no in-chart label.
+    const readout = segments?.readouts?.[k] || null
+    const ended = frozen ? { kind: 'broke', dir: b.dir, at: b.breakAt }
+      : edgeReadout.end != null ? { kind: 'end', at: edgeReadout.end } : { kind: 'current' }
+    const pending = frozen ? null : edgeReadout.pending
+    out.push({
+      from, to, top: b.top.price, bottom: b.bottom.price, frozen,
+      box: { ...b, dropped, readout, ended, pending },
+    })
+  })
+  // CR-DN item 2: a tick per probe (cancelled break) of the drawn boxes, at its edge and break minute.
+  const probes = []
+  for (const b of boxes) {
+    for (const pr of b.probes || []) {
+      const at = snap(pr.at)
+      if (at != null) probes.push({ time: at, price: pr.edge, up: pr.dir === 'up', label: `probe ${fmt(shift(pr.at))}`, probe: pr })
+    }
+  }
+  return out.length ? { boxes: out, probes } : null
+}
+
+// boxPanelOf: the box panel's sections with each box's percentiles (CR-DQ item 5), or null without boxes.
+export function boxPanelOf(entries, shift, payload, baseline, fmt) {
+  if (!entries?.boxes?.length) return null
+  const ptMin = (utc) => Math.floor(((((shift(utc) % 86400) + 86400) % 86400)) / 60)
+  const pctOf = (b) => boxPercentiles(b.readout, ptMin(b.from), payload?.segments, baseline)
+  return boxPanelSections(entries.boxes, (t) => fmt(shift(t)), payload?.segments, pctOf)
+}
+
+// currentBoxVerdict: CR-DQ item 7's verdict for the current box, or null.
+export function currentBoxVerdict(panel, entries, levels, tradeDate, rules, shift, fmt) {
+  const cur = panel?.sections.find((sct) => sct.current)
+  const entry = entries?.boxes.find((b) => !b.frozen)
+  if (!cur || !entry) return null
+  return boxVerdict({ box: entry.box, pct: cur.pct, levels, tradeDate, rules, hhmm: (t) => fmt(shift(t)) })
+}

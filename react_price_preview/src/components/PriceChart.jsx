@@ -24,7 +24,7 @@ import { TradeMarksPrimitive } from './tradePrimitives'
 import boxBaseline from '../data/boxBaseline.json'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { LIVE_EFFORT_ID, absorptionLevels, boxPanelOffset, boxPanelPlace, boxPanelSections, boxPercentiles, boxRules, boxVerdict, buildHeatColumns, readHistory, readHistoryText, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
+import { LIVE_EFFORT_ID, absorptionLevels, boxPanelOf, boxPanelOffset, boxPanelPlace, boxRules, boxVerdict, buildHeatColumns, readHistory, readHistoryText, chartMarks, currentBoxVerdict, dirArrow, edgeBoxEntries, flattenCells, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
 import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, BoxShadePrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
@@ -921,6 +921,10 @@ export default function PriceChart({
   myTrades = null,
   selectedTradeId = null,
   onTradeSelect = null,
+  // CR-DR item 3d — { key, entryT, exitT } (shifted epochs): scroll the chart (same zoom) so that trade is in view.
+  focusTrade = null,
+  // CR-DR item 3 — "View on chart" in the Trade Log tab: called with the trade id when the annotation state names a new one.
+  onAnnotationTrade = null,
 }) {
   const stageRef = useRef(null)
   const hostRef = useRef(null)
@@ -1281,6 +1285,8 @@ export default function PriceChart({
         const data = await res.json()
         if (cancelled) return
         const next = (data.ok && data.state) ? data.state : null
+        // CR-DR: a newly named trade also opens the trade review panel (App turns My trades on and selects it).
+        if (next?.trade_id != null && next.trade_id !== annotationStateRef.current?.trade_id) onAnnotationTradeRef.current?.(next.trade_id)
         annotationStateRef.current = next
         setAnnotationState(next)
       } catch { /* non-critical — silently skip */ }
@@ -2628,6 +2634,8 @@ export default function PriceChart({
   const onAnchorPickRef = useRef(null)
   const onTradeSelectRef = useRef(null)
   onTradeSelectRef.current = onTradeSelect
+  const onAnnotationTradeRef = useRef(null)
+  onAnnotationTradeRef.current = onAnnotationTrade
   useEffect(() => {
     anchorPickArmedRef.current = Boolean(anchorPickArmed)
     onAnchorPickRef.current = onAnchorPick
@@ -2723,6 +2731,28 @@ export default function PriceChart({
     }
     r.prim.setData(myTradeMarks ? { trades: myTradeMarks, times: v3Times, step: v3Step, selectedId: selectedTradeId } : null)
   }, [myTradeMarks, v3Times, v3Step, selectedTradeId])
+  // CR-DR item 3d: N / P (or a marker click) — scroll, keeping the zoom, only when the trade isn't already in view.
+  const focusTradeKey = focusTrade?.key ?? null
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || focusTradeKey == null || !displayCandles.length) return
+    const ts = chart.timeScale()
+    const vr = ts.getVisibleLogicalRange()
+    if (!vr) return
+    const idxOf = (t) => {
+      if (t == null) return null
+      let k = -1
+      for (let i = 0; i < displayCandles.length && Number(displayCandles[i].time) <= t; i += 1) k = i
+      return k < 0 ? null : k
+    }
+    const a = idxOf(focusTrade.entryT)
+    if (a == null) return
+    const b = idxOf(focusTrade.exitT) ?? a
+    if (a >= vr.from + 2 && b <= vr.to - 2) return
+    const w = vr.to - vr.from
+    const mid = (a + b) / 2
+    ts.setVisibleLogicalRange({ from: mid - w / 2, to: mid + w / 2 })
+  }, [focusTradeKey, displayCandles]) // eslint-disable-line react-hooks/exhaustive-deps
   // The smoke spec reads where the markers were drawn (css px in the plot) and the candle under each.
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -2752,41 +2782,9 @@ export default function PriceChart({
   const v3Levels = v3LevelsOn ? v3LevelsAll : null
   const v3EdgeReadout = flowV3?.edges || null
   const v3Segments = flowV3?.segments || null // CR-DN item 3: per-box readouts (drawnBoxes order)
-  const v3Edges = useMemo(() => {
-    if (!v3EdgeReadout || !v3Times.length) return null
-    const snap = (utc) => {
-      const i = floorIndex(v3Times, v3Shift(utc))
-      return i < 0 ? null : v3Times[i]
-    }
-    // CR-DI amendment 9: the last 4 frozen boxes (faded, to their break minute) and the current box.
-    const { boxes, dropped } = drawnBoxes(v3EdgeReadout)
-    const out = []
-    boxes.forEach((b, k) => {
-      const frozen = b !== v3EdgeReadout
-      const from = snap(b.from)
-      const to = snap(frozen ? b.breakAt : b.to)
-      if (from == null || to == null) return
-      // CR-DN item 3b: every drawn box carries its panel data (frozen: broke; current: set end / current). CR-DQ item 1:
-      // no in-chart label.
-      const readout = v3Segments?.readouts?.[k] || null
-      const ended = frozen ? { kind: 'broke', dir: b.dir, at: b.breakAt }
-        : v3EdgeReadout.end != null ? { kind: 'end', at: v3EdgeReadout.end } : { kind: 'current' }
-      const pending = frozen ? null : v3EdgeReadout.pending
-      out.push({
-        from, to, top: b.top.price, bottom: b.bottom.price, frozen,
-        box: { ...b, dropped, readout, ended, pending },
-      })
-    })
-    // CR-DN item 2: a tick per probe (cancelled break) of the drawn boxes, at its edge and break minute.
-    const probes = []
-    for (const b of boxes) {
-      for (const pr of b.probes || []) {
-        const at = snap(pr.at)
-        if (at != null) probes.push({ time: at, price: pr.edge, up: pr.dir === 'up', label: `probe ${formatShiftedHHMM(v3Shift(pr.at))}`, probe: pr })
-      }
-    }
-    return out.length ? { boxes: out, probes } : null
-  }, [v3EdgeReadout, v3Segments, v3Times, v3Shift])
+  // CR-DR: the drawn boxes moved unchanged into flowV3.edgeBoxEntries (the trade panel's "at entry" uses the same).
+  const v3Edges = useMemo(() => edgeBoxEntries(v3EdgeReadout, v3Segments, v3Times, v3Shift, formatShiftedHHMM),
+    [v3EdgeReadout, v3Segments, v3Times, v3Shift])
   const v3SellLayer = flowV3?.sellLayer !== false
   const v3BuyLayer = flowV3?.buyLayer !== false
   const v3PrimRef = useRef({ series: null, heat: null, boxShade: null, marks: null, profile: null, levels: null, edges: null, window: null })
@@ -2819,9 +2817,9 @@ export default function PriceChart({
     })
   }, [v3EdgeReadout, v3Payload, v3Bars, v3Segments, v3Times, v3Shift, v3End, tradeDate, v3Rules, v3PtMin])
   const v3BoxPanel = useMemo(() => {
-    if (!v3Edges?.boxes?.length) return null
-    const pctOf = (b) => boxPercentiles(b.readout, v3PtMin(b.from), v3Payload?.segments, boxBaseline)
-    const panel = boxPanelSections(v3Edges.boxes, (t) => formatShiftedHHMM(v3Shift(t)), v3Payload?.segments, pctOf)
+    // CR-DR: the base sections + percentiles from flowV3.boxPanelOf (shared with the trade panel's "at entry")
+    const panel = boxPanelOf(v3Edges, v3Shift, v3Payload, boxBaseline, formatShiftedHHMM)
+    if (!panel) return null
     const ranges = v3History?.ranges || []
     const hhmm = (t) => formatShiftedHHMM(v3Shift(t))
     return {
@@ -2839,12 +2837,8 @@ export default function PriceChart({
     }
   }, [v3Edges, v3Shift, v3Payload, v3Times, v3History, v3PtMin, tradeDate, v3Rules])
   // CR-DQ item 7: the current box's verdict from the panel's own inputs (its percentiles, the levels above, the trade date).
-  const v3Verdict = useMemo(() => {
-    const cur = v3BoxPanel?.sections.find((sct) => sct.current)
-    const entry = v3Edges?.boxes.find((b) => !b.frozen)
-    if (!cur || !entry) return null
-    return boxVerdict({ box: entry.box, pct: cur.pct, levels: v3LevelsAll, tradeDate, rules: v3Rules, hhmm: (t) => formatShiftedHHMM(v3Shift(t)) })
-  }, [v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift])
+  const v3Verdict = useMemo(() => currentBoxVerdict(v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift, formatShiftedHHMM),
+    [v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift])
   const [boxPopupClosed, setBoxPopupClosed] = useState(false)
   const [boxPanelGeom, setBoxPanelGeom] = useState(null) // { pane, w, h } plot rect (stage px) + panel size
   const [boxPanelPos, setBoxPanelPos] = useState(() => readBoxPanelPos()) // { left, bottom } or null (default)

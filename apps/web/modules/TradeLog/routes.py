@@ -142,6 +142,12 @@ def update_trade(trade_id):
         setup_target_ts_pt  — datetime-local string
         setup_direction     — 'long' | 'short' | ''
         notes               — free text
+      CR-DR review fields:
+        setup_chips / mistake_chips — lists of the offered chip strings
+        pre_trade_reason / lesson   — free text
+        checklist_followed          — true | false | null
+        grade                       — 1..5 | null
+        anchor_ts_pt                — 'YYYY-MM-DDTHH:MM[:SS]' PT | null (the box anchor for "at entry")
     """
     body = request.get_json(silent=True) or {}
     try:
@@ -149,9 +155,26 @@ def update_trade(trade_id):
         if trade is None:
             return jsonify({'ok': False, 'error': 'Not found'}), 404
         return jsonify({'ok': True, 'trade': trade})
+    except service.ReviewFieldError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
     except Exception as e:
         log.exception('update_trade failed')
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ── Review panel facts (CR-DR item 3) ─────────────────────────
+
+@trade_log_bp.get('/trades/<int:trade_id>/review')
+def trade_review(trade_id):
+    """GET /api/trade-log/trades/<id>/review — facts, MFE / MAE, resting orders, stop at entry."""
+    try:
+        r = service.trade_review(trade_id)
+        if r is None:
+            return jsonify({'ok': False, 'error': 'Not found'}), 404
+        return jsonify({'ok': True, 'review': r, 'setup_chips': service.SETUP_CHIPS, 'mistake_chips': service.MISTAKE_CHIPS})
+    except Exception as e:
+        log.exception('trade_review failed')
+        return jsonify({'ok': False, 'error': type(e).__name__}), 500
 
 
 # ── Recompute context ─────────────────────────────────────────

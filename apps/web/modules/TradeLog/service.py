@@ -709,14 +709,61 @@ def get_trade(trade_id: int) -> dict | None:
         conn.close()
 
 
+# CR-DR item 3c — Ryan's review fields. Chip strings are stored as written here; the UI offers exactly these.
+SETUP_CHIPS = ('fade top', 'fade bottom', 'continuation pullback', 'break & retest', 'failed break',
+               'second touch', '0DTE pin', 'other')
+MISTAKE_CHIPS = ('no stop', 'chased', 'one-minute flicker', 'against flow', 'not at edge', 'event day', 'late',
+                 'moved stop', 'exited early', 'held too long', 'target past level')
+
+
+class ReviewFieldError(ValueError):
+    pass
+
+
+def _clean_review_fields(updates: dict) -> dict:
+    out = {}
+    for key, allowed in (('setup_chips', SETUP_CHIPS), ('mistake_chips', MISTAKE_CHIPS)):
+        if key in updates:
+            v = updates[key] or []
+            if not isinstance(v, list) or any(c not in allowed for c in v):
+                raise ReviewFieldError(f'{key}: unknown chip')
+            out[key] = [c for c in allowed if c in v]   # canonical order, no duplicates
+    for key in ('pre_trade_reason', 'lesson'):
+        if key in updates:
+            v = updates[key]
+            out[key] = (str(v) if v is not None else None) or None
+    if 'checklist_followed' in updates:
+        v = updates['checklist_followed']
+        if v not in (True, False, None):
+            raise ReviewFieldError('checklist_followed: true / false / null')
+        out['checklist_followed'] = v
+    if 'grade' in updates:
+        v = updates['grade']
+        if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 5):
+            raise ReviewFieldError('grade: 1-5 or null')
+        out['grade'] = v
+    if 'anchor_ts_pt' in updates:
+        v = updates['anchor_ts_pt']
+        if v:
+            try:
+                out['anchor_ts_pt'] = datetime.fromisoformat(str(v)).replace(tzinfo=PT)
+            except (ValueError, TypeError):
+                raise ReviewFieldError('anchor_ts_pt: YYYY-MM-DDTHH:MM[:SS] PT')
+        else:
+            out['anchor_ts_pt'] = None
+    return out
+
+
 def update_trade(trade_id: int, patch: dict) -> dict | None:
     """
-    Apply annotation fields from patch to the trade.
-    Only setup_start_ts_pt, setup_target_ts_pt, setup_direction, notes
-    are writable this way.
+    Apply annotation / review fields from patch to the trade.
+    Writable: setup_start_ts_pt, setup_target_ts_pt, setup_direction, notes, and (CR-DR)
+    setup_chips, pre_trade_reason, mistake_chips, checklist_followed, lesson, grade, anchor_ts_pt.
+    Raises ReviewFieldError on an invalid review value.
     """
     allowed = {'setup_start_ts_pt', 'setup_target_ts_pt', 'setup_direction', 'notes'}
     updates = {k: v for k, v in patch.items() if k in allowed}
+    updates.update(_clean_review_fields(patch))
     if not updates:
         return get_trade(trade_id)
 
@@ -736,7 +783,7 @@ def update_trade(trade_id: int, patch: dict) -> dict | None:
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    f'UPDATE trade_log_trades SET {set_clauses} WHERE id = %(id)s',
+                    f'UPDATE trade_log_trades SET {set_clauses}, updated_at = now() WHERE id = %(id)s',
                     {**updates, 'id': trade_id}
                 )
         return get_trade(trade_id)
