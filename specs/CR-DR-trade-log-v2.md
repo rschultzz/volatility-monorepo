@@ -193,3 +193,11 @@ B4 freezes 2026-06-06 → 2026-10-26 and sets the forward log from 2026-10-27; t
 
 1. **Fill-price tolerance (spec amendment, item 1a):** a fill matches a zone when its price is within the bar's low − 0.25 … high + 0.25 (one tick, MES vs ES books); all fills must match exactly one zone, else refuse. Recommended. The alternative (strict) refuses this export.
 2. **10-26 trades (B4):** import them (Ryan's own fills; his trades are recorded in any case), or skip dates ≤ 2026-10-26 down to the train cut (2026-06-05) with a warning? Recommended: import the fills and orders, but show no MFE / MAE or "at entry" context for holdout dates (panel says "holdout date: context not shown", B4).
+
+### S0.11 Decisions (Ryan, chat 2026-10-31)
+
+1. **One-tick tolerance approved (amends item 1a):** a fill matches a zone if its price is within 0.25 of that zone's bar range (low − 0.25 … high + 0.25); every fill must match exactly one zone, or the upload is refused with a clear message.
+2. **2026-10-26 approved as recommended:** its fills and orders are imported and paired; on holdout dates no MFE / MAE or "at entry" context is shown, and the panel says "holdout date: context not shown". The ORATS market-context auto-compute is skipped on holdout dates too. Holdout = B4's window 2026-06-06 → 2026-10-26 (the April 2026 trades are train dates and keep their context). The 16-bar range read in Step 0 is recorded as a B4 disclosure (price ranges only), approved.
+3. Proceed with items 1–4.
+
+**Amended item 1a:** … Pick the zone where all fills match (price within 0.25 of the bar's range); if none or more than one does, refuse with a clear message. Never guess.
