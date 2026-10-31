@@ -1201,6 +1201,11 @@ export function boxLevels(levels, box, lastT, absorbPts) {
 //   → NO ACTION nothing notable.
 // `box` = the current box (top / bottom, readout, lastClose, to), `pct` = boxPercentiles (or null), `levels` =
 // absorptionLevels, `hhmm` formats a UTC epoch as PT hh:mm. Returns { kind, label, evidence, rules, title }.
+// CR-DS: also `pill` (the label's head), `reason` (one short line under the pill; label = "pill — reason" when both) and
+// `checks` (the inputs the order above already reads, for the evidence table: boxEvidenceRows). `label` keeps CR-DQ's
+// strings except where item 3 renames a NO ACTION reason. Item 3: a NO ACTION /
+// NO TRADES whose flow checks would make a read (location, box formed and event aside) names it ("short read, but price
+// not at the top"); "nothing notable" only when no flow check passes. Category and order unchanged.
 export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, hhmm = String, fomc = FOMC_2026_DECISION_DAYS }) {
   const r = boxRules(r0)
   // edges as prices: the panel's boxes carry edge objects ({ price, contracts, … }), tests may pass numbers
@@ -1211,18 +1216,22 @@ export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, 
     + `near an edge ≤ ${r.nearPts} pts, no advance ≤ ${r.progressPts} pts, absorption within ${r.absorbPts} pts of the box's high–low range, `
     + `box formed at ≥ ${r.minAgeMin} min and ≥ ${r.minHeightPts} pts. `
     + 'Order: A22 → box still forming → A24 → two-sided absorption → A19 + A23 reads → watch break (idea) → nothing notable. Draft rules, untested — a display aid.'
-  const out = (kind, label, evidence, ids) => ({ kind, label, evidence, rules: ids, title: title(ids) })
-  if (tradeDate && fomc.includes(String(tradeDate).slice(0, 10))) {
-    return out('no-trades', 'NO TRADES — event day', `FOMC decision day ${String(tradeDate).slice(0, 10)}: no new trades all session`, ['A22'])
+  let checks = null
+  const out = (kind, label, evidence, ids, reason = null) => {
+    const at = label.indexOf(' — ')
+    const pill = at < 0 ? label : label.slice(0, at)
+    return { kind, label, pill, reason: reason ?? (at < 0 ? '' : label.slice(at + 3)), evidence, rules: ids, title: title(ids), checks }
   }
-  if (!box || !ro) return out('none', 'NO ACTION — nothing notable', 'no box stats yet', [])
+  const event = Boolean(tradeDate && fomc.includes(String(tradeDate).slice(0, 10)))
+  const eventDay = String(tradeDate || '').slice(0, 10)
+  if (!box || !ro) {
+    if (event) return out('no-trades', 'NO TRADES — event day', `FOMC decision day ${eventDay}: no new trades all session`, ['A22'])
+    return out('none', 'NO ACTION — nothing notable', 'no box stats yet', [])
+  }
   // CR-DQ amendment 2: nothing beyond NO TRADES until the box is old and tall enough (close-based height)
   const age = Number(ro.minutes) || 0
   const height = box.top - box.bottom
-  if (age < r.minAgeMin || !(height >= r.minHeightPts - 1e-9)) {
-    return out('forming', 'NO ACTION — box still forming',
-      `box ${age} min (min ${r.minAgeMin}) · ${Number.isFinite(height) ? height.toFixed(2) : '–'} pts tall (min ${r.minHeightPts})`, [])
-  }
+  const formed = age >= r.minAgeMin && height >= r.minHeightPts - 1e-9
   const share = readoutShare(ro)
   const sp = pct?.share?.p ?? null
   const cp = pct?.cpp?.p ?? null
@@ -1234,15 +1243,7 @@ export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, 
   const lvTxt = (l) => `${l.side} absorbed ${l.price.toFixed(2)} (${hhmm(l.start)})${l.where === 'in' ? ' in the box' : ` at the ${l.where}`}`
   const buyersAbs = lv.filter((l) => l.side === 'buyers')
   const sellersAbs = lv.filter((l) => l.side === 'sellers')
-  // A24: flow lean and absorption point opposite ways
   const against = lean > 0 ? sellersAbs : lean < 0 ? buyersAbs : []
-  if (against.length) {
-    return out('conflict', 'CONFLICT → NO ACTION', `${shareTxt} (${lean > 0 ? 'buyers' : 'sellers'} leaning) vs ${against.map(lvTxt).join(', ')}`, ['A24'])
-  }
-  // Ryan, Step 0 decision 3 (not A24): absorption on both sides and no notable flow lean
-  if (lean === 0 && buyersAbs.length && sellersAbs.length) {
-    return out('two-sided', 'NO ACTION — two-sided absorption', `${lvTxt(buyersAbs[0])} · ${lvTxt(sellersAbs[0])}; no notable flow lean (${shareTxt})`, [])
-  }
   const px = Number(box.lastClose)
   const dp = Number(ro.dPrice)
   const nearTop = Number.isFinite(px) && box.top - px <= r.nearPts + 1e-9
@@ -1256,33 +1257,127 @@ export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, 
   }
   const absTop = buyersAbs.filter((l) => l.where === 'top')
   const absBottom = sellersAbs.filter((l) => l.where === 'bottom')
-  // A19 + A23: short at the top — buyers leaning and / or buyers absorbed at the top, no advance
-  const shortWhy = lean > 0 || absTop.length
+  // A19 + A23 flow checks (location aside): short — buyers leaning and / or buyers absorbed at the top, no advance
+  const shortWhy = lean > 0 || absTop.length > 0
   const shortStall = effort || (Number.isFinite(dp) && dp <= r.progressPts + 1e-9)
-  if (nearTop && shortWhy && shortStall) {
+  const longWhy = lean < 0 || absBottom.length > 0
+  const longStall = effort || (Number.isFinite(dp) && dp >= -r.progressPts - 1e-9)
+  const wouldShort = shortWhy && shortStall
+  const wouldLong = longWhy && longStall
+  // CR-DS item 2: the candidate side — the flow lean; else the side of any absorption at the box (one side only)
+  const candidate = lean > 0 ? 'short' : lean < 0 ? 'long'
+    : buyersAbs.length && !sellersAbs.length ? 'short' : sellersAbs.length && !buyersAbs.length ? 'long' : null
+  checks = {
+    event, eventDay, formed, age, height, minAgeMin: r.minAgeMin, minHeightPts: r.minHeightPts, candidate,
+    lastClose: px, top: box.top, bottom: box.bottom, nearTop, nearBottom, nearPts: r.nearPts,
+    share, sharePct: sp, lean, cpp: pct?.cpp?.value ?? ro.cpp ?? null, cppPct: cp, effort, notable: r.notable,
+    dPrice: Number.isFinite(dp) ? dp : null, progressPts: r.progressPts, levels: lv, lvText: lv.map(lvTxt),
+    edges: b0 && typeof b0.top === 'object' && typeof b0.bottom === 'object'
+      ? { topBuy: b0.top.contracts, topSell: b0.top.opposite, bottomSell: b0.bottom.contracts, bottomBuy: b0.bottom.opposite } : null,
+  }
+  // CR-DS item 3: a read the flow would make, but location / box formed / event says no
+  const wouldTxt = against.length ? null : wouldShort && !wouldLong ? 'short read' : wouldLong && !wouldShort ? 'long read' : null
+  const wouldBut = (why) => (wouldTxt ? `${wouldTxt}, but ${why}` : null)
+  if (event) {
+    const why = wouldBut('event day')
+    return out('no-trades', 'NO TRADES — event day', `FOMC decision day ${eventDay}: no new trades all session`, ['A22'],
+      why ? `${why} (FOMC)` : 'event day (FOMC)')
+  }
+  if (!formed) {
+    return out('forming', `NO ACTION — ${wouldBut('box still forming') || 'box still forming'}`,
+      `box ${age} min (min ${r.minAgeMin}) · ${Number.isFinite(height) ? height.toFixed(2) : '–'} pts tall (min ${r.minHeightPts})`, [])
+  }
+  // A24: flow lean and absorption point opposite ways
+  if (against.length) {
+    return out('conflict', 'CONFLICT → NO ACTION', `${shareTxt} (${lean > 0 ? 'buyers' : 'sellers'} leaning) vs ${against.map(lvTxt).join(', ')}`, ['A24'],
+      `${lean > 0 ? 'buyers' : 'sellers'} leaning vs ${against[0].side} absorbed at the ${against[0].where === 'in' ? 'box' : against[0].where}`)
+  }
+  // Ryan, Step 0 decision 3 (not A24): absorption on both sides and no notable flow lean
+  if (lean === 0 && buyersAbs.length && sellersAbs.length) {
+    return out('two-sided', 'NO ACTION — two-sided absorption', `${lvTxt(buyersAbs[0])} · ${lvTxt(sellersAbs[0])}; no notable flow lean (${shareTxt})`, [])
+  }
+  const stallTxt = (dir) => (effort ? 'effort' : dir > 0 ? 'no advance' : 'no decline')
+  if (nearTop && wouldShort) {
     const ev = [posTxt('top'), lean > 0 ? `${shareTxt} buyers leaning` : null, ...absTop.map(lvTxt),
       effort ? `${cppTxt} (effort)` : `no advance ${Number.isFinite(dp) ? `${dp >= 0 ? '+' : ''}${dp.toFixed(1)} pts` : ''}`]
-    return out('short', 'SHORT READ at top', ev.filter(Boolean).join(' · '), absTop.length ? ['A19', 'A23'] : ['A19'])
+    return out('short', 'SHORT READ at top', ev.filter(Boolean).join(' · '), absTop.length ? ['A19', 'A23'] : ['A19'],
+      `${[lean > 0 ? 'buyers leaning' : null, absTop.length ? 'buyers absorbed' : null].filter(Boolean).join(' + ')} at the top, ${stallTxt(1)}`)
   }
-  const longWhy = lean < 0 || absBottom.length
-  const longStall = effort || (Number.isFinite(dp) && dp >= -r.progressPts - 1e-9)
-  if (nearBottom && longWhy && longStall) {
+  if (nearBottom && wouldLong) {
     const ev = [posTxt('bottom'), lean < 0 ? `${shareTxt} sellers leaning` : null, ...absBottom.map(lvTxt),
       effort ? `${cppTxt} (effort)` : `no decline ${Number.isFinite(dp) ? `${dp >= 0 ? '+' : ''}${dp.toFixed(1)} pts` : ''}`]
-    return out('long', 'LONG READ at bottom', ev.filter(Boolean).join(' · '), absBottom.length ? ['A19', 'A23'] : ['A19'])
+    return out('long', 'LONG READ at bottom', ev.filter(Boolean).join(' · '), absBottom.length ? ['A19', 'A23'] : ['A19'],
+      `${[lean < 0 ? 'sellers leaning' : null, absBottom.length ? 'sellers absorbed' : null].filter(Boolean).join(' + ')} at the bottom, ${stallTxt(-1)}`)
   }
   // idea only: the pushing side winning at an edge (moving easily, nothing absorbing it)
   if (cp != null && cp < r.notable) {
     if (nearTop && lean > 0 && !absTop.length) {
-      return out('watch-up', 'WATCH BREAK ↑ (idea)', `${posTxt('top')} · ${shareTxt} · ${cppTxt} (moving easily) · no buyers absorbed at the top — wait for an accepted break`, ['idea'])
+      return out('watch-up', 'WATCH BREAK ↑ (idea)', `${posTxt('top')} · ${shareTxt} · ${cppTxt} (moving easily) · no buyers absorbed at the top — wait for an accepted break`, ['idea'],
+        'buyers pushing, moving easily — wait for an accepted break')
     }
     if (nearBottom && lean < 0 && !absBottom.length) {
-      return out('watch-down', 'WATCH BREAK ↓ (idea)', `${posTxt('bottom')} · ${shareTxt} · ${cppTxt} (moving easily) · no sellers absorbed at the bottom — wait for an accepted break`, ['idea'])
+      return out('watch-down', 'WATCH BREAK ↓ (idea)', `${posTxt('bottom')} · ${shareTxt} · ${cppTxt} (moving easily) · no sellers absorbed at the bottom — wait for an accepted break`, ['idea'],
+        'sellers pushing, moving easily — wait for an accepted break')
     }
   }
   const where = !Number.isFinite(px) ? '' : nearTop ? posTxt('top') : nearBottom ? posTxt('bottom') : 'price mid-box'
   const lvs = lv.length ? ` · ${lv.map(lvTxt).join(', ')}` : ''
-  return out('none', 'NO ACTION — nothing notable', [where, shareTxt, cppTxt].filter(Boolean).join(' · ') + lvs, [])
+  const why = wouldShort && !nearTop && !wouldLong ? 'short read, but price not at the top'
+    : wouldLong && !nearBottom && !wouldShort ? 'long read, but price not at the bottom' : 'nothing notable'
+  return out('none', `NO ACTION — ${why}`, [where, shareTxt, cppTxt].filter(Boolean).join(' · ') + lvs, [])
+}
+
+// CR-DS item 2 — the evidence table: one row per check the verdict already reads (plus edge counts), coloured by agreement
+// with the candidate side (`checks.candidate`, boxVerdict): 'good' supports it, 'bad' argues against it, 'neutral' =
+// not notable / informational. With no candidate every side row is neutral; the event and box-formed rows are 'bad' when
+// they fail whatever the candidate (they stop any trade), 'good' when met only with a candidate. Rows: { key, check,
+// value, reads, tone }.
+export function boxEvidenceRows(checks, { kfmtFn = kfmt } = {}) {
+  if (!checks) return []
+  const c = checks
+  const cand = c.candidate
+  const has = cand != null
+  const met = (ok) => (ok ? (has ? 'good' : 'neutral') : 'bad')
+  const rows = []
+  rows.push({ key: 'event', check: 'Event / time', value: c.event ? `FOMC ${c.eventDay}` : 'no event',
+    reads: c.event ? 'no trades' : 'ok', tone: met(!c.event) })
+  rows.push({ key: 'formed', check: 'Box formed',
+    value: `${c.age} min · ${Number.isFinite(c.height) ? c.height.toFixed(2) : '–'} pts (min ${c.minAgeMin} · ${c.minHeightPts})`,
+    reads: c.formed ? 'formed' : 'still forming', tone: met(c.formed) })
+  // location: the nearer edge's wording ("0.50 below the top", "1.25 below the bottom"); reads vs the candidate's edge
+  const px = c.lastClose
+  const rel = (e, name) => (Math.abs(px - e) < 1e-9 ? `at the ${name}` : `${Math.abs(px - e).toFixed(2)} ${px > e ? 'above' : 'below'} the ${name}`)
+  const nearer = !Number.isFinite(px) ? '–' : Math.abs(px - c.top) <= Math.abs(px - c.bottom) ? rel(c.top, 'top') : rel(c.bottom, 'bottom')
+  const atCand = cand === 'short' ? c.nearTop : cand === 'long' ? c.nearBottom : null
+  const edgeName = cand === 'short' ? 'top' : 'bottom'
+  rows.push({ key: 'location', check: 'Location', value: nearer,
+    reads: !has ? (c.nearTop ? 'near the top' : c.nearBottom ? 'near the bottom' : 'mid-box') : atCand ? `at the ${edgeName}` : `not at the ${edgeName}`,
+    tone: !has ? 'neutral' : atCand ? 'good' : 'bad' })
+  // Δ share: the lean (≥ notable) with or against the candidate
+  const wantSign = cand === 'short' ? 1 : cand === 'long' ? -1 : 0
+  rows.push({ key: 'share', check: 'Δ share', value: `${sharePctText(c.share)}${c.sharePct == null ? '' : ` · ${pctText(c.sharePct)}`}`,
+    reads: c.lean > 0 ? 'buyers leaning' : c.lean < 0 ? 'sellers leaning' : 'not notable',
+    tone: !has || c.lean === 0 ? 'neutral' : c.lean === wantSign ? 'good' : 'bad' })
+  rows.push({ key: 'effort', check: 'Effort', value: `${c.cpp == null ? '–' : kfmtFn(c.cpp)}/pt${c.cppPct == null ? '' : ` · ${pctText(c.cppPct)}`}`,
+    reads: c.effort ? 'effort (no advance)' : 'not notable', tone: has && c.effort ? 'good' : 'neutral' })
+  // progress toward the pushing side (buyers for a short, sellers for a long)
+  const dp = c.dPrice
+  const toward = dp == null || !has ? null : cand === 'short' ? dp : -dp
+  rows.push({ key: 'progress', check: 'Progress', value: dp == null ? '–' : `${dp >= 0 ? '+' : ''}${dp.toFixed(2)} pts`,
+    reads: toward == null ? 'informational' : toward <= c.progressPts + 1e-9 ? (cand === 'short' ? 'no advance' : 'no decline') : (cand === 'short' ? 'buyers advancing' : 'sellers advancing'),
+    tone: toward == null ? 'neutral' : toward <= c.progressPts + 1e-9 ? 'good' : 'bad' })
+  // absorption at the box (wicks included): supports the candidate when it is the candidate's side
+  const sides = new Set(c.levels.map((l) => l.side))
+  const supports = cand === 'short' ? 'buyers' : 'sellers'
+  rows.push({ key: 'absorption', check: 'Absorption', value: c.lvText.length ? c.lvText.join(', ') : 'none at the box',
+    reads: sides.size === 2 ? 'two-sided absorption' : !sides.size ? 'none' : `${[...sides][0]} absorbed`,
+    tone: sides.size === 2 ? 'bad' : !sides.size || !has ? 'neutral' : sides.has(supports) ? 'good' : 'bad' })
+  const e = c.edges
+  const n = (v) => (v == null ? '–' : kfmtFn(v))
+  rows.push({ key: 'edges', check: 'Edge counts',
+    value: e ? `Top buyers ${n(e.topBuy)} / sellers ${n(e.topSell)} · Bottom sellers ${n(e.bottomSell)} / buyers ${n(e.bottomBuy)}` : '–',
+    reads: 'informational', tone: 'neutral' })
+  return rows
 }
 
 // CR-DQ item 3 — the panel's place. Stored as px from the plot's left and bottom edges (so it stays bottom-anchored when

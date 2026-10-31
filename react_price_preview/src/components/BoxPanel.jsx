@@ -2,9 +2,10 @@
 // top, the current box last and highlighted; frozen boxes are one line, each section expands to the stats (current
 // collapsed by default too). Text comes from flowV3.boxPanelSections (CR-DP's boxPopupLines), so the numbers are the
 // popup's and the old box hover's. Dragged by its header; the caller owns the place (remembered per browser), the
-// double-click reset and the ×. Palette only (C1): the chart's tag background, magenta border, slate / light text.
+// double-click reset and the ×. Palette: the chart's tag background, magenta border, slate / light text; CR-DS item 6
+// (C1 deviation approved 2026-10-31): muted green / red / amber status colours inside this panel only.
 import { Fragment, useState } from 'react'
-import { BOX_RULES_DEFAULTS, pctBadgeTitle, pctText, pctTier } from '../flowV3.js'
+import { BOX_RULES_DEFAULTS, boxEvidenceRows, pctBadgeTitle, pctText, pctTier } from '../flowV3.js'
 import { TAG_BG } from './flowV3Primitives.js'
 
 const MAGENTA = '232,121,249'
@@ -56,24 +57,48 @@ function Stats({ s, testid, rules }) {
   )
 }
 
-// CR-DQ item 7 — the current box's verdict pill + one evidence line. C1: NO ACTION / NO TRADES in muted slate, reads in
-// brighter text, the watch idea in between; no red / green. Hover: rule IDs, thresholds, "draft rules, untested".
-const VERDICT_STYLE = {
-  'no-trades': { color: MUTED, border: `1px solid rgba(148,163,184,0.6)` },
-  conflict: { color: MUTED, border: `1px solid rgba(148,163,184,0.6)` },
-  'two-sided': { color: MUTED, border: `1px solid rgba(148,163,184,0.6)` },
-  forming: { color: MUTED, border: `1px dashed rgba(148,163,184,0.5)` },
-  none: { color: MUTED, border: `1px solid rgba(148,163,184,0.35)` },
-  short: { color: '#ffffff', fontWeight: 700, border: '1px solid rgba(255,255,255,0.7)' },
-  long: { color: '#ffffff', fontWeight: 700, border: '1px solid rgba(255,255,255,0.7)' },
-  'watch-up': { color: TEXT, border: '1px dashed rgba(226,232,240,0.6)' },
-  'watch-down': { color: TEXT, border: '1px dashed rgba(226,232,240,0.6)' },
+// CR-DQ item 7 / CR-DS item 1 — the verdict pill (its head: "SHORT READ at top", "NO ACTION", …) with one short reason
+// under it, then the evidence table (item 2). Hover on the pill: rule IDs, thresholds, "draft rules, untested". The old
+// evidence line stays on the element as data-evidence (no longer drawn: the table shows the same checks).
+// Tone per verdict kind (item 1): reads 'good', conflict 'bad', watch 'idea', NO ACTION / NO TRADES 'neutral'.
+export const VERDICT_TONE = {
+  short: 'good', long: 'good', conflict: 'bad', 'watch-up': 'idea', 'watch-down': 'idea',
+  'no-trades': 'neutral', forming: 'neutral', 'two-sided': 'neutral', none: 'neutral',
 }
-function Verdict({ v }) {
+// CR-DS item 6 sets the status colours; until then every tone draws slate.
+export const TONE_COLOR = { good: MUTED, bad: MUTED, idea: MUTED, neutral: MUTED }
+
+function EvidenceTable({ rows, testid }) {
+  if (!rows.length) return null
   return (
-    <div data-testid="flow-v3-box-verdict" data-kind={v.kind} title={v.title} style={{ cursor: 'help', marginBottom: 2 }}>
-      <span data-testid="flow-v3-box-verdict-pill" style={{ display: 'inline-block', borderRadius: 3, padding: '0 6px', ...VERDICT_STYLE[v.kind] }}>{v.label}</span>
-      <div data-testid="flow-v3-box-verdict-evidence" style={{ color: v.kind === 'short' || v.kind === 'long' ? TEXT : MUTED }}>{v.evidence}</div>
+    <table data-testid={testid} style={{ borderCollapse: 'separate', borderSpacing: '0 1px', width: '100%', margin: '3px 0 1px', lineHeight: 1.45 }}>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.key} data-testid="flow-v3-box-evidence-row" data-key={r.key} data-tone={r.tone}>
+            <td style={{ width: 3, padding: 0, background: TONE_COLOR[r.tone], borderRadius: 1 }} />
+            <td style={{ padding: '0 6px 0 5px', color: MUTED, whiteSpace: 'nowrap', verticalAlign: 'top' }}>{r.check}</td>
+            <td data-testid="flow-v3-box-evidence-value" style={{ padding: '0 6px 0 0', verticalAlign: 'top' }}>{r.value}</td>
+            <td data-testid="flow-v3-box-evidence-reads" style={{ padding: 0, color: '#cbd5e1', whiteSpace: 'nowrap', verticalAlign: 'top' }}>{r.reads}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function Verdict({ v, testid = 'flow-v3-box-verdict' }) {
+  const tone = VERDICT_TONE[v.kind] || 'neutral'
+  const c = TONE_COLOR[tone]
+  const rows = boxEvidenceRows(v.checks)
+  return (
+    <div data-testid={testid} data-kind={v.kind} data-tone={tone} data-evidence={v.evidence} style={{ marginBottom: 2 }}>
+      <span data-testid="flow-v3-box-verdict-pill" title={v.title}
+        style={{ display: 'inline-block', cursor: 'help', borderRadius: 3, padding: '0 6px 0 5px', color: TEXT, fontWeight: tone === 'good' ? 700 : 600,
+          border: `1px solid ${c}`, borderLeft: `3px solid ${c}`, background: 'rgba(255,255,255,0.03)' }}>
+        {v.pill}
+      </span>
+      {v.reason && <div data-testid="flow-v3-box-verdict-reason" style={{ color: '#cbd5e1' }}>{v.reason}</div>}
+      <EvidenceTable rows={rows} testid={`${testid}-table`} />
     </div>
   )
 }
