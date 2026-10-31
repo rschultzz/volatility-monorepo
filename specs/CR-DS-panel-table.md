@@ -166,3 +166,56 @@ no `prefers-color-scheme` / theme state); chart background `#1f2937`, panel `TAG
 So colour goes on non-text marks only (spec item 6): a 3 px left bar per table row and the pill's border + left bar;
 all text stays light on the panel background (12:1). Filled pills with light text would fall below 4.5:1, so none are
 used. On a white page behind the chart (not a current state) the bars would still be ≥ 2.5:1 against the panel.
+
+## Implementation notes (no spec change)
+
+- `boxVerdict` computes its existing checks first and returns them as `checks`, plus `pill` (the label's head) and
+  `reason` (the line under it). `label` keeps CR-DQ's strings except for the item-3 renames. Category and order are unchanged; unit
+  tests for CR-DQ's verdict pass as they were.
+- Item 3's "would be a read" is the existing short / long flow checks (lean or absorption on that side, plus effort or no
+  advance) with location / box formed / event ignored. It is not offered when the flow is opposed by absorption (that
+  would be CONFLICT once formed).
+- Evidence rows, no candidate: event and box-formed rows still show red when they fail (they stop any trade) and slate
+  when met; every side row is slate. Two-sided absorption: one red row.
+- Read history labels minutes by **candle time (bar start)**: "07:49" = the verdict once the 07:49 bar closed (the live
+  view at 07:50). Stated on the line's hover.
+- `boxStats` gains `lastClose` (frozen boxes' location row as of their end). A frozen box's table uses the absorption levels
+  as of its break minute.
+- Colours: 3 px left bar per row and the pill's border / left bar; neutral = existing slate `#64748b` (ReviewMeta); text
+  stays light.
+
+## Smoke (2026-10-31, read-only backend `scripts/cr_dp_smoke_backend.py` :8068; branch :5195; origin/main `3ec3a42` :5196)
+
+`react_price_preview/tests/e2e/cr-ds.spec.js` **6 / 6 passed**; logs in `scripts/logs/cr-ds/smoke/`, screenshots
+`specs/assets/cr-ds/`. Unit 106 / 106. Build clean.
+
+| Check | Result |
+|---|---|
+| 1. 10-30 anchor 07:39, set end 08:02 | ✓ **NO ACTION**, reason "short read, but price not at the top". Rows: event ✓ green, formed (23 min · 7.00 pts) green, **location "1.25 below the bottom" red**, **Δ share +5.02 % p93 green**, **effort 83.4k/pt p93 green**, progress −1.25 green, **absorption buyers 7660.25 (07:05) at the top green**, edge counts slate. Bar colours = the specced hex. **Read history: "Read live: none"** — differs from the kickoff's expectation (07:49 short); see 2 |
+| 2. same box, set end 07:49 | **Reported as is (differs from the kickoff):** anchored at 07:39 the verdict is **NO ACTION — nothing notable** (share +6.19 % p86 green, absorption green, location green, effort p60 slate, **progress +7.0 red**: the no-advance check fails, so no read). Anchored at 06:30 the box starts at 07:38 and reads **SHORT READ at top** ("buyers absorbed at the top, effort"; c/pt p82), history "Read live: 07:49 (short)"; event / formed / location / effort / absorption green, share slate (p<80), progress +3.5 red. Thresholds not changed |
+| 3. CONFLICT 10-30 until 08:30, anchor 08:00 | ✓ CONFLICT (red pill border), reason "buyers leaning vs sellers absorbed at the bottom"; Δ share p84 green, absorption sellers 7640.00 at the bottom red, location red |
+| 4. 10-28 (FOMC) | ✓ NO TRADES, reason "event day (FOMC)"; event row red "no trades" |
+| 5. frozen boxes (10-30 anchor 06:30) | ✓ 4 frozen rows collapsed ("09:10–09:46 · broke ↓ 09:46 · share p67 · c/pt p88 · read 09:20 (short) · 09:23–09:26 (short)"); each expands to its pill + table as of its end + history + stats. Replay in the browser: **11 ms** (anchor 06:30 → 13:00) |
+| 6. no later bars | Full-day history (box 07:38: 07:49; box 09:10: 09:20, 09:23–09:26) vs loads cut with `until` hh:mm:59 at 07:48 / 07:49 / 07:50 / 09:22 / 09:23 / 09:26 / 09:27: each live verdict equals the replay at that load's last bar, and each cut load's history is the full one truncated (e.g. until 09:26:59 → "09:20 · 09:23–09:25", SHORT READ). The merged_vol caveat did not show (5 marks on 10-30) |
+
+### Existing specs (`scripts/logs/cr-ds/existing-*.log`)
+
+A (cr-bv, cc, cd-a5, cd, ch, ck, cq): 23 passed, 8 skipped. B (cr-db, dc, de, df, dg, dh): 17 passed, 5 skipped, 14
+failed — live-date tests (Saturday, no live session: cr-dc / df / dg live), the Dashboard app not running (cr-dh × 4), review
+saves (cr-db:124, cr-de × 6 — **also fail on origin/main**, `existing-B-review-on-main.log`). C (cr-di, dk, dm): 14 passed, 2
+skipped; cr-di:250 failed on the old frozen text (updated, now passes); cr-dm:280 needs CR-DM's `hand_check.json` log (not
+in this worktree; listed failing on origin/main in CR-DQ). D (cr-dn, dp): 14 passed, 1 skipped; cr-dn:647 (57k minute),
+cr-dp:158 / 307 **also fail on origin/main** (`existing-D-on-main.log`), cr-dp:491 needs a live bar. E (cr-dq): 8 passed
+(items 1–3 after the stale-baseline fix below); the 72-replay verdict scan (report only) not re-run.
+
+**Assertions updated (old panel text / stale baseline only):**
+- `cr-dq.spec.js` panelText: stats lines read from the stats blocks (`[data-testid$=-stats] > div`; expanded frozen sections
+  now show a table first); evidence from `data-evidence`; verdict hover from the pill.
+- `cr-dq.spec.js` items 1–3: frozen summary "hh:mm–hh:mm · broke ↓ hh:mm · share …" (no "Box " prefix).
+- `cr-dq.spec.js` item 7: pill "NO TRADES" (label unchanged, reason under it).
+- `cr-dq.spec.js` items 1–3, **stale baseline (Ryan, chat 2026-10-31)**: line 226 asserted origin/main draws in-chart box
+  labels, true only against pre-CR-DQ main; now it asserts no labels on both sides and that both show the box panel (popup).
+  Same stale cause, same test: origin/main's popup head carries badges (stripped on both sides), its boxes have no `label`
+  (numbers from `boxLabelText` on the box readout), and frozen boxes nested in the current box gain `lastClose` (stripped,
+  as the top-level one already was).
+- `cr-di.spec.js:356`: frozen row text without "Box ".

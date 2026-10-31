@@ -11,7 +11,7 @@ import { test, expect } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { boxPercentiles, kfmt, makeShifter, pctTier } from '../../src/flowV3.js'
+import { boxLabelText, boxPercentiles, kfmt, makeShifter, pctTier } from '../../src/flowV3.js'
 
 const API_BASE = process.env.CRDQ_API_BASE || 'http://127.0.0.1:8068'
 const BASELINE = process.env.CRDQ_BASELINE_URL || 'http://localhost:5194'
@@ -183,13 +183,15 @@ async function panelText(page) {
         current: s.dataset.testid === 'flow-v3-box-panel-current',
         first: s.firstElementChild?.dataset?.testid ?? null,
         summary: s.querySelector('[data-testid=flow-v3-box-panel-summary]').innerText.replace(/^[▸▾]/, ''),
-        lines: [...s.querySelectorAll('[data-testid=flow-v3-box-panel-summary] + div > div > div')].map((d) => d.innerText),
+        // CR-DS: the stats block's rows (expanded frozen sections now show a verdict table above them)
+        lines: [...s.querySelectorAll('[data-testid$=-stats] > div')].map((d) => d.innerText),
         badges: [...s.querySelectorAll('[data-testid^=flow-v3-box-pct-]')].map((b) => ({ kind: b.dataset.testid.slice(16), p: Number(b.dataset.p), tier: b.dataset.tier, text: b.innerText, title: b.title, weight: getComputedStyle(b).fontWeight, color: getComputedStyle(b).color })),
         verdict: s.querySelector('[data-testid=flow-v3-box-verdict]') ? {
           kind: s.querySelector('[data-testid=flow-v3-box-verdict]').dataset.kind,
           pill: s.querySelector('[data-testid=flow-v3-box-verdict-pill]').innerText,
-          evidence: s.querySelector('[data-testid=flow-v3-box-verdict-evidence]').innerText,
-          title: s.querySelector('[data-testid=flow-v3-box-verdict]').title,
+          // CR-DS: the evidence line became the table (kept as data-evidence); the hover moved to the pill
+          evidence: s.querySelector('[data-testid=flow-v3-box-verdict]').dataset.evidence,
+          title: s.querySelector('[data-testid=flow-v3-box-verdict-pill]').title,
         } : null,
       })),
     }
@@ -219,12 +221,17 @@ test('items 1–3: 2026-10-30 anchor 11:57 — no box text, panel bottom-left, o
   const db = await drawn(b)
   const res = { boxes: da.boxes.length, frozen: da.boxes.filter((x) => x.frozen).length }
   expect(da.boxes.length, '2+ boxes after 11:57').toBeGreaterThanOrEqual(2)
-  // item 1: no label on any drawn box (origin/main had one per box)
+  // item 1: no label on any drawn box. CR-DS: the baseline is now origin/main after CR-DQ, which has no labels either, so
+  // the old "origin/main had one per box" check is stale; check that both sides show the box panel (popup) instead.
   expect(da.boxes.every((x) => x.label == null)).toBeTruthy()
-  expect(db.boxes.every((x) => x.label)).toBeTruthy()
+  expect(db.boxes.every((x) => x.label == null)).toBeTruthy()
+  await expect(a.getByTestId('flow-v3-box-popup')).toBeVisible()
+  await expect(b.getByTestId('flow-v3-box-popup')).toBeVisible()
   await expect(a.getByTestId('flow-v3-box-tooltip')).toHaveCount(0)
   // one source: the branch's box objects equal origin/main's (the branch adds lastClose only)
-  const clean = (x) => { const { lastClose, ...rest } = x.box; return { ...x, label: null, box: rest } }
+  // CR-DS item 5: frozen boxes (also the current box's nested `frozen` list) gain lastClose too
+  const noLast = ({ lastClose, ...rest }) => rest // eslint-disable-line no-unused-vars
+  const clean = (x) => { const rest = noLast(x.box); if (Array.isArray(rest.frozen)) rest.frozen = rest.frozen.map(noLast); return { ...x, label: null, box: rest } }
   expect(da.boxes.map(clean)).toEqual(db.boxes.map(clean))
   // item 4 data: the shade is fed the same boxes
   expect(da.shade).toEqual(da.boxes.map(({ from, to, top, bottom, frozen }) => ({ from, to, top, bottom, frozen })))
@@ -254,17 +261,19 @@ test('items 1–3: 2026-10-30 anchor 11:57 — no box text, panel bottom-left, o
     bottom: el.querySelector('[data-testid=flow-v3-box-popup-bottom]').innerText,
   }))
   res.mainPopup = mainPopup
-  expect(noBadges(cur.lines[0])).toBe(mainPopup.head)
+  expect(noBadges(cur.lines[0])).toBe(noBadges(mainPopup.head)) // CR-DS: origin/main (post CR-DQ) has badges too
   expect(cur.lines[1]).toBe(mainPopup.top)
   expect(cur.lines[2]).toBe(mainPopup.bottom)
   for (let k = 0; k < db.boxes.length; k += 1) {
     const m = db.boxes[k]
     const s = t.sections[k]
-    const [d, pts, mins, cpp] = m.label.split(' · ')
+    // CR-DS: origin/main (post CR-DQ) draws no labels; the label numbers from the same function, on its readout
+    const [d, pts, mins, cpp] = boxLabelText(m.box.readout).split(' · ')
     for (const piece of [d, pts, mins, cpp]) expect(noBadges(s.lines[0])).toContain(piece)
     expect(s.lines[1]).toContain(`Top ${m.top.toFixed(2)} · buyers ${m.box.top.contracts == null ? 'exact data only' : kfmt(m.box.top.contracts)}`)
     expect(s.lines[2]).toContain(`Bottom ${m.bottom.toFixed(2)} · sellers ${m.box.bottom.contracts == null ? 'exact data only' : kfmt(m.box.bottom.contracts)}`)
-    if (m.frozen) expect(s.summary).toContain(`Box ${pt(m.box.from)}–${pt(m.box.breakAt)} · broke ${m.box.dir === 'up' ? '↑' : '↓'} ${pt(m.box.breakAt)} · share `)
+    // CR-DS item 5: the frozen row is "hh:mm–hh:mm · broke ↓ hh:mm · share pNN · c/pt pNN"
+    if (m.frozen) expect(s.summary).toContain(`${pt(m.box.from)}–${pt(m.box.breakAt)} · broke ${m.box.dir === 'up' ? '↑' : '↓'} ${pt(m.box.breakAt)} · share `)
   }
   await shot(a, 'panel-1030-1157-expanded.png')
   log('items-1-3.json', res)
@@ -562,7 +571,7 @@ test('item 7: 2026-10-28 (FOMC) shows NO TRADES', async ({ page }) => {
   const v = await verdictInputs(page)
   log('item-7-fomc.json', v)
   expect(v.verdict.kind).toBe('no-trades')
-  expect(v.verdict.pill).toBe('NO TRADES — event day')
+  expect(v.verdict.pill).toBe('NO TRADES') // CR-DS item 1: the pill is the label's head; the reason sits under it
   expect(v.verdict.title).toMatch(/Rules: A22\. .*Draft rules, untested/)
   await shot(page, 'verdict-1028-fomc.png')
 })

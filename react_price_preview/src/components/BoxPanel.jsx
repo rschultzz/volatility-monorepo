@@ -93,7 +93,7 @@ function History({ s }) {
   if (!s.historyText) return null
   return (
     <div data-testid={s.current ? 'flow-v3-box-history' : 'flow-v3-box-history-frozen'} data-n={s.history?.length ?? 0}
-      title="Minutes in which the verdict was a SHORT / LONG READ, replayed minute by minute from the anchor using only bars up to each minute. Draft rules, untested."
+      title="Minutes in which the verdict was a SHORT / LONG READ, replayed minute by minute from the anchor using only bars up to each minute. Times are candle times (bar start): a read at 07:49 was showing once the 07:49 bar closed. Draft rules, untested."
       style={{ color: s.history?.length ? TEXT : MUTED, cursor: 'help' }}>
       {s.historyText}
     </div>
@@ -139,6 +139,7 @@ export default function BoxPanel({
       ref={panelRef}
       data-testid="flow-v3-box-popup"
       data-dragged={dragged ? '1' : '0'}
+      data-history-ms={panel.historyMs ?? ''}
       style={{
         position: 'absolute', left: place?.left ?? 0, top: place?.top ?? 0, visibility: place ? 'visible' : 'hidden',
         zIndex: 5, background: TAG_BG(0.92), border: `1px solid rgba(${MAGENTA},0.35)`, borderRadius: 4,
@@ -200,7 +201,7 @@ export default function BoxPanel({
               <div style={{ display: isOpen ? 'block' : 'none' }}>
                 {!s.current && s.verdict && <Verdict v={s.verdict} testid="flow-v3-box-frozen-verdict" />}
                 {!s.current && <History s={s} />}
-                <Stats s={s} rules={rules} testid={s.current ? 'flow-v3-box-panel-current-stats' : undefined} />
+                <Stats s={s} rules={rules} testid={s.current ? 'flow-v3-box-panel-current-stats' : 'flow-v3-box-panel-frozen-stats'} />
               </div>
             </div>
           )
