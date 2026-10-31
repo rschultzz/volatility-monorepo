@@ -106,3 +106,63 @@ only.
 
 Open questions to record (not this CR): the GEX-line click stealing the anchor click (pre-existing); the live Ironbeam
 undercount ratio since CR-BZ (unmeasured; the percentile baseline assumes the 2026 train ratio).
+
+## Step 0 — findings (2026-10-31, on `358f27b` = origin/main `3ec3a42` + spec)
+
+### S0.1 Where the verdict inputs live (reused, nothing computed twice)
+
+| Input | Where (today) | CR-DS use |
+|---|---|---|
+| boxes (current + ≤ 4 frozen), edges, `high` / `low`, `lastClose`, edge counts | `App.flowV3Edges` = `edgeReadout(...)`; PriceChart `v3Edges` (`drawnBoxes` + readouts + ended / pending) | table rows b, c, g, h for the current box; frozen boxes need their last close → `boxStats` gains `lastClose` (= `bars.c[j1]`, additive, not visible elsewhere) |
+| per-box readout (Δ, vol, dPrice, minutes) | `App.flowV3Segments.readouts` (`segmentReadouts` over the aligned v2 rows) | rows d, e, f; the replay needs the same rows and closes → `flowV3Segments` also carries `rows` and `closes` (already built there) |
+| percentiles | PriceChart `v3BoxPanel` → `boxPercentiles` per drawn box | rows d, e (value + pNN) |
+| absorption levels (top 8) | PriceChart `v3LevelsAll` = `absorptionLevels(...)` | row g via `boxLevels` (same function the verdict uses) |
+| rules / thresholds | `boxRules(flowV3.boxRules)` (⚙) | unchanged; the table reads the same `r` |
+| verdict | `boxVerdict(...)` | unchanged category and order. Refactor only: the checks it already makes are returned as `checks` (candidate side, location, lean, effort, progress, levels, forming, event), and the table is drawn from them, so the table can't disagree with the pill. The item-3 reason is a display string added to the existing NO ACTION outcomes: when `forming` / `none` would have been a SHORT / LONG READ with location (or forming / time) ignored, the reason names it ("short read, but price not at the top" / "short read, but box still forming"); "nothing notable" only when no flow check passes. On an FOMC day NO TRADES stays first (A22), with "short read, but event day" in the reason when the rest would read |
+
+### S0.2 Read-history replay cost
+
+Replay = for each minute *t* from the anchor to now / set end: `edgeReadout(…, end = t)` (boxes as of *t*, no later bars;
+an unresolved pending break at *t* keeps the old box, as the live view did), the current box's readout over the v2 rows
+up to *t*, its percentiles, the absorption levels as of *t* (`absorptionLevels` with `now = t`: marks confirmed ≤ *t*, broken
+only if `break_time` ≤ *t*, top 8 by score at *t*), then `boxVerdict`. Read minutes (SHORT / LONG READ) are grouped into ranges
+per box (box start = the replayed current box's `from`).
+
+Measured in node on real payloads fetched from the read-only backend (2026-10-30, `scratchpad/bench.mjs`, full
+`edgeReadout` incl. edge counts per minute — the naive version):
+
+| Payload | minutes replayed | cells | boxes (max) | time |
+|---|---|---|---|---|
+| RTH, anchor 06:30 | 389 | 6,266 | 8 | 37–39 ms |
+| FULL (ETH + RTH), anchor at the Globex open | 1,319 | 13,475 | 26 | 287 ms |
+
+The cost is the per-box edge counts (cells × boxes × minutes), which the verdict never reads. **Choice:** replay with a
+light `edgeReadout` option that skips edge counts and probe contracts (prices, edges, high / low, pending identical —
+unit-tested against the full readout), over the whole anchor → now / set end span, memoised on (payload, anchor, end,
+hold settings, rows, rules). No per-minute cache unless the light replay is still heavy in the smoke (time recorded
+there). Frozen boxes' histories come from the same single replay (grouped by box start), so expanding a frozen box costs
+nothing.
+
+**Caveat (stated, not fixed):** a mark's `merged_vol` (packages/shared/flow_heat.py) adds the volume of later marks
+merged into it, up to the payload's end. It only changes a level's contracts and therefore its rank for the top 8; which
+marks exist, when they confirm and when they break are causal. So a replayed minute can pick a slightly different top 8
+than the live chart did at that minute when more than 8 marks stand. The smoke compares the replay at a few minutes with
+the payload fetched with `until = t`.
+
+### S0.3 Colour contrast
+
+The React price chart has one (dark) theme: no light theme or theme switch exists in `react_price_preview` (grep:
+no `prefers-color-scheme` / theme state); chart background `#1f2937`, panel `TAG_BG(0.92)` = `rgba(30,41,59,0.92)` → ≈
+`#1d283a`. WCAG ratios (computed):
+
+| Colour | vs panel (non-text, needs ≥ 3:1) | light text `#e2e8f0` on it as a fill |
+|---|---|---|
+| green `#6f8f72` | 4.2 | 2.9 |
+| red `#a86464` | 3.3 | 3.7 |
+| amber `#b08a4a` | 4.7 | 2.6 |
+| slate `#94a3b8` | 5.9 | 2.1 |
+| text `#e2e8f0` | 12.2 | — |
+
+So colour goes on non-text marks only (spec item 6): a 3 px left bar per table row and the pill's border + left bar;
+all text stays light on the panel background (12:1). Filled pills with light text would fall below 4.5:1, so none are
+used. On a white page behind the chart (not a current state) the bars would still be ≥ 2.5:1 against the panel.
