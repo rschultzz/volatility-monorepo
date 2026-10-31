@@ -242,3 +242,11 @@ Also inserted: the 8 April order rows into `trade_log_orders` (from their fills;
 - **d. N / P** — buttons and keys (not while typing) step through the selected trade's day; the chart scrolls, keeping its zoom, only when the trade is not already in view.
 - **B4** — on holdout dates the panel shows "holdout date: context not shown" and computes neither MFE / MAE (backend returns null) nor the at-entry replay.
 - Unit: `tests/unit/tradeContext.test.js` (until cut, PT ↔ shifted, levels within 5 pts, last 5 minutes, an anchored box through the chart code); Python `test_review.py` (trade #5's order lines and stop-after 109 s, chips / grade / checklist / anchor validation). JS 100 / 100, Python 17 / 17.
+
+### Item 4 — Trade Log tab
+
+- `GET /api/trade-log/trades` and `/aggregate` accept `setup_chip` (a chip or `none`), `mistake_chip` (a chip or `none`), `checklist` (`yes` / `no` / `unset`), `grade` (`1`–`5` / `unset`), with the date filter; unknown values → 400.
+- `/aggregate` adds `by_setup`, `by_mistake`, `by_checklist`: `[{key, n, pts}]` over the filtered trades (a trade with two chips counts in both; `none` / `unset` = untagged). Points = sum of `realized_pts`, the same per-contract convention as the existing total.
+- Tab: four selects next to the date filter (any / each value / not set; the row wraps), Clear resets all; table columns Setup, Mistakes, Checklist, Grade (before Notes); a new row under the aggregate cards — "By setup", "By mistake", "Checklist followed" — each value as `count · pts`. New controls in slate / light text / blue counts (C1); existing cards and P&L colours unchanged.
+- Data check (read-only): 13 trades, −14.25 pts; all untagged so far (`none` / `unset` 13).
+- Unit: Python 19 / 19 (filter SQL, bad filters refused).

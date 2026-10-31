@@ -678,21 +678,53 @@ def _pt_naive(v):
     return v.astimezone(PT).replace(tzinfo=None).isoformat(timespec='seconds')
 
 
-def list_trades(date_filter: str | None = None) -> list[dict]:
+def _filter_sql(filters: dict | None) -> tuple[str, list]:
+    """
+    WHERE clause for the Trade Log tab's filters (CR-DR item 4). filters keys (all optional):
+      date (YYYY-MM-DD), setup_chip (a chip, or 'none' = no setup chip), mistake_chip (a chip, or 'none'),
+      checklist ('yes' | 'no' | 'unset'), grade ('1'..'5' | 'unset').
+    """
+    f = filters or {}
+    where, params = [], []
+    if f.get('date'):
+        where.append('trade_date = %s'); params.append(f['date'])
+    for key, col, allowed in (('setup_chip', 'setup_chips', SETUP_CHIPS), ('mistake_chip', 'mistake_chips', MISTAKE_CHIPS)):
+        v = f.get(key)
+        if v == 'none':
+            where.append(f"COALESCE(cardinality({col}), 0) = 0")
+        elif v:
+            if v not in allowed:
+                raise ReviewFieldError(f'{key}: unknown chip')
+            where.append(f'%s = ANY({col})'); params.append(v)
+    c = f.get('checklist')
+    if c == 'yes':
+        where.append('checklist_followed IS TRUE')
+    elif c == 'no':
+        where.append('checklist_followed IS FALSE')
+    elif c == 'unset':
+        where.append('checklist_followed IS NULL')
+    elif c:
+        raise ReviewFieldError('checklist: yes / no / unset')
+    g = f.get('grade')
+    if g == 'unset':
+        where.append('grade IS NULL')
+    elif g:
+        if str(g) not in ('1', '2', '3', '4', '5'):
+            raise ReviewFieldError('grade: 1-5 / unset')
+        where.append('grade = %s'); params.append(int(g))
+    return ('WHERE ' + ' AND '.join(where)) if where else '', params
+
+
+def list_trades(date_filter: str | None = None, filters: dict | None = None) -> list[dict]:
+    f = dict(filters or {})
+    if date_filter:
+        f['date'] = date_filter
+    where, params = _filter_sql(f)
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            if date_filter:
-                cur.execute("""
-                    SELECT * FROM trade_log_trades
-                    WHERE trade_date = %s
-                    ORDER BY entry_ts_pt ASC
-                """, (date_filter,))
-            else:
-                cur.execute("""
-                    SELECT * FROM trade_log_trades
-                    ORDER BY trade_date DESC, entry_ts_pt ASC
-                """)
+            order = 'ORDER BY entry_ts_pt ASC' if f.get('date') else 'ORDER BY trade_date DESC, entry_ts_pt ASC'
+            cur.execute(f'SELECT * FROM trade_log_trades {where} {order}', params)
             return [_format_trade(dict(r)) for r in cur.fetchall()]
     finally:
         conn.close()
@@ -802,12 +834,42 @@ def delete_trade(trade_id: int) -> bool:
         conn.close()
 
 
-def get_aggregate(date_filter: str | None = None) -> dict:
+def _aggregate_breakdown(cur, where: str, params) -> dict:
+    """
+    CR-DR item 4: counts and points by setup chip, by mistake chip (a trade with two chips counts in both; 'none' =
+    no chip) and by checklist followed yes / no / not set. Points = sum of realized_pts (per contract, as the total).
+    """
+    def by_chip(col, allowed):
+        cur.execute(f"""
+            SELECT c AS key, count(*) AS n, COALESCE(sum(realized_pts), 0) AS pts
+            FROM (SELECT realized_pts, unnest(CASE WHEN COALESCE(cardinality({col}), 0) = 0
+                                                   THEN ARRAY['none']::text[] ELSE {col} END) AS c
+                  FROM trade_log_trades {where}) x
+            GROUP BY c
+        """, params)
+        got = {r['key']: r for r in cur.fetchall()}
+        return [{'key': k, 'n': int(got[k]['n']), 'pts': float(got[k]['pts'])} for k in (*allowed, 'none') if k in got]
+    cur.execute(f"""
+        SELECT CASE WHEN checklist_followed IS TRUE THEN 'yes' WHEN checklist_followed IS FALSE THEN 'no' ELSE 'unset' END AS key,
+               count(*) AS n, COALESCE(sum(realized_pts), 0) AS pts
+        FROM trade_log_trades {where} GROUP BY 1
+    """, params)
+    got = {r['key']: r for r in cur.fetchall()}
+    return {
+        'by_setup': by_chip('setup_chips', SETUP_CHIPS),
+        'by_mistake': by_chip('mistake_chips', MISTAKE_CHIPS),
+        'by_checklist': [{'key': k, 'n': int(got[k]['n']), 'pts': float(got[k]['pts'])} for k in ('yes', 'no', 'unset') if k in got],
+    }
+
+
+def get_aggregate(date_filter: str | None = None, filters: dict | None = None) -> dict:
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            where = 'WHERE trade_date = %s' if date_filter else ''
-            params = (date_filter,) if date_filter else ()
+            f = dict(filters or {})
+            if date_filter:
+                f['date'] = date_filter
+            where, params = _filter_sql(f)
             cur.execute(f"""
                 SELECT
                     COUNT(*)                                                   AS total_trades,
@@ -822,6 +884,7 @@ def get_aggregate(date_filter: str | None = None) -> dict:
                 {where}
             """, params)
             row = dict(cur.fetchone())
+            breakdown = _aggregate_breakdown(cur, where, params)
 
         def _f(v):
             return float(v) if v is not None else None
@@ -848,6 +911,7 @@ def get_aggregate(date_filter: str | None = None) -> dict:
             'avg_loser':          avg_l,
             'risk_reward':        rr,
             'total_fees':         _f(row['total_fees']),
+            **breakdown,
         }
     finally:
         conn.close()

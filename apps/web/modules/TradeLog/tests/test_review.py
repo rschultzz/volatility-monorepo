@@ -88,5 +88,22 @@ class ReviewFieldTests(unittest.TestCase):
         self.assertEqual(len(s.MISTAKE_CHIPS), 11)
 
 
+class FilterTests(unittest.TestCase):
+    def test_filters(self):
+        where, params = s._filter_sql({'date': '2026-10-30', 'setup_chip': 'fade top', 'mistake_chip': 'none',
+                                       'checklist': 'no', 'grade': '3'})
+        self.assertEqual(where, 'WHERE trade_date = %s AND %s = ANY(setup_chips) AND COALESCE(cardinality(mistake_chips), 0) = 0'
+                                ' AND checklist_followed IS FALSE AND grade = %s')
+        self.assertEqual(params, ['2026-10-30', 'fade top', 3])
+        self.assertEqual(s._filter_sql({}), ('', []))
+        self.assertIn('checklist_followed IS NULL', s._filter_sql({'checklist': 'unset'})[0])
+        self.assertIn('grade IS NULL', s._filter_sql({'grade': 'unset'})[0])
+
+    def test_bad_filters_refused(self):
+        for bad in ({'setup_chip': 'x'}, {'checklist': 'maybe'}, {'grade': '9'}):
+            with self.assertRaises(s.ReviewFieldError):
+                s._filter_sql(bad)
+
+
 if __name__ == '__main__':
     unittest.main()

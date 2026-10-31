@@ -78,18 +78,25 @@ def upload():
 
 # ── Trade list ────────────────────────────────────────────────
 
+def _filters() -> dict:
+    """CR-DR item 4: ?setup_chip=&mistake_chip=&checklist=yes|no|unset&grade=1..5|unset"""
+    return {k: request.args.get(k) for k in ('setup_chip', 'mistake_chip', 'checklist', 'grade') if request.args.get(k)}
+
+
 @trade_log_bp.get('/trades')
 def list_trades():
     """
-    GET /api/trade-log/trades[?date=YYYY-MM-DD]
+    GET /api/trade-log/trades[?date=YYYY-MM-DD][&setup_chip=&mistake_chip=&checklist=&grade=]
 
     Returns all trades, newest date first.
     Optional ?date= filter narrows to one session.
     """
     date_filter = request.args.get('date') or None
     try:
-        trades = service.list_trades(date_filter)
+        trades = service.list_trades(date_filter, _filters())
         return jsonify({'ok': True, 'trades': trades})
+    except service.ReviewFieldError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
     except Exception as e:
         log.exception('list_trades failed')
         return jsonify({'ok': False, 'error': str(e)}), 500
@@ -216,14 +223,17 @@ def delete_trade(trade_id):
 @trade_log_bp.get('/aggregate')
 def aggregate():
     """
-    GET /api/trade-log/aggregate[?date=YYYY-MM-DD]
+    GET /api/trade-log/aggregate[?date=YYYY-MM-DD][&setup_chip=&mistake_chip=&checklist=&grade=]
 
-    Returns win rate, avg winner/loser, R:R, total P&L, total fees.
+    Returns win rate, avg winner/loser, R:R, total P&L, total fees, and (CR-DR)
+    by_setup / by_mistake / by_checklist: [{key, n, pts}].
     """
     date_filter = request.args.get('date') or None
     try:
-        result = service.get_aggregate(date_filter)
+        result = service.get_aggregate(date_filter, _filters())
         return jsonify(result)
+    except service.ReviewFieldError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
     except Exception as e:
         log.exception('aggregate failed')
         return jsonify({'ok': False, 'error': str(e)}), 500
