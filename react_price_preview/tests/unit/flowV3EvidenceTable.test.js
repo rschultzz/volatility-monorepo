@@ -73,7 +73,7 @@ test('item 2: CONFLICT — green and red rows together', () => {
 test('item 2: candidate from absorption when no lean; two-sided → one red row; progress > 2 red', () => {
   const a = v({ box: box({ readout: { delta: 10, vol: 10000, dPrice: 5, minutes: 20 } }), pct: pct(20, 85), levels: [lvl('buyers_absorbed', 111)] })
   assert.equal(a.checks.candidate, 'short')
-  assert.equal(tones(a).progress, 'bad') // +5 toward the buyers
+  assert.equal(tones(a).progress, 'neutral') // +5 toward the buyers, but effort p85 already meets no advance
   assert.equal(tones(a).share, 'neutral')
   const two = v({ box: box(), pct: pct(50, 50), levels: [lvl('buyers_absorbed', 110), lvl('sellers_absorbed', 100)] })
   assert.equal(two.checks.candidate, null)
@@ -91,4 +91,23 @@ test('item 2: edge counts row from the box edge objects, informational', () => {
   assert.equal(e.value, 'Top buyers 1.8k / sellers 900 · Bottom sellers 4.1k / buyers 2.0k')
   assert.equal(e.tone, 'neutral')
   assert.equal(boxEvidenceRows(null).length, 0)
+})
+
+test('no advance = effort OR progress ≤ 2 pts: when one leg qualifies the other is slate "not needed", never red (both ways)', () => {
+  const row = (r, k) => boxEvidenceRows(r.checks).find((x) => x.key === k)
+  // effort qualifies, progress +3.5 toward the buyers (the 10-30 07:38 → 07:49 shape): SHORT READ, progress slate
+  const e = v({ box: box({ readout: { delta: 10, vol: 10000, dPrice: 3.5, minutes: 20 } }), pct: pct(20, 82), levels: [lvl('buyers_absorbed', 110)] })
+  assert.equal(e.kind, 'short')
+  assert.deepEqual([row(e, 'effort').tone, row(e, 'progress').tone, row(e, 'progress').reads], ['good', 'neutral', 'not needed (effort)'])
+  // progress qualifies (+1), effort p40: effort slate "not needed"
+  const p = v({ box: box(), pct: pct(90, 40), levels: [] })
+  assert.equal(p.kind, 'short')
+  assert.deepEqual([row(p, 'progress').tone, row(p, 'effort').tone, row(p, 'effort').reads], ['good', 'neutral', 'not needed (no advance)'])
+  // long mirror: effort qualifies, progress −3.5 toward the sellers
+  const lm = v({ box: box({ lastClose: 101, readout: { delta: -300, vol: 10000, dPrice: -3.5, minutes: 20 } }), pct: pct(90, 85), levels: [] })
+  assert.equal(lm.kind, 'long')
+  assert.deepEqual([row(lm, 'progress').tone, row(lm, 'progress').reads], ['neutral', 'not needed (effort)'])
+  // neither leg: progress red, effort slate "not notable"
+  const n = v({ box: box({ readout: { delta: 300, vol: 10000, dPrice: 5, minutes: 20 } }), pct: pct(90, 40), levels: [] })
+  assert.deepEqual([row(n, 'progress').tone, row(n, 'progress').reads, row(n, 'effort').reads], ['bad', 'buyers advancing', 'not notable'])
 })

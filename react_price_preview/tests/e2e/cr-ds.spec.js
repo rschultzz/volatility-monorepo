@@ -274,6 +274,8 @@ test('smoke 2: same box with set end 07:49 (report), and anchored at 06:30 (box 
   expect(out.anchor0630.verdict.pillBorder).toBe(RGB.good)
   for (const k of ['event', 'formed', 'location', 'absorption']) expect(tonesOf(out.anchor0630.verdict)[k], k).toBe('good')
   expect(out.anchor0630.history).toContain('07:49 (short)')
+  // Ryan (chat 2026-10-31): effort meets no advance, so progress (+3.5) is slate "not needed", not red
+  expect(out.anchor0630.verdict.rows.find((r) => r.key === 'progress')).toMatchObject({ tone: 'neutral', reads: 'not needed (effort)' })
 })
 
 test('smoke 3: CONFLICT (2026-10-30 until 08:30, anchor 08:00) shows green and red rows', async ({ page }) => {

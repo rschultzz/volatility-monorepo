@@ -219,3 +219,12 @@ cr-dp:158 / 307 **also fail on origin/main** (`existing-D-on-main.log`), cr-dp:4
   (numbers from `boxLabelText` on the box readout), and frozen boxes nested in the current box gain `lastClose` (stripped,
   as the top-level one already was).
 - `cr-di.spec.js:356`: frozen row text without "Box ".
+
+## Amendment (Ryan, chat 2026-10-31, before merging) — no-advance legs
+
+No advance is "effort (c/pt ≥ notable) OR progress ≤ 2 pts toward the pushing side". When either leg qualifies, the
+other row is slate "not needed", never red, both ways: effort met + progress > 2 → Progress slate "not needed (effort)";
+progress ≤ 2 + effort below notable → Effort slate "not needed (no advance)". Progress is red only when neither leg
+qualifies. Display only; verdict unchanged. Unit 107 / 107 (new test covers both legs, the long mirror and neither).
+cr-ds smoke re-run **6 / 6** (`scripts/logs/cr-ds/smoke-run-2.log`); smoke 2 now asserts 10-30 06:30 → 07:49 (SHORT READ via
+effort p82, +3.5 pts) shows Progress slate "not needed (effort)".

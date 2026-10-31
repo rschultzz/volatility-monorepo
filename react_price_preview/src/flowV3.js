@@ -1365,14 +1365,18 @@ export function boxEvidenceRows(checks, { kfmtFn = kfmt } = {}) {
   rows.push({ key: 'share', check: 'Δ share', value: `${sharePctText(c.share)}${c.sharePct == null ? '' : ` · ${pctText(c.sharePct)}`}`,
     reads: c.lean > 0 ? 'buyers leaning' : c.lean < 0 ? 'sellers leaning' : 'not notable',
     tone: !has || c.lean === 0 ? 'neutral' : c.lean === wantSign ? 'good' : 'bad' })
-  rows.push({ key: 'effort', check: 'Effort', value: `${c.cpp == null ? '–' : kfmtFn(c.cpp)}/pt${c.cppPct == null ? '' : ` · ${pctText(c.cppPct)}`}`,
-    reads: c.effort ? 'effort (no advance)' : 'not notable', tone: has && c.effort ? 'good' : 'neutral' })
   // progress toward the pushing side (buyers for a short, sellers for a long)
   const dp = c.dPrice
   const toward = dp == null || !has ? null : cand === 'short' ? dp : -dp
+  const stalled = toward != null && toward <= c.progressPts + 1e-9
+  // Ryan (chat 2026-10-31): no advance is "effort OR progress ≤ 2 pts"; when either leg qualifies, the other is slate
+  // "not needed", never red (both ways)
+  rows.push({ key: 'effort', check: 'Effort', value: `${c.cpp == null ? '–' : kfmtFn(c.cpp)}/pt${c.cppPct == null ? '' : ` · ${pctText(c.cppPct)}`}`,
+    reads: c.effort ? 'effort (no advance)' : stalled ? 'not needed (no advance)' : 'not notable', tone: has && c.effort ? 'good' : 'neutral' })
   rows.push({ key: 'progress', check: 'Progress', value: dp == null ? '–' : `${dp >= 0 ? '+' : ''}${dp.toFixed(2)} pts`,
-    reads: toward == null ? 'informational' : toward <= c.progressPts + 1e-9 ? (cand === 'short' ? 'no advance' : 'no decline') : (cand === 'short' ? 'buyers advancing' : 'sellers advancing'),
-    tone: toward == null ? 'neutral' : toward <= c.progressPts + 1e-9 ? 'good' : 'bad' })
+    reads: toward == null ? 'informational' : stalled ? (cand === 'short' ? 'no advance' : 'no decline')
+      : c.effort ? 'not needed (effort)' : (cand === 'short' ? 'buyers advancing' : 'sellers advancing'),
+    tone: toward == null ? 'neutral' : stalled ? 'good' : c.effort ? 'neutral' : 'bad' })
   // absorption at the box (wicks included): supports the candidate when it is the candidate's side
   const sides = new Set(c.levels.map((l) => l.side))
   const supports = cand === 'short' ? 'buyers' : 'sellers'
