@@ -86,3 +86,10 @@ test('thresholds come from the one rules object', () => {
   assert.match(r.title, /notable ≥ p90/)
   assert.match(v({ box: box(), pct: pct(85, 40), levels: [], rules: { nearPts: 3 } }).title, /near an edge ≤ 3 pts/)
 })
+
+test('the panel\'s box shape: edges are objects ({ price, … }) — same verdict as with numbers', () => {
+  const obj = (o) => ({ ...box(o), top: { price: 110, contracts: 1 }, bottom: { price: 100, contracts: 1 } })
+  assert.equal(v({ box: obj(), pct: pct(90, 40), levels: [] }).kind, 'short')
+  assert.equal(v({ box: obj({ lastClose: 105 }), pct: pct(50, 50), levels: [] }).evidence, 'price mid-box · share +3.00 % p50 · c/pt p50')
+  assert.equal(v({ box: obj(), pct: pct(85, 50), levels: [lvl('sellers_absorbed', 100.5)] }).kind, 'conflict')
+})

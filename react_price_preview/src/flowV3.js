@@ -1190,8 +1190,11 @@ export function boxLevels(levels, box, lastT, absorbPts) {
 //   → NO ACTION nothing notable.
 // `box` = the current box (top / bottom, readout, lastClose, to), `pct` = boxPercentiles (or null), `levels` =
 // absorptionLevels, `hhmm` formats a UTC epoch as PT hh:mm. Returns { kind, label, evidence, rules, title }.
-export function boxVerdict({ box, pct, levels, tradeDate, rules: r0 = null, hhmm = String, fomc = FOMC_2026_DECISION_DAYS }) {
+export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, hhmm = String, fomc = FOMC_2026_DECISION_DAYS }) {
   const r = boxRules(r0)
+  // edges as prices: the panel's boxes carry edge objects ({ price, contracts, … }), tests may pass numbers
+  const edgePx = (e) => Number(e != null && typeof e === 'object' ? e.price : e)
+  const box = b0 ? { ...b0, top: edgePx(b0.top), bottom: edgePx(b0.bottom) } : null
   const ro = box?.readout || null
   const title = (ids) => `Rules: ${ids.join(' + ') || 'none'}. Thresholds: notable ≥ p${r.notable} (Δ share and contracts/pt), `
     + `near an edge ≤ ${r.nearPts} pts, no advance ≤ ${r.progressPts} pts, absorption within ${r.absorbPts} pts of an edge. `

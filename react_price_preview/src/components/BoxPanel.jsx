@@ -91,7 +91,7 @@ export default function BoxPanel({
       style={{
         position: 'absolute', left: place?.left ?? 0, top: place?.top ?? 0, visibility: place ? 'visible' : 'hidden',
         zIndex: 5, background: TAG_BG(0.92), border: `1px solid rgba(${MAGENTA},0.35)`, borderRadius: 4,
-        fontSize: '11px', fontFamily: 'sans-serif', color: TEXT, lineHeight: 1.6, maxWidth: 380, minWidth: 220,
+        fontSize: '11px', fontFamily: 'sans-serif', color: TEXT, lineHeight: 1.6, maxWidth: 460, minWidth: 220,
         display: 'flex', flexDirection: 'column', maxHeight: maxHeight || undefined,
       }}
     >
