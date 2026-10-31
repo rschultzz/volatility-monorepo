@@ -1038,6 +1038,10 @@ export function boxPopupLines(box, hhmm, segments = null) {
   }
   return {
     head: `box from ${hhmm(box.from)}${end}${stats}`,
+    // CR-DQ item 5: the head's pieces, so the panel can put a percentile badge after the share and after contracts/pt
+    // (joined with ' · ' they are `head`)
+    parts: p ? [`box from ${hhmm(box.from)}${end}`, p.delta, `share ${sharePctText(readoutShare(ro))}`, p.pts, p.minutes, p.cpp]
+      : [`box from ${hhmm(box.from)}${end}`],
     top: edge('Top', 'top', 'buyers', 'sellers'),
     bottom: edge('Bottom', 'bottom', 'sellers', 'buyers'),
     mixed: ro ? mixedSourcesText(ro, segments).replace(/^ · /, '') : '',
@@ -1049,7 +1053,7 @@ export function boxPopupLines(box, hhmm, segments = null) {
 //   summary (one line): "Box 10:12–10:41 · broke ↓ 10:41 · share -2.39 %" (frozen) / "Box 10:41–11:00 · current"
 //   lines: boxPopupLines (head / top / bottom / mixed); probes: "2 probes · testing break 10:58 ↑"
 // `dropped` = older frozen boxes not drawn ("n older boxes not shown").
-export function boxPanelSections(entries, hhmm, segments = null) {
+export function boxPanelSections(entries, hhmm, segments = null, pctOf = null) {
   const list = Array.isArray(entries) ? entries : []
   const sections = list.map((en) => {
     const b = en.box
@@ -1065,10 +1069,99 @@ export function boxPanelSections(entries, hhmm, segments = null) {
       summary: `Box ${hhmm(b.from)}–${hhmm(until)} · ${state}${frozen ? share : ''}`,
       lines: boxPopupLines(b, hhmm, segments),
       probes: `${n} probe${n === 1 ? '' : 's'}${pend}`,
+      pct: pctOf ? pctOf(b) : null, // CR-DQ item 5: boxPercentiles of this box (null: no badge)
     }
   })
   const dropped = list.length ? Number(list[list.length - 1].box.dropped) || 0 : 0
   return { sections, dropped, droppedText: dropped ? `${dropped} older box${dropped === 1 ? '' : 'es'} not shown` : '' }
+}
+
+// CR-DQ items 5 / 7 — one config object for the panel's display thresholds (⚙ "Percentile tiers" and "Verdict rules";
+// display aids, untested): tier cut-offs (percentiles) and the verdict's distances (pts).
+export const BOX_RULES_DEFAULTS = { notable: 80, strong: 95, nearPts: 2, progressPts: 2, absorbPts: 2 }
+export const BOX_RULES_RANGES = { notable: [50, 99], strong: [51, 100], nearPts: [0.25, 10], progressPts: [0, 20], absorbPts: [0, 10] }
+export function boxRules(stored) {
+  const out = { ...BOX_RULES_DEFAULTS }
+  for (const [k, [lo, hi]] of Object.entries(BOX_RULES_RANGES)) {
+    const v = Number(stored?.[k])
+    if (stored?.[k] != null && Number.isFinite(v)) out[k] = Math.min(hi, Math.max(lo, v))
+  }
+  if (out.strong <= out.notable) out.strong = Math.min(100, out.notable + 1)
+  return out
+}
+
+// CR-DQ item 5 — percentile badges against the train baseline (scripts/cr_dq_baseline.py → src/data/boxBaseline.json):
+// same source as the box (Ryan, Step 0 decision 2), length bucket by the box's minutes, |Δ share| by the box's start
+// time of day (decision 1), contracts/pt all day. Percentile = linear interpolation in the 101-point grid (numpy.interp).
+export const BOX_PCT_MIN_MINUTES = 3
+export function quantilePct(grid, v) {
+  const g = Array.isArray(grid) ? grid : []
+  const x = Number(v)
+  if (g.length < 2 || !Number.isFinite(x)) return null
+  const n = g.length - 1
+  if (x <= g[0]) return 0
+  if (x >= g[n]) return 100
+  let lo = 0
+  let hi = n
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1
+    if (g[mid] <= x) lo = mid
+    else hi = mid
+  }
+  const span = g[hi] - g[lo]
+  return (100 / n) * (lo + (span > 0 ? (x - g[lo]) / span : 0))
+}
+export function baselineBucket(baseline, minutes) {
+  const m = Number(minutes)
+  const bs = baseline?.meta?.buckets || []
+  if (!Number.isFinite(m) || m < BOX_PCT_MIN_MINUTES || !bs.length) return null
+  return bs.find((b) => m >= b.min && m <= b.max) || (m > bs[bs.length - 1].max ? bs[bs.length - 1] : null)
+}
+export function baselineTod(baseline, ptMinuteOfDay) {
+  const rel = Number(ptMinuteOfDay) - 390 // minutes after 06:30 PT
+  const ts = baseline?.meta?.tod || []
+  return ts.find((t) => rel >= t.fromMin && rel < t.toMin) || null
+}
+// `ro` = the box's readout, `ptMinuteOfDay` = its first bar's PT minute of day, `segments` = the payload's segments
+// ({ name, source }). Null (no badge) for ETH, a box spanning two segments, an unknown source or under 3 minutes.
+export function boxPercentiles(ro, ptMinuteOfDay, segments, baseline) {
+  if (!ro || !baseline || ro.fromSeg !== 'rth' || ro.toSeg !== 'rth') return null
+  const seg = (Array.isArray(segments) ? segments : []).find((g) => g.name === 'rth')
+  const src = seg?.source
+  const base = src ? baseline[src] : null
+  const bucket = baselineBucket(baseline, ro.minutes)
+  const tod = baselineTod(baseline, ptMinuteOfDay)
+  if (!base || !bucket || !tod || !(Number(ro.vol) > 0)) return null
+  const share = Number(ro.delta) / Number(ro.vol)
+  const cpp = Number(ro.vol) / Math.max(Math.abs(Number(ro.dPrice) || 0), baseline.meta.tick || TICK)
+  return {
+    source: src, bucket: bucket.name, bucketRange: [bucket.min, bucket.max], tod: tod.name,
+    sessions: base.sessions, first: base.first, last: base.last, excluded: baseline.meta.excluded || [],
+    share: { value: share, p: quantilePct(base.absShare?.[tod.name]?.[bucket.name], Math.abs(share)) },
+    cpp: { value: cpp, p: quantilePct(base.cpp?.[bucket.name], cpp) },
+  }
+}
+export function pctTier(p, rules = BOX_RULES_DEFAULTS) {
+  if (p == null) return null
+  return p >= rules.strong ? 'strong' : p >= rules.notable ? 'notable' : 'normal'
+}
+export const pctText = (p) => (p == null ? '' : `p${Math.min(99, Math.floor(p))}`)
+const TOD_TEXT = { open: '06:30–07:30', mid: '07:30–11:00', late: '11:00–13:00' }
+// The badge's hover: what the percentile means, the bucket, the baseline sessions and date range.
+export function pctBadgeTitle(kind, pc, rules = BOX_RULES_DEFAULTS) {
+  const src = SOURCE_LABEL[pc.source] || pc.source
+  const [lo, hi] = pc.bucketRange
+  const len = hi >= 240 ? `${lo}+ min` : `${lo}–${hi} min`
+  const p = kind === 'share' ? pc.share.p : pc.cpp.p
+  const what = kind === 'share'
+    ? `|Δ share| is above ${Math.floor(p)} % of RTH windows of ${len} starting ${TOD_TEXT[pc.tod] || pc.tod} PT`
+    : `contracts per point is above ${Math.floor(p)} % of RTH windows of ${len} (all day)`
+  const noise = kind === 'share'
+    ? ' The same window read from Ironbeam and from Databento differs by a median ~9 percentile points on Δ share, so a badge near a cut-off can flip.'
+    : ''
+  return `${pctText(p)}: this box's ${what}, in the ${src} baseline (${pc.sessions} train sessions ${pc.first} → ${pc.last}; `
+    + `FOMC days and the March 2026 roll week left out; same source as the box, no adjustment).${noise} `
+    + `Tiers: notable ≥ p${rules.notable}, strong ≥ p${rules.strong}. Display aid — untested.`
 }
 
 // CR-DQ item 3 — the panel's place. Stored as px from the plot's left and bottom edges (so it stays bottom-anchored when

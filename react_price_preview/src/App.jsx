@@ -1704,11 +1704,12 @@ export default function App() {
       sellLayer: flowV3Settings.sellLayer,
       buyLayer: flowV3Settings.buyLayer,
       profileFrom: flowAnchor,
-      anchor: flowAnchor, // CR-DP item 4: the box stats popup's position and × reset on a new anchor
+      anchor: flowAnchor, // CR-DP item 4 / CR-DQ item 3: the box panel's × resets on a new anchor
+      boxRules: flowV3Settings.boxRules, // CR-DQ items 5 / 7: percentile tiers and verdict rules (⚙)
       // CR-DN item 1: the profile stops after the end's minute ([from, to) on cell minute starts); null without an end.
       profileTo: flowAnchor != null && flowEnd != null ? flowEnd + 60 : null,
     }
-  }, [flowV3AnyLayer, flowCells, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowAnchor, flowEnd])
+  }, [flowV3AnyLayer, flowCells, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, flowAnchor, flowEnd])
   // CR-DN item 1: the anchor → end window, shaded on the price chart (any layer); null without an end.
   const flowV3Window = useMemo(
     () => (flowAnchor != null && flowEnd != null ? { from: flowAnchor, to: flowEnd } : null),

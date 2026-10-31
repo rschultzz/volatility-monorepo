@@ -20,9 +20,10 @@ import {
 } from 'web-shared'
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import BoxPanel from './BoxPanel'
+import boxBaseline from '../data/boxBaseline.json'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { LIVE_EFFORT_ID, absorptionLevels, boxPanelOffset, boxPanelPlace, boxPanelSections, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
+import { LIVE_EFFORT_ID, absorptionLevels, boxPanelOffset, boxPanelPlace, boxPanelSections, boxPercentiles, boxRules, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
 import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, BoxShadePrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
@@ -2748,10 +2749,14 @@ export default function PriceChart({
   // default. It is re-clamped into the plot every frame (resize). × hides it until the next anchor. Max height = half
   // the plot; the body scrolls beyond that. Text: flowV3.boxPanelSections (CR-DP's boxPopupLines).
   const v3Anchor = flowV3?.anchor ?? null
-  const v3BoxPanel = useMemo(
-    () => (v3Edges?.boxes?.length ? boxPanelSections(v3Edges.boxes, (t) => formatShiftedHHMM(v3Shift(t)), v3Payload?.segments) : null),
-    [v3Edges, v3Shift, v3Payload]
-  )
+  // CR-DQ item 5: each drawn box's percentiles (same-source train baseline; null = no badge), computed once here.
+  const v3Rules = useMemo(() => boxRules(flowV3?.boxRules), [flowV3?.boxRules])
+  const v3BoxPanel = useMemo(() => {
+    if (!v3Edges?.boxes?.length) return null
+    const ptMin = (utc) => Math.floor(((((v3Shift(utc) % 86400) + 86400) % 86400)) / 60)
+    const pctOf = (b) => boxPercentiles(b.readout, ptMin(b.from), v3Payload?.segments, boxBaseline)
+    return boxPanelSections(v3Edges.boxes, (t) => formatShiftedHHMM(v3Shift(t)), v3Payload?.segments, pctOf)
+  }, [v3Edges, v3Shift, v3Payload])
   const [boxPopupClosed, setBoxPopupClosed] = useState(false)
   const [boxPanelGeom, setBoxPanelGeom] = useState(null) // { pane, w, h } plot rect (stage px) + panel size
   const [boxPanelPos, setBoxPanelPos] = useState(() => readBoxPanelPos()) // { left, bottom } or null (default)
@@ -3907,6 +3912,7 @@ export default function PriceChart({
               onHeaderPointerMove={onBoxPopupPointerMove}
               onHeaderPointerUp={onBoxPopupPointerUp}
               onHeaderDoubleClick={onBoxPanelDoubleClick}
+              rules={v3Rules}
             />
           )}
 

@@ -3,18 +3,51 @@
 // collapsed by default too). Text comes from flowV3.boxPanelSections (CR-DP's boxPopupLines), so the numbers are the
 // popup's and the old box hover's. Dragged by its header; the caller owns the place (remembered per browser), the
 // double-click reset and the ×. Palette only (C1): the chart's tag background, magenta border, slate / light text.
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
+import { BOX_RULES_DEFAULTS, pctBadgeTitle, pctText, pctTier } from '../flowV3.js'
 import { TAG_BG } from './flowV3Primitives.js'
 
 const MAGENTA = '232,121,249'
 const TEXT = '#e2e8f0'
 const MUTED = '#94a3b8'
 
-function Stats({ s, testid }) {
+// CR-DQ item 5b: tiers by brightness only (C1) — normal text below the notable cut-off, brighter from notable, brightest
+// and bold from strong. Hover: pctBadgeTitle.
+const TIER_STYLE = {
+  normal: {},
+  notable: { color: '#ffffff', fontWeight: 600 },
+  strong: { color: '#ffffff', fontWeight: 800, background: 'rgba(255,255,255,0.12)', borderRadius: 3, padding: '0 3px' },
+}
+export function PctBadge({ kind, pct, rules }) {
+  const p = kind === 'share' ? pct?.share?.p : pct?.cpp?.p
+  if (p == null) return null
+  const tier = pctTier(p, rules)
+  return (
+    <span data-testid={`flow-v3-box-pct-${kind}`} data-tier={tier} data-p={p.toFixed(2)} title={pctBadgeTitle(kind, pct, rules)}
+      style={{ cursor: 'help', ...TIER_STYLE[tier] }}>
+      {pctText(p)}
+    </span>
+  )
+}
+
+// The head line ("box from … · Δ · share … · pts · m · …/pt") with a badge after the share and after contracts/pt.
+function Head({ s, rules }) {
+  const parts = s.lines.parts || [s.lines.head]
+  const badgeAt = { 2: 'share', 5: 'cpp' }
+  return parts.map((t, i) => (
+    <Fragment key={i}>
+      {i > 0 && ' · '}
+      {t}
+      {s.pct && badgeAt[i] && <>{' · '}<PctBadge kind={badgeAt[i]} pct={s.pct} rules={rules} /></>}
+    </Fragment>
+  ))
+}
+
+function Stats({ s, testid, rules }) {
   const l = s.lines
   return (
     <div data-testid={testid} style={{ paddingLeft: 10 }}>
-      <div data-testid={s.current ? 'flow-v3-box-popup-head' : undefined}>{l.head}</div>
+      <div data-testid={s.current ? 'flow-v3-box-popup-head' : undefined}><Head s={s} rules={rules} /></div>
       <div data-testid={s.current ? 'flow-v3-box-popup-top' : undefined}>{l.top}</div>
       <div data-testid={s.current ? 'flow-v3-box-popup-bottom' : undefined}>{l.bottom}</div>
       <div style={{ color: MUTED }}>{s.probes}</div>
@@ -25,7 +58,7 @@ function Stats({ s, testid }) {
 
 export default function BoxPanel({
   panel, place, panelRef, maxHeight, dragged, onClose, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp,
-  onHeaderDoubleClick, renderCurrentTop, renderBadges,
+  onHeaderDoubleClick, renderCurrentTop, rules = BOX_RULES_DEFAULTS,
 }) {
   const [open, setOpen] = useState({}) // section key -> expanded
   const toggle = (k) => setOpen((o) => ({ ...o, [k]: !o[k] }))
@@ -90,11 +123,10 @@ export default function BoxPanel({
               >
                 <span style={{ color: MUTED, display: 'inline-block', width: 10 }}>{isOpen ? '▾' : '▸'}</span>
                 {s.summary}
-                {renderBadges?.(s, 'summary')}
+                {!s.current && s.pct && <>{' · '}<PctBadge kind="share" pct={s.pct} rules={rules} /></>}
               </div>
               <div style={{ display: isOpen ? 'block' : 'none' }}>
-                {renderBadges?.(s, 'stats')}
-                <Stats s={s} testid={s.current ? 'flow-v3-box-panel-current-stats' : undefined} />
+                <Stats s={s} rules={rules} testid={s.current ? 'flow-v3-box-panel-current-stats' : undefined} />
               </div>
             </div>
           )
