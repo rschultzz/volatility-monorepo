@@ -74,3 +74,17 @@ test('readHistoryText', () => {
   assert.equal(readHistoryText([], hh), 'Read live: none')
   assert.equal(readHistoryText([{ from: at(10), to: at(14), side: 'short' }, { from: at(20), to: at(20), side: 'long' }], hh), 'Read live: m10–m14 (short) · m20 (long)')
 })
+
+test('item 5: frozen row pieces (span, how it ended) and the short read-live text', async () => {
+  const { boxPanelSections } = await import('../../src/flowV3.js')
+  const hh = (t) => `m${(t - T0) / 60}`
+  const edge = (price) => ({ price, contracts: null, opposite: null, heldMin: null })
+  const frozen = { from: at(0), to: at(9), top: edge(103), bottom: edge(100), ended: { kind: 'broke', dir: 'down', at: at(10) }, readout: { delta: -50, vol: 1000, dPrice: -1, minutes: 9 } }
+  const cur = { from: at(10), to: at(20), top: edge(99), bottom: edge(96), ended: { kind: 'current' }, readout: null, dropped: 0 }
+  const p = boxPanelSections([{ box: frozen }, { box: cur }], hh)
+  assert.equal(p.sections[0].span, 'm0–m10')
+  assert.equal(p.sections[0].state, 'broke ↓ m10')
+  assert.equal(p.sections[1].state, 'current')
+  assert.equal(readHistoryText([{ from: at(3), to: at(5), side: 'long' }], hh, true), 'read m3–m5 (long)')
+  assert.equal(readHistoryText([], hh, true), '')
+})

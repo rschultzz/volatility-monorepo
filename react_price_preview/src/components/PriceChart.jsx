@@ -2780,10 +2780,16 @@ export default function PriceChart({
       ...panel, historyMs: v3History?.ms ?? null,
       sections: panel.sections.map((sct) => {
         const mine = v3History ? ranges.filter((x) => String(x.box) === sct.key) : null
-        return { ...sct, history: mine, historyText: mine ? readHistoryText(mine, hhmm) : '' }
+        // CR-DS item 5: a frozen box's verdict and table as of its end (levels as of its break minute)
+        const entry = sct.current ? null : v3Edges.boxes.find((en) => String(en.box.from) === sct.key)
+        const verdict = entry ? boxVerdict({
+          box: entry.box, pct: sct.pct, levels: absorptionLevels(v3Payload, v3Times, v3Shift, undefined, entry.box.ended.at),
+          tradeDate, rules: v3Rules, hhmm,
+        }) : null
+        return { ...sct, verdict, history: mine, historyText: mine ? readHistoryText(mine, hhmm) : '', historyShort: mine ? readHistoryText(mine, hhmm, true) : '' }
       }),
     }
-  }, [v3Edges, v3Shift, v3Payload, v3History, v3PtMin])
+  }, [v3Edges, v3Shift, v3Payload, v3Times, v3History, v3PtMin, tradeDate, v3Rules])
   // CR-DQ item 7: the current box's verdict from the panel's own inputs (its percentiles, the levels above, the trade date).
   const v3Verdict = useMemo(() => {
     const cur = v3BoxPanel?.sections.find((sct) => sct.current)

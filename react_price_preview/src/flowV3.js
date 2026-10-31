@@ -1081,6 +1081,7 @@ export function boxPanelSections(entries, hhmm, segments = null, pctOf = null) {
     return {
       key: String(b.from), current: !frozen,
       summary: `Box ${hhmm(b.from)}–${hhmm(until)} · ${state}${frozen ? share : ''}`,
+      span: `${hhmm(b.from)}–${hhmm(until)}`, state, // CR-DS item 5: the frozen row's pieces
       lines: boxPopupLines(b, hhmm, segments),
       probes: `${n} probe${n === 1 ? '' : 's'}${pend}`,
       pct: pctOf ? pctOf(b) : null, // CR-DQ item 5: boxPercentiles of this box (null: no badge)
@@ -1464,9 +1465,10 @@ export function readHistory({ payload, bars, rows, closes, anchorShifted, endShi
   out.ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0)
   return out
 }
-// "Read live: 07:49–07:58 (short) · 08:10 (long)"; "Read live: none" without a read. `ranges` of one box.
-export function readHistoryText(ranges, hhmm) {
+// "Read live: 07:49–07:58 (short) · 08:10 (long)"; "Read live: none" without a read. `ranges` of one box. `short`:
+// "read 07:49–07:58 (short)", '' without a read (CR-DS item 5: the frozen box's compact row).
+export function readHistoryText(ranges, hhmm, short = false) {
   const list = Array.isArray(ranges) ? ranges : []
-  if (!list.length) return 'Read live: none'
-  return `Read live: ${list.map((x) => `${hhmm(x.from)}${x.to !== x.from ? `–${hhmm(x.to)}` : ''} (${x.side})`).join(' · ')}`
+  if (!list.length) return short ? '' : 'Read live: none'
+  return `${short ? 'read' : 'Read live:'} ${list.map((x) => `${hhmm(x.from)}${x.to !== x.from ? `–${hhmm(x.to)}` : ''} (${x.side})`).join(' · ')}`
 }

@@ -98,6 +98,17 @@ function History({ s }) {
   )
 }
 
+// CR-DS item 5 — a frozen box's compact row: time span · how it ended · share pNN · c/pt pNN · any read-live window.
+function FrozenRow({ s, rules }) {
+  const badge = (kind) => (s.pct ? <PctBadge kind={kind} pct={s.pct} rules={rules} /> : '–')
+  return (
+    <span data-testid="flow-v3-box-frozen-row">
+      {s.span} · {s.state} · share {badge('share')} · c/pt {badge('cpp')}
+      {s.historyShort && <span data-testid="flow-v3-box-frozen-read" style={{ color: TEXT }}>{' · '}{s.historyShort}</span>}
+    </span>
+  )
+}
+
 function Verdict({ v, testid = 'flow-v3-box-verdict' }) {
   const tone = VERDICT_TONE[v.kind] || 'neutral'
   const c = TONE_COLOR[tone]
@@ -182,10 +193,10 @@ export default function BoxPanel({
                 style={{ cursor: 'pointer', color: s.current ? '#f0abfc' : undefined, fontWeight: s.current ? 600 : 400 }}
               >
                 <span style={{ color: MUTED, display: 'inline-block', width: 10 }}>{isOpen ? '▾' : '▸'}</span>
-                {s.summary}
-                {!s.current && s.pct && <>{' · '}<PctBadge kind="share" pct={s.pct} rules={rules} /></>}
+                {s.current ? s.summary : <FrozenRow s={s} rules={rules} />}
               </div>
               <div style={{ display: isOpen ? 'block' : 'none' }}>
+                {!s.current && s.verdict && <Verdict v={s.verdict} testid="flow-v3-box-frozen-verdict" />}
                 {!s.current && <History s={s} />}
                 <Stats s={s} rules={rules} testid={s.current ? 'flow-v3-box-panel-current-stats' : undefined} />
               </div>
