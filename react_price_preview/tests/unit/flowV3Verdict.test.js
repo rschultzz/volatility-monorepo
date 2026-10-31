@@ -42,7 +42,7 @@ test('two-sided absorption, no notable lean → NO ACTION two-sided (not A24), n
 test('A19 + A23: SHORT READ at top — buyers leaning, no advance; absorption alone also counts', () => {
   const r = v({ box: box(), pct: pct(90, 40), levels: [] })
   assert.equal(r.kind, 'short')
-  assert.equal(r.evidence, 'price 0.50 from the top · share +3.00 % p90 buyers leaning · no advance +1.0 pts')
+  assert.equal(r.evidence, 'price 0.50 below the top · share +3.00 % p90 buyers leaning · no advance +1.0 pts')
   assert.deepEqual(r.rules, ['A19'])
   const a = v({ box: box({ readout: { delta: 10, vol: 10000, dPrice: 5, minutes: 20 } }), pct: pct(20, 85), levels: [lvl('buyers_absorbed', 111)] })
   assert.equal(a.kind, 'short')
@@ -56,7 +56,7 @@ test('LONG READ at bottom (mirror)', () => {
   const r = v({ box: box({ lastClose: 101, readout: { delta: -300, vol: 10000, dPrice: -1, minutes: 20 } }), pct: pct(90, 40), levels: [] })
   assert.equal(r.kind, 'long')
   assert.equal(r.label, 'LONG READ at bottom')
-  assert.equal(r.evidence, 'price 1.00 from the bottom · share -3.00 % p90 sellers leaning · no decline -1.0 pts')
+  assert.equal(r.evidence, 'price 1.00 above the bottom · share -3.00 % p90 sellers leaning · no decline -1.0 pts')
 })
 
 test('WATCH BREAK (idea): pushing side winning at an edge, moving easily, nothing absorbing', () => {
@@ -92,4 +92,47 @@ test('the panel\'s box shape: edges are objects ({ price, … }) — same verdic
   assert.equal(v({ box: obj(), pct: pct(90, 40), levels: [] }).kind, 'short')
   assert.equal(v({ box: obj({ lastClose: 105 }), pct: pct(50, 50), levels: [] }).evidence, 'price mid-box · share +3.00 % p50 · c/pt p50')
   assert.equal(v({ box: obj(), pct: pct(85, 50), levels: [lvl('sellers_absorbed', 100.5)] }).kind, 'conflict')
+})
+
+// CR-DQ amendment (Ryan, chat 2026-10-31)
+test('amendment 1: absorption distance is to the box\'s high–low range (wicks); edges stay close-based', () => {
+  // 2026-10-30 07:49 shape: buyers absorbed 0.5 above the box high, 3.75 above the close-based top
+  const b = box({ high: 110.5, low: 99 })
+  const lvTop = lvl('buyers_absorbed', 111)
+  assert.equal(boxLevels([lvTop], b, 50, 2)[0].where, 'top') // 0.5 from the high
+  assert.deepEqual(boxLevels([lvl('buyers_absorbed', 113)], b, 50, 2), []) // 2.5 from the high
+  assert.equal(boxLevels([lvl('sellers_absorbed', 97.5)], b, 50, 2)[0].where, 'bottom') // 1.5 below the low
+  // without high / low the close-based edges are used
+  assert.equal(boxLevels([lvl('sellers_absorbed', 98.5)], box(), 50, 2)[0].where, 'bottom')
+  // a level 1.5 above the high (3.5 above the top): counted only against the high — it blocks a watch break ↑ (moving
+  // easily, no stall, so no read either) and, with a stall, makes the short read A19 + A23
+  const moving = { readout: { delta: 300, vol: 10000, dPrice: 6, minutes: 20 } }
+  assert.equal(v({ box: box(moving), pct: pct(90, 40), levels: [lvl('buyers_absorbed', 113.5)] }).kind, 'watch-up')
+  assert.equal(v({ box: box({ ...moving, high: 112 }), pct: pct(90, 40), levels: [lvl('buyers_absorbed', 113.5)] }).kind, 'none')
+  const r = v({ box: box({ high: 112 }), pct: pct(90, 40), levels: [lvl('buyers_absorbed', 113.5)] })
+  assert.equal(r.kind, 'short')
+  assert.deepEqual(r.rules, ['A19', 'A23'])
+})
+
+test('amendment 2: box still forming until ≥ 10 min and ≥ 2 pts (close-based), checked right after NO TRADES', () => {
+  const young = box({ readout: { delta: 300, vol: 10000, dPrice: 1, minutes: 9 } })
+  const r = v({ box: young, pct: pct(90, 40), levels: [lvl('sellers_absorbed', 100.5)] })
+  assert.equal(r.kind, 'forming')
+  assert.equal(r.label, 'NO ACTION — box still forming')
+  assert.equal(r.evidence, 'box 9 min (min 10) · 10.00 pts tall (min 2)')
+  const flat = box({ top: 101.5, bottom: 100, lastClose: 101 })
+  assert.equal(v({ box: flat, pct: pct(90, 40), levels: [] }).kind, 'forming')
+  assert.equal(v({ box: box(), pct: pct(90, 40), levels: [] }).kind, 'short') // 20 min, 10 pts
+  assert.equal(v({ box: young, pct: pct(90, 40), levels: [], tradeDate: '2026-10-28' }).kind, 'no-trades')
+  assert.equal(v({ box: young, pct: pct(90, 40), levels: [], rules: { minAgeMin: 5 } }).kind, 'short')
+  assert.match(v({ box: young, pct: null, levels: [] }).title, /box formed at ≥ 10 min and ≥ 2 pts/)
+})
+
+test('amendment 3: wording says which side of the edge', () => {
+  const above = v({ box: box({ lastClose: 111.5 }), pct: pct(90, 40), levels: [] })
+  assert.match(above.evidence, /^price 1\.50 above the top/)
+  const at = v({ box: box({ lastClose: 110 }), pct: pct(90, 40), levels: [] })
+  assert.match(at.evidence, /^price at the top/)
+  const below = v({ box: box({ lastClose: 99.5, readout: { delta: -300, vol: 10000, dPrice: -1, minutes: 20 } }), pct: pct(90, 40), levels: [] })
+  assert.match(below.evidence, /^price 0\.50 below the bottom/)
 })

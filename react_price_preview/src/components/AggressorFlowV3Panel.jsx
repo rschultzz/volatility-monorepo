@@ -212,7 +212,11 @@ function BoxRulesFields({ draft, setDraft, input, label }) {
         {num('progressPts', 'No advance (pts)', 0.25, 'flow-v3-rule-progress')}
         {num('absorbPts', 'Absorption within (pts)', 0.25, 'flow-v3-rule-absorb')}
       </div>
-      <div style={note}>Draft rules (A19, A22, A23, A24), applied mechanically — untested, a display aid. "Notable" in the rules is the tier above. Defaults 2 / 2 / 2.</div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+        {num('minAgeMin', 'Min box age (min)', 1, 'flow-v3-rule-min-age')}
+        {num('minHeightPts', 'Min box height (pts)', 0.25, 'flow-v3-rule-min-height')}
+      </div>
+      <div style={note}>Draft rules (A19, A22, A23, A24), applied mechanically — untested, a display aid. "Notable" in the rules is the tier above. Absorption distance is to the box's high–low range (wicks). No verdict beyond NO TRADES until the box is this old and tall ("box still forming"). Defaults 2 / 2 / 2, 10 min / 2 pts.</div>
     </>
   )
 }

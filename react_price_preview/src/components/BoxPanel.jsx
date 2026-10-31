@@ -62,6 +62,7 @@ const VERDICT_STYLE = {
   'no-trades': { color: MUTED, border: `1px solid rgba(148,163,184,0.6)` },
   conflict: { color: MUTED, border: `1px solid rgba(148,163,184,0.6)` },
   'two-sided': { color: MUTED, border: `1px solid rgba(148,163,184,0.6)` },
+  forming: { color: MUTED, border: `1px dashed rgba(148,163,184,0.5)` },
   none: { color: MUTED, border: `1px solid rgba(148,163,184,0.35)` },
   short: { color: '#ffffff', fontWeight: 700, border: '1px solid rgba(255,255,255,0.7)' },
   long: { color: '#ffffff', fontWeight: 700, border: '1px solid rgba(255,255,255,0.7)' },

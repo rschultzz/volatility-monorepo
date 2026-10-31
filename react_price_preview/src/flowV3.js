@@ -619,8 +619,15 @@ function boxStats(payload, bars, j0, j1, exact, e) {
   }
   const minutes = exact ? edgeCounts(payload, bars.t[j0], bars.t[j1], top, bottom) : null
   const sum = (k) => (minutes ? total(minutes[k]) : null)
+  // CR-DQ amendment 1: the box's full high–low range over its bars (wicks), for the verdict's absorption distance
+  let high = -Infinity
+  let low = Infinity
+  for (let i = j0; i <= j1; i += 1) {
+    high = Math.max(high, bars.h[i])
+    low = Math.min(low, bars.l[i])
+  }
   return {
-    from: bars.t[j0], to: bars.t[j1], minutes,
+    from: bars.t[j0], to: bars.t[j1], minutes, high, low,
     top: { price: top, contracts: sum('topBuy'), opposite: sum('topSell'), firstTouch: topTouch, brokeAt: topMoved, breaks: topMoves },
     bottom: { price: bottom, contracts: sum('bottomSell'), opposite: sum('bottomBuy'), firstTouch: bottomTouch, brokeAt: bottomMoved, breaks: bottomMoves },
   }
@@ -1079,8 +1086,8 @@ export function boxPanelSections(entries, hhmm, segments = null, pctOf = null) {
 
 // CR-DQ items 5 / 7 — one config object for the panel's display thresholds (⚙ "Percentile tiers" and "Verdict rules";
 // display aids, untested): tier cut-offs (percentiles) and the verdict's distances (pts).
-export const BOX_RULES_DEFAULTS = { notable: 80, strong: 95, nearPts: 2, progressPts: 2, absorbPts: 2 }
-export const BOX_RULES_RANGES = { notable: [50, 99], strong: [51, 100], nearPts: [0.25, 10], progressPts: [0, 20], absorbPts: [0, 10] }
+export const BOX_RULES_DEFAULTS = { notable: 80, strong: 95, nearPts: 2, progressPts: 2, absorbPts: 2, minAgeMin: 10, minHeightPts: 2 }
+export const BOX_RULES_RANGES = { notable: [50, 99], strong: [51, 100], nearPts: [0.25, 10], progressPts: [0, 20], absorbPts: [0, 10], minAgeMin: [0, 120], minHeightPts: [0, 20] }
 export function boxRules(stored) {
   const out = { ...BOX_RULES_DEFAULTS }
   for (const [k, [lo, hi]] of Object.entries(BOX_RULES_RANGES)) {
@@ -1171,15 +1178,19 @@ export function pctBadgeTitle(kind, pc, rules = BOX_RULES_DEFAULTS) {
 export const FOMC_2026_DECISION_DAYS = ['2026-01-28', '2026-03-18', '2026-04-29', '2026-06-17', '2026-07-29', '2026-09-16', '2026-10-28', '2026-12-09']
 const levelSide = (lv) => (lv.kind === 'sellers_absorbed' ? 'sellers' : 'buyers')
 // Absorption levels (absorptionLevels: the chart's top 8) standing at the box's last bar: started at or before it and not
-// broken by then; `where` = 'top' / 'bottom' (within absorbPts of that edge) or 'in' (inside the box), else not counted.
+// broken by then. CR-DQ amendment 1: distances are to the box's full high–low range (wicks; `box.high` / `box.low`, the
+// close-based edges when absent): `where` = 'top' / 'bottom' (within absorbPts of the high / low, the nearer if both) or
+// 'in' (between them), else not counted.
 export function boxLevels(levels, box, lastT, absorbPts) {
+  const hi = Number.isFinite(box.high) ? box.high : box.top
+  const lo = Number.isFinite(box.low) ? box.low : box.bottom
   const out = []
   for (const lv of Array.isArray(levels) ? levels : []) {
     if (!(lv.start <= lastT) || (lv.broken && lv.end <= lastT)) continue
-    const nearTop = Math.abs(lv.price - box.top) <= absorbPts + 1e-9
-    const nearBottom = Math.abs(lv.price - box.bottom) <= absorbPts + 1e-9
-    const inside = lv.price <= box.top + 1e-9 && lv.price >= box.bottom - 1e-9
-    const where = nearTop && (!nearBottom || Math.abs(lv.price - box.top) <= Math.abs(lv.price - box.bottom)) ? 'top'
+    const nearTop = Math.abs(lv.price - hi) <= absorbPts + 1e-9
+    const nearBottom = Math.abs(lv.price - lo) <= absorbPts + 1e-9
+    const inside = lv.price <= hi + 1e-9 && lv.price >= lo - 1e-9
+    const where = nearTop && (!nearBottom || Math.abs(lv.price - hi) <= Math.abs(lv.price - lo)) ? 'top'
       : nearBottom ? 'bottom' : inside ? 'in' : null
     if (where) out.push({ ...lv, side: levelSide(lv), where })
   }
@@ -1197,13 +1208,21 @@ export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, 
   const box = b0 ? { ...b0, top: edgePx(b0.top), bottom: edgePx(b0.bottom) } : null
   const ro = box?.readout || null
   const title = (ids) => `Rules: ${ids.join(' + ') || 'none'}. Thresholds: notable ≥ p${r.notable} (Δ share and contracts/pt), `
-    + `near an edge ≤ ${r.nearPts} pts, no advance ≤ ${r.progressPts} pts, absorption within ${r.absorbPts} pts of an edge. `
-    + 'Order: A22 → A24 → two-sided absorption → A19 + A23 reads → watch break (idea) → nothing notable. Draft rules, untested — a display aid.'
+    + `near an edge ≤ ${r.nearPts} pts, no advance ≤ ${r.progressPts} pts, absorption within ${r.absorbPts} pts of the box's high–low range, `
+    + `box formed at ≥ ${r.minAgeMin} min and ≥ ${r.minHeightPts} pts. `
+    + 'Order: A22 → box still forming → A24 → two-sided absorption → A19 + A23 reads → watch break (idea) → nothing notable. Draft rules, untested — a display aid.'
   const out = (kind, label, evidence, ids) => ({ kind, label, evidence, rules: ids, title: title(ids) })
   if (tradeDate && fomc.includes(String(tradeDate).slice(0, 10))) {
     return out('no-trades', 'NO TRADES — event day', `FOMC decision day ${String(tradeDate).slice(0, 10)}: no new trades all session`, ['A22'])
   }
   if (!box || !ro) return out('none', 'NO ACTION — nothing notable', 'no box stats yet', [])
+  // CR-DQ amendment 2: nothing beyond NO TRADES until the box is old and tall enough (close-based height)
+  const age = Number(ro.minutes) || 0
+  const height = box.top - box.bottom
+  if (age < r.minAgeMin || !(height >= r.minHeightPts - 1e-9)) {
+    return out('forming', 'NO ACTION — box still forming',
+      `box ${age} min (min ${r.minAgeMin}) · ${Number.isFinite(height) ? height.toFixed(2) : '–'} pts tall (min ${r.minHeightPts})`, [])
+  }
   const share = readoutShare(ro)
   const sp = pct?.share?.p ?? null
   const cp = pct?.cpp?.p ?? null
@@ -1229,7 +1248,12 @@ export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, 
   const nearTop = Number.isFinite(px) && box.top - px <= r.nearPts + 1e-9
   const nearBottom = Number.isFinite(px) && px - box.bottom <= r.nearPts + 1e-9
   const effort = cp != null && cp >= r.notable
-  const posTxt = (side) => `price ${Math.abs(side === 'top' ? box.top - px : px - box.bottom).toFixed(2)} from the ${side}`
+  // CR-DQ amendment 3: which side of the edge price is on
+  const posTxt = (side) => {
+    const e = side === 'top' ? box.top : box.bottom
+    if (Math.abs(px - e) < 1e-9) return `price at the ${side}`
+    return `price ${Math.abs(px - e).toFixed(2)} ${px > e ? 'above' : 'below'} the ${side}`
+  }
   const absTop = buyersAbs.filter((l) => l.where === 'top')
   const absBottom = sellersAbs.filter((l) => l.where === 'bottom')
   // A19 + A23: short at the top — buyers leaning and / or buyers absorbed at the top, no advance
