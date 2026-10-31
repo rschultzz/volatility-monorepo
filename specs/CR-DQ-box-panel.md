@@ -299,3 +299,89 @@ cut-off:
 
 Verdict order as built: NO TRADES (A22) → CONFLICT (A24) → NO ACTION two-sided absorption → SHORT / LONG READ (A19 + A23)
 → WATCH BREAK (idea) → NO ACTION nothing notable.
+
+## Implementation notes (deltas found while building; no spec change)
+
+- **Item 2:** the current section's stats are collapsed like the frozen ones (spec); the lines stay in the DOM
+  (`display: none`), so the popup's test ids (`flow-v3-box-popup-head / -top / -bottom / -mixed`) still name the current
+  box's lines. Max width 460 px (380 wrapped most lines).
+- **Item 3:** "× hides it until the next anchor" keeps CR-DP's meaning: picking the same anchor again is not a new anchor.
+- **Item 5:** `boxPopupLines` gains `parts` (the head's pieces) so a badge sits after the share and after contracts/pt; the
+  head string itself is unchanged. ⚙ holds both groups ("Box panel — percentile tiers", "Verdict rules") in one stored
+  object (`ib-react-flow-v3-settings.boxRules`, defaults `BOX_RULES_DEFAULTS`).
+- **Item 7 fix (found by the smoke scan):** the panel's boxes carry edge objects (`top: { price, … }`), so the first
+  build's verdict read NaN distances and always fell to "price mid-box". `boxVerdict` now takes edge prices; unit test on
+  that shape.
+- **Evidence wording:** "price 2.00 from the top" is the distance either side of the edge (a close up to 2 pts beyond the
+  top counts as "near", as a test of the edge); it doesn't say above / below.
+
+## Smoke (2026-10-31, read-only backend `scripts/cr_dp_smoke_backend.py` :8068; branch :5193, origin/main `82028ca` :5194)
+
+`tests/e2e/cr-dq.spec.js` **9 / 9** (logs `scripts/logs/cr-dq/smoke/`, screenshots `specs/assets/cr-dq/`). Unit **91 / 91**.
+GEX lines are hidden in these loads (min |GEX| 9999 $bn): an armed anchor click on a GEX line opens its popup instead.
+
+| Smoke item | Result |
+|---|---|
+| 2026-10-30, anchor 11:57: no box text; panel bottom-left; one section per box; current last, highlighted, verdict first; numbers = origin/main | 2 boxes (11:57–12:39 broke ↑, 12:39–12:59 current). No drawn box has a label (origin/main: both); no box hover. Branch box objects = origin/main's (plus `lastClose`). Current section's head (badges removed) / Top / Bottom = origin/main's popup text exactly; the frozen section has origin/main's label pieces and Top / Bottom contracts. Panel 4 px in from the plot's left and bottom, ≤ half the plot. Verdict: NO ACTION — nothing notable (price mid-box · share +4.05 % p73 · c/pt p62) |
+| Drag, reload: kept; double-click: bottom-left | drag +200 / −150 px stored (`ib-react-box-panel-pos`); same place after reload and for a new anchor; double-click → bottom-left, key removed; 900 × 700 viewport: inside the plot; × until the next anchor; clear removes |
+| Shading: current stronger than frozen, candles on top; set-end distinct | magenta lift (r + b − 2g, shade on vs off) current 24, frozen 12; candle body pixels unchanged; set end 12:40: the window's pixel above the boxes lifts 10 / 10 / 10 (slate, no magenta cast) |
+| > 4 boxes | 2026-10-29 anchor 06:31: 5 sections, "3 older boxes not shown" |
+| Percentiles: 3 example boxes by hand; tiers | Train windows as anchor + set end (Databento on the chart), one box each: 02-10 07:05–07:30 Δ −1,718 / vol 92,876 → share p58.41 · c/pt p69.38; 04-15 09:12–09:24 +725 / 18,923 → p57.74 · p30.33; 05-20 10:40–11:35 −154 / 68,938 → p7.69 · p88.99 = Step 0's minute-table sums and numpy.interp on the JSON (to 0.01). 2026-10-30 anchor 06:31 (Ironbeam): every badge = `boxPercentiles` of its readout; tiers seen normal / notable / strong with weights < 600 / ≥ 600 / ≥ 800 |
+| Verdicts: 3 hand-checked boxes; 10-28 NO TRADES | below |
+
+### Verdict scan (2026-10-29 / 10-30, replay to every 10 min 07:00 → 12:50, anchor 30 min earlier; 72 replays)
+
+65 NO ACTION nothing notable · 3 WATCH BREAK ↑ (idea) · 2 SHORT READ · 1 CONFLICT · 1 NO ACTION two-sided (`item-7-scan.json`).
+Hand checks against the rule table (defaults: notable p80, near 2, no advance 2, absorption 2):
+
+- **Read — 10-30 replay 09:30, anchor 09:00:** box 09:00–09:29, top 7629.50, last close 7631.50 (2.00 beyond the top ≤ 2:
+  near); share 3,962 / 80,300 = +4.93 % p93 ≥ 80 (buyers leaning); c/pt p86 ≥ 80 (effort; also dPrice +2.0 ≤ 2); the only
+  sellers-absorbed level (7640.00) broke at 08:30, before the box → no conflict → **SHORT READ at top** (A19). ✓
+- **Conflict — 10-30 replay 08:30, anchor 08:00:** box 08:00–08:29, bottom 7639.75; share 3,949 / 103,311 = +3.82 % p84 ≥ 80
+  (buyers leaning); sellers absorbed 7640.00 from 08:20, unbroken at the box's last bar, 0.25 from the bottom → **CONFLICT →
+  NO ACTION** (A24). ✓
+- **Nothing notable — 10-29 replay 07:20, anchor 06:50:** box 06:50–07:19, top 7756.25 / bottom 7738.50, last 7753.50
+  (2.75 from the top > 2, 15 from the bottom): not at an edge; share −0.58 % p23 (no lean); no levels → **NO ACTION —
+  nothing notable**. ✓
+- Also seen: **two-sided** 10-29 replay 12:40 (buyers absorbed 7746.50 0.75 from the top 7745.75, sellers absorbed 7738.25
+  2.00 from the bottom 7740.25, share p4) ✓; **watch break ↑** 10-29 12:10, 10-30 07:50, 12:50 (share p85–97, c/pt p35–44,
+  at the top, no buyers absorbed there).
+- 10-30 replay 10:20 (anchor 09:50) reads SHORT on a box whose top = bottom = 7609.00 (a box after a break starts at one
+  close and widens only on a close > 2 pts away, CR-DN). The rule reads it as written; noted, not changed.
+- **2026-10-28 (FOMC):** NO TRADES — event day, hover "Rules: A22" ✓.
+
+### Smoke addition — Ryan's 2026-10-30 entries (report only; thresholds unchanged)
+
+`smoke-ryan-entries.json`, screenshots `ryan-entry-*.png`. Replays cut at the entry minute (the backend floors `until` to
+the minute).
+
+| Entry | Anchor | Verdict | Evidence / inputs |
+|---|---|---|---|
+| 06:11:46 | 05:00 (FULL) | NO ACTION — nothing notable | 2 boxes (05:00–05:34 broke ↑; 05:34–06:10). Last 7664.75, 0.50 below the bottom 7665.25; share +2.40 % — **no badges: ETH box (baseline is RTH only)**, so no lean and no effort read; no levels (ETH: absorption is RTH-only) |
+| 07:06:47 | 06:58 | NO ACTION — nothing notable | box 06:58–07:05, 7658.50–7667.00, last 7657.00 (1.50 below the bottom); share −0.05 % p1 (no lean), c/pt p60, dPrice −7.0; no levels |
+| 07:49:17 | 07:40 | WATCH BREAK ↑ (idea) | box 07:40–07:48, 7652.25–7656.50, last 7657.00 (0.50 above the top); share +8.14 % p94 (buyers), c/pt p65 (moving easily), dPrice +4.75; buyers absorbed 7660.25 (07:05) is 3.75 above the top — beyond the 2-pt absorption distance, so not counted |
+| 09:22:50 | 09:15 | NO ACTION — nothing notable | box 09:15–09:21, 7624.75–7627.50, last 7624.50 (0.25 below the bottom); share +3.97 % p56 (no notable lean), c/pt **p98 (strong)**, dPrice −0.25. A LONG READ needs sellers leaning or sellers absorbed at the bottom; neither (the effort was buyers', positive share, below notable) |
+
+### Existing specs (`scripts/logs/cr-dq/existing-specs.log`)
+
+All 18 other spec files against the branch (:5193, backend :8068, origin/main :5194): **62 passed, 16 skipped, 26 failed
+(47 min)**. Every failure is either not runnable here or fails on origin/main as well:
+- **Not runnable here (other CRs' fixed ports, refused):** `cr-ck` ×2 (:5178 / :5179), `cr-db` ×5 (:5176 / :5177; T/S/U also
+  fails on main, CR-DN), `cr-de` ×7 (:5172).
+- **Need a live session (today, 2026-10-31, is a Saturday; the chart never loads):** `cr-dc` live, `cr-df` live, `cr-dg`
+  live, `cr-dp` item 8 ("a live bar arrived").
+- **Need the Dash app:** `cr-dh` ×4 (as in CR-DP).
+- **Fail on origin/main too:** `cr-dn` item 6 "57k closing minute" (stale since CR-DN merged, as in CR-DP); `cr-dp` item 4
+  and item 6 — both compare with the *pre-CR-DP* main (its header edge readout / raw CVD line), which origin/main `82028ca`
+  no longer has; run with origin/main's own spec copy against origin/main they fail the same way; `cr-dm` "review replay
+  2026-10-29" — times out waiting for the chart on origin/main as on the branch (15 min each; its hand-check file copied
+  from the main checkout's logs).
+
+**Updated (assertions on the removed labels / hover / old popup placement only):**
+- `cr-dn`: `drawn()` labels → `boxLabelText` of each box's readout (the label left the chart; the hand-sum checks now check
+  the panel's numbers, one source).
+- `cr-di`: the frozen-box hover → the oldest frozen section of the box panel, expanded ("Top … · buyers …" instead of
+  "Top …: buyers …"; "n older boxes not shown" instead of "not drawn").
+- `cr-dp` item 4: label read from the box readout; default place bottom-left (was right of the box top-right); drag by
+  the header, clamped in the plot; a new anchor reuses the remembered place (was: reset); ≤ half the plot (was the 8 %
+  compactness check). Amendment 2: popup head `toBeAttached` (the current section is collapsed by default).
