@@ -381,8 +381,8 @@ export class AbsorptionLevelsPrimitive extends BasePrimitive {
 
 // Edge lines (DF4): thin dashed magenta lines at each box's top and bottom. CR-DI amendment 9: frozen boxes (broken)
 // are drawn at lower opacity from their start to the break minute; the current box from its start to the last bar.
-// data: { boxes: [{ from, to (shifted epochs), top, bottom (prices), frozen, box }] }. Hover: `onHover(box | null, pt)`
-// within 5 px of a frozen box's line (the current box is the header's).
+// data: { boxes: [{ from, to (shifted epochs), top, bottom (prices), frozen }] }. CR-DQ item 1: no box label and no box
+// hover (the box panel holds the stats).
 export const FROZEN_EDGE_ALPHA = 0.35
 // CR-DN item 2: probes (cancelled breaks) = a short magenta tick from the edge outward at the break minute, low opacity,
 // with a small "probe hh:mm" label. data.probes: [{ time (shifted), price (edge), up, label, probe }]. Hover:
@@ -390,11 +390,9 @@ export const FROZEN_EDGE_ALPHA = 0.35
 export const PROBE_ALPHA = 0.45
 const PROBE_TICK_PX = 7
 export class EdgeLinesPrimitive extends BasePrimitive {
-  constructor(onHover, onProbeHover) {
+  constructor(onProbeHover) {
     super()
-    this._onHover = onHover
     this._onProbeHover = onProbeHover
-    this._hit = []
     this._probeHit = []
     this._move = (param) => {
       const pt = param?.point
@@ -410,19 +408,6 @@ export class EdgeLinesPrimitive extends BasePrimitive {
         }
       }
       this._onProbeHover?.(probe ? probe.probe : null, probe ? { x: probe.x, y: probe.y } : null)
-      let best = null
-      let bestD = 6
-      if (pt && !probe) {
-        for (const h of this._hit) {
-          if (pt.x < h.x0 - 3 || pt.x > h.x1 + 3) continue
-          const dd = Math.abs(pt.y - h.y)
-          if (dd < bestD) {
-            bestD = dd
-            best = h
-          }
-        }
-      }
-      this._onHover?.(best ? best.box : null, best ? { x: pt.x, y: best.y } : null)
     }
   }
 
@@ -433,7 +418,6 @@ export class EdgeLinesPrimitive extends BasePrimitive {
 
   detached() {
     this._chart?.unsubscribeCrosshairMove(this._move)
-    this._onHover?.(null, null)
     this._onProbeHover?.(null, null)
     super.detached()
   }
@@ -443,7 +427,6 @@ export class EdgeLinesPrimitive extends BasePrimitive {
   }
 
   paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }, chart, series, d) {
-    this._hit = []
     this._probeHit = []
     const ts = chart.timeScale()
     const plotW = bitmapSize.width / hr
@@ -467,23 +450,6 @@ export class EdgeLinesPrimitive extends BasePrimitive {
         ctx.moveTo(Math.round(x0 * hr), yy)
         ctx.lineTo(Math.round(Math.max(x1, x0 + 2) * hr), yy)
         ctx.stroke()
-        if (b.box) this._hit.push({ x0, x1, y, box: b.box })
-      }
-      // CR-DN item 3b: the box's label inside its top-left corner, on a small dark pill (the chart's tag background).
-      const yt = series.priceToCoordinate(b.top)
-      if (b.label && yt != null && x1 - x0 > 40) {
-        ctx.save()
-        ctx.setLineDash([])
-        ctx.font = `${Math.round(10 * vr)}px sans-serif`
-        ctx.textBaseline = 'top'
-        const tw = ctx.measureText(b.label).width / hr
-        const lx = Math.max(0, x0) + 3
-        const ly = yt + 3
-        ctx.fillStyle = TAG_BG(b.frozen ? 0.6 : 0.8)
-        ctx.fillRect(Math.round((lx - 2) * hr), Math.round((ly - 1) * vr), Math.round((tw + 4) * hr), Math.round(13 * vr))
-        ctx.fillStyle = `rgba(${MAGENTA_RGB},${b.frozen ? 0.6 : 0.95})`
-        ctx.fillText(b.label, Math.round(lx * hr), Math.round(ly * vr))
-        ctx.restore()
       }
     }
     ctx.setLineDash([])
