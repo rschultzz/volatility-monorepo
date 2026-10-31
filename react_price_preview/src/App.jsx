@@ -1679,8 +1679,9 @@ export default function App() {
     if (!seg) return null
     const allBars = flowV2PanePayloads.flatMap((p) => (Array.isArray(p?.bars) ? p.bars : []))
     const rows = alignV2ToCandles(allBars, mergedBarsWithLiveTimeline)
-    const readouts = segmentReadouts(rows, rowCloses(rows, mergedBarsWithLiveTimeline, flowV3Shift), seg.spans)
-    return { ...seg, readouts }
+    const closes = rowCloses(rows, mergedBarsWithLiveTimeline, flowV3Shift)
+    const readouts = segmentReadouts(rows, closes, seg.spans)
+    return { ...seg, readouts, rows, closes } // CR-DS item 4: rows / closes also feed the read-history replay
   }, [flowV3Edges, flowV3Shift, flowV2PanePayloads, mergedBarsWithLiveTimeline])
 
   // CR-DI amendment 2: while the Edge effort strip is drawn the Flow v3 pane grows by its height (the price pane
@@ -1700,6 +1701,8 @@ export default function App() {
       marks: flowV3Layers.marks,
       levels: flowV3Layers.levels,
       edges: flowV3Edges,
+      bars: flowCellsBars, // CR-DS item 4: the payload's 1-minute bars (edgeReadout's) for the read-history replay
+      end: flowEnd, // CR-DS item 4: set end (shifted) or null
       segments: flowV3Segments, // CR-DN item 3: per-box readouts for the box labels (drawnBoxes order)
       sellLayer: flowV3Settings.sellLayer,
       buyLayer: flowV3Settings.buyLayer,
@@ -1709,7 +1712,7 @@ export default function App() {
       // CR-DN item 1: the profile stops after the end's minute ([from, to) on cell minute starts); null without an end.
       profileTo: flowAnchor != null && flowEnd != null ? flowEnd + 60 : null,
     }
-  }, [flowV3AnyLayer, flowCells, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, flowAnchor, flowEnd])
+  }, [flowV3AnyLayer, flowCells, flowCellsBars, flowEnd, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, flowAnchor, flowEnd])
   // CR-DN item 1: the anchor → end window, shaded on the price chart (any layer); null without an end.
   const flowV3Window = useMemo(
     () => (flowAnchor != null && flowEnd != null ? { from: flowAnchor, to: flowEnd } : null),

@@ -353,7 +353,8 @@ for (const until of [`${TODAY}T07:40`, `${TODAY}T08:09`, null]) {
       const tip = panel.getByTestId('flow-v3-box-panel-frozen').first()
       await tip.getByTestId('flow-v3-box-panel-summary').click()
       // CR-DN item 3b: "how it ended" reads "broke ↑/↓ hh:mm"
-      await expect(tip).toContainText(`Box ${pt(fb.from)}–${pt(fb.breakAt)} · broke ${dirArrow(fb.dir)} ${pt(fb.breakAt)}`)
+      // CR-DS item 5: the frozen row reads "hh:mm–hh:mm · broke ↓ hh:mm · share pNN · c/pt pNN"
+      await expect(tip).toContainText(`${pt(fb.from)}–${pt(fb.breakAt)} · broke ${dirArrow(fb.dir)} ${pt(fb.breakAt)}`)
       await expect(tip).toContainText(`Top ${fb.top.price.toFixed(2)} · buyers ${kfmt(fb.top.contracts)} / sellers ${kfmt(fb.top.opposite)}`)
       await expect(tip).toContainText(`Bottom ${fb.bottom.price.toFixed(2)} · sellers ${kfmt(fb.bottom.contracts)} / buyers ${kfmt(fb.bottom.opposite)}`)
       if (dropped) await expect(panel).toContainText(`${dropped} older box${dropped === 1 ? '' : 'es'} not shown`)
