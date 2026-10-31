@@ -407,3 +407,25 @@ As built (Code's reading, stated here before the code):
   shorter than 2 pts, the verdict is "NO ACTION — box still forming" (evidence: its age and height vs the minimums), so no
   read, watch, conflict or two-sided verdict shows on a forming box. ⚙ "Min box age (min)" 10 (0–120), "Min box height
   (pts)" 2 (0–20).
+
+### Amendment re-runs (2026-10-31; `smoke-ryan-entries.json`, `amendment-hand-checks.json`; reported as they came out)
+
+Unit **94 / 94** (+3 amendment tests). Same anchors, replays cut at the entry minute; no threshold changed beyond the
+amendment's two new display defaults (10 min, 2 pts).
+
+| Entry | Anchor | Before the amendment | After | Inputs |
+|---|---|---|---|---|
+| 06:11:46 | 05:00 (FULL) | NO ACTION — nothing notable | **NO ACTION — nothing notable** | box 05:34–06:10 (36 min, 7.75 pts; high 7674.50 / low 7664.25); "price 0.50 below the bottom"; ETH box: no badges, no levels |
+| 07:06:47 | 06:58 | NO ACTION — nothing notable | **NO ACTION — box still forming** | box 7 min (min 10) · 8.50 pts tall |
+| 07:49:17 | 07:40 | WATCH BREAK ↑ (idea) | **NO ACTION — box still forming** | box 8 min (min 10) · 4.25 pts tall. The buyers-absorbed 7660.25 is now 0.50 above the box high 7659.75 (would count "at the top" once the box is formed) |
+| 09:22:50 | 09:15 | NO ACTION — nothing notable | **NO ACTION — box still forming** | box 6 min (min 10) · 2.75 pts tall |
+
+Hand-checked verdicts, re-run:
+- 10-30 replay 09:30, anchor 09:00 (29 min, 6.50 pts tall): **SHORT READ at top** — "price 2.00 above the top · share
+  +4.93 % p93 buyers leaning · c/pt p86 (effort)". Unchanged; the levels within 2 of the high 7636.00 (buyers 7631.75) broke
+  at 08:49, before the box. ✓
+- 10-30 replay 08:30, anchor 08:00 (29 min, 12.75 pts): **CONFLICT → NO ACTION** — share +3.82 % p84 vs sellers absorbed
+  7640.00 at the bottom (0.25 from the low 7639.75). Unchanged. ✓
+- 10-29 replay 07:20, anchor 06:50 (29 min, 17.75 pts): **NO ACTION — nothing notable** — "price mid-box · share −0.58 % p23
+  · c/pt p50". Unchanged. ✓
+- 2026-10-28: NO TRADES — event day. Unchanged.

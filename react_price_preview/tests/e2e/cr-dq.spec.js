@@ -546,7 +546,7 @@ async function verdictInputs(page) {
   const cur = d.boxes.find((x) => !x.frozen)
   const sec = t.sections.find((s) => s.current)
   return {
-    box: { from: pt(cur.box.from), to: pt(cur.box.to), top: cur.top, bottom: cur.bottom, lastClose: cur.box.lastClose,
+    box: { from: pt(cur.box.from), to: pt(cur.box.to), top: cur.top, bottom: cur.bottom, high: cur.box.high, low: cur.box.low, lastClose: cur.box.lastClose,
       readout: cur.box.readout && { delta: cur.box.readout.delta, vol: cur.box.readout.vol, dPrice: cur.box.readout.dPrice, minutes: cur.box.readout.minutes, share: cur.box.readout.vol ? cur.box.readout.delta / cur.box.readout.vol : null } },
     badges: sec.badges.map(({ kind, p, tier }) => ({ kind, p, tier })),
     levels: (d.levels || []).map((l) => ({ kind: l.kind, price: l.price, start: pt(l.start), broken: l.broken, end: pt(l.end) })),
@@ -606,4 +606,20 @@ test('smoke addition: Ryan\'s 2026-10-30 entries — verdict and evidence at eac
     log('smoke-ryan-entries.json', rows)
   }
   expect(rows.length).toBe(4)
+})
+
+// CR-DQ amendment: the three hand-checked verdicts re-run (report as they come out; nothing tuned).
+test('amendment: the three hand-checked replays (10-30 09:30 / 08:30, 10-29 07:20)', async ({ page }) => {
+  test.setTimeout(600_000)
+  const rows = []
+  for (const [day, until, a] of [[D30, '09:30', '09:00'], [D30, '08:30', '08:00'], [D29, '07:20', '06:50']]) {
+    await page.goto('about:blank')
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await open(page, day, { storage: EDGES_LEVELS, until: `${day}T${until}` })
+    await anchorAt(page, shifted(`${day}T${a}`), shifted(`${day}T${a}`) - 20 * 60, shifted(`${day}T${until}`))
+    rows.push({ day, until, anchor: a, ...(await verdictInputs(page)) })
+    await shot(page, `amend-hand-${day.slice(5)}-${until.replace(':', '')}.png`)
+    log('amendment-hand-checks.json', rows)
+  }
+  expect(rows.length).toBe(3)
 })
