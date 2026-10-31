@@ -597,6 +597,40 @@ export class ShareCapPrimitive extends BasePrimitive {
   }
 }
 
+// CR-DQ item 4 — faint box fills behind the candles: each drawn box between its top and bottom over its time span, existing
+// magenta at very low opacity (current BOX_SHADE_ALPHA_CURRENT, frozen BOX_SHADE_ALPHA_FROZEN). The edge lines stay as
+// EdgeLinesPrimitive draws them. The set-end window (WindowShadePrimitive) is slate and spans the full plot height, so it
+// stays distinct. data: the same { boxes: [{ from, to, top, bottom, frozen }] } as EdgeLinesPrimitive.
+export const BOX_SHADE_ALPHA_CURRENT = 0.10
+export const BOX_SHADE_ALPHA_FROZEN = 0.05
+export class BoxShadePrimitive extends BasePrimitive {
+  zOrder() {
+    return 'bottom'
+  }
+
+  paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }, chart, series, d) {
+    const ts = chart.timeScale()
+    const plotW = bitmapSize.width / hr
+    const vrange = ts.getVisibleRange?.()
+    if (!vrange) return
+    for (const b of d.boxes || []) {
+      if (b.to < Number(vrange.from) || b.from > Number(vrange.to)) continue
+      const xa = ts.timeToCoordinate(b.from)
+      const xb = ts.timeToCoordinate(b.to)
+      const yt = series.priceToCoordinate(b.top)
+      const yb = series.priceToCoordinate(b.bottom)
+      if (yt == null || yb == null) continue
+      const x0 = Math.max(0, xa == null ? 0 : xa)
+      const x1 = Math.min(plotW, xb == null ? plotW : xb)
+      if (x1 <= x0) continue
+      const y0 = Math.min(yt, yb)
+      const h = Math.max(1, Math.abs(yb - yt))
+      ctx.fillStyle = `rgba(${MAGENTA_RGB},${b.frozen ? BOX_SHADE_ALPHA_FROZEN : BOX_SHADE_ALPHA_CURRENT})`
+      ctx.fillRect(Math.round(x0 * hr), Math.round(y0 * vr), Math.round((x1 - x0) * hr), Math.round(h * vr))
+    }
+  }
+}
+
 // CR-DN item 1 — the Flow v3 anchor → end window, shaded lightly behind the candles (existing slate, low opacity; C1).
 // data: { from, to (shifted epochs; `to` = the end's last 1-minute bar), times (shifted candle times) }: the shade runs
 // from the anchor candle's left edge to the end candle's right edge, half a bar spacing either side.

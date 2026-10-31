@@ -23,7 +23,7 @@ import BoxPanel from './BoxPanel'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
 import { LIVE_EFFORT_ID, absorptionLevels, boxPanelOffset, boxPanelPlace, boxPanelSections, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
-import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
+import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, BoxShadePrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
 const ETH_BG_COLOR = '#1f2937'
@@ -2736,7 +2736,7 @@ export default function PriceChart({
   }, [v3EdgeReadout, v3Segments, v3Times, v3Shift])
   const v3SellLayer = flowV3?.sellLayer !== false
   const v3BuyLayer = flowV3?.buyLayer !== false
-  const v3PrimRef = useRef({ series: null, heat: null, marks: null, profile: null, levels: null, edges: null, window: null })
+  const v3PrimRef = useRef({ series: null, heat: null, boxShade: null, marks: null, profile: null, levels: null, edges: null, window: null })
   const [v3Hover, setV3Hover] = useState(null)
   const [v3LevelHover, setV3LevelHover] = useState(null)
   const [v3ProbeHover, setV3ProbeHover] = useState(null) // CR-DN item 2
@@ -2825,7 +2825,7 @@ export default function PriceChart({
     const series = seriesRef.current
     if (!series) return
     const reg = v3PrimRef.current
-    if (reg.series !== series) v3PrimRef.current = { series, heat: null, marks: null, profile: null, levels: null, edges: null, window: null }
+    if (reg.series !== series) v3PrimRef.current = { series, heat: null, boxShade: null, marks: null, profile: null, levels: null, edges: null, window: null }
     const r = v3PrimRef.current
     const feed = (key, make, data) => {
       if (!data && !r[key]) return
@@ -2836,6 +2836,7 @@ export default function PriceChart({
       r[key].setData(data)
     }
     feed('heat', () => new HeatmapPrimitive(), v3Columns ? { columns: v3Columns, times: v3Times, sell: v3SellLayer, buy: v3BuyLayer } : null)
+    feed('boxShade', () => new BoxShadePrimitive(), v3Edges) // CR-DQ item 4: over the heat, under the candles
     feed('marks', () => new AbsorbMarksPrimitive((mark, pt) => setV3Hover(mark ? { mark, pt } : null)),
       v3Marks ? { marks: v3Marks, times: v3Times } : null)
     feed('profile', () => new ProfilePrimitive(), v3Profile)
