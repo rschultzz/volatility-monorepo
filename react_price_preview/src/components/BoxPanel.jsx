@@ -86,6 +86,18 @@ function EvidenceTable({ rows, testid }) {
   )
 }
 
+// CR-DS item 4 — "Read live: 07:49–07:58 (short)": the minutes in which a read verdict held, replayed without later bars.
+function History({ s }) {
+  if (!s.historyText) return null
+  return (
+    <div data-testid={s.current ? 'flow-v3-box-history' : 'flow-v3-box-history-frozen'} data-n={s.history?.length ?? 0}
+      title="Minutes in which the verdict was a SHORT / LONG READ, replayed minute by minute from the anchor using only bars up to each minute. Draft rules, untested."
+      style={{ color: s.history?.length ? TEXT : MUTED, cursor: 'help' }}>
+      {s.historyText}
+    </div>
+  )
+}
+
 function Verdict({ v, testid = 'flow-v3-box-verdict' }) {
   const tone = VERDICT_TONE[v.kind] || 'neutral'
   const c = TONE_COLOR[tone]
@@ -159,6 +171,7 @@ export default function BoxPanel({
                 : { marginTop: 2, padding: '0 6px', color: '#cbd5e1' }}
             >
               {s.current && verdict && <Verdict v={verdict} />}
+              {s.current && <History s={s} />}
               <div
                 role="button"
                 tabIndex={0}
@@ -173,6 +186,7 @@ export default function BoxPanel({
                 {!s.current && s.pct && <>{' · '}<PctBadge kind="share" pct={s.pct} rules={rules} /></>}
               </div>
               <div style={{ display: isOpen ? 'block' : 'none' }}>
+                {!s.current && <History s={s} />}
                 <Stats s={s} rules={rules} testid={s.current ? 'flow-v3-box-panel-current-stats' : undefined} />
               </div>
             </div>

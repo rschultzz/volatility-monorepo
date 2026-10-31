@@ -479,8 +479,11 @@ export function relinkHover(hover, field, list, idKey) {
 
 // DF1–DF3: one level per absorption mark that is confirmed by now; it starts at the mark's minute and ends at
 // its break bar or now; opacity fades with age; the top LEVELS_MAX by contracts x opacity are kept.
-export function absorptionLevels(payload, candleTimes, shift, max = LEVELS_MAX) {
-  const now = payloadNow(payload)
+// CR-DS item 4: `asOf` (UTC) replays the levels as of that minute (marks confirmed by then, broken only if their break
+// is by then, top 8 by score then); null = the payload's now. Caveat (Step 0): a mark's merged_vol can include later
+// merges, so the top-8 rank at `asOf` can differ slightly from what the live chart showed then.
+export function absorptionLevels(payload, candleTimes, shift, max = LEVELS_MAX, asOf = null) {
+  const now = asOf != null ? Number(asOf) : payloadNow(payload)
   if (now == null) return []
   const all = []
   for (const s of Array.isArray(payload?.segments) ? payload.segments : []) {
@@ -609,7 +612,7 @@ function probeStats(payload, bars, p, back, edge, box, exact) {
 // never move an edge, so the edges can't be re-derived from the closes): { top, bottom, topMoved, bottomMoved,
 // topMoves, bottomMoves } (growth moves); first touch within EDGE_NEAR_PTS; contracts from edgeCounts against the final
 // edges (null when not exact).
-function boxStats(payload, bars, j0, j1, exact, e) {
+function boxStats(payload, bars, j0, j1, exact, e, counts = true) {
   const { top, bottom, topMoved, bottomMoved, topMoves, bottomMoves } = e
   let topTouch = null
   let bottomTouch = null
@@ -617,7 +620,7 @@ function boxStats(payload, bars, j0, j1, exact, e) {
     if (topTouch == null && bars.h[i] >= top - EDGE_NEAR_PTS - 1e-9) topTouch = bars.t[i]
     if (bottomTouch == null && bars.l[i] <= bottom + EDGE_NEAR_PTS + 1e-9) bottomTouch = bars.t[i]
   }
-  const minutes = exact ? edgeCounts(payload, bars.t[j0], bars.t[j1], top, bottom) : null
+  const minutes = exact && counts ? edgeCounts(payload, bars.t[j0], bars.t[j1], top, bottom) : null
   const sum = (k) => (minutes ? total(minutes[k]) : null)
   // CR-DQ amendment 1: the box's full high–low range over its bars (wicks), for the verdict's absorption distance
   let high = -Infinity
@@ -628,6 +631,7 @@ function boxStats(payload, bars, j0, j1, exact, e) {
   }
   return {
     from: bars.t[j0], to: bars.t[j1], minutes, high, low,
+    lastClose: bars.c[j1], // CR-DS item 5: where price sat at the box's last bar (frozen boxes' table as of their end)
     top: { price: top, contracts: sum('topBuy'), opposite: sum('topSell'), firstTouch: topTouch, brokeAt: topMoved, breaks: topMoves },
     bottom: { price: bottom, contracts: sum('bottomSell'), opposite: sum('bottomBuy'), firstTouch: bottomTouch, brokeAt: bottomMoved, breaks: bottomMoves },
   }
@@ -651,8 +655,10 @@ function boxStats(payload, bars, j0, j1, exact, e) {
 // the new box's start are the original break bar. A close back inside cancels it: the box is unchanged and the break
 // is a probe (`probes` on its box: break bar, extreme, minutes outside, contracts beyond the edge). While pending,
 // nothing grows or breaks; `pending` is the unresolved break at the last bar (or the end), else null.
+// CR-DS item 4: `{ counts: false }` skips the edge counts and probe contracts (cells scans) for the read-history replay;
+// prices, edges, high / low, probes' times and pending are identical.
 export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAULT_V3_SETTINGS.boxHoldMin, endShifted = null,
-  breakHoldMin = DEFAULT_V3_SETTINGS.breakHoldMin) {
+  breakHoldMin = DEFAULT_V3_SETTINGS.breakHoldMin, { counts = true } = {}) {
   if (anchorShifted == null || !bars?.t?.length) return null
   let i0 = -1
   for (let i = 0; i < bars.t.length; i += 1) {
@@ -683,7 +689,7 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
     if (pending) {
       // Strictly inside (Amendment 1): a close on the edge is not back inside. Inside within A bars = a probe.
       if (c < top - 1e-9 && c > bottom + 1e-9) {
-        probes.push(probeStats(payload, bars, pending, i, pending.dir === 'up' ? top : bottom, bars.t[j0], exact))
+        probes.push(probeStats(payload, bars, pending, i, pending.dir === 'up' ? top : bottom, bars.t[j0], exact && counts))
         pending = null
         continue
       }
@@ -721,7 +727,7 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
   const tLast = bars.t[last]
   const probesOf = (from) => probes.filter((p) => p.box === from)
   const frozen = spans.map(([a, z, dir, e]) => {
-    const box = { ...boxStats(payload, bars, a, z, exact, e), probes: probesOf(bars.t[a]) }
+    const box = { ...boxStats(payload, bars, a, z, exact, e, counts), probes: probesOf(bars.t[a]) }
     const end = bars.t[z + 1]
     const held = (e) => (e.firstTouch == null ? null : Math.round((end - e.firstTouch) / 60))
     return {
@@ -729,7 +735,7 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
       top: { ...box.top, heldMin: held(box.top) }, bottom: { ...box.bottom, heldMin: held(box.bottom) },
     }
   })
-  const cur = { ...boxStats(payload, bars, j0, last, exact, edgesNow()), probes: probesOf(bars.t[j0]) }
+  const cur = { ...boxStats(payload, bars, j0, last, exact, edgesNow(), counts), probes: probesOf(bars.t[j0]) }
   const held = (e) => (e.firstTouch == null ? null : Math.round((tLast - e.firstTouch) / 60))
   return {
     ...cur, anchor: bars.t[i0], exact, holdMin: Number(holdMin), breakHoldMin: accept, frozen, end: endShifted == null ? null : bars.t[last],
@@ -1414,4 +1420,53 @@ export function endFromPick(t, stepSec, anchor, lastShifted) {
 export function endWindowText(anchor, end, hhmm) {
   if (anchor == null || end == null) return ''
   return `${hhmm(anchor)} → ${hhmm(end)} · ${Math.round((end - anchor) / 60)} min`
+}
+
+// CR-DS item 4 — read history: replay the verdict minute by minute from the anchor to now / the set end, each minute
+// using only bars up to it — boxes from edgeReadout(…, end = that minute; light, no edge counts), the current box's
+// readout over the pane rows whose candle has closed by then (on a 5-minute chart the last complete candle), its
+// percentiles, and the absorption levels as of then — and keep the minutes whose verdict was a SHORT / LONG READ, as
+// ranges per box (`box` = the replayed box's start, UTC; equal to the frozen box's `from` once it froze). Inputs are the
+// panel's own: the cells payload and its bars, the pane rows / closes (App flowV3Segments), the edge settings, the
+// baseline, the trade date and the ⚙ rules. `ptMinOf(utc)` = PT minute of day (as the panel's badges).
+export const READ_KINDS = ['short', 'long']
+export function readHistory({ payload, bars, rows, closes, anchorShifted, endShifted = null, shift, holdMin, breakHoldMin,
+  candleTimes, segments, baseline, tradeDate, rules = null, ptMinOf, stepSec = 60 }) {
+  const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now()
+  const out = { ranges: [], minutes: 0, ms: 0 }
+  if (anchorShifted == null || !bars?.t?.length || !Array.isArray(rows)) return out
+  let i0 = -1
+  for (let i = 0; i < bars.t.length; i += 1) if (shift(bars.t[i]) >= anchorShifted) { i0 = i; break }
+  if (i0 < 0) return out
+  let last = bars.t.length - 1
+  if (endShifted != null) while (last > i0 && shift(bars.t[last]) > endShifted) last -= 1
+  const lag = Math.max(0, (Number(stepSec) || 60) - 60) // a candle's rows count once the candle has closed
+  let cur = null
+  for (let i = i0; i <= last; i += 1) {
+    const tEnd = shift(bars.t[i])
+    const r = edgeReadout(payload, bars, anchorShifted, shift, holdMin, tEnd, breakHoldMin, { counts: false })
+    if (!r) continue
+    out.minutes += 1
+    const ro = anchorReadout(rows, closes, shift(r.from), tEnd - lag)
+    const pct = boxPercentiles(ro, ptMinOf(r.from), segments, baseline)
+    const levels = absorptionLevels(payload, candleTimes, shift, LEVELS_MAX, bars.t[i] + 60)
+    const v = boxVerdict({ box: { ...r, readout: ro, ended: { kind: 'current' } }, pct, levels, tradeDate, rules })
+    const side = READ_KINDS.includes(v.kind) ? v.kind : null
+    if (side && cur && cur.side === side && cur.box === r.from && cur.lastI === i - 1) {
+      cur.to = bars.t[i]
+      cur.lastI = i
+    } else if (side) {
+      cur = { box: r.from, side, from: bars.t[i], to: bars.t[i], lastI: i }
+      out.ranges.push(cur)
+    } else cur = null
+  }
+  out.ranges = out.ranges.map(({ lastI, ...x }) => x) // eslint-disable-line no-unused-vars
+  out.ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0)
+  return out
+}
+// "Read live: 07:49–07:58 (short) · 08:10 (long)"; "Read live: none" without a read. `ranges` of one box.
+export function readHistoryText(ranges, hhmm) {
+  const list = Array.isArray(ranges) ? ranges : []
+  if (!list.length) return 'Read live: none'
+  return `Read live: ${list.map((x) => `${hhmm(x.from)}${x.to !== x.from ? `–${hhmm(x.to)}` : ''} (${x.side})`).join(' · ')}`
 }

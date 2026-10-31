@@ -23,7 +23,7 @@ import BoxPanel from './BoxPanel'
 import boxBaseline from '../data/boxBaseline.json'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { LIVE_EFFORT_ID, absorptionLevels, boxPanelOffset, boxPanelPlace, boxPanelSections, boxPercentiles, boxRules, boxVerdict, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
+import { LIVE_EFFORT_ID, absorptionLevels, boxPanelOffset, boxPanelPlace, boxPanelSections, boxPercentiles, boxRules, boxVerdict, buildHeatColumns, readHistory, readHistoryText, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
 import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, BoxShadePrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
@@ -2755,12 +2755,35 @@ export default function PriceChart({
   const v3Anchor = flowV3?.anchor ?? null
   // CR-DQ item 5: each drawn box's percentiles (same-source train baseline; null = no badge), computed once here.
   const v3Rules = useMemo(() => boxRules(flowV3?.boxRules), [flowV3?.boxRules])
+  const v3PtMin = useCallback((utc) => Math.floor(((((v3Shift(utc) % 86400) + 86400) % 86400)) / 60), [v3Shift])
+  // CR-DS item 4: read history — the verdict replayed minute by minute from the anchor to now / the set end with no later
+  // bars (flowV3.readHistory; light edgeReadout, ~15 ms RTH / ~45 ms full Globex in Step 0), once per payload / anchor /
+  // end / settings change. Ranges carry their box's start (UTC) = the panel section's key.
+  const v3Bars = flowV3?.bars || null
+  const v3End = flowV3?.end ?? null
+  const v3History = useMemo(() => {
+    if (!v3EdgeReadout || !v3Payload || !v3Bars || !v3Segments?.rows) return null
+    const step = v3Times.length > 1 ? Math.max(60, v3Times[1] - v3Times[0]) : 60
+    return readHistory({
+      payload: v3Payload, bars: v3Bars, rows: v3Segments.rows, closes: v3Segments.closes, anchorShifted: v3Shift(v3EdgeReadout.anchor),
+      endShifted: v3End, shift: v3Shift, holdMin: v3EdgeReadout.holdMin, breakHoldMin: v3EdgeReadout.breakHoldMin, candleTimes: v3Times,
+      segments: v3Payload.segments, baseline: boxBaseline, tradeDate, rules: v3Rules, ptMinOf: v3PtMin, stepSec: step,
+    })
+  }, [v3EdgeReadout, v3Payload, v3Bars, v3Segments, v3Times, v3Shift, v3End, tradeDate, v3Rules, v3PtMin])
   const v3BoxPanel = useMemo(() => {
     if (!v3Edges?.boxes?.length) return null
-    const ptMin = (utc) => Math.floor(((((v3Shift(utc) % 86400) + 86400) % 86400)) / 60)
-    const pctOf = (b) => boxPercentiles(b.readout, ptMin(b.from), v3Payload?.segments, boxBaseline)
-    return boxPanelSections(v3Edges.boxes, (t) => formatShiftedHHMM(v3Shift(t)), v3Payload?.segments, pctOf)
-  }, [v3Edges, v3Shift, v3Payload])
+    const pctOf = (b) => boxPercentiles(b.readout, v3PtMin(b.from), v3Payload?.segments, boxBaseline)
+    const panel = boxPanelSections(v3Edges.boxes, (t) => formatShiftedHHMM(v3Shift(t)), v3Payload?.segments, pctOf)
+    const ranges = v3History?.ranges || []
+    const hhmm = (t) => formatShiftedHHMM(v3Shift(t))
+    return {
+      ...panel, historyMs: v3History?.ms ?? null,
+      sections: panel.sections.map((sct) => {
+        const mine = v3History ? ranges.filter((x) => String(x.box) === sct.key) : null
+        return { ...sct, history: mine, historyText: mine ? readHistoryText(mine, hhmm) : '' }
+      }),
+    }
+  }, [v3Edges, v3Shift, v3Payload, v3History, v3PtMin])
   // CR-DQ item 7: the current box's verdict from the panel's own inputs (its percentiles, the levels above, the trade date).
   const v3Verdict = useMemo(() => {
     const cur = v3BoxPanel?.sections.find((sct) => sct.current)
