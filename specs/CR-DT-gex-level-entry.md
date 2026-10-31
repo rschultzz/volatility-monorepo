@@ -174,7 +174,7 @@ takes the missed winners nearly cancel the gain (D4 +40 / −30; D6 +40 / −50)
 
 ### Readout — A12 strong levels
 
-6 / 10 / 11 / 2 cards (D2 / D4 / D6 / inside), 0–5 on takes. Every cell inconclusive (all-card means +2.0, +2.0,
+6 / 10 / 11 / 2 cards (D2 / D4 / D6 / inside), 0–5 on takes. Every cell inconclusive (all-card means 0.0, +2.0,
 +1.8, 0.0 pts / card; CIs straddle 0). On these cards both entries mostly lose (edge all-card D6: 1 / 7). Too few to
 read.
 
