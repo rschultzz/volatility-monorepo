@@ -22,6 +22,8 @@ import {
 } from '../flowShared'
 import {
   BOX_HOLD_MIN_RANGE,
+  BOX_RULES_RANGES,
+  boxRules,
   BREAK_HOLD_MIN_RANGE,
   DEFAULT_V3_SETTINGS,
   LIVE_MIN_MOVE_RANGE,
@@ -184,6 +186,41 @@ function GuideBody() {
   )
 }
 
+// CR-DQ items 5 / 7 — the box panel's thresholds (one config object, flowV3.BOX_RULES_DEFAULTS). Display aids, untested.
+function BoxRulesFields({ draft, setDraft, input, label }) {
+  const r = { ...boxRules(null), ...(draft.boxRules || {}) }
+  const set = (k) => (e) => setDraft((d) => ({ ...d, boxRules: { ...boxRules(null), ...(d.boxRules || {}), [k]: e.target.value } }))
+  const num = (k, text, step, testid) => (
+    <label style={{ display: 'block', flex: 1 }}>
+      {label(text)}
+      <input type="number" step={step} min={BOX_RULES_RANGES[k][0]} max={BOX_RULES_RANGES[k][1]} aria-label={text} data-testid={testid}
+        value={r[k]} style={input} onChange={set(k)} />
+    </label>
+  )
+  const note = { fontSize: '11px', color: '#94a3b8', marginTop: '2px', marginBottom: '10px' }
+  return (
+    <>
+      <div style={{ fontSize: '12px', color: '#e2e8f0', fontWeight: 600, margin: '4px 0' }}>Box panel — percentile tiers</div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        {num('notable', 'Notable from (percentile)', 1, 'flow-v3-tier-notable')}
+        {num('strong', 'Strong from (percentile)', 1, 'flow-v3-tier-strong')}
+      </div>
+      <div style={note}>Display aid — untested. Badges compare a box's Δ share and contracts/pt with train RTH windows of similar length (defaults 80 / 95).</div>
+      <div style={{ fontSize: '12px', color: '#e2e8f0', fontWeight: 600, margin: '4px 0' }}>Verdict rules</div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        {num('nearPts', 'Near edge (pts)', 0.25, 'flow-v3-rule-near')}
+        {num('progressPts', 'No advance (pts)', 0.25, 'flow-v3-rule-progress')}
+        {num('absorbPts', 'Absorption within (pts)', 0.25, 'flow-v3-rule-absorb')}
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+        {num('minAgeMin', 'Min box age (min)', 1, 'flow-v3-rule-min-age')}
+        {num('minHeightPts', 'Min box height (pts)', 0.25, 'flow-v3-rule-min-height')}
+      </div>
+      <div style={note}>Draft rules (A19, A22, A23, A24), applied mechanically — untested, a display aid. "Notable" in the rules is the tier above. Absorption distance is to the box's high–low range (wicks). No verdict beyond NO TRADES until the box is this old and tall ("box still forming"). Defaults 2 / 2 / 2, 10 min / 2 pts.</div>
+    </>
+  )
+}
+
 function Settings({ value, layers, markers = DEFAULT_MARKER_SETTINGS, onApply, onClose, onResetLayout }) {
   const [draft, setDraft] = useState({
     ...value, heat: Boolean(layers?.heat), marks: Boolean(layers?.marks), swing: markers.swing, effortRatio: markers.effortRatio,
@@ -207,6 +244,7 @@ function Settings({ value, layers, markers = DEFAULT_MARKER_SETTINGS, onApply, o
       rollingOn: Boolean(draft.rollingOn),
       liveMinMove: n('liveMinMove', LIVE_MIN_MOVE_RANGE[0], LIVE_MIN_MOVE_RANGE[1], DEFAULT_V3_SETTINGS.liveMinMove),
       anchoredLine: draft.anchoredLine === 'raw' ? 'raw' : 'share',
+      boxRules: boxRules(draft.boxRules), // CR-DQ items 5 / 7: clamped to BOX_RULES_RANGES
     }, {
       // CR-DP amendment item 1: the Flow v2 marker settings, same ranges as v2's ⚙ (swing 1–50, ratio 1–10)
       ...markers,
@@ -264,6 +302,7 @@ function Settings({ value, layers, markers = DEFAULT_MARKER_SETTINGS, onApply, o
             value={draft.liveMinMove ?? DEFAULT_V3_SETTINGS.liveMinMove} style={input} onChange={(e) => setDraft((d) => ({ ...d, liveMinMove: e.target.value }))} />
           <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>With Effort on, the leg in progress is labelled once it has moved this far (2–12, default 4). A display default, not a tested threshold.</div>
         </label>
+        <BoxRulesFields draft={draft} setDraft={setDraft} input={input} label={label} />
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
           <input type="checkbox" aria-label="Heatmap (cells)" data-testid="flow-v3-heatmap-toggle" checked={Boolean(draft.heat)} onChange={(e) => setDraft((d) => ({ ...d, heat: e.target.checked }))} />
           Heatmap (cells) — behind the candles

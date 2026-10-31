@@ -19,10 +19,12 @@ import {
   QUALITY_SHORT,
 } from 'web-shared'
 import LandscapeChartOverlay from './LandscapeChartOverlay'
+import BoxPanel from './BoxPanel'
+import boxBaseline from '../data/boxBaseline.json'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { LIVE_EFFORT_ID, absorptionLevels, boxLabelText, boxPopupLines, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
-import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
+import { LIVE_EFFORT_ID, absorptionLevels, boxPanelOffset, boxPanelPlace, boxPanelSections, boxPercentiles, boxRules, boxVerdict, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
+import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, BoxShadePrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
 const ETH_BG_COLOR = '#1f2937'
@@ -42,6 +44,24 @@ const CONDOR_DEFAULT_TOP_OFFSET = 8
 // so a user-dragged position keeps its distance from the price axis across
 // the LANDSCAPE toggle.
 const CONDOR_PANEL_POSITION_STORAGE_KEY = 'ib-react-condor-panel-pos'
+// CR-DQ item 3: the box panel's place, px from the plot's left / bottom edges; absent = default (bottom-left).
+const BOX_PANEL_POS_KEY = 'ib-react-box-panel-pos'
+function readBoxPanelPos() {
+  try {
+    const v = JSON.parse(window.localStorage.getItem(BOX_PANEL_POS_KEY) || 'null')
+    return v && Number.isFinite(v.left) && Number.isFinite(v.bottom) ? { left: v.left, bottom: v.bottom } : null
+  } catch {
+    return null
+  }
+}
+function writeBoxPanelPos(pos) {
+  try {
+    if (pos) window.localStorage.setItem(BOX_PANEL_POS_KEY, JSON.stringify({ left: Math.round(pos.left), bottom: Math.round(pos.bottom) }))
+    else window.localStorage.removeItem(BOX_PANEL_POS_KEY)
+  } catch {
+    // storage blocked: the place is kept for this page only
+  }
+}
 
 // CR-012 Item 4 — GEX legend panel default anchor: top-left, below the row
 // of pills/buttons. 56 = settings-gear bottom (top 8 + height 44) + 4px
@@ -2676,8 +2696,12 @@ export default function PriceChart({
   }, [v3ProfileOn, v3Flat, v3ProfileFrom, v3ProfileTo])
   // CR-DF — absorption levels (exact marks as fading lines: magenta buyers absorbed, orange sellers absorbed, CR-DG)
   // and the edge readout's dashed lines.
+  // CR-DQ item 7 (Ryan, Step 0 decision 4): the verdict reads the same top-8 levels the chart draws, also when the
+  // Absorption levels layer is off, so they are computed once whenever either needs them.
   const v3LevelsOn = Boolean(flowV3?.levels && v3Payload)
-  const v3Levels = useMemo(() => (v3LevelsOn ? absorptionLevels(v3Payload, v3Times, v3Shift) : null), [v3LevelsOn, v3Payload, v3Times, v3Shift])
+  const v3LevelsNeeded = Boolean(v3Payload && (flowV3?.levels || flowV3?.edges))
+  const v3LevelsAll = useMemo(() => (v3LevelsNeeded ? absorptionLevels(v3Payload, v3Times, v3Shift) : null), [v3LevelsNeeded, v3Payload, v3Times, v3Shift])
+  const v3Levels = v3LevelsOn ? v3LevelsAll : null
   const v3EdgeReadout = flowV3?.edges || null
   const v3Segments = flowV3?.segments || null // CR-DN item 3: per-box readouts (drawnBoxes order)
   const v3Edges = useMemo(() => {
@@ -2694,14 +2718,14 @@ export default function PriceChart({
       const from = snap(b.from)
       const to = snap(frozen ? b.breakAt : b.to)
       if (from == null || to == null) return
-      // CR-DN item 3b: every drawn box carries its label and hover data (frozen: broke; current: set end / current).
+      // CR-DN item 3b: every drawn box carries its panel data (frozen: broke; current: set end / current). CR-DQ item 1:
+      // no in-chart label.
       const readout = v3Segments?.readouts?.[k] || null
       const ended = frozen ? { kind: 'broke', dir: b.dir, at: b.breakAt }
         : v3EdgeReadout.end != null ? { kind: 'end', at: v3EdgeReadout.end } : { kind: 'current' }
       const pending = frozen ? null : v3EdgeReadout.pending
       out.push({
         from, to, top: b.top.price, bottom: b.bottom.price, frozen,
-        label: readout ? boxLabelText(readout) : '',
         box: { ...b, dropped, readout, ended, pending },
       })
     })
@@ -2717,35 +2741,46 @@ export default function PriceChart({
   }, [v3EdgeReadout, v3Segments, v3Times, v3Shift])
   const v3SellLayer = flowV3?.sellLayer !== false
   const v3BuyLayer = flowV3?.buyLayer !== false
-  const v3PrimRef = useRef({ series: null, heat: null, marks: null, profile: null, levels: null, edges: null, window: null })
+  const v3PrimRef = useRef({ series: null, heat: null, boxShade: null, marks: null, profile: null, levels: null, edges: null, window: null })
   const [v3Hover, setV3Hover] = useState(null)
   const [v3LevelHover, setV3LevelHover] = useState(null)
-  const [v3BoxHover, setV3BoxHover] = useState(null)
   const [v3ProbeHover, setV3ProbeHover] = useState(null) // CR-DN item 2
 
-  // CR-DP item 4 — box stats popup for the current (unfrozen) box, with Edges on and an anchor (v3EdgeReadout is null
-  // otherwise, so clear / Esc / Edges off remove it). Default place: just right of the box's top-right, kept inside the
-  // plot, following the box on pans and zooms; once dragged it stays where it was put. A new anchor resets the
-  // position and the × (closed until the next anchor). Text: flowV3.boxPopupLines, the box label's own numbers.
+  // CR-DQ items 2 / 3 — the box panel (replaces CR-DP item 4's popup): every drawn box, with Edges on and an anchor
+  // (v3EdgeReadout is null otherwise, so clear / Esc / Edges off remove it). Default place: bottom-left inside the plot;
+  // dragged by its header, the place is remembered per browser (px from the plot's left / bottom edges,
+  // BOX_PANEL_POS_KEY) and reused for later anchors and sessions; a double-click on the header returns it to the
+  // default. It is re-clamped into the plot every frame (resize). × hides it until the next anchor. Max height = half
+  // the plot; the body scrolls beyond that. Text: flowV3.boxPanelSections (CR-DP's boxPopupLines).
   const v3Anchor = flowV3?.anchor ?? null
-  const v3CurrentBox = useMemo(() => v3Edges?.boxes.find((b) => !b.frozen) || null, [v3Edges])
-  const v3PopupLines = useMemo(
-    () => (v3CurrentBox ? boxPopupLines(v3CurrentBox.box, (t) => formatShiftedHHMM(v3Shift(t)), v3Payload?.segments) : null),
-    [v3CurrentBox, v3Shift, v3Payload]
-  )
-  const [boxPopupDrag, setBoxPopupDrag] = useState(null) // { left, top } in stage px once dragged
+  // CR-DQ item 5: each drawn box's percentiles (same-source train baseline; null = no badge), computed once here.
+  const v3Rules = useMemo(() => boxRules(flowV3?.boxRules), [flowV3?.boxRules])
+  const v3BoxPanel = useMemo(() => {
+    if (!v3Edges?.boxes?.length) return null
+    const ptMin = (utc) => Math.floor(((((v3Shift(utc) % 86400) + 86400) % 86400)) / 60)
+    const pctOf = (b) => boxPercentiles(b.readout, ptMin(b.from), v3Payload?.segments, boxBaseline)
+    return boxPanelSections(v3Edges.boxes, (t) => formatShiftedHHMM(v3Shift(t)), v3Payload?.segments, pctOf)
+  }, [v3Edges, v3Shift, v3Payload])
+  // CR-DQ item 7: the current box's verdict from the panel's own inputs (its percentiles, the levels above, the trade date).
+  const v3Verdict = useMemo(() => {
+    const cur = v3BoxPanel?.sections.find((sct) => sct.current)
+    const entry = v3Edges?.boxes.find((b) => !b.frozen)
+    if (!cur || !entry) return null
+    return boxVerdict({ box: entry.box, pct: cur.pct, levels: v3LevelsAll, tradeDate, rules: v3Rules, hhmm: (t) => formatShiftedHHMM(v3Shift(t)) })
+  }, [v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift])
   const [boxPopupClosed, setBoxPopupClosed] = useState(false)
-  const [boxPopupAuto, setBoxPopupAuto] = useState(null) // { left, top, pane } default place + plot rect (stage px)
+  const [boxPanelGeom, setBoxPanelGeom] = useState(null) // { pane, w, h } plot rect (stage px) + panel size
+  const [boxPanelPos, setBoxPanelPos] = useState(() => readBoxPanelPos()) // { left, bottom } or null (default)
+  const [boxPanelDragging, setBoxPanelDragging] = useState(false)
   const boxPopupRef = useRef(null)
   const boxPopupDragRef = useRef(null)
   useEffect(() => {
-    setBoxPopupDrag(null)
     setBoxPopupClosed(false)
   }, [v3Anchor])
-  const boxPopupOn = Boolean(v3PopupLines && !boxPopupClosed)
+  const boxPopupOn = Boolean(v3BoxPanel && !boxPopupClosed)
   useEffect(() => {
-    if (!boxPopupOn || !v3CurrentBox) {
-      setBoxPopupAuto(null)
+    if (!boxPopupOn) {
+      setBoxPanelGeom(null)
       return undefined
     }
     let raf = 0
@@ -2753,69 +2788,60 @@ export default function PriceChart({
     const tick = () => {
       raf = requestAnimationFrame(tick)
       const chart = chartRef.current
-      const series = seriesRef.current
       const stage = stageRef.current
       const paneEl = chart?.panes?.()[0]?.getHTMLElement?.()
-      if (!chart || !series || !stage || !paneEl) return
+      if (!chart || !stage || !paneEl) return
       const sr = stage.getBoundingClientRect()
       const pr = paneEl.getBoundingClientRect()
       // the pane element is the chart's table row (price axis included): the plot is the time scale's width
       const pane = { left: pr.left - sr.left, top: pr.top - sr.top, width: chart.timeScale().width() || pr.width, height: pr.height }
-      const w = boxPopupRef.current?.offsetWidth || 0
-      const h = boxPopupRef.current?.offsetHeight || 0
-      const x = chart.timeScale().timeToCoordinate(v3CurrentBox.to)
-      const y = series.priceToCoordinate(v3CurrentBox.top)
-      const rawLeft = pane.left + (x == null ? pane.width : x + 8)
-      const rawTop = pane.top + (y == null ? 0 : y - 2)
-      const next = {
-        left: Math.max(pane.left, Math.min(rawLeft, pane.left + pane.width - w - 4)),
-        top: Math.max(pane.top, Math.min(rawTop, pane.top + pane.height - h - 4)),
-        pane,
-      }
+      const next = { pane, w: boxPopupRef.current?.offsetWidth || 0, h: boxPopupRef.current?.offsetHeight || 0 }
       const key = JSON.stringify(next, (k, v) => (typeof v === 'number' ? Math.round(v) : v))
       if (key !== lastKey) {
         lastKey = key
-        setBoxPopupAuto(next)
+        setBoxPanelGeom(next)
       }
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [boxPopupOn, v3CurrentBox])
-  const clampToPlot = (left, top) => {
-    const pane = boxPopupAuto?.pane
-    const w = boxPopupRef.current?.offsetWidth || 0
-    const h = boxPopupRef.current?.offsetHeight || 0
-    if (!pane) return { left, top }
-    return {
-      left: Math.max(pane.left, Math.min(left, pane.left + pane.width - w)),
-      top: Math.max(pane.top, Math.min(top, pane.top + pane.height - h)),
-    }
-  }
+  }, [boxPopupOn])
+  const boxPopupPlace = boxPanelGeom ? boxPanelPlace(boxPanelGeom.pane, boxPanelPos, boxPanelGeom.w, boxPanelGeom.h) : null
   const onBoxPopupPointerDown = (e) => {
     if (e.button !== 0 || e.target?.closest?.('[data-popup-close]')) return
     const el = boxPopupRef.current
-    if (!el) return
+    if (!el || !boxPanelGeom) return
     e.preventDefault()
     e.stopPropagation()
-    el.setPointerCapture?.(e.pointerId)
+    e.currentTarget.setPointerCapture?.(e.pointerId)
     boxPopupDragRef.current = { x: e.clientX, y: e.clientY, left: el.offsetLeft, top: el.offsetTop }
+    setBoxPanelDragging(true)
   }
   const onBoxPopupPointerMove = (e) => {
     const d = boxPopupDragRef.current
-    if (!d) return
-    setBoxPopupDrag(clampToPlot(d.left + e.clientX - d.x, d.top + e.clientY - d.y))
+    if (!d || !boxPanelGeom) return
+    const { pane, w, h } = boxPanelGeom
+    const p = boxPanelPlace(pane, boxPanelOffset(pane, d.left + e.clientX - d.x, d.top + e.clientY - d.y, h), w, h)
+    setBoxPanelPos(boxPanelOffset(pane, p.left, p.top, h))
   }
   const onBoxPopupPointerUp = (e) => {
     if (!boxPopupDragRef.current) return
     boxPopupDragRef.current = null
-    boxPopupRef.current?.releasePointerCapture?.(e.pointerId)
+    e.currentTarget.releasePointerCapture?.(e.pointerId)
+    setBoxPanelDragging(false)
+    setBoxPanelPos((pos) => {
+      writeBoxPanelPos(pos)
+      return pos
+    })
   }
-  const boxPopupPlace = boxPopupDrag ? clampToPlot(boxPopupDrag.left, boxPopupDrag.top) : boxPopupAuto
+  const onBoxPanelDoubleClick = () => {
+    setBoxPanelPos(null)
+    writeBoxPanelPos(null)
+  }
   useEffect(() => {
     const series = seriesRef.current
     if (!series) return
     const reg = v3PrimRef.current
-    if (reg.series !== series) v3PrimRef.current = { series, heat: null, marks: null, profile: null, levels: null, edges: null, window: null }
+    if (reg.series !== series) v3PrimRef.current = { series, heat: null, boxShade: null, marks: null, profile: null, levels: null, edges: null, window: null }
     const r = v3PrimRef.current
     const feed = (key, make, data) => {
       if (!data && !r[key]) return
@@ -2826,22 +2852,18 @@ export default function PriceChart({
       r[key].setData(data)
     }
     feed('heat', () => new HeatmapPrimitive(), v3Columns ? { columns: v3Columns, times: v3Times, sell: v3SellLayer, buy: v3BuyLayer } : null)
+    feed('boxShade', () => new BoxShadePrimitive(), v3Edges) // CR-DQ item 4: over the heat, under the candles
     feed('marks', () => new AbsorbMarksPrimitive((mark, pt) => setV3Hover(mark ? { mark, pt } : null)),
       v3Marks ? { marks: v3Marks, times: v3Times } : null)
     feed('profile', () => new ProfilePrimitive(), v3Profile)
     feed('levels', () => new AbsorptionLevelsPrimitive((level, pt) => setV3LevelHover(level ? { level, pt } : null)),
       v3Levels ? { levels: v3Levels, times: v3Times } : null)
-    feed('edges', () => new EdgeLinesPrimitive((box, pt) => setV3BoxHover(box ? { box, pt } : null),
-      (probe, pt) => setV3ProbeHover(probe ? { probe, pt } : null)), v3Edges)
+    feed('edges', () => new EdgeLinesPrimitive((probe, pt) => setV3ProbeHover(probe ? { probe, pt } : null)), v3Edges)
     feed('window', () => new WindowShadePrimitive(), flowWindow ? { ...flowWindow, times: v3Times } : null)
     // CR-DG: an open hover re-reads its mark / level from the new payload, so held minutes update on a refresh
     // while the pointer is still (gone from the new list = hover closed).
     setV3Hover((h) => relinkHover(h, 'mark', v3Marks, 'time'))
     setV3LevelHover((h) => relinkHover(h, 'level', v3Levels, 'start'))
-    setV3BoxHover((h) => {
-      const hit = h && v3Edges?.boxes.find((b) => b.box.from === h.box.from)
-      return hit ? { ...h, box: hit.box } : null
-    })
     setV3ProbeHover((h) => {
       const hit = h && v3Edges?.probes.find((q) => q.probe.at === h.probe.at && q.probe.dir === h.probe.dir)
       return hit ? { ...h, probe: hit.probe } : null
@@ -3889,78 +3911,21 @@ export default function PriceChart({
             </div>
           )}
 
-          {v3BoxHover && (
-            <div
-              data-testid="flow-v3-box-tooltip"
-              style={{
-                position: 'absolute',
-                left: Math.max(0, (hostRef.current?.offsetLeft || 0) + v3BoxHover.pt.x + 12),
-                top: Math.max(0, (hostRef.current?.offsetTop || 0) + v3BoxHover.pt.y - 10),
-                zIndex: 6, pointerEvents: 'none', background: 'rgba(2,6,23,0.92)', border: '1px solid #86198f',
-                borderRadius: 8, padding: '6px 8px', fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4, maxWidth: 300,
-              }}
-            >
-              {(() => {
-                const b = v3BoxHover.box
-                const hm = (t) => formatShiftedHHMM(v3Shift(t))
-                const n = (v) => (v == null ? 'exact data only' : kfmt(v))
-                const heldE = (e) => (e.heldMin == null ? 'not touched' : `held ${e.heldMin} min`)
-                // CR-DN item 3b: how the box ended (broke ↑/↓ hh:mm, set end hh:mm, or current)
-                const ended = b.ended?.kind === 'broke' ? `broke ${dirArrow(b.ended.dir)} ${hm(b.ended.at)}`
-                  : b.ended?.kind === 'end' ? `set end ${hm(b.ended.at)}` : 'current'
-                const until = b.ended?.kind === 'broke' ? b.ended.at : b.to
-                const probes = b.probes?.length || 0
-                return (
-                  <>
-                    <div style={{ fontWeight: 700, color: '#f0abfc' }}>Box {hm(b.from)}–{hm(until)} · {ended}</div>
-                    {b.readout && <div>{boxLabelText(b.readout)}</div>}
-                    <div>Top {b.top.price.toFixed(2)}: buyers {n(b.top.contracts)} / sellers {n(b.top.opposite)} · {heldE(b.top)}</div>
-                    <div>Bottom {b.bottom.price.toFixed(2)}: sellers {n(b.bottom.contracts)} / buyers {n(b.bottom.opposite)} · {heldE(b.bottom)}</div>
-                    <div>{probes} probe{probes === 1 ? '' : 's'}{b.pending ? ` · testing break ${hm(b.pending.at)} ${dirArrow(b.pending.dir)}${b.ended?.kind === 'end' ? ' (pending at the end)' : ''}` : ''}{b.dropped ? ` · ${b.dropped} older box${b.dropped === 1 ? '' : 'es'} not drawn` : ''}</div>
-                    <div style={{ color: '#94a3b8' }}>visual aid — untested</div>
-                  </>
-                )
-              })()}
-            </div>
-          )}
-
           {boxPopupOn && (
-            <div
-              ref={boxPopupRef}
-              data-testid="flow-v3-box-popup"
-              data-dragged={boxPopupDrag ? '1' : '0'}
-              onPointerDown={onBoxPopupPointerDown}
-              onPointerMove={onBoxPopupPointerMove}
-              onPointerUp={onBoxPopupPointerUp}
-              onPointerCancel={onBoxPopupPointerUp}
-              title="Current box (drag to move) — visual aid, untested"
-              style={{
-                position: 'absolute',
-                left: boxPopupPlace?.left ?? 0,
-                top: boxPopupPlace?.top ?? 0,
-                visibility: boxPopupPlace ? 'visible' : 'hidden',
-                zIndex: 5, cursor: 'move', userSelect: 'none', touchAction: 'none',
-                background: TAG_BG(0.92), border: '1px solid rgba(232,121,249,0.35)', borderRadius: 4,
-                padding: '3px 18px 3px 6px', fontSize: '10px', fontFamily: 'sans-serif', color: '#e2e8f0', lineHeight: 1.35,
-                maxWidth: 340,
-              }}
-            >
-              <div data-testid="flow-v3-box-popup-head" style={{ color: '#f0abfc' }}>{v3PopupLines.head}</div>
-              <div data-testid="flow-v3-box-popup-top">{v3PopupLines.top}</div>
-              <div data-testid="flow-v3-box-popup-bottom">{v3PopupLines.bottom}</div>
-              {v3PopupLines.mixed && <div data-testid="flow-v3-box-popup-mixed" style={{ color: '#fbbf24' }}>{v3PopupLines.mixed}</div>}
-              <button
-                type="button"
-                data-popup-close="1"
-                data-testid="flow-v3-box-popup-close"
-                aria-label="Hide box stats until the next anchor"
-                title="Hide until the next anchor"
-                onClick={() => setBoxPopupClosed(true)}
-                style={{ position: 'absolute', top: 1, right: 2, width: 14, height: 14, padding: 0, border: 'none', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontSize: '11px', lineHeight: '14px' }}
-              >
-                ×
-              </button>
-            </div>
+            <BoxPanel
+              panel={v3BoxPanel}
+              place={boxPopupPlace}
+              panelRef={boxPopupRef}
+              maxHeight={boxPanelGeom ? Math.max(80, Math.round(boxPanelGeom.pane.height * 0.5)) : undefined}
+              dragged={Boolean(boxPanelPos) || boxPanelDragging}
+              onClose={() => setBoxPopupClosed(true)}
+              onHeaderPointerDown={onBoxPopupPointerDown}
+              onHeaderPointerMove={onBoxPopupPointerMove}
+              onHeaderPointerUp={onBoxPopupPointerUp}
+              onHeaderDoubleClick={onBoxPanelDoubleClick}
+              rules={v3Rules}
+              verdict={v3Verdict}
+            />
           )}
 
           {v3ProbeHover && (

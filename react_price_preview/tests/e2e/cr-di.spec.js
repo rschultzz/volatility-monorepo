@@ -347,13 +347,16 @@ for (const until of [`${TODAY}T07:40`, `${TODAY}T08:09`, null]) {
         fs.writeFileSync(path.join(LOGS, 'probe-debug.png'), await page.screenshot())
       }
       expect(magentaish, `faded magenta dashes on the oldest drawn frozen top ${fb.top.price}`).toBeGreaterThan(5)
-      await page.mouse.move(probe.x, probe.y)
-      const tip = page.getByTestId('flow-v3-box-tooltip')
+      // CR-DQ item 1 (re-pointed): the frozen-box hover panel is gone; the same stats are the oldest frozen section of
+      // the box panel (expanded)
+      const panel = page.getByTestId('flow-v3-box-popup')
+      const tip = panel.getByTestId('flow-v3-box-panel-frozen').first()
+      await tip.getByTestId('flow-v3-box-panel-summary').click()
       // CR-DN item 3b: "how it ended" reads "broke ↑/↓ hh:mm"
       await expect(tip).toContainText(`Box ${pt(fb.from)}–${pt(fb.breakAt)} · broke ${dirArrow(fb.dir)} ${pt(fb.breakAt)}`)
-      await expect(tip).toContainText(`Top ${fb.top.price.toFixed(2)}: buyers ${kfmt(fb.top.contracts)} / sellers ${kfmt(fb.top.opposite)}`)
-      await expect(tip).toContainText(`Bottom ${fb.bottom.price.toFixed(2)}: sellers ${kfmt(fb.bottom.contracts)} / buyers ${kfmt(fb.bottom.opposite)}`)
-      if (dropped) await expect(tip).toContainText(`${dropped} older box${dropped === 1 ? '' : 'es'} not drawn`)
+      await expect(tip).toContainText(`Top ${fb.top.price.toFixed(2)} · buyers ${kfmt(fb.top.contracts)} / sellers ${kfmt(fb.top.opposite)}`)
+      await expect(tip).toContainText(`Bottom ${fb.bottom.price.toFixed(2)} · sellers ${kfmt(fb.bottom.contracts)} / buyers ${kfmt(fb.bottom.opposite)}`)
+      if (dropped) await expect(panel).toContainText(`${dropped} older box${dropped === 1 ? '' : 'es'} not shown`)
       res.box_hover = await tip.innerText()
       fs.mkdirSync(ASSETS, { recursive: true })
       fs.writeFileSync(path.join(ASSETS, 'boxes-end-anchor-0700.png'), await page.screenshot())

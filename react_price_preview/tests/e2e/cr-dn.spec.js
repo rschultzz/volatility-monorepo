@@ -171,7 +171,7 @@ async function drawn(page) {
     return {
       cvd,
       // to = the drawn end (a frozen box: its break minute); lastUtc = the box's own last bar (the bar before its break)
-      boxes: e ? e.boxes.map((b) => ({ from: b.from, to: b.to, lastUtc: b.box?.to ?? null, top: b.top, bottom: b.bottom, frozen: b.frozen, label: b.label })) : null,
+      boxes: e ? e.boxes.map((b) => ({ from: b.from, to: b.to, lastUtc: b.box?.to ?? null, top: b.top, bottom: b.bottom, frozen: b.frozen, label: b.label ?? null, ro: b.box?.readout ?? null })) : null,
       probes: e ? (e.probes || []).map((q) => ({ time: q.time, price: q.price, label: q.label })) : null,
       levels: lv?._data ? lv._data.levels.map((l) => ({ price: l.price, kind: l.kind, broken: l.broken, contracts: l.contracts, alpha: l.alpha, drawAlpha: l.drawAlpha, start: l.startShifted, end: l.endShifted })) : null,
       tags: lv?._tags ? lv._tags.map((l) => l.price) : null,
@@ -179,7 +179,11 @@ async function drawn(page) {
       window: price.prims?.window?._data ? { from: price.prims.window._data.from, to: price.prims.window._data.to } : null,
       profile: price.prims?.profile?._data ? price.prims.profile._data.rows[1] : null,
     }
-  }, CHARTS_FN)
+  }, CHARTS_FN).then((d) => {
+    // CR-DQ item 1: no in-chart label; `label` = boxLabelText of the box's readout (the panel's numbers, one source)
+    if (d.boxes) d.boxes = d.boxes.map(({ ro, ...b }) => ({ ...b, label: b.label ?? (ro ? boxLabelText(ro) : null) }))
+    return d
+  })
 }
 
 // Hand sums from the minute data: v2 bars (delta, vol) by shifted minute; closes from the price chart's candles.

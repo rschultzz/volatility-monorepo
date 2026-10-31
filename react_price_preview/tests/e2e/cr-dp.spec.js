@@ -119,8 +119,8 @@ const currentBoxLabel = (page) => page.evaluate((fn) => {
   const { price } = eval(fn) // eslint-disable-line no-eval
   const e = price.prims?.edges?._data
   const b = e ? e.boxes.find((x) => !x.frozen) : null
-  return b ? { label: b.label, top: b.top, bottom: b.bottom, readout: b.box?.readout || null } : null
-}, CHARTS_FN)
+  return b ? { label: b.label ?? null, top: b.top, bottom: b.bottom, readout: b.box?.readout || null } : null
+}, CHARTS_FN).then((x) => (x && x.label == null && x.readout ? { ...x, label: boxLabelText(x.readout) } : x)) // CR-DQ item 1: no in-chart label
 
 const popupBox = (page) => page.getByTestId('flow-v3-box-popup').evaluate((el) => {
   const r = el.getBoundingClientRect()
@@ -203,7 +203,7 @@ test('item 4: 2026-10-29 anchor 06:49, Edges on — popup near the box with orig
   await expect(b.getByTestId('flow-v3-readout')).toHaveCount(0)
   await expect(b.getByTestId('flow-v3-edge-readout')).toHaveCount(0)
 
-  // default place: just right of the box's top-right (or clamped inside the plot)
+  // CR-DQ item 3 (re-pointed): default place bottom-left inside the plot (was: right of the box's top-right)
   const place = await b.evaluate((fn) => {
     const { priceEl, price } = eval(fn) // eslint-disable-line no-eval
     const e = price.prims.edges._data.boxes.find((x) => !x.frozen)
@@ -214,21 +214,20 @@ test('item 4: 2026-10-29 anchor 06:49, Edges on — popup near the box with orig
   const p0 = await popupBox(b)
   log('popup-place.json', { place, p0 })
   expect(p0.dragged).toBe('0')
-  expect(p0.x).toBeGreaterThanOrEqual(Math.round(place.pane.x))
-  expect(p0.x + p0.w).toBeLessThanOrEqual(Math.round(place.pane.r) + 1)
-  expect(p0.y + p0.h).toBeLessThanOrEqual(Math.round(place.pane.b) + 1)
-  if (place.x + 8 + p0.w < place.pane.r - 4) expect(Math.abs(p0.x - (place.x + 8))).toBeLessThanOrEqual(2)
-  expect(p0.w * p0.h).toBeLessThan(0.08 * (place.pane.r - place.pane.x) * (place.pane.b - place.pane.y)) // compact
+  expect(Math.abs(p0.x - (place.pane.x + 4))).toBeLessThanOrEqual(2)
+  expect(Math.abs(p0.y + p0.h - (place.pane.b - 4))).toBeLessThanOrEqual(2)
+  expect(p0.h).toBeLessThanOrEqual(0.5 * (place.pane.b - place.pane.y) + 2) // CR-DQ: at most half the plot
 
-  // drag by its body: it moves and stays (also across a re-render: Profile on / off)
+  // drag (CR-DQ item 3: by its header): it moves and stays (also across a re-render: Profile on / off)
   await b.mouse.move(p0.x + 20, p0.y + 8)
   await b.mouse.down()
   await b.mouse.move(p0.x - 200, p0.y + 120, { steps: 8 })
   await b.mouse.up()
   const p1 = await popupBox(b)
   expect(p1.dragged).toBe('1')
-  expect(Math.abs(p1.x - (p0.x - 220))).toBeLessThanOrEqual(2)
-  expect(Math.abs(p1.y - (p0.y + 112))).toBeLessThanOrEqual(2)
+  // clamped inside the plot (it starts bottom-left, so left / down stop at the plot's edge)
+  expect(p1.x).toBeGreaterThanOrEqual(Math.round(place.pane.x) - 1)
+  expect(p1.y + p1.h).toBeLessThanOrEqual(Math.round(place.pane.b) + 1)
   await b.getByTestId('flow-v3-profile-toggle').click()
   await b.waitForTimeout(1500)
   await b.getByTestId('flow-v3-profile-toggle').click()
@@ -237,12 +236,13 @@ test('item 4: 2026-10-29 anchor 06:49, Edges on — popup near the box with orig
   const p2 = await popupBox(b)
   expect([p2.x, p2.y]).toEqual([p1.x, p1.y])
 
-  // clear removes it; a new anchor brings it back at its default place
+  // clear removes it; CR-DQ item 3 (re-pointed): a new anchor reuses the remembered place
   await b.getByTestId('flow-v3-anchor-clear').click()
   await expect(b.getByTestId('flow-v3-box-popup')).toHaveCount(0)
   await anchorAt(b, a)
   const p3 = await popupBox(b)
-  expect(p3.dragged).toBe('0')
+  expect(p3.dragged).toBe('1')
+  expect([p3.x, p3.y + p3.h]).toEqual([p1.x, p1.y + p1.h])
   // × hides it until the next anchor; Esc clears; Edges off removes it
   await b.getByTestId('flow-v3-box-popup-close').click()
   await expect(b.getByTestId('flow-v3-box-popup')).toHaveCount(0)
@@ -618,6 +618,6 @@ test('amendment 2: a box spanning ETH (Ironbeam approx) and RTH (Databento exact
   await page.keyboard.press('Escape')
   await anchorAt(page, shifted(`${day}T07:00`), shifted(`${day}T09:00`))
   await pickAt(page, 'flow-v3-end-pick', shifted(`${day}T07:40`))
-  await expect(page.getByTestId('flow-v3-box-popup-head')).toBeVisible()
+  await expect(page.getByTestId('flow-v3-box-popup-head')).toBeAttached() // CR-DQ: in the collapsed current section
   await expect(page.getByTestId('flow-v3-box-popup-mixed')).toHaveCount(0)
 })
