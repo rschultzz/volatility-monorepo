@@ -19,9 +19,10 @@ import {
   QUALITY_SHORT,
 } from 'web-shared'
 import LandscapeChartOverlay from './LandscapeChartOverlay'
+import BoxPanel from './BoxPanel'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { LIVE_EFFORT_ID, absorptionLevels, boxPopupLines, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
+import { LIVE_EFFORT_ID, absorptionLevels, boxPanelOffset, boxPanelPlace, boxPanelSections, buildHeatColumns, chartMarks, dirArrow, drawnBoxes, flattenCells, floorIndex, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
 import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
@@ -42,6 +43,24 @@ const CONDOR_DEFAULT_TOP_OFFSET = 8
 // so a user-dragged position keeps its distance from the price axis across
 // the LANDSCAPE toggle.
 const CONDOR_PANEL_POSITION_STORAGE_KEY = 'ib-react-condor-panel-pos'
+// CR-DQ item 3: the box panel's place, px from the plot's left / bottom edges; absent = default (bottom-left).
+const BOX_PANEL_POS_KEY = 'ib-react-box-panel-pos'
+function readBoxPanelPos() {
+  try {
+    const v = JSON.parse(window.localStorage.getItem(BOX_PANEL_POS_KEY) || 'null')
+    return v && Number.isFinite(v.left) && Number.isFinite(v.bottom) ? { left: v.left, bottom: v.bottom } : null
+  } catch {
+    return null
+  }
+}
+function writeBoxPanelPos(pos) {
+  try {
+    if (pos) window.localStorage.setItem(BOX_PANEL_POS_KEY, JSON.stringify({ left: Math.round(pos.left), bottom: Math.round(pos.bottom) }))
+    else window.localStorage.removeItem(BOX_PANEL_POS_KEY)
+  } catch {
+    // storage blocked: the place is kept for this page only
+  }
+}
 
 // CR-012 Item 4 — GEX legend panel default anchor: top-left, below the row
 // of pills/buttons. 56 = settings-gear bottom (top 8 + height 44) + 4px
@@ -2722,29 +2741,30 @@ export default function PriceChart({
   const [v3LevelHover, setV3LevelHover] = useState(null)
   const [v3ProbeHover, setV3ProbeHover] = useState(null) // CR-DN item 2
 
-  // CR-DP item 4 — box stats popup for the current (unfrozen) box, with Edges on and an anchor (v3EdgeReadout is null
-  // otherwise, so clear / Esc / Edges off remove it). Default place: just right of the box's top-right, kept inside the
-  // plot, following the box on pans and zooms; once dragged it stays where it was put. A new anchor resets the
-  // position and the × (closed until the next anchor). Text: flowV3.boxPopupLines, the box label's own numbers.
+  // CR-DQ items 2 / 3 — the box panel (replaces CR-DP item 4's popup): every drawn box, with Edges on and an anchor
+  // (v3EdgeReadout is null otherwise, so clear / Esc / Edges off remove it). Default place: bottom-left inside the plot;
+  // dragged by its header, the place is remembered per browser (px from the plot's left / bottom edges,
+  // BOX_PANEL_POS_KEY) and reused for later anchors and sessions; a double-click on the header returns it to the
+  // default. It is re-clamped into the plot every frame (resize). × hides it until the next anchor. Max height = half
+  // the plot; the body scrolls beyond that. Text: flowV3.boxPanelSections (CR-DP's boxPopupLines).
   const v3Anchor = flowV3?.anchor ?? null
-  const v3CurrentBox = useMemo(() => v3Edges?.boxes.find((b) => !b.frozen) || null, [v3Edges])
-  const v3PopupLines = useMemo(
-    () => (v3CurrentBox ? boxPopupLines(v3CurrentBox.box, (t) => formatShiftedHHMM(v3Shift(t)), v3Payload?.segments) : null),
-    [v3CurrentBox, v3Shift, v3Payload]
+  const v3BoxPanel = useMemo(
+    () => (v3Edges?.boxes?.length ? boxPanelSections(v3Edges.boxes, (t) => formatShiftedHHMM(v3Shift(t)), v3Payload?.segments) : null),
+    [v3Edges, v3Shift, v3Payload]
   )
-  const [boxPopupDrag, setBoxPopupDrag] = useState(null) // { left, top } in stage px once dragged
   const [boxPopupClosed, setBoxPopupClosed] = useState(false)
-  const [boxPopupAuto, setBoxPopupAuto] = useState(null) // { left, top, pane } default place + plot rect (stage px)
+  const [boxPanelGeom, setBoxPanelGeom] = useState(null) // { pane, w, h } plot rect (stage px) + panel size
+  const [boxPanelPos, setBoxPanelPos] = useState(() => readBoxPanelPos()) // { left, bottom } or null (default)
+  const [boxPanelDragging, setBoxPanelDragging] = useState(false)
   const boxPopupRef = useRef(null)
   const boxPopupDragRef = useRef(null)
   useEffect(() => {
-    setBoxPopupDrag(null)
     setBoxPopupClosed(false)
   }, [v3Anchor])
-  const boxPopupOn = Boolean(v3PopupLines && !boxPopupClosed)
+  const boxPopupOn = Boolean(v3BoxPanel && !boxPopupClosed)
   useEffect(() => {
-    if (!boxPopupOn || !v3CurrentBox) {
-      setBoxPopupAuto(null)
+    if (!boxPopupOn) {
+      setBoxPanelGeom(null)
       return undefined
     }
     let raf = 0
@@ -2752,64 +2772,55 @@ export default function PriceChart({
     const tick = () => {
       raf = requestAnimationFrame(tick)
       const chart = chartRef.current
-      const series = seriesRef.current
       const stage = stageRef.current
       const paneEl = chart?.panes?.()[0]?.getHTMLElement?.()
-      if (!chart || !series || !stage || !paneEl) return
+      if (!chart || !stage || !paneEl) return
       const sr = stage.getBoundingClientRect()
       const pr = paneEl.getBoundingClientRect()
       // the pane element is the chart's table row (price axis included): the plot is the time scale's width
       const pane = { left: pr.left - sr.left, top: pr.top - sr.top, width: chart.timeScale().width() || pr.width, height: pr.height }
-      const w = boxPopupRef.current?.offsetWidth || 0
-      const h = boxPopupRef.current?.offsetHeight || 0
-      const x = chart.timeScale().timeToCoordinate(v3CurrentBox.to)
-      const y = series.priceToCoordinate(v3CurrentBox.top)
-      const rawLeft = pane.left + (x == null ? pane.width : x + 8)
-      const rawTop = pane.top + (y == null ? 0 : y - 2)
-      const next = {
-        left: Math.max(pane.left, Math.min(rawLeft, pane.left + pane.width - w - 4)),
-        top: Math.max(pane.top, Math.min(rawTop, pane.top + pane.height - h - 4)),
-        pane,
-      }
+      const next = { pane, w: boxPopupRef.current?.offsetWidth || 0, h: boxPopupRef.current?.offsetHeight || 0 }
       const key = JSON.stringify(next, (k, v) => (typeof v === 'number' ? Math.round(v) : v))
       if (key !== lastKey) {
         lastKey = key
-        setBoxPopupAuto(next)
+        setBoxPanelGeom(next)
       }
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [boxPopupOn, v3CurrentBox])
-  const clampToPlot = (left, top) => {
-    const pane = boxPopupAuto?.pane
-    const w = boxPopupRef.current?.offsetWidth || 0
-    const h = boxPopupRef.current?.offsetHeight || 0
-    if (!pane) return { left, top }
-    return {
-      left: Math.max(pane.left, Math.min(left, pane.left + pane.width - w)),
-      top: Math.max(pane.top, Math.min(top, pane.top + pane.height - h)),
-    }
-  }
+  }, [boxPopupOn])
+  const boxPopupPlace = boxPanelGeom ? boxPanelPlace(boxPanelGeom.pane, boxPanelPos, boxPanelGeom.w, boxPanelGeom.h) : null
   const onBoxPopupPointerDown = (e) => {
     if (e.button !== 0 || e.target?.closest?.('[data-popup-close]')) return
     const el = boxPopupRef.current
-    if (!el) return
+    if (!el || !boxPanelGeom) return
     e.preventDefault()
     e.stopPropagation()
-    el.setPointerCapture?.(e.pointerId)
+    e.currentTarget.setPointerCapture?.(e.pointerId)
     boxPopupDragRef.current = { x: e.clientX, y: e.clientY, left: el.offsetLeft, top: el.offsetTop }
+    setBoxPanelDragging(true)
   }
   const onBoxPopupPointerMove = (e) => {
     const d = boxPopupDragRef.current
-    if (!d) return
-    setBoxPopupDrag(clampToPlot(d.left + e.clientX - d.x, d.top + e.clientY - d.y))
+    if (!d || !boxPanelGeom) return
+    const { pane, w, h } = boxPanelGeom
+    const p = boxPanelPlace(pane, boxPanelOffset(pane, d.left + e.clientX - d.x, d.top + e.clientY - d.y, h), w, h)
+    setBoxPanelPos(boxPanelOffset(pane, p.left, p.top, h))
   }
   const onBoxPopupPointerUp = (e) => {
     if (!boxPopupDragRef.current) return
     boxPopupDragRef.current = null
-    boxPopupRef.current?.releasePointerCapture?.(e.pointerId)
+    e.currentTarget.releasePointerCapture?.(e.pointerId)
+    setBoxPanelDragging(false)
+    setBoxPanelPos((pos) => {
+      writeBoxPanelPos(pos)
+      return pos
+    })
   }
-  const boxPopupPlace = boxPopupDrag ? clampToPlot(boxPopupDrag.left, boxPopupDrag.top) : boxPopupAuto
+  const onBoxPanelDoubleClick = () => {
+    setBoxPanelPos(null)
+    writeBoxPanelPos(null)
+  }
   useEffect(() => {
     const series = seriesRef.current
     if (!series) return
@@ -3884,42 +3895,18 @@ export default function PriceChart({
           )}
 
           {boxPopupOn && (
-            <div
-              ref={boxPopupRef}
-              data-testid="flow-v3-box-popup"
-              data-dragged={boxPopupDrag ? '1' : '0'}
-              onPointerDown={onBoxPopupPointerDown}
-              onPointerMove={onBoxPopupPointerMove}
-              onPointerUp={onBoxPopupPointerUp}
-              onPointerCancel={onBoxPopupPointerUp}
-              title="Current box (drag to move) — visual aid, untested"
-              style={{
-                position: 'absolute',
-                left: boxPopupPlace?.left ?? 0,
-                top: boxPopupPlace?.top ?? 0,
-                visibility: boxPopupPlace ? 'visible' : 'hidden',
-                zIndex: 5, cursor: 'move', userSelect: 'none', touchAction: 'none',
-                background: TAG_BG(0.92), border: '1px solid rgba(232,121,249,0.35)', borderRadius: 4,
-                padding: '3px 18px 3px 6px', fontSize: '10px', fontFamily: 'sans-serif', color: '#e2e8f0', lineHeight: 1.35,
-                maxWidth: 340,
-              }}
-            >
-              <div data-testid="flow-v3-box-popup-head" style={{ color: '#f0abfc' }}>{v3PopupLines.head}</div>
-              <div data-testid="flow-v3-box-popup-top">{v3PopupLines.top}</div>
-              <div data-testid="flow-v3-box-popup-bottom">{v3PopupLines.bottom}</div>
-              {v3PopupLines.mixed && <div data-testid="flow-v3-box-popup-mixed" style={{ color: '#fbbf24' }}>{v3PopupLines.mixed}</div>}
-              <button
-                type="button"
-                data-popup-close="1"
-                data-testid="flow-v3-box-popup-close"
-                aria-label="Hide box stats until the next anchor"
-                title="Hide until the next anchor"
-                onClick={() => setBoxPopupClosed(true)}
-                style={{ position: 'absolute', top: 1, right: 2, width: 14, height: 14, padding: 0, border: 'none', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontSize: '11px', lineHeight: '14px' }}
-              >
-                ×
-              </button>
-            </div>
+            <BoxPanel
+              panel={v3BoxPanel}
+              place={boxPopupPlace}
+              panelRef={boxPopupRef}
+              maxHeight={boxPanelGeom ? Math.max(80, Math.round(boxPanelGeom.pane.height * 0.5)) : undefined}
+              dragged={Boolean(boxPanelPos) || boxPanelDragging}
+              onClose={() => setBoxPopupClosed(true)}
+              onHeaderPointerDown={onBoxPopupPointerDown}
+              onHeaderPointerMove={onBoxPopupPointerMove}
+              onHeaderPointerUp={onBoxPopupPointerUp}
+              onHeaderDoubleClick={onBoxPanelDoubleClick}
+            />
           )}
 
           {v3ProbeHover && (

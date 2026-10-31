@@ -1044,6 +1044,50 @@ export function boxPopupLines(box, hhmm, segments = null) {
   }
 }
 
+// CR-DQ item 2 — the box panel: one section per drawn box (PriceChart's v3Edges.boxes, oldest first, the current last),
+// each from the same box fields as boxPopupLines (one source with CR-DP's popup and the removed box hover).
+//   summary (one line): "Box 10:12–10:41 · broke ↓ 10:41 · share -2.39 %" (frozen) / "Box 10:41–11:00 · current"
+//   lines: boxPopupLines (head / top / bottom / mixed); probes: "2 probes · testing break 10:58 ↑"
+// `dropped` = older frozen boxes not drawn ("n older boxes not shown").
+export function boxPanelSections(entries, hhmm, segments = null) {
+  const list = Array.isArray(entries) ? entries : []
+  const sections = list.map((en) => {
+    const b = en.box
+    const frozen = b.ended?.kind === 'broke'
+    const until = frozen ? b.ended.at : b.to
+    const state = frozen ? `broke ${dirArrow(b.ended.dir)} ${hhmm(b.ended.at)}`
+      : b.ended?.kind === 'end' ? `set end ${hhmm(b.ended.at)}` : 'current'
+    const share = b.readout ? ` · share ${sharePctText(readoutShare(b.readout))}` : ''
+    const n = b.probes?.length || 0
+    const pend = b.pending ? ` · testing break ${hhmm(b.pending.at)} ${dirArrow(b.pending.dir)}${b.ended?.kind === 'end' ? ' (pending at the end)' : ''}` : ''
+    return {
+      key: String(b.from), current: !frozen,
+      summary: `Box ${hhmm(b.from)}–${hhmm(until)} · ${state}${frozen ? share : ''}`,
+      lines: boxPopupLines(b, hhmm, segments),
+      probes: `${n} probe${n === 1 ? '' : 's'}${pend}`,
+    }
+  })
+  const dropped = list.length ? Number(list[list.length - 1].box.dropped) || 0 : 0
+  return { sections, dropped, droppedText: dropped ? `${dropped} older box${dropped === 1 ? '' : 'es'} not shown` : '' }
+}
+
+// CR-DQ item 3 — the panel's place. Stored as px from the plot's left and bottom edges (so it stays bottom-anchored when
+// the plot height changes); default bottom-left, 4 px inset. Returns stage px clamped inside the plot.
+export const BOX_PANEL_INSET = 4
+export function boxPanelPlace(pane, stored, w, h) {
+  if (!pane) return null
+  const off = stored && Number.isFinite(stored.left) && Number.isFinite(stored.bottom) ? stored : { left: BOX_PANEL_INSET, bottom: BOX_PANEL_INSET }
+  const left = pane.left + off.left
+  const top = pane.top + pane.height - off.bottom - h
+  return {
+    left: Math.max(pane.left, Math.min(left, pane.left + pane.width - w)),
+    top: Math.max(pane.top, Math.min(top, pane.top + pane.height - h)),
+  }
+}
+export function boxPanelOffset(pane, left, top, h) {
+  return { left: left - pane.left, bottom: pane.top + pane.height - (top + h) }
+}
+
 // CR-DN item 1 — set end. The picked end (shifted candle time) is stored as the last 1-minute bar inside that candle
 // (`stepSec` = the chart's candle step: 60 on the 1-minute chart, 300 on 5-minute), so a 5-minute pick keeps the whole
 // candle. Valid only after the anchor and not after the payload's last bar (`lastShifted`: live = now, replay /
