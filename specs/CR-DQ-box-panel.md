@@ -124,6 +124,7 @@ spec freeze → Step 0 → one commit per item (1; 2+3; 4; 5 incl. baseline scri
 - Verdicts: 3 hand-checked boxes on 2026-10-29/30 match the rule table (one read, one conflict, one nothing-notable);
   2026-10-28 shows NO TRADES (FOMC).
 - Existing specs green; only assertions on the removed labels / hover updated (list them).
+- **Smoke addition (Ryan, chat 2026-10-31) — report only.** Replay the panel on 2026-10-30 at Ryan's entry times 06:11:46, 07:06:47, 07:49:17, 09:22:50, anchored at the start of the range he was trading (06:11 → the overnight box from ~05:00; 07:06 → 06:58; 07:49 → 07:40; 09:22 → 09:15), and record the verdict and its evidence for each. Thresholds are NOT changed to make these match; a disagreement with chat's expectation is reported as is.
 
 ## Wrap
 
