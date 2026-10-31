@@ -11,8 +11,9 @@ const ts = {
   options: () => ({ barSpacing: 10 }),
 }
 
-test('timeX: a fill inside its bar, left edge at :00, centre at :30', () => {
-  assert.equal(timeX(ts, times, 60, times[2]), 115)
+test('timeX: a fill inside its bar (10–90 %), centre at :30', () => {
+  assert.equal(timeX(ts, times, 60, times[2]), 116) // :00 → 10 % in, not on the boundary
+  assert.equal(timeX(ts, times, 60, times[2] + 59), 124)
   assert.equal(timeX(ts, times, 60, times[2] + 30), 120)
   assert.equal(timeX(ts, times, 60, times[2] + 17), 115 + 10 * 17 / 60)
   assert.equal(timeX(ts, times, 60, times[0] - 1), null) // before the data

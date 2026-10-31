@@ -752,11 +752,16 @@ export default function TradeLog() {
 
   // ── Data fetching ───────────────────────────────────────────
 
+  // CR-DR: filters can change faster than responses arrive; only the latest request's answer is applied.
+  const tradesReq = useRef(0)
+  const aggReq = useRef(0)
   const loadTrades = useCallback(async () => {
     setLoading(true)
+    const n = ++tradesReq.current
     try {
       const res  = await fetch(`/api/trade-log/trades${filterQuery(dateFilter, filters)}`)
       const data = await res.json()
+      if (n !== tradesReq.current) return
       if (data.ok) setTrades(data.trades || [])
       else setError(data.error || 'Failed to load trades')
     } catch (e) { setError(e.message) }
@@ -765,9 +770,10 @@ export default function TradeLog() {
 
   const loadAgg = useCallback(async () => {
     try {
+      const n = ++aggReq.current
       const res  = await fetch(`/api/trade-log/aggregate${filterQuery(dateFilter, filters)}`)
       const data = await res.json()
-      if (data.ok) setAgg(data)
+      if (n === aggReq.current && data.ok) setAgg(data)
     } catch { /* non-critical */ }
   }, [dateFilter, filters])
 

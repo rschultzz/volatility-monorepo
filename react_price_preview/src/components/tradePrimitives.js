@@ -3,7 +3,7 @@
 // exit-side orders resting while the position was open (stop dashed, target dotted), each from its placing (or the
 // entry) to its fill / cancel (or the exit). Palette (C1): blue for long, slate for short; no red / green.
 // Fill times are seconds inside a candle: x = the candle's x + (offset in the bar − ½) × bar spacing, so a fill sits
-// left-to-right inside its own bar.
+// left-to-right inside its own bar (offset clamped to 10–90 % of the bar).
 import { floorIndex } from '../flowV3.js'
 
 export const TRADE_LONG_RGB = '96,165,250'
@@ -22,7 +22,8 @@ export function timeX(ts, times, step, t) {
   const x = ts.timeToCoordinate(times[i])
   if (x == null) return null
   const spacing = Number(ts.options().barSpacing) || 6
-  const frac = Math.min(1, Math.max(0, (t - times[i]) / (step || 60)))
+  // kept 10 % inside the bar's edges, so a fill at :00 is drawn on its own bar, not the boundary with the previous one
+  const frac = Math.min(0.9, Math.max(0.1, (t - times[i]) / (step || 60)))
   return x + (frac - 0.5) * spacing
 }
 
