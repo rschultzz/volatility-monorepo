@@ -385,3 +385,25 @@ All 18 other spec files against the branch (:5193, backend :8068, origin/main :5
 - `cr-dp` item 4: label read from the box readout; default place bottom-left (was right of the box top-right); drag by
   the header, clamped in the plot; a new anchor reuses the remembered place (was: reset); ≤ half the plot (was the 8 %
   compactness check). Amendment 2: popup head `toBeAttached` (the current section is collapsed by default).
+
+## Amendment (Ryan, chat 2026-10-31, before merging)
+
+1. **Absorption distance against the box's full high–low range.** "Within 2 pts of the box" (and "at the top / bottom")
+   is measured against the current box's high and low over its bars (wicks included), not the close-based edges. Box edges
+   for everything else stay close-based. (2026-10-30 07:49: the 7660.25 buyers-absorbed level is 0.5 above the box high
+   7659.75.)
+2. **Minimum box for a read.** No read verdicts until the current box is ≥ 10 minutes old AND ≥ 2 pts tall (close-based
+   top − bottom); until then **"NO ACTION — box still forming"**. Both in ⚙ under Verdict rules, display defaults.
+3. **Evidence wording:** "below the top / above the top / above the bottom / below the bottom" with the distance.
+4. No other threshold changes. Re-run the 4 entry replays (same anchors) and the 3 hand-checked verdicts; report the
+   results as they come out.
+5. Then merge PR #125 with a merge commit, confirm on origin/main, report the SHA; close-out as usual. Don't deploy.
+
+As built (Code's reading, stated here before the code):
+- Item 1: `edgeReadout` boxes gain `high` / `low` (max high / min low of the box's bars). A level counts for the verdict
+  when `low − 2 ≤ price ≤ high + 2`; it is "at the top" when within 2 of the high, "at the bottom" when within 2 of the
+  low (the nearer one if both), else "in the box". Conflict / two-sided / reads / watch all use this.
+- Item 2: the check runs right after NO TRADES (A22): while the current box is younger than 10 min (readout minutes) or
+  shorter than 2 pts, the verdict is "NO ACTION — box still forming" (evidence: its age and height vs the minimums), so no
+  read, watch, conflict or two-sided verdict shows on a forming box. ⚙ "Min box age (min)" 10 (0–120), "Min box height
+  (pts)" 2 (0–20).
