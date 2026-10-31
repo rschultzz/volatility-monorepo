@@ -201,3 +201,24 @@ B4 freezes 2026-06-06 → 2026-10-26 and sets the forward log from 2026-10-27; t
 3. Proceed with items 1–4.
 
 **Amended item 1a:** … Pick the zone where all fills match (price within 0.25 of the bar's range); if none or more than one does, refuse with a clear message. Never guess.
+
+## Implementation notes
+
+### Item 1 — importer
+
+- `parse_tv_csv` keeps every order row (any status); headers are matched case-insensitively with aliases (`Qty` / `Quantity`, `Fill Qty` / `Fill quantity`, …), so both the April and the 2026-10 layouts parse. Times stay naive until `detect_timezone` picks the zone (PT / CT / ET / UTC, fill price within the `es_minutes` bar ± 0.25, exactly one zone or refuse; "Nothing was imported").
+- Orders → `trade_log_orders` (all statuses), fills → `trade_log_fills` (+ `detected_tz`); both `ON CONFLICT (order_id) DO NOTHING`, trades `ON CONFLICT (entry_order_id, exit_order_id) DO NOTHING`, so a re-import adds nothing.
+- Pairing and trade times use the **fill (Status) time**; `trade_date` is the PT date. ORATS context auto-compute skips B4 holdout dates.
+- `POST /api/trade-log/upload?dry_run=1` runs the whole pipeline in a rolled-back transaction (`scripts/cr_dr_dry_run.py <csv>` does the same from a shell).
+- Unit tests: `apps/web/modules/TradeLog/tests/test_import.py` (both layouts, tolerance, ambiguity, fill-time pairing, partial fills, holdout window).
+
+**April rebuild** (`scripts/cr_dr_april_rebuild.py --commit`, log `scripts/logs/cr-dr/item1_april_rebuild.txt`; old rows in S0.2):
+
+| Trade | Fills | What changed | Carried over | Dropped |
+|---|---|---|---|---|
+| id 5 long +1.00 | unchanged | `exit_ts_pt` 08:28 → 08:35 PT (the stop's fill time) | setup start / target (08:07 / 08:13), `setup_direction` long, notes (empty), all context columns | — |
+| id 6 short −2.75 | unchanged | nothing | everything | — |
+| id 7 | same two fills, **swapped** | short → **long**; entry = Buy Limit 7126.00 @12:10, exit = Sell Stop 7123.75 @12:14; pts unchanged (−2.25) | `setup_direction` (NULL), notes (NULL), context columns (all NULL) | setup start / target — they were the old placing-time placeholders (both 12:10); reset to the new entry / exit (12:10 / 12:14) |
+| **id 23 (new)** short −5.75 | 1353070885 S Limit 7125.50 @12:19 → 1353080861 B Stop Loss 7131.25 @12:21 | inserted | — | — (annotations = entry / exit placeholders; ORATS context computed, train date) |
+
+Also inserted: the 8 April order rows into `trade_log_orders` (from their fills; the April export's cancelled orders were never stored), and `detected_tz = 'PT'` on the 8 April fills. A dry run of Ryan's 2026-10-31 export afterwards: PT 18 / 18, 32 orders, 18 fills, 9 new trades, no April trade re-created.

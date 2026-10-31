@@ -54,8 +54,10 @@ def upload():
     POST /api/trade-log/upload
     Body: multipart/form-data with field 'file' (CSV)
 
-    Parses the TV CSV, FIFO-pairs fills into round-trip trades,
-    inserts new records, and auto-computes market context.
+    Parses the TV order-history CSV, detects its time zone against ES bars
+    (refuses if not unique), stores every order, FIFO-pairs fills by fill time
+    into round-trip trades, inserts new records, and auto-computes market context.
+    ?dry_run=1 runs it all in a rolled-back transaction (CR-DR).
     """
     if 'file' not in request.files:
         return jsonify({'ok': False, 'error': 'No file in request'}), 400
@@ -65,7 +67,8 @@ def upload():
         return jsonify({'ok': False, 'error': 'Empty filename'}), 400
 
     try:
-        result = service.upload_csv(f.read())
+        dry_run = request.args.get('dry_run') in ('1', 'true')
+        result = service.upload_csv(f.read(), dry_run=dry_run)
         status = 200 if result.get('ok') else 400
         return jsonify(result), status
     except Exception as e:

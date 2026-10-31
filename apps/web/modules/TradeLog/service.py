@@ -2,7 +2,7 @@
 apps/web/modules/TradeLog/service.py
 
 Business logic for the Trade Log feature:
-  - TV CSV parsing (CT → PT conversion)
+  - TV order-history CSV parsing (time zone detected against ES bars, CR-DR)
   - FIFO fill pairing into round-trip trades
   - DB insert / CRUD
   - Market-context computation via BacktestsV2 helpers
@@ -149,20 +149,28 @@ _TV_DATETIME_FORMATS = [
     '%m/%d/%y %H:%M',
 ]
 
+# CR-DR: TradingView exports name the same column differently by version
+# ('Fill Qty' in the April 2026 export, 'Fill quantity' in the 2026-10 one).
+# Headers are matched case-insensitively through this alias table.
+_HEADER_ALIASES = {
+    'qty':            'quantity',
+    'fill qty':       'fill quantity',
+    'filled qty':     'fill quantity',
+    'avg fill price': 'avg fill price',
+    'avg. fill price': 'avg fill price',
+    'order id':       'order id',
+    'id':             'order id',
+}
 
-def _parse_tv_datetime(value: str):
-    """
-    Parse a TradingView datetime string (assumed Central Time) and
-    return a timezone-aware datetime in Pacific Time.
-    Returns None on failure.
-    """
+
+def _parse_tv_naive(value: str):
+    """Parse a TradingView datetime string to a naive datetime (zone unknown). None on failure."""
     s = (value or '').strip()
     if not s:
         return None
     for fmt in _TV_DATETIME_FORMATS:
         try:
-            naive = datetime.strptime(s, fmt)
-            return naive.replace(tzinfo=CT).astimezone(PT)
+            return datetime.strptime(s, fmt)
         except ValueError:
             continue
     log.debug('Could not parse TV datetime: %r', value)
@@ -179,99 +187,172 @@ def _normalize_side(raw: str) -> str:
     return s
 
 
+def _num(v):
+    if v is None or str(v).strip() == '':
+        return None
+    try:
+        return float(v)
+    except ValueError:
+        return None
+
+
 def parse_tv_csv(file_bytes: bytes) -> tuple[list[dict], list[str]]:
     """
-    Parse a TradingView fills CSV.
+    Parse a TradingView order-history CSV (CR-DR).
+
+    Every order row is returned (Filled, Cancelled, Rejected, Working, ...);
+    times stay naive here because the export's zone is detected later
+    against ES bars (detect_timezone). A row is a fill when it carries a
+    fill quantity > 0 and an average fill price (partial fills included).
 
     Returns:
-        (fills, warnings)
-        fills    — list of fill dicts (only filled orders, CT→PT converted)
-        warnings — list of human-readable warning strings
+        (orders, warnings)
     """
     text = file_bytes.decode('utf-8-sig')   # strip BOM if present
     reader = csv.DictReader(io.StringIO(text))
 
-    fills = []
+    orders = []
     warnings = []
-    skipped_cancelled = 0
-    skipped_unparseable = 0
+    skipped_no_id = 0
 
     for raw_row in reader:
-        row = {k.strip(): (v or '').strip() for k, v in raw_row.items()}
+        raw = {(k or '').strip(): (v or '').strip() for k, v in raw_row.items()}
+        row = {}
+        for k, v in raw.items():
+            key = k.lower()
+            row[_HEADER_ALIASES.get(key, key)] = v
 
-        status = row.get('Status', '').lower()
-        if status == 'cancelled':
-            skipped_cancelled += 1
-            continue
-
-        fill_qty_raw  = row.get('Fill Qty', '')
-        fill_px_raw   = row.get('Avg Fill Price', '')
-
-        if not fill_qty_raw or not fill_px_raw:
-            skipped_unparseable += 1
-            continue
-
-        try:
-            fill_qty   = int(float(fill_qty_raw))
-            fill_price = float(fill_px_raw)
-        except ValueError:
-            skipped_unparseable += 1
-            continue
-
-        if fill_qty <= 0:
-            skipped_unparseable += 1
-            continue
-
-        order_id = row.get('Order ID', '').strip()
+        order_id = row.get('order id', '')
         if not order_id:
-            warnings.append(f'Row missing Order ID, skipped: {row}')
+            skipped_no_id += 1
             continue
 
-        placing_time_pt = _parse_tv_datetime(row.get('Placing Time', ''))
-        status_time_pt  = _parse_tv_datetime(row.get('Status Time', ''))
+        fill_qty = _num(row.get('fill quantity'))
+        fill_price = _num(row.get('avg fill price'))
+        is_fill = bool(fill_qty and fill_qty > 0 and fill_price is not None)
 
-        fills.append({
-            'order_id':       order_id,
-            'symbol':         row.get('Symbol', ''),
-            'side':           _normalize_side(row.get('Side', '')),
-            'order_type':     row.get('Type', ''),
-            'qty':            int(float(row.get('Qty', 0) or 0)),
-            'fill_qty':       fill_qty,
-            'fill_price':     fill_price,
-            'commission':     float(row.get('Commission', 0) or 0),
-            'duration':       row.get('Duration', ''),
-            'placing_time_pt': placing_time_pt,
-            'status_time_pt':  status_time_pt,
-            'raw_csv_row':    row,
+        orders.append({
+            'order_id':      order_id,
+            'symbol':        row.get('symbol', ''),
+            'side':          _normalize_side(row.get('side', '')),
+            'order_type':    row.get('type', ''),
+            'qty':           int(_num(row.get('quantity')) or 0),
+            'limit_price':   _num(row.get('limit price')),
+            'stop_price':    _num(row.get('stop price')),
+            'status':        row.get('status', '') or 'Unknown',
+            'duration':      row.get('duration', ''),
+            'commission':    _num(row.get('commission')) or 0.0,
+            'fill_qty':      int(fill_qty) if is_fill else 0,
+            'fill_price':    fill_price if is_fill else None,
+            'is_fill':       is_fill,
+            'placing_naive': _parse_tv_naive(row.get('placing time', '')),
+            'status_naive':  _parse_tv_naive(row.get('status time', '')),
+            'raw_csv_row':   raw,
         })
 
-    if skipped_cancelled:
-        warnings.append(f'{skipped_cancelled} cancelled order(s) skipped.')
-    if skipped_unparseable:
-        warnings.append(f'{skipped_unparseable} row(s) skipped (missing fill data).')
+    if skipped_no_id:
+        warnings.append(f'{skipped_no_id} row(s) without an Order ID skipped.')
+    return orders, warnings
 
-    # Sort chronologically by placing time (fall back to status time)
-    def _sort_key(f):
-        return f['placing_time_pt'] or f['status_time_pt'] or datetime.min.replace(tzinfo=PT)
 
-    fills.sort(key=_sort_key)
-    return fills, warnings
+# ══════════════════════════════════════════════════════════════
+# Timezone detection (CR-DR item 1a)
+# ══════════════════════════════════════════════════════════════
+
+TZ_CANDIDATES = [('PT', PT), ('CT', CT), ('ET', ET), ('UTC', timezone.utc)]
+FILL_MATCH_TOL_PTS = 0.25   # one tick: MES and ES are separate books (Step 0 S0.7)
+
+# B4: holdout window — no MFE / MAE, "at entry" or ORATS context is shown or computed.
+HOLDOUT_START = '2026-06-06'
+HOLDOUT_END   = '2026-10-26'
+
+
+def is_holdout_date(d) -> bool:
+    s = str(d)[:10] if d else ''
+    return bool(s) and HOLDOUT_START <= s <= HOLDOUT_END
+
+
+def _fill_naive(o: dict):
+    """The fill time of an order row: its Status time (fallback: placing time)."""
+    return o.get('status_naive') or o.get('placing_naive')
+
+
+def detect_timezone(cur, fills: list[dict]) -> dict:
+    """
+    For each candidate zone, read every fill's time in that zone and check its
+    price against the ES 1-minute bar (es_minutes, minute floor) ± one tick.
+    The zone is accepted only if it is the one zone where every fill matches.
+    Never guesses: returns {'zone': None, 'error': ...} otherwise.
+    """
+    naive = [_fill_naive(f) for f in fills]
+    if any(n is None for n in naive):
+        return {'zone': None, 'matches': {}, 'error':
+                'Some fills have no readable fill time; the export\'s time zone cannot be checked.'}
+
+    utc_by_zone = {}
+    for name, tz in TZ_CANDIDATES:
+        utc_by_zone[name] = [n.replace(second=0, microsecond=0, tzinfo=tz).astimezone(timezone.utc) for n in naive]
+    all_minutes = sorted({m for ms in utc_by_zone.values() for m in ms})
+    cur.execute('SELECT ts_utc, low, high FROM es_minutes WHERE ts_utc = ANY(%s)', (all_minutes,))
+    bars = {r['ts_utc']: (float(r['low']), float(r['high'])) for r in cur.fetchall()}
+
+    matches, misses = {}, {}
+    for name, _ in TZ_CANDIDATES:
+        ok, miss = 0, []
+        for f, m in zip(fills, utc_by_zone[name]):
+            b = bars.get(m)
+            if b and b[0] - FILL_MATCH_TOL_PTS <= f['fill_price'] <= b[1] + FILL_MATCH_TOL_PTS:
+                ok += 1
+            else:
+                miss.append(f"{_fill_naive(f):%Y-%m-%d %H:%M:%S} @ {f['fill_price']:g}"
+                            + (f' (bar {b[0]:g}–{b[1]:g})' if b else ' (no bar)'))
+        matches[name] = ok
+        misses[name] = miss
+
+    full = [name for name, n in matches.items() if n == len(fills)]
+    summary = ', '.join(f'{z} {n}/{len(fills)}' for z, n in matches.items())
+    if len(full) == 1:
+        return {'zone': full[0], 'matches': matches, 'error': None}
+    if not full:
+        best = max(matches, key=matches.get)
+        return {'zone': None, 'matches': matches, 'error':
+                f'Time zone not detected: no zone puts every fill inside its ES minute bar (± 0.25). '
+                f'Matches: {summary}. Closest zone {best} misses: {"; ".join(misses[best][:5])}. Nothing was imported.'}
+    return {'zone': None, 'matches': matches, 'error':
+            f'Time zone ambiguous: every fill matches in {" and ".join(full)}. Nothing was imported.'}
+
+
+def _localize(o: dict, zone: str) -> dict:
+    tz = dict(TZ_CANDIDATES)[zone]
+    def _pt(n):
+        return n.replace(tzinfo=tz).astimezone(PT) if n else None
+    return {**o, 'detected_tz': zone,
+            'placing_time_pt': _pt(o.get('placing_naive')),
+            'status_time_pt':  _pt(o.get('status_naive'))}
 
 
 # ══════════════════════════════════════════════════════════════
 # FIFO pairing
 # ══════════════════════════════════════════════════════════════
 
+def _fill_ts(f: dict):
+    """CR-DR: a fill happens at its Status time, not when the order was placed."""
+    return f.get('status_time_pt') or f.get('placing_time_pt')
+
+
 def fifo_pair_fills(fills: list[dict]) -> tuple[list[dict], list[str]]:
     """
-    FIFO-pair fills into round-trip trades.
-    Handles scaling into a position (buy 1, buy 1, sell 2 → two trades).
-    Open positions at the end of the fill list are silently dropped
-    with a warning per symbol.
+    FIFO-pair fills into round-trip trades, in fill (Status) time order.
+    Handles scaling into a position (buy 1, buy 1, sell 2 → two trades)
+    and partial fills (each fill row carries its own fill qty).
+    Open positions at the end of the fill list are dropped with a warning per symbol.
 
     Returns:
         (trades, warnings)
     """
+    _min = datetime.min.replace(tzinfo=PT)
+    fills = sorted(fills, key=lambda f: (_fill_ts(f) or _min, f.get('placing_time_pt') or _min, f['order_id']))
+
     # Group by symbol root so MES and ES don't cross-contaminate
     by_root: dict[str, list[dict]] = {}
     for f in fills:
@@ -289,12 +370,8 @@ def fifo_pair_fills(fills: list[dict]) -> tuple[list[dict], list[str]]:
             side      = fill['side']
             remaining = fill['fill_qty']
 
-            if not queue:
-                queue.append({**fill, 'remaining': remaining})
-                continue
-
-            if side == queue[0]['side']:
-                # Same direction — scaling in
+            if not queue or side == queue[0]['side']:
+                # Flat, or same direction — opening / scaling in
                 queue.append({**fill, 'remaining': remaining})
                 continue
 
@@ -321,9 +398,10 @@ def fifo_pair_fills(fills: list[dict]) -> tuple[list[dict], list[str]]:
                 fees_usd   = entry_comm + exit_comm
                 net_pnl    = realized_pnl_usd - fees_usd
 
-                entry_ts = entry['placing_time_pt'] or entry['status_time_pt']
-                exit_ts  = exit_fill['placing_time_pt'] or exit_fill['status_time_pt']
-                trade_date = (entry_ts or exit_ts).date().isoformat() if (entry_ts or exit_ts) else None
+                entry_ts = _fill_ts(entry)
+                exit_ts  = _fill_ts(exit_fill)
+                day_ts = entry_ts or exit_ts
+                trade_date = day_ts.astimezone(PT).date().isoformat() if day_ts else None
 
                 trades.append({
                     'trade_date':       trade_date,
@@ -362,7 +440,7 @@ def fifo_pair_fills(fills: list[dict]) -> tuple[list[dict], list[str]]:
                 f'{root}: {open_qty} lot(s) left open at end of fills — unmatched trade(s) dropped.'
             )
 
-    trades.sort(key=lambda t: t['entry_ts_pt'] or datetime.min.replace(tzinfo=PT))
+    trades.sort(key=lambda t: t['entry_ts_pt'] or _min)
     return trades, warnings
 
 
@@ -370,99 +448,131 @@ def fifo_pair_fills(fills: list[dict]) -> tuple[list[dict], list[str]]:
 # Upload orchestration
 # ══════════════════════════════════════════════════════════════
 
-def upload_csv(file_bytes: bytes) -> dict:
+def _load_db_fills(cur, roots: list[str]) -> list[dict]:
+    like_patterns = [f'F.US.{r}%' for r in roots] + roots
+    cur.execute("""
+        SELECT order_id, symbol, side, order_type,
+               qty, fill_qty, fill_price, commission, duration,
+               placing_time_pt, status_time_pt
+        FROM trade_log_fills
+        WHERE symbol LIKE ANY(%s)
+           OR symbol = ANY(%s)
+    """, (like_patterns, roots))
+    out = []
+    for r in cur.fetchall():
+        row = dict(r)
+        # psycopg2 returns NUMERIC columns as Decimal — cast to float
+        # so downstream arithmetic works without type errors.
+        row['commission'] = float(row.get('commission') or 0)
+        row['fill_price'] = float(row.get('fill_price') or 0)
+        row['fill_qty']   = int(row.get('fill_qty') or 0)
+        row['qty']        = int(row.get('qty') or 0)
+        out.append(row)
+    return out
+
+
+def upload_csv(file_bytes: bytes, dry_run: bool = False) -> dict:
     """
-    Full upload pipeline:
-      1. Parse CSV → fills
-      2. Insert new fills (dedup by order_id)
-      3. Load ALL fills from DB for affected symbols
-      4. Re-pair ALL fills → trades
+    Full upload pipeline (CR-DR):
+      1. Parse CSV → every order row; fills = rows with a fill qty and price
+      2. Detect the export's time zone against ES minute bars (refuse if not unique)
+      3. Insert new orders (trade_log_orders) and fills (trade_log_fills), dedup by order_id
+      4. Load ALL fills from DB for affected symbols, re-pair FIFO by fill time
       5. Insert new trades (dedup by entry+exit order_id)
-      6. Auto-compute context for newly inserted trades
+      6. Auto-compute ORATS context for new trades (not on B4 holdout dates)
+    dry_run: everything runs in one transaction that is rolled back.
     Returns a summary dict.
     """
-    fills, parse_warnings = parse_tv_csv(file_bytes)
+    orders, parse_warnings = parse_tv_csv(file_bytes)
+    fills = [o for o in orders if o['is_fill']]
     if not fills:
         return {'ok': False, 'error': 'No filled orders found in CSV.', 'warnings': parse_warnings}
 
     conn = get_conn()
     try:
-        with conn:
-            with conn.cursor() as cur:
-                # ── 1. Insert new fills ───────────────────────────────
-                new_fill_count = 0
-                for f in fills:
-                    cur.execute("""
-                        INSERT INTO trade_log_fills
-                            (order_id, symbol, side, order_type, qty, fill_qty,
-                             fill_price, commission, duration,
-                             placing_time_pt, status_time_pt, raw_csv_row)
-                        VALUES (%(order_id)s, %(symbol)s, %(side)s, %(order_type)s,
-                                %(qty)s, %(fill_qty)s, %(fill_price)s, %(commission)s,
-                                %(duration)s, %(placing_time_pt)s, %(status_time_pt)s,
-                                %(raw_csv_row)s)
-                        ON CONFLICT (order_id) DO NOTHING
-                    """, {**f, 'raw_csv_row': json.dumps(f['raw_csv_row'])})
-                    new_fill_count += cur.rowcount
+        with conn.cursor() as cur:
+            tz = detect_timezone(cur, fills)
+            if not tz['zone']:
+                conn.rollback()
+                return {'ok': False, 'error': tz['error'], 'zone_matches': tz['matches'],
+                        'warnings': parse_warnings}
+            zone = tz['zone']
+            orders = [_localize(o, zone) for o in orders]
+            fills = [o for o in orders if o['is_fill']]
 
-                # ── 2. Load ALL fills from DB (for affected symbols) ──
-                roots = list({extract_root(f['symbol']) for f in fills})
-                # Match by symbol prefix using LIKE patterns
-                like_patterns = [f'F.US.{r}%' for r in roots] + roots
+            # ── 1. Insert new orders (all statuses) ───────────────
+            new_order_count = 0
+            for o in orders:
                 cur.execute("""
-                    SELECT order_id, symbol, side, order_type,
-                           qty, fill_qty, fill_price, commission, duration,
-                           placing_time_pt, status_time_pt
-                    FROM trade_log_fills
-                    WHERE symbol LIKE ANY(%s)
-                       OR symbol = ANY(%s)
-                    ORDER BY placing_time_pt ASC NULLS LAST
-                """, (like_patterns, roots))
-                all_db_fills = []
-                for r in cur.fetchall():
-                    row = dict(r)
-                    # psycopg2 returns NUMERIC columns as Decimal — cast to float
-                    # so downstream arithmetic works without type errors.
-                    row['commission'] = float(row.get('commission') or 0)
-                    row['fill_price'] = float(row.get('fill_price') or 0)
-                    row['fill_qty']   = int(row.get('fill_qty') or 0)
-                    row['qty']        = int(row.get('qty') or 0)
-                    all_db_fills.append(row)
+                    INSERT INTO trade_log_orders
+                        (order_id, symbol, side, order_type, qty, limit_price, stop_price,
+                         status, placing_time_pt, status_time_pt, duration, detected_tz, raw_csv_row)
+                    VALUES (%(order_id)s, %(symbol)s, %(side)s, %(order_type)s, %(qty)s,
+                            %(limit_price)s, %(stop_price)s, %(status)s, %(placing_time_pt)s,
+                            %(status_time_pt)s, %(duration)s, %(detected_tz)s, %(raw_csv_row)s)
+                    ON CONFLICT (order_id) DO NOTHING
+                """, {**o, 'raw_csv_row': json.dumps(o['raw_csv_row'])})
+                new_order_count += cur.rowcount
 
-                # ── 3. Re-pair ALL fills ──────────────────────────────
-                paired_trades, pair_warnings = fifo_pair_fills(all_db_fills)
+            # ── 2. Insert new fills ───────────────────────────────
+            new_fill_count = 0
+            for f in fills:
+                cur.execute("""
+                    INSERT INTO trade_log_fills
+                        (order_id, symbol, side, order_type, qty, fill_qty,
+                         fill_price, commission, duration,
+                         placing_time_pt, status_time_pt, raw_csv_row, detected_tz)
+                    VALUES (%(order_id)s, %(symbol)s, %(side)s, %(order_type)s,
+                            %(qty)s, %(fill_qty)s, %(fill_price)s, %(commission)s,
+                            %(duration)s, %(placing_time_pt)s, %(status_time_pt)s,
+                            %(raw_csv_row)s, %(detected_tz)s)
+                    ON CONFLICT (order_id) DO NOTHING
+                """, {**f, 'raw_csv_row': json.dumps(f['raw_csv_row'])})
+                new_fill_count += cur.rowcount
 
-                # ── 4. Insert new trades (skip existing by unique constraint) ──
-                new_trade_ids = []
-                for t in paired_trades:
-                    cur.execute("""
-                        INSERT INTO trade_log_trades
-                            (trade_date, symbol, direction, qty,
-                             entry_order_id, entry_ts_pt, entry_price, entry_order_type,
-                             exit_order_id,  exit_ts_pt,  exit_price,  exit_order_type,
-                             realized_pts, realized_pnl_usd, fees_usd, net_pnl_usd,
-                             setup_start_ts_pt, setup_target_ts_pt)
-                        VALUES
-                            (%(trade_date)s, %(symbol)s, %(direction)s, %(qty)s,
-                             %(entry_order_id)s, %(entry_ts_pt)s, %(entry_price)s, %(entry_order_type)s,
-                             %(exit_order_id)s,  %(exit_ts_pt)s,  %(exit_price)s,  %(exit_order_type)s,
-                             %(realized_pts)s, %(realized_pnl_usd)s, %(fees_usd)s, %(net_pnl_usd)s,
-                             %(setup_start_ts_pt)s, %(setup_target_ts_pt)s)
-                        ON CONFLICT (entry_order_id, exit_order_id) DO NOTHING
-                        RETURNING id
-                    """, t)
-                    row = cur.fetchone()
-                    if row:
-                        new_trade_ids.append(row['id'])
+            # ── 3. Re-pair ALL fills for the affected symbols ─────
+            roots = list({extract_root(f['symbol']) for f in fills})
+            paired_trades, pair_warnings = fifo_pair_fills(_load_db_fills(cur, roots))
+
+            # ── 4. Insert new trades (skip existing by unique constraint) ──
+            new_trades = []
+            for t in paired_trades:
+                cur.execute("""
+                    INSERT INTO trade_log_trades
+                        (trade_date, symbol, direction, qty,
+                         entry_order_id, entry_ts_pt, entry_price, entry_order_type,
+                         exit_order_id,  exit_ts_pt,  exit_price,  exit_order_type,
+                         realized_pts, realized_pnl_usd, fees_usd, net_pnl_usd,
+                         setup_start_ts_pt, setup_target_ts_pt)
+                    VALUES
+                        (%(trade_date)s, %(symbol)s, %(direction)s, %(qty)s,
+                         %(entry_order_id)s, %(entry_ts_pt)s, %(entry_price)s, %(entry_order_type)s,
+                         %(exit_order_id)s,  %(exit_ts_pt)s,  %(exit_price)s,  %(exit_order_type)s,
+                         %(realized_pts)s, %(realized_pnl_usd)s, %(fees_usd)s, %(net_pnl_usd)s,
+                         %(setup_start_ts_pt)s, %(setup_target_ts_pt)s)
+                    ON CONFLICT (entry_order_id, exit_order_id) DO NOTHING
+                    RETURNING id
+                """, t)
+                row = cur.fetchone()
+                if row:
+                    new_trades.append({**t, 'id': row['id']})
+
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
 
         # ── 5. Auto-compute context for newly inserted trades ─────────
         ctx_errors = 0
-        for trade_id in new_trade_ids:
-            try:
-                recompute_context(trade_id)
-            except Exception as e:
-                log.warning('Context auto-compute failed for trade %s: %s', trade_id, e)
-                ctx_errors += 1
+        if not dry_run:
+            for t in new_trades:
+                if is_holdout_date(t['trade_date']):
+                    continue   # B4: no context on holdout dates
+                try:
+                    recompute_context(t['id'])
+                except Exception as e:
+                    log.warning('Context auto-compute failed for trade %s: %s', t['id'], type(e).__name__)
+                    ctx_errors += 1
 
         all_warnings = parse_warnings + pair_warnings
         if ctx_errors:
@@ -471,12 +581,29 @@ def upload_csv(file_bytes: bytes) -> dict:
                 'Use "Recompute" after setting annotation times.'
             )
 
+        def _brief(t):
+            return {'trade_date': t['trade_date'], 'direction': t['direction'], 'qty': t['qty'],
+                    'entry_ts_pt': t['entry_ts_pt'].isoformat() if t['entry_ts_pt'] else None,
+                    'entry_price': t['entry_price'],
+                    'exit_ts_pt': t['exit_ts_pt'].isoformat() if t['exit_ts_pt'] else None,
+                    'exit_price': t['exit_price'], 'realized_pts': round(t['realized_pts'], 2)}
+
         return {
             'ok': True,
-            'new_fills':  new_fill_count,
-            'new_trades': len(new_trade_ids),
-            'warnings':   all_warnings,
+            'dry_run':      dry_run,
+            'detected_tz':  zone,
+            'zone_matches': tz['matches'],
+            'fills_in_file': len(fills),
+            'orders_in_file': len(orders),
+            'new_orders':   new_order_count,
+            'new_fills':    new_fill_count,
+            'new_trades':   len(new_trades),
+            'trades':       [_brief(t) for t in new_trades],
+            'warnings':     all_warnings,
         }
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
