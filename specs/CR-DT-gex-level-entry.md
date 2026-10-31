@@ -102,3 +102,35 @@ card's edge entry, after the range and the call (not the automatic entry at the 
 corrected placement only. R3–R5, R7 not used.
 
 ---
+
+## Step 0 findings (2026-10-31; code at `3ec3a42`; read-only; no outcome read — `outcome` not selected)
+
+Script: `scripts/cr_dt_level_entry.py step0` (output `scripts/logs/cr_dt/step0.json`, `levels.json`, git-ignored).
+
+1. **Cards and labels.** 120 rows in `cr-cz:cp-ranges`, card 31 dropped → **119** on **66 sessions**, 2026-01-06 →
+   2026-06-03 (all ≤ 2026-06-05, B4). Short 60, long 59. Blind labels (first pre-reveal row): **take 44, skip 75**, no
+   `unsure`, none missing. So "all" = takes + skips.
+2. **Level function per session.** `_corrected_gex_tables(d)` was called for each of the 66 sessions, imported from
+   `apps/web/modules/Ironbeam/callbacks.py` unchanged. 65 return tables; **one session has no corrected levels:
+   2026-02-19 (`no_es_snapshot`**: no Ironbeam ES bar starting 15:45 ET on 2026-02-18, the CR-BT P_target). Its one card
+   (**#37**) is excluded from every level variant and kept in the edge baseline totals (reported both ways at the run).
+   No `pre_forward_era` / `no_rows` / errors.
+3. **Drawn levels per card** (T5, band cut at `entry_ts_pt`): 17–52, median 34; adjacent drawn levels median 8 pts
+   apart (min 5, the chart's spacing rule). A12 strong (T6, p95 of the card's drawn \|net\|): 1–3 per card, median 2.
+   So gross ≥ 40 is a dense grid near any edge; A12 strong is sparse.
+4. **Coverage** — cards with a qualifying level (takes / skips / all of 44 / 75 / 119):
+
+   | Variant | gross ≥ 40 | A12 strong |
+   |---|---|---|
+   | D2 (≤ 2 pts beyond) | 11 / 24 / 35 | 2 / 4 / 6 |
+   | D4 | 23 / 46 / 69 | 4 / 6 / 10 |
+   | D6 | 33 / 58 / 91 | 5 / 6 / 11 |
+   | just inside (≤ 2 pts) | 14 / 15 / 29 | 0 / 2 / 2 |
+
+   The A12 cells are too small for a verdict (≤ 11 cards); they will be reported, and will be inconclusive by
+   construction unless every card goes one way.
+5. **Variant table frozen** as in the definitions above (24 cells, T14 verdict rule, seed 20261031). No change from
+   the kickoff. Nesting disclosed: D2 ⊂ D4 ⊂ D6 cards do not all pick the same level (nearest to the edge in each), and
+   the variants are not independent tests.
+6. **Baseline check planned at the run** (T10): the edge limit recomputed through the same loop must reproduce every
+   card's stored fill status, fill time, fill price and ±10 result; the run asserts it before any variant is summarised.
