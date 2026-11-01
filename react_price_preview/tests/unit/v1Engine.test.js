@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { V1_DEFAULTS, evaluateAt, newState, prepareSession, simulateSession } from '../../src/v1Engine.js'
+import { boxEvidenceRows as boxEvidenceRowsSync } from '../../src/flowV3.js'
 
 // CR-DU item 1 — the v1 engine on a synthetic RTH session (2026-03-10, PDT: 06:30 PT = 13:30 UTC).
 //   bars 0–19: flat at 6000 (box A; its edges hold 20 min)
@@ -247,10 +248,26 @@ test('the 12:15 cutoff cancels a resting order', () => {
   assert.equal(sim.trades.length, 0)
 })
 
-test('a verdict lapse cancels the order', () => {
-  // bar 29 closes 2.5 below the top (not at the top) → NO ACTION → cancelled before bar 30 trades through
-  const sim = simulateSession(session({ over: { 29: { o: 6013.5, c: 6012.5, h: 6013.75, l: 6012.5 }, 30: { h: 6015.25 } } }))
-  assert.equal(sim.trades.length, 0)
+test('a read lapse cancels the order', () => {
+  // bar 29 sells 6,000 against the box's buying: the lean flips → the short read lapses → cancelled before bar 30 trades through
+  const sim = simulateSession(session({ over: { 29: { buy: 0, sell: 6000, vol: 6000 }, 30: { h: 6015.25 } } }))
+  assert.ok(!sim.trades.some((x) => x.side === 'short' && x.entryT >= at(30) && x.entryT < at(31)))
+})
+
+test('Amendment 4 (v1.2): a valid read away from the edge rests a limit at the edge; it fills only there', async () => {
+  const { panelEngine, panelVerdict, V1_ENGINE_VERSION } = await import('../../src/v1Engine.js')
+  assert.equal(V1_ENGINE_VERSION, 'v1.2')
+  const away = { 28: { o: 6013.5, c: 6012.75, h: 6013.75, l: 6012.5 } } // closes 2.25 below the top
+  const ctx = session({ over: away })
+  const ev = evaluateAt(ctx, 28)
+  assert.equal(ev.verdict, 'SHORT')
+  assert.equal(ev.order.entry, 6015)
+  const pv = panelVerdict(panelEngine(ctx, { endShifted: ctx.times[28] }))
+  assert.equal(pv.pill, 'READ — limit at 6015.00')
+  assert.deepEqual(boxRow(pv, 'location'), ['limit at the top', 'neutral'])
+  // price climbs back and trades through the edge at bar 31: filled at 6015
+  const sim = simulateSession(session({ over: { ...away, 29: { h: 6014.25 }, 30: { h: 6015 }, 31: { h: 6015.25 }, ...down(32, 6008), 33: { h: 6008.25, l: 6004.75, o: 6008, c: 6005 } } }))
+  assert.deepEqual([sim.trades[0].entry, sim.trades[0].entryT, sim.trades[0].reason], [6015, at(31), 'target'])
 })
 
 test('no lookahead: the verdict at bar i is the same with later bars removed', () => {
@@ -271,6 +288,10 @@ test('no lookahead: the verdict at bar i is the same with later bars removed', (
 })
 
 // ------------------------------------------------------------------------------------------- item 2 (panel)
+const boxRow = (pv, key) => {
+  const r = boxEvidenceRowsSync(pv.checks).find((x) => x.key === key)
+  return [r.reads, r.tone]
+}
 test('panelVerdict: SHORT pill, failed rules as reason + rows, engine trades line', async () => {
   const { panelEngine, panelVerdict } = await import('../../src/v1Engine.js')
   const { boxEvidenceRows } = await import('../../src/flowV3.js')

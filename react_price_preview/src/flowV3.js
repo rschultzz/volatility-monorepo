@@ -1298,7 +1298,7 @@ export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, 
     lastClose: px, top: box.top, bottom: box.bottom, nearTop, nearBottom, nearPts: r.nearPts,
     share, sharePct: sp, lean, cpp: pct?.cpp?.value ?? ro.cpp ?? null, cppPct: cp, effort, notable: r.notable,
     dPrice: Number.isFinite(dp) ? dp : null, progressPts: r.progressPts, levels: lv, lvText: lv.map(lvTxt),
-    noExtend: v1 ? { up: Boolean(v1.noExtendUp), down: Boolean(v1.noExtendDown) } : null,
+    noExtend: v1 ? { up: Boolean(v1.noExtendUp), down: Boolean(v1.noExtendDown) } : null, anyLocation: Boolean(v1?.anyLocation),
     edges: b0 && typeof b0.top === 'object' && typeof b0.bottom === 'object'
       ? { topBuy: b0.top.contracts, topSell: b0.top.opposite, bottomSell: b0.bottom.contracts, bottomBuy: b0.bottom.opposite } : null,
   }
@@ -1324,17 +1324,19 @@ export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, 
     return out('two-sided', 'NO ACTION — two-sided absorption', `${lvTxt(buyersAbs[0])} · ${lvTxt(sellersAbs[0])}; no notable flow lean (${shareTxt})`, [])
   }
   const stallTxt = (dir) => (effort ? 'effort' : v1 ? (dir > 0 ? 'highs not extending' : 'lows not extending') : dir > 0 ? 'no advance' : 'no decline')
-  if (nearTop && wouldShort) {
+  // CR-DU Amendment 4 (v1.2): with v1.anyLocation a read doesn't need price at the edge (the engine rests a limit there)
+  const anyLoc = Boolean(v1?.anyLocation)
+  if ((nearTop || anyLoc) && wouldShort) {
     const ev = [posTxt('top'), lean > 0 ? `${shareTxt} buyers leaning` : null, ...absTop.map(lvTxt),
       effort ? `${cppTxt} (effort)` : `no advance ${Number.isFinite(dp) ? `${dp >= 0 ? '+' : ''}${dp.toFixed(1)} pts` : ''}`]
     return out('short', 'SHORT READ at top', ev.filter(Boolean).join(' · '), absTop.length ? ['A19', 'A23'] : ['A19'],
-      `${[lean > 0 ? 'buyers leaning' : null, absTop.length ? 'buyers absorbed' : null].filter(Boolean).join(' + ')} at the top, ${stallTxt(1)}`)
+      `${[lean > 0 ? 'buyers leaning' : null, absTop.length ? 'buyers absorbed' : null].filter(Boolean).join(' + ')}${nearTop ? ' at the top' : ''}, ${stallTxt(1)}`)
   }
-  if (nearBottom && wouldLong) {
+  if ((nearBottom || anyLoc) && wouldLong) {
     const ev = [posTxt('bottom'), lean < 0 ? `${shareTxt} sellers leaning` : null, ...absBottom.map(lvTxt),
       effort ? `${cppTxt} (effort)` : `no decline ${Number.isFinite(dp) ? `${dp >= 0 ? '+' : ''}${dp.toFixed(1)} pts` : ''}`]
     return out('long', 'LONG READ at bottom', ev.filter(Boolean).join(' · '), absBottom.length ? ['A19', 'A23'] : ['A19'],
-      `${[lean < 0 ? 'sellers leaning' : null, absBottom.length ? 'sellers absorbed' : null].filter(Boolean).join(' + ')} at the bottom, ${stallTxt(-1)}`)
+      `${[lean < 0 ? 'sellers leaning' : null, absBottom.length ? 'sellers absorbed' : null].filter(Boolean).join(' + ')}${nearBottom ? ' at the bottom' : ''}, ${stallTxt(-1)}`)
   }
   // idea only: the pushing side winning at an edge (moving easily, nothing absorbing it)
   if (cp != null && cp < r.notable) {
@@ -1378,8 +1380,9 @@ export function boxEvidenceRows(checks, { kfmtFn = kfmt } = {}) {
   const atCand = cand === 'short' ? c.nearTop : cand === 'long' ? c.nearBottom : null
   const edgeName = cand === 'short' ? 'top' : 'bottom'
   rows.push({ key: 'location', check: 'Location', value: nearer,
-    reads: !has ? (c.nearTop ? 'near the top' : c.nearBottom ? 'near the bottom' : 'mid-box') : atCand ? `at the ${edgeName}` : `not at the ${edgeName}`,
-    tone: !has ? 'neutral' : atCand ? 'good' : 'bad' })
+    reads: !has ? (c.nearTop ? 'near the top' : c.nearBottom ? 'near the bottom' : 'mid-box') : atCand ? `at the ${edgeName}`
+      : c.anyLocation ? `limit at the ${edgeName}` : `not at the ${edgeName}`, // CR-DU v1.2: location is the order's, not the read's
+    tone: !has ? 'neutral' : atCand ? 'good' : c.anyLocation ? 'neutral' : 'bad' })
   // Δ share: the lean (≥ notable) with or against the candidate
   const wantSign = cand === 'short' ? 1 : cand === 'long' ? -1 : 0
   rows.push({ key: 'share', check: 'Δ share', value: `${sharePctText(c.share)}${c.sharePct == null ? '' : ` · ${pctText(c.sharePct)}`}`,

@@ -15,7 +15,9 @@ import {
 } from './flowV3.js'
 import { utcEpochShowingZoneTime } from './flowShared.js'
 
-export const V1_ENGINE_VERSION = 'v1.1' // v1.1 (Amendments 2 / 3): lean ≥ p70, fixed 10-pt stop
+// v1.1 (Amendments 2 / 3): lean ≥ p70, fixed 10-pt stop. v1.2 (Amendment 4): location moves from the read to the order
+// (a valid read rests a limit at the faded edge while it holds). v1.2 is frozen on train (CR-DU): no further changes.
+export const V1_ENGINE_VERSION = 'v1.2'
 export const V1_DEFAULTS = {
   boxMin: 8, minHeightPts: 2, // rule 6
   notable: 80, nearPts: 2, absorbPts: 2, // CR-DQ ⚙ "Verdict rules" defaults (notable = the effort leg's cut)
@@ -210,7 +212,7 @@ export function evaluateAt(ctx, i, state = newState(), { anchorShifted = null, c
   const v = boxVerdict({
     box, pct, levels: inBox, tradeDate: ctx.tradeDate, fomc: FOMC_2026_DECISION_DAYS,
     rules: { notable: s.notable, lean: s.leanPct, nearPts: s.nearPts, absorbPts: s.absorbPts, minAgeMin: s.boxMin, minHeightPts: s.minHeightPts },
-    v1: { noExtendUp: ne.up, noExtendDown: ne.down },
+    v1: { noExtendUp: ne.up, noExtendDown: ne.down, anyLocation: true },
   })
   const boxInfo = { from: r.from, top: r.top.price, bottom: r.bottom.price, high: r.high, low: r.low, minutes: ro?.minutes ?? null }
   const evidence = { kind: v.kind, pill: v.pill, reason: v.reason, sharePct: pct?.share?.p ?? null, cppPct: pct?.cpp?.p ?? null,
@@ -288,7 +290,8 @@ function resolveSeconds(ctx, minute, pos, fromT, adverseOnlyAt = null) {
 
 /**
  * Simulate the session minute by minute (no lookahead): orders placed at a minute's close rest from the next minute,
- * fill only when price trades ≥ 1 tick through (Q4), are cancelled on a lapse / box break / 12:15; brackets resolve on
+ * fill only when price trades ≥ 1 tick through (Q4), follow the faded edge while the read holds (v1.2), are cancelled
+ * on a lapse / box break / 12:15; brackets resolve on
  * 1-min bars, same-minute stop + target from 1-s data (else the stop); flatten at the open of the 12:59 bar.
  * Returns { trades, minutes: [{ t, verdict, side, failed, box }], state, open }.
  */
@@ -354,6 +357,9 @@ export function simulateSession(ctx, { keepMinutes = true, lastI = null } = {}) 
     const ev = evaluateAt(ctx, i, state)
     if (keepMinutes) minutes.push({ t, verdict: ev.verdict, side: ev.side, failed: ev.failed, box: ev.box })
     if (order && (ev.verdict !== order.side.toUpperCase() || ev.box?.from !== order.boxFrom)) order = null
+    else if (order) { // Amendment 4: the limit stays at the faded edge (by closes) while the read holds — re-pegged
+      order = { ...order, entry: ev.order.entry, stop: ev.order.stop, target: ev.order.target }
+    }
     if (!pos && !order && (ev.verdict === 'SHORT' || ev.verdict === 'LONG')) {
       order = { ...ev.order, decisionT: t, box: ev.box, contra: { primary: ev.evidence.contra.primary.length, secondary: ev.evidence.contra.secondary.length },
         rule12: ev.evidence.rule12, locationSupport: ev.evidence.locationSupport.length }
@@ -395,7 +401,7 @@ export function engineTradesText(pe, fmt = (t) => String(t)) {
 }
 
 // The panel's verdict object (BoxPanel's Verdict: kind / pill / reason / checks / title) from an engine evaluation:
-// SHORT / LONG when every v1 rule passes, else NO ACTION (NO TRADES on FOMC days, CONFLICT kept) with the failed rules
+// SHORT / LONG ("READ — limit at <price>" while price is not at the edge, Amendment 4) when every v1 rule passes, else NO ACTION (NO TRADES on FOMC days, CONFLICT kept) with the failed rules
 // as the reason and as extra evidence rows (existing row style, tone 'bad').
 export function panelVerdict(pe, fmt = (t) => String(t)) {
   const title = 'v1 rules engine (discretionary-rules-v1, applied mechanically; CR-DU). Rules 1–20: FOMC, RTH, 12:15 cutoff, '
@@ -406,7 +412,9 @@ export function panelVerdict(pe, fmt = (t) => String(t)) {
   const v = ev.v
   const ok = ev.verdict === 'SHORT' || ev.verdict === 'LONG'
   const kind = ok ? ev.side : !v ? 'forming' : v.kind === 'short' || v.kind === 'long' ? 'none' : v.kind
-  const pill = ok ? `${ev.verdict} at ${ev.side === 'short' ? 'top' : 'bottom'}`
+  // Amendment 4: a valid read away from the edge shows its resting limit
+  const atEdge = ok && (ev.side === 'short' ? v?.checks?.nearTop : v?.checks?.nearBottom)
+  const pill = ok ? (atEdge ? `${ev.verdict} at ${ev.side === 'short' ? 'top' : 'bottom'}` : `READ — limit at ${ev.order.entry.toFixed(2)}`)
     : kind === 'no-trades' ? 'NO TRADES' : kind === 'conflict' ? 'CONFLICT → NO ACTION' : 'NO ACTION'
   const reason = ok ? (v?.reason || '') : ev.failed.map((f) => `rule ${f.rule}: ${f.text}`).join(' · ')
   return {
