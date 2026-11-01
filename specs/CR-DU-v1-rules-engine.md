@@ -380,3 +380,17 @@ Results (train, in-sample): see the session note (vault `sessions/2026-10-31 - C
 `scripts/logs/cr-du/backtest_report.md`. Primary: 90 trades on 86 sessions, 27.8 % wins, −69.5 pts gross / −92.0 after
 0.25 per round trip; fixed 10-pt stop: 80 trades, 50.0 %, −23.25 after cost. Contradiction bars: inconclusive (n = 6
 with a primary bar). Set 2: SHORT 0 · LONG 0 · NO ACTION 115 (27 warm-up). Smoke 4 / 4.
+
+## Amendment 2 — Ryan, chat 2026-10-31 (after the first backtest)
+
+- **Rule 15 primary stop = a fixed 10 pts from entry.** The box wick extreme + 2 pts (Amendment 1's primary) becomes a
+  pre-declared sensitivity row. Pre-declared rows are now: box min 10; no 12:15 cutoff; no loss cap; D4 entry; wick + 2 stop.
+- The backtest totals are rerun only after diagnosis D1 is reported (below). The code default changes with that rerun
+  (not during the running e2e comparison, whose branch frontend serves `src/`).
+- **Diagnosis D1** (read-only, no outcomes, no tuning): for each CR-CZ card by Ryan's first pre-reveal label, (a) the
+  engine's box at the card's decision minute vs the card's box (overlap in pts and minutes); (b) if they overlap, the
+  first and every failed v1 rule; (c) the same with the engine anchored at the card's range start. Counts by first
+  failed rule for (b) and (c).
+
+Rulings re-check: A4 still honoured (a fixed 10-pt stop is beyond the box on every trade where the box is < 10 pts from
+entry; reported); A11 unchanged (+10). No other row changes.
