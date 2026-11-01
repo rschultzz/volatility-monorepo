@@ -11,7 +11,8 @@ export const ROLLING_CHOICES = [5, 10, 15]
 // CR-DM: rolling net delta is a ⚙ option, off by default (volume per minute takes its slot); liveMinMove = the live
 // effort label's minimum move in points (⚙, a display default, not a tested threshold).
 // CR-DP item 6d: anchoredLine = what the anchored line plots ('share' = cumulative delta share, the default; 'raw' = CVD).
-export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: false, liveMinMove: 4, breakHoldMin: 5, anchoredLine: 'share' }
+// CR-DU: v1Alert = sound + browser notification when the engine verdict turns SHORT / LONG (live only), off by default.
+export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: false, liveMinMove: 4, breakHoldMin: 5, anchoredLine: 'share', v1Alert: false }
 // CR-DN item 2: a break must hold A minutes (no 1-minute close strictly back inside the box) before the box freezes (⚙;
 // a display default, not a tested threshold).
 export const BREAK_HOLD_MIN_RANGE = [1, 15]
@@ -1097,8 +1098,16 @@ export function boxPanelSections(entries, hhmm, segments = null, pctOf = null) {
 
 // CR-DQ items 5 / 7 — one config object for the panel's display thresholds (⚙ "Percentile tiers" and "Verdict rules";
 // display aids, untested): tier cut-offs (percentiles) and the verdict's distances (pts).
-export const BOX_RULES_DEFAULTS = { notable: 80, strong: 95, nearPts: 2, progressPts: 2, absorbPts: 2, minAgeMin: 10, minHeightPts: 2 }
+// CR-DU: box minimum 10 → 8 min (v1 rule 6). A stored 10 from before CR-DU is read as 8 once (migrateBoxRules).
+export const BOX_RULES_DEFAULTS = { notable: 80, strong: 95, nearPts: 2, progressPts: 2, absorbPts: 2, minAgeMin: 8, minHeightPts: 2 }
 export const BOX_RULES_RANGES = { notable: [50, 99], strong: [51, 100], nearPts: [0.25, 10], progressPts: [0, 20], absorbPts: [0, 10], minAgeMin: [0, 120], minHeightPts: [0, 20] }
+export const BOX_RULES_VERSION = 2
+export function migrateBoxRules(settings) {
+  if (!settings || settings.boxRulesV === BOX_RULES_VERSION) return settings
+  const br = settings.boxRules
+  const next = br && Number(br.minAgeMin) === 10 ? { ...br, minAgeMin: BOX_RULES_DEFAULTS.minAgeMin } : br
+  return { ...settings, boxRules: next, boxRulesV: BOX_RULES_VERSION }
+}
 export function boxRules(stored) {
   const out = { ...BOX_RULES_DEFAULTS }
   for (const [k, [lo, hi]] of Object.entries(BOX_RULES_RANGES)) {
@@ -1371,7 +1380,7 @@ export function boxEvidenceRows(checks, { kfmtFn = kfmt } = {}) {
   // Δ share: the lean (≥ notable) with or against the candidate
   const wantSign = cand === 'short' ? 1 : cand === 'long' ? -1 : 0
   rows.push({ key: 'share', check: 'Δ share', value: `${sharePctText(c.share)}${c.sharePct == null ? '' : ` · ${pctText(c.sharePct)}`}`,
-    reads: c.lean > 0 ? 'buyers leaning' : c.lean < 0 ? 'sellers leaning' : 'not notable',
+    reads: c.lean > 0 ? 'net buying' : c.lean < 0 ? 'net selling' : 'not notable', // CR-DU (Ryan): was buyers / sellers leaning
     tone: !has || c.lean === 0 ? 'neutral' : c.lean === wantSign ? 'good' : 'bad' })
   // progress toward the pushing side (buyers for a short, sellers for a long)
   const dp = c.dPrice

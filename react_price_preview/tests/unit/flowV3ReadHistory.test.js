@@ -54,7 +54,7 @@ test('replay: SHORT READ minutes grouped into one range per box; history up to a
   assert.ok(h.ranges.length >= 1)
   assert.equal(h.ranges[0].side, 'short')
   assert.equal(h.ranges[0].box, T0)
-  assert.ok(h.ranges[0].from >= at(10)) // not before the box is 10 min old
+  assert.ok(h.ranges[0].from >= at(8)) // not before the box is 8 min old (CR-DU: box min 8)
   for (let k = 8; k < CLOSES.length; k += 1) {
     // same history whether the later bars exist (set end at k) or not (payload cut at k)
     assert.deepEqual(hist(CLOSES, at(k)).ranges, hist(CLOSES.slice(0, k + 1)).ranges, `minute ${k}`)

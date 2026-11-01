@@ -114,18 +114,18 @@ test('amendment 1: absorption distance is to the box\'s high–low range (wicks)
   assert.deepEqual(r.rules, ['A19', 'A23'])
 })
 
-test('amendment 2: box still forming until ≥ 10 min and ≥ 2 pts (close-based), checked right after NO TRADES', () => {
-  const young = box({ readout: { delta: 300, vol: 10000, dPrice: 1, minutes: 9 } })
+test('amendment 2: box still forming until ≥ 8 min (CR-DU; was 10) and ≥ 2 pts (close-based), checked right after NO TRADES', () => {
+  const young = box({ readout: { delta: 300, vol: 10000, dPrice: 1, minutes: 7 } })
   const r = v({ box: young, pct: pct(90, 40), levels: [lvl('sellers_absorbed', 100.5)] })
   assert.equal(r.kind, 'forming')
   assert.equal(r.label, 'NO ACTION — box still forming')
-  assert.equal(r.evidence, 'box 9 min (min 10) · 10.00 pts tall (min 2)')
+  assert.equal(r.evidence, 'box 7 min (min 8) · 10.00 pts tall (min 2)')
   const flat = box({ top: 101.5, bottom: 100, lastClose: 101 })
   assert.equal(v({ box: flat, pct: pct(90, 40), levels: [] }).kind, 'forming')
   assert.equal(v({ box: box(), pct: pct(90, 40), levels: [] }).kind, 'short') // 20 min, 10 pts
   assert.equal(v({ box: young, pct: pct(90, 40), levels: [], tradeDate: '2026-10-28' }).kind, 'no-trades')
   assert.equal(v({ box: young, pct: pct(90, 40), levels: [], rules: { minAgeMin: 5 } }).kind, 'short')
-  assert.match(v({ box: young, pct: null, levels: [] }).title, /box formed at ≥ 10 min and ≥ 2 pts/)
+  assert.match(v({ box: young, pct: null, levels: [] }).title, /box formed at ≥ 8 min and ≥ 2 pts/)
 })
 
 test('amendment 3: wording says which side of the edge', () => {

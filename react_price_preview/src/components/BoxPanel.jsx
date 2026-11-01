@@ -114,7 +114,7 @@ function FrozenRow({ s, rules }) {
 function Verdict({ v, testid = 'flow-v3-box-verdict' }) {
   const tone = VERDICT_TONE[v.kind] || 'neutral'
   const c = TONE_COLOR[tone]
-  const rows = boxEvidenceRows(v.checks)
+  const rows = [...boxEvidenceRows(v.checks), ...(v.extraRows || [])] // CR-DU: the v1 engine's failed rules
   return (
     <div data-testid={testid} data-kind={v.kind} data-tone={tone} data-evidence={v.evidence} style={{ marginBottom: 2 }}>
       <span data-testid="flow-v3-box-verdict-pill" title={v.title}
@@ -124,6 +124,7 @@ function Verdict({ v, testid = 'flow-v3-box-verdict' }) {
       </span>
       {v.reason && <div data-testid="flow-v3-box-verdict-reason" style={{ color: '#cbd5e1' }}>{v.reason}</div>}
       <EvidenceTable rows={rows} testid={`${testid}-table`} />
+      {v.engineLine && <div data-testid="flow-v3-box-engine-line" style={{ color: MUTED }}>{v.engineLine}</div>}
     </div>
   )
 }

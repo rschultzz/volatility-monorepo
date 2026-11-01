@@ -288,7 +288,7 @@ function resolveSeconds(ctx, minute, pos, fromT, adverseOnlyAt = null) {
  * 1-min bars, same-minute stop + target from 1-s data (else the stop); flatten at the open of the 12:59 bar.
  * Returns { trades, minutes: [{ t, verdict, side, failed, box }], state, open }.
  */
-export function simulateSession(ctx, { keepMinutes = true } = {}) {
+export function simulateSession(ctx, { keepMinutes = true, lastI = null } = {}) {
   const { s, bars, ptMin } = ctx
   const state = newState()
   const trades = []
@@ -308,7 +308,8 @@ export function simulateSession(ctx, { keepMinutes = true } = {}) {
     }
     pos = null
   }
-  for (let i = 0; i < bars.t.length; i += 1) {
+  const last = lastI == null ? bars.t.length - 1 : Math.min(lastI, bars.t.length - 1)
+  for (let i = 0; i <= last; i += 1) {
     const t = bars.t[i]
     const pm = ptMin(t)
     // during bar i: the open position, else the resting order
@@ -357,8 +358,56 @@ export function simulateSession(ctx, { keepMinutes = true } = {}) {
   return { trades, minutes, state, open: pos }
 }
 
-// Engine state at the end of the bars given (the live panel's "engine's trades, not yours"): losses, the re-entry timer.
-export function engineToday(ctx) {
-  const sim = simulateSession(ctx, { keepMinutes: false })
-  return { trades: sim.trades, state: sim.state, open: sim.open }
+// The engine settings the box panel's ⚙ "Verdict rules" set (boxRules: box min, height, near, absorption, notable).
+export function engineSettingsFromRules(r) {
+  if (!r) return {}
+  return { boxMin: r.minAgeMin, minHeightPts: r.minHeightPts, nearPts: r.nearPts, absorbPts: r.absorbPts, notable: r.notable }
+}
+
+// Item 2 / Q6 — the box panel's verdict from the engine: the engine's own trades from 06:30 through bar i (rules 19 /
+// 20 state, "engine's trades, not yours"), then the verdict at bar i at the chart's anchor. `endShifted` = the set end
+// (or null = the last bar). Null without RTH bars at or before the end.
+export function panelEngine(ctx, { anchorShifted = null, endShifted = null } = {}) {
+  if (!ctx) return null
+  let i = ctx.bars.t.length - 1
+  if (endShifted != null) while (i >= 0 && ctx.times[i] > endShifted) i -= 1
+  if (i < 0) return null
+  const sim = simulateSession(ctx, { keepMinutes: false, lastI: i })
+  const ev = evaluateAt(ctx, i, sim.state, { anchorShifted, counts: false })
+  const tClose = ctx.bars.t[i] + 60
+  const wait = sim.state.lastStop ? Math.max(0, Math.ceil(ctx.s.reentryMin - (tClose - sim.state.lastStop.at) / 60)) : 0
+  return { ev, trades: sim.trades, open: sim.open, losses: sim.state.losses, wait, i }
+}
+
+const ruleRow = (f) => ({ key: `rule-${f.rule}-${f.code}`, check: `Rule ${f.rule}`, value: f.text, reads: 'fails', tone: 'bad' })
+// "Engine's trades, not yours: 2 trades (1 stop) · re-entry wait 12 min · open short 7015.00"
+export function engineTradesText(pe, fmt = (t) => String(t)) {
+  if (!pe) return ''
+  const n = pe.trades.length
+  const parts = [`${n} trade${n === 1 ? '' : 's'}${pe.losses ? ` (${pe.losses} stop${pe.losses === 1 ? '' : 's'})` : ''}`]
+  if (pe.wait > 0) parts.push(`re-entry wait ${pe.wait} min`)
+  if (pe.open) parts.push(`open ${pe.open.side} ${pe.open.entry.toFixed(2)} since ${fmt(pe.open.entryT)}`)
+  return `Engine's trades, not yours: ${parts.join(' · ')}`
+}
+
+// The panel's verdict object (BoxPanel's Verdict: kind / pill / reason / checks / title) from an engine evaluation:
+// SHORT / LONG when every v1 rule passes, else NO ACTION (NO TRADES on FOMC days, CONFLICT kept) with the failed rules
+// as the reason and as extra evidence rows (existing row style, tone 'bad').
+export function panelVerdict(pe, fmt = (t) => String(t)) {
+  const title = 'v1 rules engine (discretionary-rules-v1, applied mechanically; CR-DU). Rules 1–20: FOMC, RTH, 12:15 cutoff, '
+    + 'box ≥ 8 min after a larger move, Δ share / effort / highs not extending, absorption inside the box, nothing strong in '
+    + 'the +10 path, ≤ 3 losses, 20-min re-entry. Train backtest in-sample only — not a tested edge.'
+  if (!pe) return { kind: 'none', pill: 'NO ACTION', reason: 'rule 2: RTH only', checks: null, title, evidence: '', extraRows: [], engineLine: '' }
+  const { ev } = pe
+  const v = ev.v
+  const ok = ev.verdict === 'SHORT' || ev.verdict === 'LONG'
+  const kind = ok ? ev.side : !v ? 'forming' : v.kind === 'short' || v.kind === 'long' ? 'none' : v.kind
+  const pill = ok ? `${ev.verdict} at ${ev.side === 'short' ? 'top' : 'bottom'}`
+    : kind === 'no-trades' ? 'NO TRADES' : kind === 'conflict' ? 'CONFLICT → NO ACTION' : 'NO ACTION'
+  const reason = ok ? (v?.reason || '') : ev.failed.map((f) => `rule ${f.rule}: ${f.text}`).join(' · ')
+  return {
+    kind, pill, reason, checks: v?.checks || null, title, evidence: v?.evidence || '', engine: { verdict: ev.verdict, failed: ev.failed },
+    extraRows: ok ? [] : ev.failed.filter((f) => !['box_forming', 'no_read', 'conflict', 'two_sided', 'fomc'].includes(f.code)).map(ruleRow),
+    engineLine: engineTradesText(pe, fmt),
+  }
 }

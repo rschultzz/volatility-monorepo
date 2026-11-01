@@ -247,3 +247,44 @@ test('no lookahead: the verdict at bar i is the same with later bars removed', (
       simFull.minutes.slice(0, cut + 1).map((m) => [m.verdict, m.failed.map((f) => f.code)]), `cut ${cut}`)
   }
 })
+
+// ------------------------------------------------------------------------------------------- item 2 (panel)
+test('panelVerdict: SHORT pill, failed rules as reason + rows, engine trades line', async () => {
+  const { panelEngine, panelVerdict } = await import('../../src/v1Engine.js')
+  const { boxEvidenceRows } = await import('../../src/flowV3.js')
+  const ok = panelVerdict(panelEngine(session(), { endShifted: session().times[28] }))
+  assert.equal(ok.kind, 'short')
+  assert.equal(ok.pill, 'SHORT at top')
+  assert.deepEqual(ok.extraRows, [])
+  assert.equal(ok.engineLine, "Engine's trades, not yours: 0 trades")
+  assert.equal(boxEvidenceRows(ok.checks).find((r) => r.key === 'share').reads, 'net buying') // was "buyers leaning"
+  const g = { reason: null, schedule: [{ from: at(0), levels: [{ price: 6010, net: -9e10, side: 'put' }] }] }
+  const ctx = session({ gex: g })
+  const no = panelVerdict(panelEngine(ctx, { endShifted: ctx.times[28] }))
+  assert.equal(no.pill, 'NO ACTION')
+  assert.match(no.reason, /^rule 4: strong GEX level 6010\.00 \(put\) in the path$/)
+  assert.deepEqual(no.extraRows.map((r) => [r.check, r.tone]), [['Rule 4', 'bad']])
+  const forming = panelVerdict(panelEngine(ctx, { endShifted: ctx.times[26] }))
+  assert.equal(forming.kind, 'forming')
+  assert.match(forming.reason, /^rule 6: box still forming/)
+  assert.equal(panelVerdict(null).reason, 'rule 2: RTH only')
+})
+
+test('panelEngine counts the engine\'s own trades and the re-entry wait', async () => {
+  const { panelEngine } = await import('../../src/v1Engine.js')
+  const ctx = session({ over: { 29: { h: 6015.25 }, 30: { h: 6018.25, l: 6014, o: 6015, c: 6017 }, ...down(31, 6016) } })
+  const pe = panelEngine(ctx, { endShifted: ctx.times[35] })
+  assert.equal(pe.trades.length, 1)
+  assert.equal(pe.losses, 1)
+  assert.equal(pe.wait, 14) // stopped in bar 30; at the close of bar 35: 15 of 20 min gone (rounded up)
+})
+
+test('box minimum default 8; a stored 10 (old default) migrates once', async () => {
+  const { BOX_RULES_DEFAULTS, migrateBoxRules } = await import('../../src/flowV3.js')
+  assert.equal(BOX_RULES_DEFAULTS.minAgeMin, 8)
+  const m = migrateBoxRules({ k: 3, boxRules: { minAgeMin: 10, nearPts: 2 } })
+  assert.equal(m.boxRules.minAgeMin, 8)
+  assert.equal(m.boxRulesV, 2)
+  assert.equal(migrateBoxRules({ boxRulesV: 2, boxRules: { minAgeMin: 10 } }).boxRules.minAgeMin, 10) // set after CR-DU: kept
+  assert.equal(migrateBoxRules({ boxRules: { minAgeMin: 12 } }).boxRules.minAgeMin, 12)
+})

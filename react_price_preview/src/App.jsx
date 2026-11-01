@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PriceChart from './components/PriceChart'
 import { DEFAULT_MARKER_SETTINGS, alignV2ToCandles, effortChartMarkers } from './flowShared'
 import AggressorFlowV3Panel from './components/AggressorFlowV3Panel'
-import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, LIVE_EFFORT_ID, boxRules, boxSegments, edgeReadout, edgeStripDrawn, endFromPick, flattenBars, liveEffortLabel, makeShifter, rollingExtraHeight, rowCloses, segmentReadouts } from './flowV3'
+import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, migrateBoxRules, LIVE_EFFORT_ID, boxRules, boxSegments, edgeReadout, edgeStripDrawn, endFromPick, flattenBars, liveEffortLabel, makeShifter, rollingExtraHeight, rowCloses, segmentReadouts } from './flowV3'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import TradeReviewPanel from './components/TradeReviewPanel'
 import boxBaseline from './data/boxBaseline.json'
@@ -468,7 +468,8 @@ export default function App() {
       return dflt
     }
   }
-  const [flowV3Settings, setFlowV3Settings] = useState(() => readStoredObject(FLOW_V3_SETTINGS_STORAGE_KEY, DEFAULT_V3_SETTINGS))
+  // CR-DU: a stored box minimum of 10 (the old default) becomes 8 once (flowV3.migrateBoxRules)
+  const [flowV3Settings, setFlowV3Settings] = useState(() => migrateBoxRules(readStoredObject(FLOW_V3_SETTINGS_STORAGE_KEY, DEFAULT_V3_SETTINGS)))
   const [flowV3Layers, setFlowV3Layers] = useState(() => readStoredObject(FLOW_V3_LAYERS_STORAGE_KEY, FLOW_V3_LAYERS_OFF))
   const [flowEdgeEffort, setFlowEdgeEffort] = useState(() => {
     try {
@@ -1032,6 +1033,8 @@ export default function App() {
   // CR-DR item 2 — "My trades" (Flow v3 Display group): off by default (C2), not remembered. While on, Ryan's trades
   // for the loaded dates come from /api/trade-log/chart; a marker click selects a trade (the review panel, item 3).
   const [myTradesOn, setMyTradesOn] = useState(false)
+  // CR-DU item 4b — "v1 trades" (Flow v3 Display group, beside My trades): the engine's simulated trades, off by default.
+  const [v1TradesOn, setV1TradesOn] = useState(false) // eslint-disable-line no-unused-vars
   const [myTrades, setMyTrades] = useState(null)
   const [myTradesReload, setMyTradesReload] = useState(0)
   const [selectedTradeId, setSelectedTradeId] = useState(null)
@@ -1709,6 +1712,44 @@ export default function App() {
     }
   }, [flowCellsUrl, loadingCenter, error, isLiveTradeDate])
 
+  // CR-DU: the v1 rules engine's inputs for the session (prior-sessions baseline, contradiction percentiles, A7 swing,
+  // strong GEX levels per minute, 1-s OHLC; /api/ironbeam/v1-engine/inputs), while Edges is on (box panel verdict) or the
+  // v1 trades overlay is on. `blocked` (holdout, set 2 in progress, …) turns the engine off for the date. Live: every 60 s.
+  const v1InputsUrl = useMemo(() => {
+    if (!flowEnabled || !(flowV3Layers.edges || v1TradesOn) || !flowCellsDate) return null
+    const url = new URL(`${apiBase}/api/ironbeam/v1-engine/inputs`)
+    url.searchParams.set('trade_date', flowCellsDate)
+    if (reviewUntil) url.searchParams.set('until', reviewUntil)
+    return url.toString()
+  }, [apiBase, flowEnabled, flowV3Layers.edges, v1TradesOn, flowCellsDate, reviewUntil])
+  const [v1InputsLoaded, setV1InputsLoaded] = useState({ url: null, payload: null })
+  useEffect(() => {
+    if (!v1InputsUrl) {
+      setV1InputsLoaded({ url: null, payload: null })
+      return undefined
+    }
+    const controller = new AbortController()
+    let disposed = false
+    const load = async () => {
+      try {
+        const response = await fetch(v1InputsUrl, { method: 'GET', credentials: 'include', signal: controller.signal, cache: 'no-store' })
+        if (!response.ok) throw new Error(`v1 engine inputs ${response.status}`)
+        const payload = await response.json()
+        if (!disposed) setV1InputsLoaded({ url: v1InputsUrl, payload })
+      } catch (err) {
+        if (err?.name !== 'AbortError' && !disposed) console.error('v1 engine inputs failed', err)
+      }
+    }
+    load()
+    const timer = isLiveTradeDate ? window.setInterval(load, 60000) : null
+    return () => {
+      disposed = true
+      if (timer) window.clearInterval(timer)
+      controller.abort()
+    }
+  }, [v1InputsUrl, isLiveTradeDate])
+  const v1Inputs = v1InputsLoaded.url === v1InputsUrl ? v1InputsLoaded.payload : null
+
   // CR-DF: the edge readout (DF4) from the anchor, on the cells payload's 1-minute bars; shared by the v3
   // header (text) and the price chart (dashed lines).
   const flowV3Shift = useMemo(() => makeShifter((t) => utcEpochShowingZoneTime(t, 'America/Los_Angeles')), [])
@@ -1760,10 +1801,12 @@ export default function App() {
       profileFrom: flowAnchor,
       anchor: flowAnchor, // CR-DP item 4 / CR-DQ item 3: the box panel's × resets on a new anchor
       boxRules: flowV3Settings.boxRules, // CR-DQ items 5 / 7: percentile tiers and verdict rules (⚙)
+      v1Inputs, // CR-DU: the v1 engine's inputs (box panel verdict, engine's trades)
+      v1Alert: Boolean(flowV3Settings.v1Alert) && isLiveTradeDate, // CR-DU item 2: alert only on the live session
       // CR-DN item 1: the profile stops after the end's minute ([from, to) on cell minute starts); null without an end.
       profileTo: flowAnchor != null && flowEnd != null ? flowEnd + 60 : null,
     }
-  }, [flowV3AnyLayer, flowCells, flowCellsBars, flowEnd, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, flowAnchor, flowEnd])
+  }, [flowV3AnyLayer, flowCells, flowCellsBars, flowEnd, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, v1Inputs, flowV3Settings.v1Alert, isLiveTradeDate, flowAnchor, flowEnd])
   // CR-DN item 1: the anchor → end window, shaded on the price chart (any layer); null without an end.
   const flowV3Window = useMemo(
     () => (flowAnchor != null && flowEnd != null ? { from: flowAnchor, to: flowEnd } : null),

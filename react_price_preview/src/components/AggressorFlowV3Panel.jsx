@@ -216,7 +216,7 @@ function BoxRulesFields({ draft, setDraft, input, label }) {
         {num('minAgeMin', 'Min box age (min)', 1, 'flow-v3-rule-min-age')}
         {num('minHeightPts', 'Min box height (pts)', 0.25, 'flow-v3-rule-min-height')}
       </div>
-      <div style={note}>Draft rules (A19, A22, A23, A24), applied mechanically — untested, a display aid. "Notable" in the rules is the tier above. Absorption distance is to the box's high–low range (wicks). No verdict beyond NO TRADES until the box is this old and tall ("box still forming"). Defaults 2 / 2 / 2, 10 min / 2 pts.</div>
+      <div style={note}>Draft rules (A19, A22, A23, A24), applied mechanically — untested, a display aid. "Notable" in the rules is the tier above. Absorption distance is to the box's high–low range (wicks). No verdict beyond NO TRADES until the box is this old and tall ("box still forming"). Defaults 2 / 2 / 2, 8 min / 2 pts. The box panel's verdict is the v1 rules engine's, which uses these values too.</div>
     </>
   )
 }
@@ -245,6 +245,7 @@ function Settings({ value, layers, markers = DEFAULT_MARKER_SETTINGS, onApply, o
       liveMinMove: n('liveMinMove', LIVE_MIN_MOVE_RANGE[0], LIVE_MIN_MOVE_RANGE[1], DEFAULT_V3_SETTINGS.liveMinMove),
       anchoredLine: draft.anchoredLine === 'raw' ? 'raw' : 'share',
       boxRules: boxRules(draft.boxRules), // CR-DQ items 5 / 7: clamped to BOX_RULES_RANGES
+      v1Alert: Boolean(draft.v1Alert), // CR-DU item 2
     }, {
       // CR-DP amendment item 1: the Flow v2 marker settings, same ranges as v2's ⚙ (swing 1–50, ratio 1–10)
       ...markers,
@@ -303,6 +304,15 @@ function Settings({ value, layers, markers = DEFAULT_MARKER_SETTINGS, onApply, o
           <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>With Effort on, the leg in progress is labelled once it has moved this far (2–12, default 4). A display default, not a tested threshold.</div>
         </label>
         <BoxRulesFields draft={draft} setDraft={setDraft} input={input} label={label} />
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '0 0 10px' }}>
+          <input type="checkbox" aria-label="Alert on SHORT / LONG" data-testid="flow-v3-v1-alert" checked={Boolean(draft.v1Alert)}
+            onChange={(e) => {
+              const on = e.target.checked
+              setDraft((d) => ({ ...d, v1Alert: on }))
+              try { if (on && window.Notification && Notification.permission === 'default') Notification.requestPermission() } catch (err) { /* none */ }
+            }} />
+          <span style={{ fontSize: '12px', color: '#cbd5e1' }}>Alert when the v1 verdict turns SHORT / LONG (live session: tone + browser notification)</span>
+        </label>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
           <input type="checkbox" aria-label="Heatmap (cells)" data-testid="flow-v3-heatmap-toggle" checked={Boolean(draft.heat)} onChange={(e) => setDraft((d) => ({ ...d, heat: e.target.checked }))} />
           Heatmap (cells) — behind the candles
