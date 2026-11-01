@@ -1,7 +1,7 @@
 """Record/replay harness for /api/ironbeam/flow/cells (CR-DC step 2).
 
-`modules.Ironbeam.flow_v3` reads the DB only through its `fetch_*`, `_exists_price_1m` and `_trades_oldest`
-functions, plus Flow v2's `fetch_flow_minutes`, `fetch_bar_closes` and `_watermark_1m` (contract choice).
+`modules.Ironbeam.flow_v3` reads the DB only through its `fetch_*`, `_exists_price_1m`, `_trades_oldest` and
+`_trades_last` functions, plus Flow v2's `fetch_flow_minutes`, `fetch_bar_closes` and `_watermark_1m` (contract choice).
 `record()` wraps them against the live DB (SELECTs only); `replay()` serves the stored results. Keys leave
 out the engine argument. Both modules' in-process caches are cleared on entry.
 """
@@ -15,7 +15,7 @@ from apps.web.modules.Ironbeam.tests import flow_v2_fixture as vf
 
 FIXTURE_DIR = bf.FIXTURE_DIR
 FIXTURE = FIXTURE_DIR / "cr_dc_flow_cells.pkl.gz"
-V3_FUNCS = ("fetch_price_1m", "fetch_trade_cells", "fetch_seconds", "_exists_price_1m", "_trades_oldest")
+V3_FUNCS = ("fetch_price_1m", "fetch_trade_cells", "fetch_seconds", "_exists_price_1m", "_trades_oldest", "_trades_last")
 
 QS_0501 = "trade_date=2026-05-01&session=FULL"
 QS_0501_RTH = "trade_date=2026-05-01&session=RTH"

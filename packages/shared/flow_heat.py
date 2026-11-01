@@ -85,7 +85,7 @@ def cut_cells(cells: pd.DataFrame, start_epoch: int, end_epoch: int) -> pd.DataF
 
 
 def absorption_marks(cells: pd.DataFrame, bars: pd.DataFrame, start_epoch: int, end_epoch: int,
-                     params: AbsorbParams = AbsorbParams()) -> list[dict]:
+                     params: AbsorbParams = AbsorbParams(), provisional: bool = False) -> list[dict]:
     """'Sellers absorbed' / 'Buyers absorbed' marks (spec DC9), for cells with start <= t < end.
 
     cells: (t, p ticks, buy, sell); bars: 1-minute bars indexed by bar-start epoch with columns h, l
@@ -95,6 +95,11 @@ def absorption_marks(cells: pd.DataFrame, bars: pd.DataFrame, start_epoch: int, 
     mark is confirmed at t + (m + 1) minutes, which must be <= end. A qualifying cell within 1 tick of
     an earlier, still unbroken mark of the same side merges into it. Break = the first later bar with
     low < P - 1 tick (sellers) / high > P + 1 tick (buyers), before `end`. Mirror for buyers.
+
+    CR-DV: live callers pass `end` = the last closed minute, so nothing still forming is read. With
+    `provisional`, a candidate whose hold window has not yet elapsed (confirm > end) and that no bar before
+    `end` has broken is returned with `provisional: True` (it adds no volume to an earlier mark it would merge
+    into, and is not returned when within 1 tick of one); confirmed marks carry `provisional: False`.
     """
     c = cells[(cells["t"] >= start_epoch) & (cells["t"] < end_epoch)]
     if c.empty or bars is None or len(bars) == 0:
@@ -119,7 +124,8 @@ def absorption_marks(cells: pd.DataFrame, bars: pd.DataFrame, start_epoch: int, 
                 q = g[vols >= params.k * med]
                 q = q[q[side] > 0]
                 confirm = t + hold_s
-                if not q.empty and confirm <= end_epoch:
+                pending = confirm > end_epoch
+                if not q.empty and (not pending or provisional):
                     row = q.loc[q["p"].idxmin()] if side == "sell" else q.loc[q["p"].idxmax()]
                     p = int(row["p"])
                     price = p * TICK
@@ -130,8 +136,9 @@ def absorption_marks(cells: pd.DataFrame, bars: pd.DataFrame, start_epoch: int, 
                         for mk in marks:
                             unbroken = mk["break_time"] is None or mk["break_time"] > t
                             if unbroken and abs(mk["p"] - p) <= 1:
-                                mk["merged_vol"] += float(row[side])
-                                mk["merges"].append([confirm, float(row[side])])   # CR-DU: merged_vol as of a time
+                                if not pending:
+                                    mk["merged_vol"] += float(row[side])
+                                    mk["merges"].append([confirm, float(row[side])])   # CR-DU: merged_vol as of a time
                                 merged = True
                                 break
                         if not merged:
@@ -142,7 +149,8 @@ def absorption_marks(cells: pd.DataFrame, bars: pd.DataFrame, start_epoch: int, 
                                           "time": t, "p": p, "price": price, "confirm_time": confirm,
                                           "aggressor": float(row[side]), "opposite": float(row[opp]),
                                           "median": float(med), "merged_vol": 0.0, "merges": [],
-                                          "break_time": int(bt[hit[0]]) if len(hit) else None})
+                                          "break_time": int(bt[hit[0]]) if len(hit) else None,
+                                          "provisional": pending})
             for v in nz:
                 bisect.insort(prior, float(v))
         out += marks

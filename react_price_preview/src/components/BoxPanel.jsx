@@ -111,10 +111,10 @@ function FrozenRow({ s, rules }) {
   )
 }
 
-function Verdict({ v, testid = 'flow-v3-box-verdict' }) {
+function Verdict({ v, testid = 'flow-v3-box-verdict', stall = null }) {
   const tone = VERDICT_TONE[v.kind] || 'neutral'
   const c = TONE_COLOR[tone]
-  const rows = [...boxEvidenceRows(v.checks), ...(v.extraRows || [])] // CR-DU: the v1 engine's failed rules
+  const rows = [...boxEvidenceRows(v.checks, { stall }), ...(v.extraRows || [])] // CR-DU: the v1 engine's failed rules
   return (
     <div data-testid={testid} data-kind={v.kind} data-tone={tone} data-evidence={v.evidence} style={{ marginBottom: 2 }}>
       <span data-testid="flow-v3-box-verdict-pill" title={v.title}
@@ -131,7 +131,7 @@ function Verdict({ v, testid = 'flow-v3-box-verdict' }) {
 
 export default function BoxPanel({
   panel, place, panelRef, maxHeight, dragged, onClose, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp,
-  onHeaderDoubleClick, rules = BOX_RULES_DEFAULTS, verdict = null,
+  onHeaderDoubleClick, rules = BOX_RULES_DEFAULTS, verdict = null, feedStall = null,
 }) {
   const [open, setOpen] = useState({}) // section key -> expanded
   const toggle = (k) => setOpen((o) => ({ ...o, [k]: !o[k] }))
@@ -185,7 +185,7 @@ export default function BoxPanel({
                 ? { marginTop: 4, padding: '3px 6px', border: `1px solid rgba(${MAGENTA},0.8)`, borderRadius: 3 }
                 : { marginTop: 2, padding: '0 6px', color: '#cbd5e1' }}
             >
-              {s.current && verdict && <Verdict v={verdict} />}
+              {s.current && verdict && <Verdict v={verdict} stall={feedStall} />}
               {s.current && <History s={s} />}
               <div
                 role="button"
