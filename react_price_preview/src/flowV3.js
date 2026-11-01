@@ -11,8 +11,9 @@ export const ROLLING_CHOICES = [5, 10, 15]
 // CR-DM: rolling net delta is a ⚙ option, off by default (volume per minute takes its slot); liveMinMove = the live
 // effort label's minimum move in points (⚙, a display default, not a tested threshold).
 // CR-DP item 6d: anchoredLine = what the anchored line plots ('share' = cumulative delta share, the default; 'raw' = CVD).
-// CR-DU: v1Alert = sound + browser notification when the engine verdict turns SHORT / LONG (live only), off by default.
-export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: false, liveMinMove: 4, breakHoldMin: 5, anchoredLine: 'share', v1Alert: false }
+// CR-DU: v1Alert = sound + browser notification when the engine verdict turns SHORT / LONG (live only), off by default;
+// contraMarks = item 4's contradiction-bar markers on the price chart, off by default.
+export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: false, liveMinMove: 4, breakHoldMin: 5, anchoredLine: 'share', v1Alert: false, contraMarks: false }
 // CR-DN item 2: a break must hold A minutes (no 1-minute close strictly back inside the box) before the box freezes (⚙;
 // a display default, not a tested threshold).
 export const BREAK_HOLD_MIN_RANGE = [1, 15]

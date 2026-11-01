@@ -230,6 +230,33 @@ def run():
             bars = next(s for s in b["segments"] if s["name"] == "rth")["bars"]
             rc[race10(bars, int(x["fillI"]), x["entry"], x["side"])] += 1
         lines += [f"- Stop-free ±10 race of the same entries (A15 readout): {dict(rc)}", ""]
+    # item 4 — contradiction bars at the decision (primary trades): with ≥ 1 vs none, primary and secondary definitions
+    def contra_cmp(trades, key):
+        a = [x for x in trades if x["contra"][key] >= 1]
+        b = [x for x in trades if x["contra"][key] == 0]
+        wa, wb = np.array([x["pts"] > 0 for x in a], float), np.array([x["pts"] > 0 for x in b], float)
+        row = [len(a), round(100 * wa.mean(), 1) if len(a) else None, round(sum(x["pts"] - 0.25 for x in a), 2),
+               len(b), round(100 * wb.mean(), 1) if len(b) else None, round(sum(x["pts"] - 0.25 for x in b), 2)]
+        if len(a) >= 2 and len(b) >= 2:
+            rng = np.random.default_rng(20261031)
+            diffs = [rng.choice(wa, len(wa)).mean() - rng.choice(wb, len(wb)).mean() for _ in range(10_000)]
+            lo, hi = np.percentile(diffs, [5, 95])
+            verdict = "pass" if lo > 0 else "refuted" if hi < 0 else "inconclusive"
+            row += [f"{100 * (wa.mean() - wb.mean()):+.1f} ({100 * lo:+.1f}, {100 * hi:+.1f})", verdict]
+        else:
+            row += ["n too small", "inconclusive"]
+        return row
+    crow = []
+    for scope, tr in (("all sessions", prim), ("without set-2 sessions", kp)):
+        for key, nm in (("primary", "primary (p10 / p90 delta, wick ≥ 50 %, vol ≥ p80, range ≥ 2)"),
+                        ("secondary", "secondary (p20 / p80 delta, wick ≥ 40 %, no volume floor)")):
+            crow.append([scope, nm, *contra_cmp(tr, key)])
+    lines += [f"## Contradiction bars in the box at the faded edge (item 4; primary engine trades, {LABEL})", "",
+              fmt_table(crow, ["Sessions", "Definition", "n with", "Win % with", "Net with (after cost)", "n none", "Win % none",
+                               "Net none (after cost)", "Win-rate diff, pts (90 % bootstrap CI)", "B1"]),
+              "", "Small n: a difference this size can't be separated from chance here; the secondary definition is report-only. "
+              "Bars are counted from the box start through the decision minute, on the edge being faded (bar low / high within 2 pts "
+              "of the box's wick low / high); percentiles per 30-min RTH bucket from prior sessions (Databento).", ""]
     # no-trade reasons (all sessions; no outcomes)
     rc = Counter()
     for d in days:

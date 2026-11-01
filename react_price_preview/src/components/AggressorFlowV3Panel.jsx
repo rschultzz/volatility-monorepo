@@ -246,6 +246,7 @@ function Settings({ value, layers, markers = DEFAULT_MARKER_SETTINGS, onApply, o
       anchoredLine: draft.anchoredLine === 'raw' ? 'raw' : 'share',
       boxRules: boxRules(draft.boxRules), // CR-DQ items 5 / 7: clamped to BOX_RULES_RANGES
       v1Alert: Boolean(draft.v1Alert), // CR-DU item 2
+      contraMarks: Boolean(draft.contraMarks), // CR-DU item 4
     }, {
       // CR-DP amendment item 1: the Flow v2 marker settings, same ranges as v2's ⚙ (swing 1–50, ratio 1–10)
       ...markers,
@@ -312,6 +313,11 @@ function Settings({ value, layers, markers = DEFAULT_MARKER_SETTINGS, onApply, o
               try { if (on && window.Notification && Notification.permission === 'default') Notification.requestPermission() } catch (err) { /* none */ }
             }} />
           <span style={{ fontSize: '12px', color: '#cbd5e1' }}>Alert when the v1 verdict turns SHORT / LONG (live session: tone + browser notification)</span>
+        </label>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '0 0 10px' }}>
+          <input type="checkbox" aria-label="Contradiction bars" data-testid="flow-v3-contra-marks" checked={Boolean(draft.contraMarks)}
+            onChange={(e) => setDraft((d) => ({ ...d, contraMarks: e.target.checked }))} />
+          <span style={{ fontSize: '12px', color: '#cbd5e1' }}>Contradiction bars (markers) in the current box: heavy one-sided minute rejected at an edge (CR-DU item 4; untested)</span>
         </label>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
           <input type="checkbox" aria-label="Heatmap (cells)" data-testid="flow-v3-heatmap-toggle" checked={Boolean(draft.heat)} onChange={(e) => setDraft((d) => ({ ...d, heat: e.target.checked }))} />
@@ -391,6 +397,9 @@ export default function AggressorFlowV3Panel({
   onEffortChange,
   myTradesOn = false,
   onMyTradesChange,
+  v1TradesOn = false,
+  v1TradesBlocked = null,
+  onV1TradesChange,
   edgeEffortOn = false, // CR-DI: the Edge effort strip (stored per viewer); draws only with Edges on, an anchor and exact data
   onEdgeEffortChange,
   zoomResetKey = null, // CR-DP item 8b: the trade date; a change resets the slot zoom
@@ -971,6 +980,13 @@ export default function AggressorFlowV3Panel({
             onClick={() => onMyTradesChange?.(!myTradesOn)}
             title="Your logged trades on the price chart: ▲ / ▼ entry, × exit, resting stop (dashed) and target (dotted) while open; click a marker to review it">
             My trades {myTradesOn ? 'on' : 'off'}
+          </button>
+          <button type="button" style={{ ...chipStyle(v1TradesOn), ...(v1TradesBlocked ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+            aria-pressed={v1TradesOn} disabled={Boolean(v1TradesBlocked)} data-testid="flow-v3-v1-trades-toggle" data-blocked={v1TradesBlocked || ''}
+            onClick={() => onV1TradesChange?.(!v1TradesOn)}
+            title={v1TradesBlocked ? `v1 trades: ${v1TradesBlocked}`
+              : "The v1 rules engine's simulated trades for this session (teal): entry, exit, stop / +10 target while open, points; hover a minute for its verdict and failed rules. Run minute by minute without later bars. Engine's trades, not yours; train backtest in-sample only — untested."}>
+            v1 trades {v1TradesBlocked ? `(${v1TradesBlocked})` : v1TradesOn ? 'on' : 'off'}
           </button>
         </span>
         {(anyLayer && (approxCells || cellsLoading || cellsError)) || ((layers.marks || layers.levels) && marksNote && !approxCells) ? (

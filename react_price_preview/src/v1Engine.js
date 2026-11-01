@@ -411,3 +411,42 @@ export function panelVerdict(pe, fmt = (t) => String(t)) {
     engineLine: engineTradesText(pe, fmt),
   }
 }
+
+// Item 4b — the overlay's marks (TradeMarksPrimitive data, shifted times): entry ▲ / ▼, exit ×, stop / +10 target lines
+// while open, the trade's points beside the exit; an open trade runs its lines to the last bar and has no exit marker.
+export const V1_TRADES_RGB = '45,212,191' // teal (C1 deviation approved by Ryan 2026-10-31)
+export function overlayMarks(sim, ctx) {
+  if (!sim || !ctx) return []
+  const sh = ctx.shift
+  const lastT = sh(ctx.bars.t[ctx.bars.t.length - 1] + 60)
+  const mk = (tr, k, open) => {
+    const toT = open ? lastT : sh(tr.exitT)
+    return {
+      id: `v1-${k}`, direction: tr.side, entryT: sh(tr.entryT), entryPrice: tr.entry,
+      exitT: open ? null : sh(tr.exitT), exitPrice: open ? null : tr.exit,
+      lines: [{ kind: 'stop', price: tr.stop, fromT: sh(tr.entryT), toT }, { kind: 'target', price: tr.target, fromT: sh(tr.entryT), toT }],
+      label: open ? '' : `${tr.pts >= 0 ? '+' : ''}${tr.pts.toFixed(2)}`,
+    }
+  }
+  const out = sim.trades.map((tr, k) => mk(tr, k, false))
+  if (sim.open) out.push(mk(sim.open, out.length, true))
+  return out
+}
+
+// The overlay's hover text for one simulated minute: "07:49 SHORT" / "07:49 NO ACTION · rule 6: box still forming".
+export function minuteText(m, fmt = (t) => String(t)) {
+  if (!m) return ''
+  const head = `v1 engine ${fmt(m.t)} · ${m.verdict}`
+  return m.failed?.length ? `${head} · ${m.failed.map((f) => `rule ${f.rule}: ${f.text}`).join(' · ')}` : head
+}
+
+// Item 4 — the optional chart markers (⚙, off by default): primary contradiction bars of the panel's current engine box,
+// both edges (bullish at the bottom, bearish at the top), as of the panel's minute. [{ t (UTC bar start), side }].
+export function contraMarkers(ctx, pe) {
+  const r = pe?.ev?.edges
+  if (!ctx || !r) return []
+  const j0 = floorIndex(ctx.bars.t, r.from)
+  const out = []
+  for (const side of SIDES) for (const t of contradictionBars(ctx, j0, pe.i, side, r).primary) out.push({ t, side })
+  return out.sort((a, b) => a.t - b.t)
+}
