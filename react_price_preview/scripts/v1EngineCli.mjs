@@ -5,7 +5,7 @@
 // session json: { trade_date, payload (cells payload), inputs (v1-engine inputs) }.
 // out: { version, sessions: { date: { variant: { trades, minutes? } } }, at: [{ id, verdict, side, failed, evidence }] }
 import fs from 'node:fs'
-import { V1_ENGINE_VERSION, evaluateAt, newState, prepareSession, simulateSession } from '../src/v1Engine.js'
+import { V1_ENGINE_VERSION, panelEngine, prepareSession, simulateSession } from '../src/v1Engine.js'
 
 const [jobPath, outPath] = process.argv.slice(2)
 const job = JSON.parse(fs.readFileSync(jobPath, 'utf8'))
@@ -22,7 +22,8 @@ for (const file of job.sessions || []) {
   }
   out.sessions[ses.trade_date] = res
 }
-// item 5: the verdict at given decision minutes (state: the engine's own trades before that minute)
+// item 5 / CR-CZ overlap: the verdict at given decision minutes (06:30 anchor; state = the engine's own trades that day
+// through that minute, as the panel)
 const cache = new Map()
 for (const q of job.at || []) {
   if (!cache.has(q.file)) cache.set(q.file, JSON.parse(fs.readFileSync(q.file, 'utf8')))
@@ -30,7 +31,7 @@ for (const q of job.at || []) {
   const ctx = prepareSession({ payload: ses.payload, inputs: ses.inputs, tradeDate: ses.trade_date, settings: job.atSettings || {} })
   const i = ctx ? ctx.bars.t.indexOf(Number(q.t)) : -1
   if (i < 0) { out.at.push({ id: q.id, verdict: null, failed: [{ rule: null, code: 'no_bar', text: 'decision bar not in the session' }] }); continue }
-  const ev = evaluateAt(ctx, i, newState())
+  const ev = panelEngine(ctx, { endShifted: ctx.times[i] }).ev
   out.at.push({ id: q.id, verdict: ev.verdict, side: ev.side, failed: ev.failed,
     evidence: { ...ev.evidence, box: ev.box, order: ev.order } })
 }
