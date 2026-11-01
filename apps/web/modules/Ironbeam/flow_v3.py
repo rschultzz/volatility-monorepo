@@ -170,6 +170,45 @@ def _splice_cells(engine, symbol: str, a: dt.datetime, b: dt.datetime, now_utc: 
     return pd.concat(parts, ignore_index=True).reset_index(drop=True)
 
 
+def _live_bar_closes(engine, a: dt.datetime, b: dt.datetime, now_utc: dt.datetime) -> dict[int, float]:
+    """CR-DV amendment 2 — the chart's minute closes for a live payload, cached to now - 2 min and re-read from there."""
+    key = ("live_bars", a.isoformat())
+    hit = _CACHE.get(key)
+    if hit is not None and hit[0] > a:
+        cut, old = hit
+        start = min(cut, b)
+        out = {t: c for t, c in old.items() if t < flow_v2._epoch(start)}
+        if start < b:
+            out.update(flow_v2.fetch_bar_closes(engine, start, b))
+    else:
+        out = flow_v2.fetch_bar_closes(engine, a, b)
+    new_cut = min(b, flow_v2._floor_min(now_utc) - dt.timedelta(minutes=LIVE_RECHECK_MIN))
+    if new_cut > a:
+        with _CACHE_LOCK:
+            _CACHE[key] = (new_cut, {t: c for t, c in out.items() if t < flow_v2._epoch(new_cut)})
+    return out
+
+
+def _live_segment_minutes(engine, table: str, a: dt.datetime, b: dt.datetime, bar_closes, now_utc: dt.datetime):
+    """CR-DV amendment 2 — flow_v2._segment_minutes for a live window: the 1-minute flow rows (all contracts) cached to
+    now - 2 min and re-read from there; the contract choice (A1.4) runs on the merged rows."""
+    key = ("live_minutes", table, a.isoformat())
+    hit = _CACHE.get(key)
+    if hit is not None and hit[0] > a:
+        cut, old = hit
+        start = min(cut, b)
+        rows = old[old["t"] < flow_v2._epoch(start)]
+        if start < b:
+            rows = pd.concat([rows, flow_v2.fetch_flow_minutes(engine, table, [(start, b)])], ignore_index=True)
+    else:
+        rows = flow_v2.fetch_flow_minutes(engine, table, [(a, b)])
+    new_cut = min(b, flow_v2._floor_min(now_utc) - dt.timedelta(minutes=LIVE_RECHECK_MIN))
+    if new_cut > a:
+        with _CACHE_LOCK:
+            _CACHE[key] = (new_cut, rows[rows["t"] < flow_v2._epoch(new_cut)].reset_index(drop=True))
+    return flow_v2._pick(rows.reset_index(drop=True), bar_closes)
+
+
 def _trades_cover(engine, symbol: str, a: dt.datetime) -> bool:
     oldest = _cached(f"trades_oldest:{symbol}", TRADES_OLDEST_TTL_S, lambda: _trades_oldest(engine, symbol))
     return oldest is not None and oldest <= a
@@ -255,8 +294,8 @@ def _build(engine, trade_date, *, session, until_pt, params, session_date, sessi
         payload["until"] = until_pt.replace(tzinfo=None).isoformat()
     notes, segments = [], []
     bars_from = eth_a if session_mode == "FULL" else rth_a
-    all_bars = flow_v2.fetch_bar_closes(engine, bars_from.astimezone(flow_v2.UTC), end.astimezone(flow_v2.UTC)) \
-        if end > bars_from else {}
+    fetch_bars = flow_v2.fetch_bar_closes if complete else (lambda e, a, b: _live_bar_closes(e, a, b, now_utc))
+    all_bars = fetch_bars(engine, bars_from.astimezone(flow_v2.UTC), end.astimezone(flow_v2.UTC)) if end > bars_from else {}
 
     plan = []
     if session_mode == "FULL" and end > eth_a:
@@ -272,7 +311,10 @@ def _build(engine, trade_date, *, session, until_pt, params, session_date, sessi
             if sym is not None:
                 source, table = "databento", flow_v2.DATABENTO_TABLE
         if source == "ironbeam":
-            sym, _, m = flow_v2._segment_minutes(engine, flow_v2.IRONBEAM_TABLE, a, b, bar_closes, complete)
+            if complete:
+                sym, _, m = flow_v2._segment_minutes(engine, flow_v2.IRONBEAM_TABLE, a, b, bar_closes, True)
+            else:
+                sym, _, m = _live_segment_minutes(engine, flow_v2.IRONBEAM_TABLE, a, b, bar_closes, now_utc)
         if sym is None or m is None or m.empty:
             notes.append(f"No {name.upper()} flow rows for this session.")
             continue

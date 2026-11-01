@@ -321,6 +321,27 @@ class TestLiveSegment(_Base):
         self.assertEqual([s["tier"] for s in p["segments"]], ["splice", "splice"])
         self.assertEqual(max(self.seg(p, "rth")["cells"]["t"]), int(self.NOW.timestamp()) // 60 * 60 - 60)
 
+    def test_second_poll_reads_only_the_newest_minutes(self):
+        self.v3._CACHE.clear()
+        self.build(self.NOW, self.NOW)
+        reads = []
+        later = self.NOW + dt.timedelta(minutes=1)
+        self.build(later, later, reads=reads, keep_cache=True)
+        span = lambda r: (r[-1] - r[-2]).total_seconds() / 60
+        for r in reads:
+            if r[0] == "fetch_price_1m":
+                self.assertLessEqual(span(r[1:]), 8 * 60)                    # from the cached W (to the segment end)
+            elif r[0] == "fetch_trade_cells":
+                self.assertLessEqual(span(r[1:]), 10)                        # the tail [W, closed) only
+            elif r[0] == "fetch_bar_closes":
+                self.assertLessEqual(span(r[1:]), 8 * 60)
+            elif r[0] == "fetch_flow_minutes":
+                (a, b), = r[2]
+                self.assertGreaterEqual(a, self.NOW - dt.timedelta(minutes=3))   # from the cached cut (now - 2 min)
+        rth_reads = [r for r in reads if r[0] == "fetch_trade_cells"]
+        self.assertTrue(rth_reads)
+        self.v3._CACHE.clear()
+
     def test_no_stall_read_on_a_past_session(self):
         p, calls, _ = self.get(cf.QS_1027)
         self.assertNotIn("_trades_last", [c[0] for c in calls])
