@@ -13,14 +13,13 @@ export const ROLLING_CHOICES = [5, 10, 15]
 // CR-DP item 6d: anchoredLine = what the anchored line plots ('share' = cumulative delta share, the default; 'raw' = CVD).
 // CR-DU: v1Alert = sound + browser notification when the engine verdict turns SHORT / LONG (live only), off by default;
 // contraMarks = item 4's contradiction-bar markers on the price chart, off by default.
-export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, boxHoldMin: 15, rollingOn: false, liveMinMove: 4, breakHoldMin: 5, anchoredLine: 'share', v1Alert: false, contraMarks: false }
+export const DEFAULT_V3_SETTINGS = { rollingMin: 10, k: 3, m: 3, sellLayer: true, buyLayer: true, rollingOn: false, liveMinMove: 4, breakHoldMin: 5, anchoredLine: 'share', v1Alert: false, contraMarks: false }
 // CR-DN item 2: a break must hold A minutes (no 1-minute close strictly back inside the box) before the box freezes (⚙;
 // a display default, not a tested threshold).
 export const BREAK_HOLD_MIN_RANGE = [1, 15]
 export const LIVE_MIN_MOVE_RANGE = [2, 12]
 // CR-DI amendment 9: an Edges box edge must hold this many minutes before a close beyond it freezes the box (⚙; a display
 // default, not a tested threshold).
-export const BOX_HOLD_MIN_RANGE = [5, 60]
 
 // utc epoch -> shifted PT epoch. The PT offset is looked up once per UTC hour (offsets only change on the
 // hour), not per timestamp: building an Intl.DateTimeFormat per value is what made CR-CH's re-renders costly.
@@ -440,7 +439,8 @@ export const LEVEL_ALPHA_MIN = 0.25
 // CR-DN item 5c: an unbroken level is *drawn* fading to this floor (broken levels keep LEVEL_ALPHA_MIN). The selection
 // score keeps levelAlpha with LEVEL_ALPHA_MIN, so the drawn set of LEVELS_MAX levels is unchanged.
 export const LEVEL_ALPHA_MIN_UNBROKEN = 0.5
-export const EDGE_BREAK_PTS = 2 // DF4 (CR-CP A1.1): once a box qualifies, a close > 2 pts beyond an edge is a break (CR-DU Amendment 5)
+export const EDGE_BREAK_PTS = 2 // DF4 (CR-CP A1.1): a close > 2 pts beyond an edge breaks a qualified box, restarts a forming one (CR-DU Amendments 5 / 6)
+export const BOX_MAX_PTS = 12 // CR-CP A1.1 width limit: a forming box whose closes span more restarts (CR-DU Amendment 6)
 export const EDGE_NEAR_PTS = 1 // contracts and first touch within 1 pt of the edge
 
 // Line width (px) from contracts absorbed: log scale, 1 px at <= 50, 5 px at >= 1,500 (Step 0: p50 350, max 1,426).
@@ -627,7 +627,7 @@ function probeStats(payload, bars, p, back, edge, box, exact) {
 // topMoves, bottomMoves } (growth moves); first touch within EDGE_NEAR_PTS; contracts from edgeCounts against the final
 // edges (null when not exact).
 function boxStats(payload, bars, j0, j1, exact, e, counts = true) {
-  const { top, bottom, topMoved, bottomMoved, topMoves, bottomMoves } = e
+  const { top, bottom, topMoved, bottomMoved, topMoves, bottomMoves, testAbove, testBelow } = e
   let topTouch = null
   let bottomTouch = null
   for (let i = j0; i <= j1 && (topTouch == null || bottomTouch == null); i += 1) {
@@ -646,15 +646,17 @@ function boxStats(payload, bars, j0, j1, exact, e, counts = true) {
   return {
     from: bars.t[j0], to: bars.t[j1], minutes, high, low,
     lastClose: bars.c[j1], // CR-DS item 5: where price sat at the box's last bar (frozen boxes' table as of their end)
+    tests: { above: testAbove || 0, below: testBelow || 0 }, // CR-DU Amendment 6: deepest close beyond each frozen edge (<= 2 pts)
     top: { price: top, contracts: sum('topBuy'), opposite: sum('topSell'), firstTouch: topTouch, brokeAt: topMoved, breaks: topMoves },
     bottom: { price: bottom, contracts: sum('bottomSell'), opposite: sum('bottomBuy'), firstTouch: bottomTouch, brokeAt: bottomMoved, breaks: bottomMoves },
   }
 }
 
-// DF4 edge readout from the anchor (shifted candle time) to the last bar, as a box. The edges start at the box's
-// first minute's close; a close up to EDGE_BREAK_PTS beyond an edge is a test (edge unchanged). CR-DI amendment 9:
-// a close more than EDGE_BREAK_PTS beyond an edge moves that edge to it (the box grows) while the edge has stood
-// less than `holdMin` minutes since it was set; once it has stood `holdMin` minutes, such a close is a break: the box
+// DF4 edge readout from the anchor (shifted candle time) to the last bar, as a box. CR-DU Amendments 5 / 6 (A1.1, v1 rule 6):
+// a box starts with top = bottom = its first close and forms: a close up to EDGE_BREAK_PTS beyond a running edge widens
+// it; a close further beyond, or closes spanning more than BOX_MAX_PTS, restarts it at that close (the old one is dropped).
+// It qualifies at `qualifyMin` minutes and `qualifyPts` tall, and its edges freeze. Then a close up to EDGE_BREAK_PTS beyond
+// an edge is a test (`tests`: the deepest on each side); a close further beyond is a break: the box
 // freezes (`frozen`, oldest first, each with `breakAt` and `dir` 'up' / 'down') and a new box starts at the break bar
 // with top = bottom = its close (both edges set there). A box spans its first bar to the bar before its break, so no
 // minute is counted twice. The returned object is the current box: contracts = aggressor volume of cells within
@@ -662,7 +664,7 @@ function boxStats(payload, bars, j0, j1, exact, e, counts = true) {
 // only when every bar since the anchor is on an exact segment (else null and `exact` false); `minutes` are the same
 // cells per minute (CR-DI strip), so the contracts are their sums. First touch: the first minute of the box whose high
 // (top) / low (bottom) came within EDGE_NEAR_PTS of the edge; `brokeAt` / `breaks` on an edge = its growth moves.
-// `holdMin` is a display default (⚙), not a tested threshold. Null without an anchor or bars. CR-DN item 1: with
+// Null without an anchor or bars. CR-DN item 1: with
 // `endShifted`, bars after it are ignored (the last box ends on the last bar at or before it; `end` = that bar).
 // CR-DN item 2 (replaces the single-close break): such a close starts a *pending* break; the box freezes only if no
 // close comes back strictly inside it (bottom < close < top) within `breakHoldMin` (A) bars, and then the freeze and
@@ -671,7 +673,7 @@ function boxStats(payload, bars, j0, j1, exact, e, counts = true) {
 // nothing grows or breaks; `pending` is the unresolved break at the last bar (or the end), else null.
 // CR-DS item 4: `{ counts: false }` skips the edge counts and probe contracts (cells scans) for the read-history replay;
 // prices, edges, high / low, probes' times and pending are identical.
-export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAULT_V3_SETTINGS.boxHoldMin, endShifted = null,
+export function edgeReadout(payload, bars, anchorShifted, shift, endShifted = null,
   breakHoldMin = DEFAULT_V3_SETTINGS.breakHoldMin, { counts = true, qualifyMin = BOX_RULES_DEFAULTS.minAgeMin, qualifyPts = BOX_RULES_DEFAULTS.minHeightPts } = {}) {
   if (anchorShifted == null || !bars?.t?.length) return null
   let i0 = -1
@@ -693,13 +695,23 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
   let j0 = i0
   let top = bars.c[i0]
   let bottom = bars.c[i0]
-  let moves = { topMoved: null, bottomMoved: null, topMoves: 0, bottomMoves: 0 }
-  let qualified = false // CR-DU Amendment 5 (A1.1 / rule 6): forming until box min and height; edges freeze then
+  const newMoves = () => ({ topMoved: null, bottomMoved: null, topMoves: 0, bottomMoves: 0, testAbove: 0, testBelow: 0 })
+  let moves = newMoves()
+  let qualified = false // CR-DU Amendments 5 / 6 (A1.1 / rule 6): forming until box min and height; edges freeze then
   const edgesNow = () => ({ top, bottom, ...moves })
   for (let i = i0 + 1; i <= last; i += 1) {
     const c = bars.c[i]
     if (!qualified) {
-      // Forming: edges = the running max / min close from the box start; no breaks yet
+      // Forming: a close <= 2 pts beyond a running edge widens the box; > 2 pts beyond, or a span > 12 pts, restarts it
+      // at that close (a box that never qualified is dropped, not frozen)
+      const widened = Math.max(top, c) - Math.min(bottom, c)
+      if (c > top + EDGE_BREAK_PTS + 1e-9 || c < bottom - EDGE_BREAK_PTS - 1e-9 || widened > BOX_MAX_PTS + 1e-9) {
+        j0 = i
+        top = c
+        bottom = c
+        moves = newMoves()
+        continue
+      }
       if (c > top) {
         top = c
         moves = { ...moves, topMoved: bars.t[i], topMoves: moves.topMoves + 1 }
@@ -726,7 +738,7 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
       j0 = ib
       top = bars.c[ib]
       bottom = bars.c[ib]
-      moves = { topMoved: null, bottomMoved: null, topMoves: 0, bottomMoves: 0 }
+      moves = newMoves()
       qualified = false
       i = ib
       continue
@@ -735,6 +747,8 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
     const up = c > top + EDGE_BREAK_PTS + 1e-9
     const down = c < bottom - EDGE_BREAK_PTS - 1e-9
     if (up || down) pending = { i, dir: up ? 'up' : 'down' }
+    else if (c > top) moves = { ...moves, testAbove: Math.max(moves.testAbove, c - top) }
+    else if (c < bottom) moves = { ...moves, testBelow: Math.max(moves.testBelow, bottom - c) }
   }
   const tLast = bars.t[last]
   const probesOf = (from) => probes.filter((p) => p.box === from)
@@ -750,7 +764,7 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
   const cur = { ...boxStats(payload, bars, j0, last, exact, edgesNow(), counts), probes: probesOf(bars.t[j0]) }
   const held = (e) => (e.firstTouch == null ? null : Math.round((tLast - e.firstTouch) / 60))
   return {
-    ...cur, anchor: bars.t[i0], exact, holdMin: Number(holdMin), breakHoldMin: accept, qualified, frozen, end: endShifted == null ? null : bars.t[last],
+    ...cur, anchor: bars.t[i0], exact, breakHoldMin: accept, qualified, frozen, end: endShifted == null ? null : bars.t[last],
     lastClose: bars.c[last], // CR-DQ item 7: where price sits in the current box (its last bar's close)
     pending: pending ? { at: bars.t[pending.i], dir: pending.dir, edge: pending.dir === 'up' ? top : bottom } : null,
     startDir: frozen.length ? frozen[frozen.length - 1].dir : null,
@@ -1300,7 +1314,7 @@ export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, 
   const candidate = lean > 0 ? 'short' : lean < 0 ? 'long'
     : buyersAbs.length && !sellersAbs.length ? 'short' : sellersAbs.length && !buyersAbs.length ? 'long' : null
   checks = {
-    event, eventDay, formed, age, height, minAgeMin: r.minAgeMin, minHeightPts: r.minHeightPts, candidate,
+    event, eventDay, formed, age, height, tests: box.tests || null, minAgeMin: r.minAgeMin, minHeightPts: r.minHeightPts, candidate,
     lastClose: px, top: box.top, bottom: box.bottom, nearTop, nearBottom, nearPts: r.nearPts,
     share, sharePct: sp, lean, cpp: pct?.cpp?.value ?? ro.cpp ?? null, cppPct: cp, effort, notable: r.notable,
     dPrice: Number.isFinite(dp) ? dp : null, progressPts: r.progressPts, levels: lv, lvText: lv.map(lvTxt),
@@ -1379,7 +1393,8 @@ export function boxEvidenceRows(checks, { kfmtFn = kfmt, stall = null } = {}) {
   rows.push({ key: 'event', check: 'Event / time', value: c.event ? `FOMC ${c.eventDay}` : 'no event',
     reads: c.event ? 'no trades' : 'ok', tone: met(!c.event) })
   rows.push({ key: 'formed', check: 'Box formed',
-    value: `${c.age} min · ${Number.isFinite(c.height) ? c.height.toFixed(2) : '–'} pts (min ${c.minAgeMin} · ${c.minHeightPts})`,
+    value: `${c.age} min · ${Number.isFinite(c.height) ? c.height.toFixed(2) : '–'} pts (min ${c.minAgeMin} · ${c.minHeightPts})`
+      + (c.tests?.above > 0 ? ` · tested ${c.tests.above.toFixed(2)} above` : '') + (c.tests?.below > 0 ? ` · tested ${c.tests.below.toFixed(2)} below` : ''),
     reads: c.formed ? 'formed' : 'still forming', tone: met(c.formed) })
   // location: the nearer edge's wording ("0.50 below the top", "1.25 below the bottom"); reads vs the candidate's edge
   const px = c.lastClose
@@ -1471,7 +1486,7 @@ export function endWindowText(anchor, end, hhmm) {
 // panel's own: the cells payload and its bars, the pane rows / closes (App flowV3Segments), the edge settings, the
 // baseline, the trade date and the ⚙ rules. `ptMinOf(utc)` = PT minute of day (as the panel's badges).
 export const READ_KINDS = ['short', 'long']
-export function readHistory({ payload, bars, rows, closes, anchorShifted, endShifted = null, shift, holdMin, breakHoldMin,
+export function readHistory({ payload, bars, rows, closes, anchorShifted, endShifted = null, shift, breakHoldMin,
   candleTimes, segments, baseline, tradeDate, rules = null, ptMinOf, stepSec = 60 }) {
   const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now()
   const out = { ranges: [], minutes: 0, ms: 0 }
@@ -1486,7 +1501,7 @@ export function readHistory({ payload, bars, rows, closes, anchorShifted, endShi
   let cur = null
   for (let i = i0; i <= last; i += 1) {
     const tEnd = shift(bars.t[i])
-    const r = edgeReadout(payload, bars, anchorShifted, shift, holdMin, tEnd, breakHoldMin, { counts: false, qualifyMin: qualify.minAgeMin, qualifyPts: qualify.minHeightPts })
+    const r = edgeReadout(payload, bars, anchorShifted, shift, tEnd, breakHoldMin, { counts: false, qualifyMin: qualify.minAgeMin, qualifyPts: qualify.minHeightPts })
     if (!r) continue
     out.minutes += 1
     const ro = anchorReadout(rows, closes, shift(r.from), tEnd - lag)

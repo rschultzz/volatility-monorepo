@@ -95,24 +95,24 @@ test('approximate segments give no levels', () => {
 })
 
 test('edge: while the box is forming every new extreme close moves the edge (CR-DU Amendment 5)', () => {
-  const closes = [7000, 7001.5, 7002, 6999, 7004.25, 7005, 6998, 6997.75, 6995.5]
+  const closes = [7000, 7001.5, 7002, 6999, 7004, 7005, 6998, 6997.75, 6995.75] // CR-DU Amendment 6: forming steps <= 2 pts
   const r = edgeReadout(payload([]), flattenBars(payload([seg(bars(closes), [])])), T0, id)
   assert.equal(r.top.price, 7005)
   assert.equal(r.top.brokeAt, T0 + 5 * 60)
   assert.equal(r.top.breaks, 4)
-  assert.equal(r.bottom.price, 6995.5)
+  assert.equal(r.bottom.price, 6995.75)
   assert.equal(r.bottom.breaks, 4)
   assert.equal(r.bottom.brokeAt, T0 + 8 * 60)
 })
 
 test('edge: repeated breaks, first touch within 1 pt and held minutes', () => {
-  const closes = [7000, 7003, 7006, 7005, 7004, 7005.5]
+  const closes = [7000, 7002, 7004, 7003, 7002.5, 7003.5] // CR-DU Amendment 6: forming steps <= 2 pts
   const b = bars(closes, { hi: 0.25, lo: 0.25 })
   const r = edgeReadout(payload([]), flattenBars(payload([seg(b, [])])), T0, id)
-  assert.equal(r.top.price, 7006)
+  assert.equal(r.top.price, 7004)
   assert.equal(r.top.breaks, 2)
   assert.equal(r.top.brokeAt, T0 + 120)
-  assert.equal(r.top.firstTouch, T0 + 120) // minute 1 high 7003.25 < 7005
+  assert.equal(r.top.firstTouch, T0 + 120) // minute 1 high 7002.25 < 7003
   assert.equal(r.top.heldMin, 3)
   assert.equal(r.bottom.price, 7000)
   assert.equal(r.bottom.firstTouch, T0)

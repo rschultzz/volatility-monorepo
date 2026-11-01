@@ -21,7 +21,6 @@ import {
   utcEpochShowingZoneTime,
 } from '../flowShared'
 import {
-  BOX_HOLD_MIN_RANGE,
   BOX_RULES_RANGES,
   boxRules,
   BREAK_HOLD_MIN_RANGE,
@@ -239,7 +238,6 @@ function Settings({ value, layers, markers = DEFAULT_MARKER_SETTINGS, onApply, o
       m: Math.round(n('m', 1, 30, DEFAULT_V3_SETTINGS.m)),
       sellLayer: Boolean(draft.sellLayer),
       buyLayer: Boolean(draft.buyLayer),
-      boxHoldMin: Math.round(n('boxHoldMin', BOX_HOLD_MIN_RANGE[0], BOX_HOLD_MIN_RANGE[1], DEFAULT_V3_SETTINGS.boxHoldMin)),
       breakHoldMin: Math.round(n('breakHoldMin', BREAK_HOLD_MIN_RANGE[0], BREAK_HOLD_MIN_RANGE[1], DEFAULT_V3_SETTINGS.breakHoldMin)),
       rollingOn: Boolean(draft.rollingOn),
       liveMinMove: n('liveMinMove', LIVE_MIN_MOVE_RANGE[0], LIVE_MIN_MOVE_RANGE[1], DEFAULT_V3_SETTINGS.liveMinMove),
@@ -285,12 +283,6 @@ function Settings({ value, layers, markers = DEFAULT_MARKER_SETTINGS, onApply, o
           {label('Absorbed: M minutes held')}
           <input type="number" step={1} min={1} aria-label="Absorbed M" value={draft.m} style={input} onChange={(e) => setDraft((d) => ({ ...d, m: e.target.value }))} />
           <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>Display defaults (3 and 3), not tested thresholds.</div>
-        </label>
-        <label style={{ display: 'block', marginBottom: '10px' }}>
-          {label('Box edge must hold N min before a break freezes it')}
-          <input type="number" step={1} min={BOX_HOLD_MIN_RANGE[0]} max={BOX_HOLD_MIN_RANGE[1]} aria-label="Box hold minutes" data-testid="flow-v3-box-hold"
-            value={draft.boxHoldMin ?? DEFAULT_V3_SETTINGS.boxHoldMin} style={input} onChange={(e) => setDraft((d) => ({ ...d, boxHoldMin: e.target.value }))} />
-          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>Edges box, 5–60 (default 15). A display default, not a tested threshold: ranges are measured against the prior move, not a fixed time (A2); this only decides when the drawn box restarts.</div>
         </label>
         <label style={{ display: 'block', marginBottom: '10px' }}>
           {label('Break must hold A min')}

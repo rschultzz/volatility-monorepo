@@ -17,12 +17,13 @@ import { utcEpochShowingZoneTime } from './flowShared.js'
 
 // v1.1 (Amendments 2 / 3): lean ≥ p70, fixed 10-pt stop. v1.2 (Amendment 4): location moves from the read to the order
 // (a valid read rests a limit at the faded edge while it holds). v1.3 (Amendment 5, a bug fix): forming box edges = running max / min close, frozen at qualification (A1.1 / rule 6).
-export const V1_ENGINE_VERSION = 'v1.3'
+// v1.4 (Amendment 6): while forming, a close > 2 pts beyond or a span > 12 pts restarts the box; no edge hold.
+export const V1_ENGINE_VERSION = 'v1.4'
 export const V1_DEFAULTS = {
   boxMin: 8, minHeightPts: 2, // rule 6
   notable: 80, nearPts: 2, absorbPts: 2, // CR-DQ ⚙ "Verdict rules" defaults (notable = the effort leg's cut)
   leanPct: 70, // rules 7 / 8 lean: Δ share ≥ p70 on the side (Amendment 3; p80 = sensitivity row)
-  holdMin: 15, breakHoldMin: 5, // rule 6 anchor: the CR-DI / CR-DN box chain at its display defaults, fixed here
+  breakHoldMin: 5, // rule 6 anchor: the CR-DI / CR-DN box chain at its display defaults, fixed here
   moveLookbackMin: 60, // rule 6 "after a larger move"
   noExtendBars: 3, // rules 7 / 8 "highs (lows) not extending"
   cutoff: true, cutoffMin: 12 * 60 + 15, flattenMin: 12 * 60 + 59, // rule 3; Q4 flatten (PT minutes of day)
@@ -188,6 +189,8 @@ const VERDICT_RULE = {
   none: [7, 'no_read', 'nothing notable'],
 }
 
+const ptHhmm = (ptMin) => (t) => `${String(Math.floor(ptMin(t) / 60)).padStart(2, '0')}:${String(ptMin(t) % 60).padStart(2, '0')}`
+
 /**
  * The verdict at the close of RTH bar i: { verdict 'SHORT' / 'LONG' / 'NO ACTION', side, failed[], evidence, order }.
  * `state` = the session's engine trades so far (rules 19 / 20, one trade per box); `anchorShifted` overrides the 06:30
@@ -199,7 +202,7 @@ export function evaluateAt(ctx, i, state = newState(), { anchorShifted = null, c
   const t = bars.t[i]
   const tClose = t + 60
   const anchor = anchorShifted != null ? Math.max(anchorShifted, ctx.anchor) : ctx.anchor
-  const r = edgeReadout(pay, bars, anchor, shift, s.holdMin, times[i], s.breakHoldMin, { counts, qualifyMin: s.boxMin, qualifyPts: s.minHeightPts })
+  const r = edgeReadout(pay, bars, anchor, shift, times[i], s.breakHoldMin, { counts, qualifyMin: s.boxMin, qualifyPts: s.minHeightPts })
   const base = { t, verdict: 'NO ACTION', side: null, failed: [], evidence: {}, order: null, box: null, v: null }
   if (!r) return { ...base, failed: [fail(6, 'no_box', 'no box yet')] }
   const j0 = floorIndex(bars.t, r.from)
@@ -211,7 +214,7 @@ export function evaluateAt(ctx, i, state = newState(), { anchorShifted = null, c
   const ne = noExtend(bars, j0, i, s.noExtendBars)
   const box = { ...r, readout: ro, ended: { kind: 'current' } }
   const v = boxVerdict({
-    box, pct, levels: inBox, tradeDate: ctx.tradeDate, fomc: FOMC_2026_DECISION_DAYS,
+    box, pct, levels: inBox, tradeDate: ctx.tradeDate, fomc: FOMC_2026_DECISION_DAYS, hhmm: ptHhmm(ptMin),
     rules: { notable: s.notable, lean: s.leanPct, nearPts: s.nearPts, absorbPts: s.absorbPts, minAgeMin: s.boxMin, minHeightPts: s.minHeightPts },
     v1: { noExtendUp: ne.up, noExtendDown: ne.down, anyLocation: true },
   })

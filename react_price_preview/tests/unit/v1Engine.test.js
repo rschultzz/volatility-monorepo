@@ -17,9 +17,10 @@ function bars(over = {}) {
   const b = { t: [], o: [], h: [], l: [], c: [], buy: [], sell: [], vol: [] }
   for (let i = 0; i < N; i += 1) {
     let o, c, buy = 500, sell = 500
-    if (i < 20) { o = 6000; c = i % 2 ? 6002.5 : 6000 } // Amendment 5: a first box that qualifies, so bar 20 can break it
+    if (i < 20) { o = 6000; c = 6000 + [0, 1.5, 3, 1.5][i % 4] } // Amendments 5 / 6: a first box that qualifies, so bar 20 can break it
     else if (i === 20) { o = 6000; c = 6015 }
-    else if (i === 21) { o = 6015; c = 6012.5 }
+    else if (i === 21) { o = 6015; c = 6013.5 } // Amendment 6: within 2 pts, or the forming box restarts
+    else if (i === 22) { o = 6013.5; c = 6012.5; buy = 600; sell = 400 }
     else { o = i % 2 ? 6014.5 : 6013.5; c = i % 2 ? 6013.5 : 6014.5; buy = 600; sell = 400 }
     let h = Math.max(o, c) + 0.25
     let l = Math.min(o, c) - 0.25
@@ -256,7 +257,7 @@ test('a read lapse cancels the order', () => {
 
 test('Amendment 4 (v1.2): a valid read away from the edge rests a limit at the edge; it fills only there', async () => {
   const { panelEngine, panelVerdict, V1_ENGINE_VERSION } = await import('../../src/v1Engine.js')
-  assert.equal(V1_ENGINE_VERSION, 'v1.3')
+  assert.equal(V1_ENGINE_VERSION, 'v1.4')
   const away = { 28: { o: 6013.5, c: 6012.75, h: 6013.75, l: 6012.5 } } // closes 2.25 below the top
   const ctx = session({ over: away })
   const ev = evaluateAt(ctx, 28)
@@ -300,7 +301,7 @@ test('panelVerdict: SHORT pill, failed rules as reason + rows, engine trades lin
   assert.equal(ok.pill, 'SHORT at top')
   assert.deepEqual(ok.extraRows, [])
   assert.equal(ok.engineLine, "Engine's trades, not yours: 0 trades")
-  assert.equal(ok.engineTag, 'engine v1.3 — untested')
+  assert.equal(ok.engineTag, 'engine v1.4 — untested')
   assert.equal(boxEvidenceRows(ok.checks).find((r) => r.key === 'share').reads, 'net buying') // was "buyers leaning"
   const g = { reason: null, schedule: [{ from: at(0), levels: [{ price: 6010, net: -9e10, side: 'put' }] }] }
   const ctx = session({ gex: g })
@@ -378,7 +379,7 @@ test('Amendment 5: the engine and the panel read the same height; the engine box
   const { edgeReadout } = await import('../../src/flowV3.js')
   const ctx = session()
   const ev = evaluateAt(ctx, 28)
-  const r = edgeReadout(ctx.pay, ctx.bars, ctx.times[0], ctx.shift, ctx.s.holdMin, ctx.times[28], ctx.s.breakHoldMin, { counts: false, qualifyMin: ctx.s.boxMin, qualifyPts: ctx.s.minHeightPts })
+  const r = edgeReadout(ctx.pay, ctx.bars, ctx.times[0], ctx.shift, ctx.times[28], ctx.s.breakHoldMin, { counts: false, qualifyMin: ctx.s.boxMin, qualifyPts: ctx.s.minHeightPts })
   assert.equal(ev.v.checks.height, r.top.price - r.bottom.price)
   assert.equal(ev.box.top - ev.box.bottom, ev.v.checks.height)
   assert.equal(ev.v.checks.height, 2.5)

@@ -1780,9 +1780,9 @@ export default function App() {
   const flowCellsBars = useMemo(() => (flowCells ? flattenBars(flowCells) : null), [flowCells])
   const flowV3Edges = useMemo(() => {
     if (!flowV3Layers.edges || !flowCells || flowAnchor == null) return null
-    return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin, flowEnd,
+    return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowEnd,
       flowV3Settings.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin, { qualifyMin: flowV3Rules.minAgeMin, qualifyPts: flowV3Rules.minHeightPts })
-  }, [flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin, flowEnd, flowV3Settings.breakHoldMin, flowV3Rules])
+  }, [flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowEnd, flowV3Settings.breakHoldMin, flowV3Rules])
 
   // CR-DN item 3: with Edges on and an anchor, each drawn box is a CVD segment. Spans come from the edge readout (cells
   // payload); the readouts run on the same aligned v2 rows the pane draws (alignV2ToCandles + anchorReadout), once here

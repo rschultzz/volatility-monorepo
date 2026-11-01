@@ -165,7 +165,7 @@ test('1. 10-30 #5 box (anchor 07:40, replay to 07:49): the engine verdict at box
   const v8 = await verdict(page)
   await shot(page, '1-min8.png')
   expect(v8.reason).not.toMatch(/box still forming/)
-  expect(v8.tag).toBe('engine v1.3 — untested') // beside the pill, in the panel's muted secondary text
+  expect(v8.tag).toBe('engine v1.4 — untested') // beside the pill, in the panel's muted secondary text
   expect(v8.rows.find((r) => r[0] === 'formed')[2]).toMatch(/formed/)
   expect(v8.rows.find((r) => r[0] === 'formed')[2]).toMatch(/min 8/)
   // ⚙ box minimum 10 (stored, after the CR-DU migration): box still forming
@@ -241,6 +241,7 @@ test('5. Amendment 5: 2026-04-15 box 09:18–09:29 (the screenshot) reads 11 min
   const v = await verdict(page)
   await shot(page, '5-0415-height.png')
   log('5-0415.json', v)
-  expect(v.rows.find((r) => r[0] === 'formed')[2]).toMatch(/11 min · 2\.50 pts \(min 8 · 2\)/)
+  expect(v.rows.find((r) => r[0] === 'formed')[2]).toMatch(/11 min · 2\.50 pts \(min 8 · 2\) · tested 1\.50 below/)
   expect(v.rows.find((r) => r[0] === 'location')[2]).toMatch(/1\.50 below the bottom/)
+  expect(v.rows.find((r) => r[0] === 'absorption')[2]).toMatch(/7040\.00 \(09:23\)/) // PT, not the epoch
 })

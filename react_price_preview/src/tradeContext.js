@@ -59,7 +59,7 @@ export function entryContext({ cells, v2Bars, bars, anchorShifted, entryShifted,
 
   let box = null
   if (anchorShifted != null && cells) {
-    const edges = edgeReadout(cells, flattenBars(cells), anchorShifted, shift, s.boxHoldMin, null, s.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin, { qualifyMin: boxRules(rules).minAgeMin, qualifyPts: boxRules(rules).minHeightPts })
+    const edges = edgeReadout(cells, flattenBars(cells), anchorShifted, shift, null, s.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin, { qualifyMin: boxRules(rules).minAgeMin, qualifyPts: boxRules(rules).minHeightPts })
     const seg = boxSegments(edges, shift)
     if (edges && seg) {
       const readouts = segmentReadouts(rows, rowCloses(rows, bars || [], shift), seg.spans)
@@ -80,7 +80,7 @@ export function entryContext({ cells, v2Bars, bars, anchorShifted, entryShifted,
 }
 
 // Fetch the three until-replay payloads for a trade and compute its context. settings: Flow v3 settings (k, m,
-// boxHoldMin, breakHoldMin), session ('FULL' / 'RTH'), markerSettings (the v2 marker knobs App sends), rules, baseline.
+// breakHoldMin), session ('FULL' / 'RTH'), markerSettings (the v2 marker knobs App sends), rules, baseline.
 export async function loadEntryContext({ apiBase, trade, session = 'FULL', settings, markerSettings = {}, rules, baseline, signal }) {
   const until = entryUntil(trade.entry_pt)
   const day = String(trade.trade_date).slice(0, 10)

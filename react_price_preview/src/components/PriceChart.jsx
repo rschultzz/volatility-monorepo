@@ -2813,7 +2813,7 @@ export default function PriceChart({
     const step = v3Times.length > 1 ? Math.max(60, v3Times[1] - v3Times[0]) : 60
     return readHistory({
       payload: v3Payload, bars: v3Bars, rows: v3Segments.rows, closes: v3Segments.closes, anchorShifted: v3Shift(v3EdgeReadout.anchor),
-      endShifted: v3End, shift: v3Shift, holdMin: v3EdgeReadout.holdMin, breakHoldMin: v3EdgeReadout.breakHoldMin, candleTimes: v3Times,
+      endShifted: v3End, shift: v3Shift, breakHoldMin: v3EdgeReadout.breakHoldMin, candleTimes: v3Times,
       segments: v3Payload.segments, baseline: boxBaseline, tradeDate, rules: v3Rules, ptMinOf: v3PtMin, stepSec: step,
     })
   }, [v3EdgeReadout, v3Payload, v3Bars, v3Segments, v3Times, v3Shift, v3End, tradeDate, v3Rules, v3PtMin])
