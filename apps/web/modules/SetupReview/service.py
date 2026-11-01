@@ -17,6 +17,8 @@ rows never move the Take / Skip / Unsure outcome stats.
 from __future__ import annotations
 
 import datetime as dt
+import decimal
+import re
 
 from psycopg.rows import dict_row
 
@@ -63,6 +65,8 @@ _STATE_LATERAL = """
 def _iso(v):
     if isinstance(v, (dt.datetime, dt.date)):
         return v.isoformat()
+    if isinstance(v, decimal.Decimal):
+        return float(v)
     return v
 
 
@@ -191,6 +195,22 @@ class ReviewError(ValueError):
         self.code = code
 
 
+_ANCHOR_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?")
+
+
+def _review_num(body: dict, key: str):
+    v = body.get(key)
+    if v is None or v == "":
+        return None
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        raise ReviewError(f"{key} must be a number") from None
+    if not 0 <= x <= 1000:
+        raise ReviewError(f"{key} out of range")
+    return x
+
+
 def add_review(conn, candidate_id: str, body: dict) -> dict:
     """Insert a review (insert-only; nothing is updated).
 
@@ -212,6 +232,12 @@ def add_review(conn, candidate_id: str, body: dict) -> dict:
             reasons.append(r[:80])
     comment = body.get("comment")
     comment = (str(comment).strip()[:4000] or None) if comment is not None else None
+    # CR-DU amendment 7b: the chart anchor (naive PT minute) and the box min / height in force at this save; NULL without one
+    anchor_ts = str(body.get("anchor_ts") or "").strip() or None
+    if anchor_ts is not None and not _ANCHOR_RE.fullmatch(anchor_ts):
+        raise ReviewError("anchor_ts must be YYYY-MM-DDTHH:MM[:SS] (PT)")
+    box_min_age_min = _review_num(body, "box_min_age_min")
+    box_min_height_pts = _review_num(body, "box_min_height_pts")
 
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
@@ -238,10 +264,12 @@ def add_review(conn, candidate_id: str, body: dict) -> dict:
             if label is None:
                 raise ReviewError(f"label must be one of {LABELS}")
         cur.execute(
-            "INSERT INTO setup_reviews (candidate_id, label, reasons, comment, post_reveal) "
-            "VALUES (%s, %s, %s, %s, %s) "
-            "RETURNING id, label, reasons, comment, reviewed_at, revealed_at, post_reveal",
-            (candidate_id, label, reasons, comment, revealed),
+            "INSERT INTO setup_reviews (candidate_id, label, reasons, comment, post_reveal, "
+            "anchor_ts, box_min_age_min, box_min_height_pts) "
+            "VALUES (%s, %s, %s, %s, %s, %s::timestamp AT TIME ZONE 'America/Los_Angeles', %s, %s) "
+            "RETURNING id, label, reasons, comment, reviewed_at, revealed_at, post_reveal, "
+            "anchor_ts, box_min_age_min, box_min_height_pts",
+            (candidate_id, label, reasons, comment, revealed, anchor_ts, box_min_age_min, box_min_height_pts),
         )
         return _clean(dict(cur.fetchone()))
 

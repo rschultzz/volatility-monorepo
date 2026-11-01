@@ -19,6 +19,8 @@ import cr_dq_step0 as s0  # noqa: E402  (loads .env, read-only PGOPTIONS)
 
 import psycopg  # noqa: E402
 
+from packages.shared.backfill_safety import connect_redacted  # noqa: E402
+
 SQL = """
 SELECT symbol, (minute_utc AT TIME ZONE 'America/Los_Angeles')::date AS d, extract(epoch FROM minute_utc)::bigint AS t,
        volume::float8, (buy_vol - sell_vol)::float8, (high - low)::float8
@@ -52,7 +54,7 @@ def load(conn, src, days):
 def main():
     days = s0.sessions()
     try:
-        with psycopg.connect(s0.review_routes._normalize_db_url(os.environ["BACKFILL_DATABASE_URL"]), connect_timeout=20) as conn:
+        with connect_redacted(os.environ["BACKFILL_DATABASE_URL"], connect_timeout=20) as conn:
             data = {src: load(conn, src, days) for src in ("databento", "ironbeam")}
     except Exception as e:  # never print the connection string
         print("DB error:", type(e).__name__)

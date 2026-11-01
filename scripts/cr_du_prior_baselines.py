@@ -26,6 +26,8 @@ import cr_dq_step0 as s0  # noqa: E402  (loads .env, read-only PGOPTIONS)
 
 import psycopg  # noqa: E402
 
+from packages.shared.backfill_safety import connect_redacted  # noqa: E402
+
 from packages.shared.trading_calendar import is_trading_day  # noqa: E402
 
 OUT = os.path.join(s0.REPO, "apps", "web", "modules", "Ironbeam", "data", "cr_du_prior_baselines.json")
@@ -60,7 +62,7 @@ def contra(arrs):
 def main():
     days = s0.sessions()
     try:
-        with psycopg.connect(s0.review_routes._normalize_db_url(os.environ["BACKFILL_DATABASE_URL"]), connect_timeout=20) as conn:
+        with connect_redacted(os.environ["BACKFILL_DATABASE_URL"], connect_timeout=20) as conn:
             db = s0.load(conn, "databento", days)
             ib = s0.load(conn, "ironbeam", days)
     except Exception as e:  # never print the connection string

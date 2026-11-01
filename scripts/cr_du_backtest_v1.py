@@ -85,8 +85,8 @@ def build():
 
 
 def db():
-    import psycopg
-    return psycopg.connect(os.environ["DATABASE_URL"].replace("+psycopg", ""), connect_timeout=20)
+    from packages.shared.backfill_safety import connect_redacted
+    return connect_redacted(os.environ["DATABASE_URL"], connect_timeout=20)
 
 
 def set2_state():

@@ -24,6 +24,8 @@ from flask import request  # noqa: E402
 
 import psycopg  # noqa: E402
 
+from packages.shared.backfill_safety import connect_redacted  # noqa: E402
+
 import modules.Ironbeam.callbacks as cb  # noqa: E402
 from modules.SetupReview import routes as review_routes  # noqa: E402
 from modules.TradeLog.routes import trade_log_bp  # noqa: E402
@@ -41,8 +43,7 @@ app.server.register_blueprint(trade_log_bp)
 
 # setup-review routes for the existing specs (as CR-DP's smoke backend): backfill role, read-only — any review POST fails
 def _review_conn():
-    return psycopg.connect(review_routes._normalize_db_url(os.environ["BACKFILL_DATABASE_URL"]),
-                           options="-c default_transaction_read_only=on")
+    return connect_redacted(os.environ["BACKFILL_DATABASE_URL"], options="-c default_transaction_read_only=on")
 
 
 review_routes._conn = _review_conn

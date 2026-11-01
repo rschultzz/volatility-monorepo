@@ -758,3 +758,32 @@ Contradiction bars: primary definition inconclusive; secondary (report-only, all
 | cr-ds smokes 1, 2 | panel verdict is the engine's on the moved box | waits for manual-box step |
 
 All of these read a chart anchor. The follow-on makes a chart anchor a manual box (no restart, no chain), so their assertions change again; they are fixed once, against that step, and listed there.
+
+## Amendment 7 (Ryan, chat 2026-11-01): manual box, engine line, anchor record
+
+Follow-on after v1.4. Engine v1.4 stays frozen: `evaluateAt`, `simulateSession`, the backtest, the overlay and set-2 verdicts keep the automatic box.
+
+**Item 1 (diagnosis, deployed code `ddbe3ab`, session 2026-01-26).** The panel was on set-2 card 19 (entry 08:50, `until` cut, last bar 08:49). Closes 08:29–08:36: 6985.00, 6984.75, 6986.00, 6986.00, 6985.75, 6983.50, 6984.00, 6984.25. `edgeReadout` takes the first bar at or after the anchor (no snap); the chart click passes the candle's own time. Replay of every anchor up to 08:49 × 7 edge holds × 7 break holds × RTH / FULL (59,290 runs): an 08:33 box start only with an anchor on 08:33, never by chaining. So the click landed on 08:33; the panel never showed the anchor minute. The 08:34 close is 2.50 below 08:31, so v1.4 restarts both an 08:31 and an 08:33 anchor at 08:34.
+
+**Rulings.**
+- A box can't break before it has formed. A manual anchor starts the box at the anchor minute. The forming restart (close > 2 pts beyond, span > 12 pts) applies to the engine's automatic boxes only.
+- Manual mode: box = anchor → set end / now; rows, per-box delta line and panel verdict read exactly that window; chaining never moves it. A held break after forming shows "broke ↑ HH:MM" with a "restart here" button that re-anchors.
+- Engine line in the panel: "Engine (box HH:MM–HH:MM): <verdict> — <first failed rule>", from the engine's own chained box; it never changes the manual box or rows. Approved visible change.
+- With no anchor the panel is as now.
+- Delta line resets at the start of the box the rows read, and again with a small tick when a new box starts.
+- 7a. Manual box line shows "anchor HH:MM", existing muted text (C2 approved).
+- 7b. `setup_reviews` gains nullable `anchor_ts`, `box_min_age_min`, `box_min_height_pts`, written on every new review save; existing rows stay NULL. Set 2 resumes only after this deploys.
+- 7c. The 7 set-2 cards labelled since CR-DS are "pre-anchor-record"; no relabelling.
+- 7d. Engine line smoke on 10-30 (Ironbeam) and a train day with no set-2 card; 01-26 checks the manual box only (blocked for the engine).
+- 7e. Connection strings redacted before any print or exception in every script touched.
+
+**Readings fixed before code.**
+- Panel verdict in manual mode = the box verdict (`boxVerdict`, as CR-DS) on the manual window; the v1 gates live on the engine line.
+- A trade's stored anchor (trade review "at entry") is a manual anchor too.
+- After a held break the edges stay as they were and no further tests or breaks are tracked: the flag is the first break.
+- A break does not reset the delta line, because the line reads the same window as the rows. A new box = "restart here": the old span stays drawn, the line resets at the restart minute with a tick. A freshly picked anchor clears that history.
+- "As now" with no anchor: today there is no panel without an anchor, so nothing changes.
+
+**7b run.** `scripts/cr_du_setup_reviews_anchor.py`, run 98f30069: 154 rows before and after, all new values NULL. `dash_backfill_writer` has no DDL, so the run is recorded through the backfill role and the ALTER runs as the table owner.
+
+**Standing rulings:** conformance table unchanged, no new deviation (C1 / C2 approvals above).

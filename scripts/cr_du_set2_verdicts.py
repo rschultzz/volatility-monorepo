@@ -29,10 +29,10 @@ SQL = Path(__file__).resolve().parent / "cr_du_engine_verdicts.sql"
 
 
 def migrate():
-    import psycopg
+    from packages.shared.backfill_safety import connect_redacted
     try:
-        conn = psycopg.connect(os.environ["DATABASE_URL"].replace("+psycopg", ""), autocommit=True,
-                               options="-c default_transaction_read_only=off")
+        conn = connect_redacted(os.environ["DATABASE_URL"], autocommit=True,
+                                options="-c default_transaction_read_only=off")
     except Exception as e:
         print("connect failed:", type(e).__name__)
         sys.exit(1)

@@ -193,7 +193,8 @@ CREATE TEMP TABLE setup_reviews (
     label text NOT NULL CHECK (label IN ('take', 'skip', 'unsure')),
     reasons text[] NOT NULL DEFAULT '{}', comment text,
     reviewed_at timestamptz NOT NULL DEFAULT clock_timestamp(), revealed_at timestamptz,
-    post_reveal boolean NOT NULL DEFAULT false
+    post_reveal boolean NOT NULL DEFAULT false,
+    anchor_ts timestamptz, box_min_age_min numeric, box_min_height_pts numeric
 ) ON COMMIT DROP;
 CREATE TRIGGER setup_reviews_guard BEFORE UPDATE OR DELETE ON setup_reviews
     FOR EACH ROW EXECUTE FUNCTION public.setup_review_guard();
