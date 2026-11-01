@@ -4,6 +4,7 @@
 // once per data change (flowV3.js, memoised by the caller); a draw only reads them.
 // Palette (C1): sell = light grey, buy = blue, marks / lines = slate. No green, no red.
 import { CROWDED_TICK_PX, TICK, floorIndex } from '../flowV3.js'
+import { hitBox } from '../selectableBoxes.js'
 
 const SELL_RGB = '229,231,235'
 const BUY_RGB = '96,165,250'
@@ -653,6 +654,62 @@ export class BoxShadePrimitive extends BasePrimitive {
       const h = Math.max(1, Math.abs(yb - yt))
       ctx.fillStyle = `rgba(${MAGENTA_RGB},${b.frozen ? BOX_SHADE_ALPHA_FROZEN : BOX_SHADE_ALPHA_CURRENT})`
       ctx.fillRect(Math.round(x0 * hr), Math.round(y0 * vr), Math.round((x1 - x0) * hr), Math.round(h * vr))
+    }
+  }
+}
+
+// CR-DY goal 4 — the selectable boxes, over the heat and under the candles (no autoscaleInfo: never moves the scale). All
+// light fill; hover a little darker; selected darker with a solid border. Half a bar past each end, so the first and last
+// bars sit inside. data: { boxes: [{ id, from, to, top, bottom, rgb }], selectedId, hoverId, times }. `rects()` = where each
+// was last drawn (css px): the click / hover hit list, also read by the smoke spec.
+export const BOX_FILL_ALPHA = BOX_SHADE_ALPHA_CURRENT
+export const BOX_FILL_ALPHA_HOVER = 0.16
+export const BOX_FILL_ALPHA_SELECTED = 0.26
+export class SelectableBoxesPrimitive extends BasePrimitive {
+  constructor() {
+    super()
+    this._rects = []
+  }
+
+  zOrder() {
+    return 'bottom'
+  }
+
+  rects() {
+    return this._rects.slice()
+  }
+
+  hitTest(pt) {
+    return hitBox(this._rects, pt)
+  }
+
+  paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }, chart, series, d) {
+    this._rects = []
+    const ts = chart.timeScale()
+    const plotW = bitmapSize.width / hr
+    const half = (Number(ts.options().barSpacing) || 6) / 2
+    for (const b of d.boxes || []) {
+      const xa = ts.timeToCoordinate(b.from)
+      const xb = ts.timeToCoordinate(b.to)
+      const yt = series.priceToCoordinate(b.top)
+      const yb = series.priceToCoordinate(b.bottom)
+      if (xa == null || xb == null || yt == null || yb == null) continue
+      const x0 = Math.max(0, xa - half)
+      const x1 = Math.min(plotW, xb + half)
+      if (x1 <= x0) continue
+      const y0 = Math.min(yt, yb)
+      const h = Math.max(1, Math.abs(yb - yt))
+      const sel = b.id === d.selectedId
+      const hov = b.id === d.hoverId
+      ctx.fillStyle = `rgba(${b.rgb},${sel ? BOX_FILL_ALPHA_SELECTED : hov ? BOX_FILL_ALPHA_HOVER : BOX_FILL_ALPHA})`
+      const px = [Math.round(x0 * hr), Math.round(y0 * vr), Math.round((x1 - x0) * hr), Math.round(h * vr)]
+      ctx.fillRect(...px)
+      if (sel) {
+        ctx.strokeStyle = `rgba(${b.rgb},0.95)`
+        ctx.lineWidth = Math.max(1, Math.round(1.5 * hr))
+        ctx.strokeRect(...px)
+      }
+      this._rects.push({ id: b.id, x0, x1, y0, y1: y0 + h, selected: sel, hover: hov })
     }
   }
 }
