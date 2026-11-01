@@ -27,7 +27,7 @@ import cr_du_backtest_v1 as BT  # noqa: E402
 
 OUT = BT.LOG / "d1"
 WARM = BT.LOG / "sessions_warmup"
-ENGINE_DIR = os.environ["CRDU_D1_ENGINE"]   # a copy of react_price_preview/src with evaluateAt's forceSide option
+ENGINE_DIR = os.environ.get("CRDU_D1_ENGINE", str(BT.C.REPO_ROOT / "react_price_preview" / "src"))   # evaluateAt's forceSide
 
 
 def cards():

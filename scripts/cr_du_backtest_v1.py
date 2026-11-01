@@ -12,8 +12,8 @@ Spec: specs/CR-DU-v1-rules-engine.md (Step 0 + Amendment 1). Every number is **t
   baseline and contradiction percentiles, A7 swing, strong corrected GEX levels per minute, `es_flow_1s_databento`
   seconds). Cached as JSON in scripts/logs/cr-du/sessions/ (git-ignored).
 - Engine: react_price_preview/src/v1Engine.js through scripts/v1EngineCli.mjs (node) — the same code as the panel and
-  the overlay. Variants: primary + the pre-declared sensitivity rows (box min 10; no 12:15 cutoff; no loss cap; D4
-  entry; fixed 10-pt stop), report-only.
+  the overlay. Variants (Amendment 3): primary = lean ≥ p70 + fixed 10-pt stop; sensitivity rows, report-only: p80
+  lean, wick + 2 stop, D4 fill, box min 10.
 - Set 2 (Amendment 1): per-trade rows and monthly splits are withheld for sessions with a `set-2:cp-calls` card until
   set 2 is reviewed; totals are shown with and without those sessions. Side / hour splits use non-set-2 sessions only.
 - CR-CZ overlap: the engine's verdict at each CR-CZ card's decision minute (its own trades that day before it) vs Ryan's
@@ -42,13 +42,12 @@ LOG = C.REPO_ROOT / "scripts" / "logs" / "cr-du"
 SES = LOG / "sessions"
 CLI = C.REPO_ROOT / "react_price_preview" / "scripts" / "v1EngineCli.mjs"
 PT = C.PT
-VARIANTS = {
+VARIANTS = {                     # Amendment 3: primary = lean ≥ p70 + fixed 10-pt stop (engine v1.1 defaults)
     "primary": {},
+    "p80 lean": {"leanPct": 80},
+    "wick + 2 stop": {"stop": "zone"},
+    "D4 fill (1 pt inside)": {"entry": "d4"},
     "box min 10": {"boxMin": 10},
-    "no 12:15 cutoff": {"cutoff": False},
-    "no loss cap": {"lossCap": False},
-    "D4 entry (1 pt inside)": {"entry": "d4"},
-    "fixed 10-pt stop": {"stop": "fixed10"},
 }
 LABEL = "train, in-sample"
 

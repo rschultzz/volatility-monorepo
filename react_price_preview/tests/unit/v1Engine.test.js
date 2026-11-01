@@ -59,7 +59,9 @@ function session({ over = {}, marks = [], gex = { reason: null, schedule: [{ fro
 }
 const codes = (ev) => ev.failed.map((f) => f.code)
 
-test('defaults: box min 8, cutoff 12:15, +10, 3 losses, 20-min re-entry', () => {
+test('defaults: box min 8, cutoff 12:15, +10, 3 losses, 20-min re-entry, lean p70, fixed 10-pt stop', () => {
+  assert.equal(V1_DEFAULTS.leanPct, 70)
+  assert.equal(V1_DEFAULTS.stop, 'fixed10')
   assert.equal(V1_DEFAULTS.boxMin, 8)
   assert.equal(V1_DEFAULTS.cutoffMin, 12 * 60 + 15)
   assert.equal(V1_DEFAULTS.target, 10)
@@ -77,19 +79,39 @@ test('rule 6: a box qualifies at 8 min although its edges are younger than the 1
   assert.equal(e28.box.minutes, 8)
 })
 
-test('SHORT at the top: order at the exact edge, stop = wick high + 2, target -10', () => {
+test('SHORT at the top: order at the exact edge, fixed 10-pt stop (Amendment 2), target -10; wick + 2 as a row', () => {
   const ev = evaluateAt(session(), 28)
   assert.equal(ev.verdict, 'SHORT')
   assert.deepEqual(ev.failed, [])
-  assert.deepEqual([ev.order.entry, ev.order.stop, ev.order.target], [6015, 6018, 6005])
+  assert.deepEqual([ev.order.entry, ev.order.stop, ev.order.target], [6015, 6025, 6005])
+  assert.equal(evaluateAt(session({ settings: { stop: 'zone' } }), 28).order.stop, 6018)
   assert.ok(ev.evidence.noExtend.up)
 })
 
-test('sensitivity rows: D4 entry 1 pt inside; fixed 10-pt stop', () => {
+test('sensitivity rows: D4 entry 1 pt inside; wick + 2 stop', () => {
   const d4 = evaluateAt(session({ settings: { entry: 'd4' } }), 28)
-  assert.deepEqual([d4.order.entry, d4.order.target], [6014, 6004])
-  const f10 = evaluateAt(session({ settings: { stop: 'fixed10' } }), 28)
-  assert.equal(f10.order.stop, 6025)
+  assert.deepEqual([d4.order.entry, d4.order.target, d4.order.stop], [6014, 6004, 6024])
+  const z = evaluateAt(session({ settings: { stop: 'zone' } }), 28)
+  assert.equal(z.order.stop, 6018)
+})
+
+test('Amendment 3: the lean leg reads at p70 (p80 a sensitivity row); the effort leg stays p80', () => {
+  const p75 = {}
+  for (let i = 21; i < 40; i += 1) p75[i] = { buy: 537.5, sell: 462.5 } // share +7.5 % over the box = p75 on the test grid
+  const ev = evaluateAt(session({ over: p75 }), 28)
+  assert.ok(ev.evidence.sharePct >= 70 && ev.evidence.sharePct < 80)
+  assert.equal(ev.verdict, 'SHORT')
+  assert.deepEqual(codes(evaluateAt(session({ over: p75, settings: { leanPct: 80 } }), 28)), ['no_read'])
+})
+
+test('forceSide (D1): with no read the gates on that side are listed and the verdict stays NO ACTION', () => {
+  const g = { reason: null, schedule: [{ from: at(0), levels: [{ price: 6010, net: -9e10, side: 'put' }] }] }
+  const flat = {}
+  for (let i = 22; i < 40; i += 1) flat[i] = { buy: 500, sell: 500 }
+  const ev = evaluateAt(session({ over: flat, gex: g }), 28, newState(), { forceSide: 'short' })
+  assert.equal(ev.verdict, 'NO ACTION')
+  assert.equal(ev.side, null)
+  assert.deepEqual(codes(ev), ['no_read', 'gex_in_path'])
 })
 
 test('rules 7 / 8: a new high in the last 3 bars (no effort) is no read', () => {
@@ -198,12 +220,12 @@ test('fill only on a trade-through, then +10 target', () => {
 
 test('same-minute stop and target: from 1-s data, else the stop', () => {
   const over = { 29: { h: 6015.25 }, ...down(30, 6010), 32: { o: 6010, c: 6010, h: 6018.5, l: 6004.5 } }
-  const noSec = simulateSession(session({ over }))
+  const noSec = simulateSession(session({ over, settings: { stop: 'zone' } }))
   assert.equal(noSec.trades[0].reason, 'stop')
   assert.equal(noSec.trades[0].pts, -3)
   const m = at(32)
   const seconds = { t: [m + 1, m + 2], o: [6010, 6005], h: [6010, 6018.5], l: [6004.5, 6005], c: [6005, 6018] }
-  const sec = simulateSession(session({ over, seconds }))
+  const sec = simulateSession(session({ over, seconds, settings: { stop: 'zone' } }))
   assert.equal(sec.trades[0].reason, 'target')
 })
 
@@ -214,7 +236,7 @@ test('flatten at the open of the 12:59 bar', () => {
 })
 
 test('a stop counts a loss and starts the 20-min wait', () => {
-  const sim = simulateSession(session({ over: { 29: { h: 6015.25 }, 30: { h: 6018.25, l: 6014, o: 6015, c: 6017 }, ...down(31, 6016) } }))
+  const sim = simulateSession(session({ settings: { stop: 'zone' }, over: { 29: { h: 6015.25 }, 30: { h: 6018.25, l: 6014, o: 6015, c: 6017 }, ...down(31, 6016) } }))
   assert.equal(sim.trades[0].reason, 'stop')
   assert.equal(sim.state.losses, 1)
   assert.equal(sim.state.lastStop.at, at(30))
@@ -272,7 +294,7 @@ test('panelVerdict: SHORT pill, failed rules as reason + rows, engine trades lin
 
 test('panelEngine counts the engine\'s own trades and the re-entry wait', async () => {
   const { panelEngine } = await import('../../src/v1Engine.js')
-  const ctx = session({ over: { 29: { h: 6015.25 }, 30: { h: 6018.25, l: 6014, o: 6015, c: 6017 }, ...down(31, 6016) } })
+  const ctx = session({ settings: { stop: 'zone' }, over: { 29: { h: 6015.25 }, 30: { h: 6018.25, l: 6014, o: 6015, c: 6017 }, ...down(31, 6016) } })
   const pe = panelEngine(ctx, { endShifted: ctx.times[35] })
   assert.equal(pe.trades.length, 1)
   assert.equal(pe.losses, 1)
@@ -298,8 +320,15 @@ test('overlayMarks: teal trade marks with stop / target lines while open and the
   assert.equal(m.length, 1)
   assert.equal(m[0].direction, 'short')
   assert.equal(m[0].label, '+10.00')
-  assert.deepEqual(m[0].lines.map((l) => [l.kind, l.price]), [['stop', 6018], ['target', 6005]])
+  assert.deepEqual(m[0].lines.map((l) => [l.kind, l.price]), [['stop', 6025], ['target', 6005]])
   assert.equal(m[0].lines[0].toT, ctx.shift(at(31)))
   assert.equal(minuteText(sim.minutes[28], () => '06:58'), 'v1 engine 06:58 · SHORT')
   assert.match(minuteText(sim.minutes[26], () => '06:56'), /^v1 engine 06:56 · NO ACTION · rule 6: box still forming/)
+})
+
+test('fixed 10-pt stop: a 3-pt pop that stops the wick + 2 bracket leaves this one open', () => {
+  const over = { 29: { h: 6015.25 }, 30: { h: 6018.25, l: 6014, o: 6015, c: 6017 }, ...down(31, 6008), 33: { h: 6008.25, l: 6004.75, o: 6008, c: 6005 } }
+  const f = simulateSession(session({ over }))
+  assert.deepEqual([f.trades[0].stop, f.trades[0].reason, f.trades[0].pts], [6025, 'target', 10])
+  assert.equal(simulateSession(session({ over, settings: { stop: 'zone' } })).trades[0].reason, 'stop')
 })

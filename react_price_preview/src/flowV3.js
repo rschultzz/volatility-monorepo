@@ -1259,7 +1259,9 @@ export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, 
   const share = readoutShare(ro)
   const sp = pct?.share?.p ?? null
   const cp = pct?.cpp?.p ?? null
-  const lean = share != null && sp != null && sp >= r.notable ? Math.sign(share) : 0
+  // CR-DU Amendment 3: the lean leg's cut can differ from `notable` (v1 engine: p70); rules.lean, else notable
+  const leanCut = Number.isFinite(Number(r0?.lean)) ? Number(r0.lean) : r.notable
+  const lean = share != null && sp != null && sp >= leanCut ? Math.sign(share) : 0
   const shareTxt = `share ${sharePctText(share)}${sp == null ? '' : ` ${pctText(sp)}`}`
   const cppTxt = `c/pt ${cp == null ? '–' : pctText(cp)}`
   const lastT = box.ended?.kind === 'broke' ? box.ended.at : box.to

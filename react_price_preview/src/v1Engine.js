@@ -15,16 +15,17 @@ import {
 } from './flowV3.js'
 import { utcEpochShowingZoneTime } from './flowShared.js'
 
-export const V1_ENGINE_VERSION = 'v1.0'
+export const V1_ENGINE_VERSION = 'v1.1' // v1.1 (Amendments 2 / 3): lean ≥ p70, fixed 10-pt stop
 export const V1_DEFAULTS = {
   boxMin: 8, minHeightPts: 2, // rule 6
-  notable: 80, nearPts: 2, absorbPts: 2, // CR-DQ ⚙ "Verdict rules" defaults
+  notable: 80, nearPts: 2, absorbPts: 2, // CR-DQ ⚙ "Verdict rules" defaults (notable = the effort leg's cut)
+  leanPct: 70, // rules 7 / 8 lean: Δ share ≥ p70 on the side (Amendment 3; p80 = sensitivity row)
   holdMin: 15, breakHoldMin: 5, // rule 6 anchor: the CR-DI / CR-DN box chain at its display defaults, fixed here
   moveLookbackMin: 60, // rule 6 "after a larger move"
   noExtendBars: 3, // rules 7 / 8 "highs (lows) not extending"
   cutoff: true, cutoffMin: 12 * 60 + 15, flattenMin: 12 * 60 + 59, // rule 3; Q4 flatten (PT minutes of day)
   entry: 'edge', // rule 13: 'edge' = the exact edge by closes; 'd4' = CR-CP D4, 1 pt inside (sensitivity)
-  stop: 'zone', stopPad: 2, // rule 15: 'zone' = the box's wick extreme + 2 pts; 'fixed10' = 10 pts from entry (sensitivity)
+  stop: 'fixed10', stopPad: 2, // rule 15 (Amendment 2): 'fixed10' = 10 pts from entry; 'zone' = the box's wick extreme + 2 pts (sensitivity)
   target: 10, // rule 16
   lossCap: true, maxLosses: 3, // rule 19
   reentryMin: 20, // rule 20
@@ -187,9 +188,10 @@ const VERDICT_RULE = {
 /**
  * The verdict at the close of RTH bar i: { verdict 'SHORT' / 'LONG' / 'NO ACTION', side, failed[], evidence, order }.
  * `state` = the session's engine trades so far (rules 19 / 20, one trade per box); `anchorShifted` overrides the 06:30
- * anchor (the panel's chart anchor; clamped to RTH).
+ * anchor (the panel's chart anchor; clamped to RTH). `forceSide` (diagnosis D1): with no read, still check the gates on
+ * that side (listed in `failed`; the verdict stays NO ACTION).
  */
-export function evaluateAt(ctx, i, state = newState(), { anchorShifted = null, counts = false } = {}) {
+export function evaluateAt(ctx, i, state = newState(), { anchorShifted = null, counts = false, forceSide = null } = {}) {
   const { s, shift, pay, bars, times, rows, closes, ptMin } = ctx
   const t = bars.t[i]
   const tClose = t + 60
@@ -207,7 +209,7 @@ export function evaluateAt(ctx, i, state = newState(), { anchorShifted = null, c
   const box = { ...r, readout: ro, ended: { kind: 'current' } }
   const v = boxVerdict({
     box, pct, levels: inBox, tradeDate: ctx.tradeDate, fomc: FOMC_2026_DECISION_DAYS,
-    rules: { notable: s.notable, nearPts: s.nearPts, absorbPts: s.absorbPts, minAgeMin: s.boxMin, minHeightPts: s.minHeightPts },
+    rules: { notable: s.notable, lean: s.leanPct, nearPts: s.nearPts, absorbPts: s.absorbPts, minAgeMin: s.boxMin, minHeightPts: s.minHeightPts },
     v1: { noExtendUp: ne.up, noExtendDown: ne.down },
   })
   const boxInfo = { from: r.from, top: r.top.price, bottom: r.bottom.price, high: r.high, low: r.low, minutes: ro?.minutes ?? null }
@@ -219,16 +221,17 @@ export function evaluateAt(ctx, i, state = newState(), { anchorShifted = null, c
     const [rule, code, text] = VERDICT_RULE[v.kind] || [7, 'no_read', v.kind]
     const why = v.reason && v.reason !== text ? (v.reason.startsWith(text) ? v.reason : `${text}: ${v.reason}`) : text
     out.failed.push(fail(rule, code, why))
-    return out
+    if (!forceSide) return out
   }
   out.side = side
-  const h = side === 'short' ? -1 : 1
-  const edge = side === 'short' ? r.top.price : r.bottom.price
+  const sd = side || forceSide // D1 diagnostic: the gates on the card's side when the engine has no read
+  const h = sd === 'short' ? -1 : 1
+  const edge = sd === 'short' ? r.top.price : r.bottom.price
   const entry = s.entry === 'd4' ? edge + h * 1 : edge
   const target = entry + h * s.target
-  const stop = s.stop === 'fixed10' ? entry - h * 10 : side === 'short' ? r.high + s.stopPad : r.low - s.stopPad
-  const order = { side, boxFrom: r.from, entry, stop, target, placedT: tClose }
-  if (!(side === 'short' ? stop > entry : stop < entry)) out.failed.push(fail(14, 'stop_side', 'stop on the wrong side of the entry'))
+  const stop = s.stop === 'fixed10' ? entry - h * 10 : sd === 'short' ? r.high + s.stopPad : r.low - s.stopPad
+  const order = { side: sd, boxFrom: r.from, entry, stop, target, placedT: tClose }
+  if (!(sd === 'short' ? stop > entry : stop < entry)) out.failed.push(fail(14, 'stop_side', 'stop on the wrong side of the entry'))
   // rule 3: no entries after 12:15 PT (an order placed now rests from the next minute)
   const nextMin = ptMin(t) + 1
   if (s.cutoff && nextMin >= s.cutoffMin) out.failed.push(fail(3, 'cutoff', 'after 12:15 PT'))
@@ -238,17 +241,17 @@ export function evaluateAt(ctx, i, state = newState(), { anchorShifted = null, c
   out.evidence.move = { ...mv, swing: ctx.swing }
   if (!mv.ok) out.failed.push(fail(6, 'no_larger_move', `no ${ctx.swing.toFixed(1)}-pt move into the box (max ${mv.move.toFixed(2)})`))
   // rule 4: nothing strong in the path (entry → target, exclusive)
-  const inPath = (p) => (side === 'short' ? p < entry - 1e-9 && p > target + 1e-9 : p > entry + 1e-9 && p < target - 1e-9)
+  const inPath = (p) => (sd === 'short' ? p < entry - 1e-9 && p > target + 1e-9 : p > entry + 1e-9 && p < target - 1e-9)
   if (ctx.gex.reason) out.failed.push(fail(4, 'no_gex', `no GEX levels (${ctx.gex.reason})`))
   const gexHit = gexAt(ctx.gex, t).filter((lv) => inPath(Number(lv.price)))
   if (gexHit.length) out.failed.push(fail(4, 'gex_in_path', `strong GEX level ${gexHit.map((x) => `${Number(x.price).toFixed(2)} (${x.side})`).join(', ')} in the path`))
-  const oppKind = side === 'short' ? 'sellers_absorbed' : 'buyers_absorbed'
+  const oppKind = sd === 'short' ? 'sellers_absorbed' : 'buyers_absorbed'
   const absHit = earlier.filter((lv) => lv.kind === oppKind && !lv.broken && inPath(lv.price))
-  if (absHit.length) out.failed.push(fail(4, 'absorption_in_path', `earlier ${side === 'short' ? 'sellers' : 'buyers'} absorbed ${absHit.map((x) => x.price.toFixed(2)).join(', ')} in the path`))
+  if (absHit.length) out.failed.push(fail(4, 'absorption_in_path', `earlier ${sd === 'short' ? 'sellers' : 'buyers'} absorbed ${absHit.map((x) => x.price.toFixed(2)).join(', ')} in the path`))
   out.evidence.gexInPath = gexHit
   // rule 5: earlier absorption that held at the faded edge = location support (not a trigger)
-  const supKind = side === 'short' ? 'buyers_absorbed' : 'sellers_absorbed'
-  const wick = side === 'short' ? r.high : r.low
+  const supKind = sd === 'short' ? 'buyers_absorbed' : 'sellers_absorbed'
+  const wick = sd === 'short' ? r.high : r.low
   out.evidence.locationSupport = earlier.filter((lv) => lv.kind === supKind && !lv.broken && Math.abs(lv.price - wick) <= s.absorbPts + 1e-9)
     .map((lv) => ({ price: lv.price, start: lv.start }))
   // rules 19 / 20 and one trade per box
@@ -256,13 +259,13 @@ export function evaluateAt(ctx, i, state = newState(), { anchorShifted = null, c
   if (state.lastStop) {
     const waited = (tClose - state.lastStop.at) / 60
     if (waited < s.reentryMin - 1e-9) out.failed.push(fail(20, 'reentry_wait', `${Math.ceil(s.reentryMin - waited)} min left of the 20-min wait`))
-    if (state.lastStop.side === side && !(r.from > state.lastStop.entryAt)) out.failed.push(fail(20, 'reentry_box', 'same side needs a new box after the stop'))
+    if (state.lastStop.side === sd && !(r.from > state.lastStop.entryAt)) out.failed.push(fail(20, 'reentry_box', 'same side needs a new box after the stop'))
   }
   if (state.boxesTraded.includes(r.from)) out.failed.push(fail(20, 'one_per_box', 'already traded this box'))
-  out.evidence.rule12 = rule12(bars, j0, i, side)
-  out.evidence.contra = contradictionBars(ctx, j0, i, side, r)
+  out.evidence.rule12 = rule12(bars, j0, i, sd)
+  out.evidence.contra = contradictionBars(ctx, j0, i, sd, r)
   out.order = order
-  if (!out.failed.length) out.verdict = side.toUpperCase()
+  if (!out.failed.length && side) out.verdict = side.toUpperCase()
   return out
 }
 
