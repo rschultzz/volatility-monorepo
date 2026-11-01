@@ -836,3 +836,25 @@ Also changed because a manual box has no chain: `cr-dq` item 2 (no "older boxes"
 No relabelling. Set 2 resumes only after this deploys.
 
 **7e.** `connect_redacted` / `redact_db_url` in `packages/shared/backfill_safety.py`; used by `scripts/cr_du_backtest_v1.py`, `cr_du_set2_verdicts.py`, `cr_du_prior_baselines.py`, `cr_du_smoke_backend.py`, `cr_du_step0/q5_contradiction_pcts.py`, `cr_du_setup_reviews_anchor.py`. The leak was `DATABASE_URL` (`new_db_cred`), from a scratch script; credential rotated by Ryan 2026-11-01.
+
+## Rulings before merge (Ryan, chat 2026-11-01)
+
+No engine change. v1.4 stays frozen.
+
+1. **Anchor-bar flow in Δ share.** The window stays anchor + 1 … last bar, so the anchor bar's own flow is in no Δ share. Kept as is for v1.4. Raised as an explicit question for the sub-box CR: test both windows against labels.
+2. **Set-2 scoring.** The primary result excludes the 7 pre-anchor-record cards (1, 3, 5, 7, 9, 10, 16). Scoring with them is a sensitivity row. No relabelling.
+3. **Swallowed panel clicks while anchor / set end is armed.** A separate follow-up CR, done before set 2 resumes. Not in CR-DU.
+4. **Unused code.** Frozen rows and "older boxes" from a chart anchor stay in place; listed in the session note for a later cleanup.
+
+## Full browser suite before merge (2026-11-01)
+
+All 22 spec files by explicit path on `d464ec4`, against the last origin/main `ddbe3ab` run (21 spec files; same backend script on :8068, branch frontend :5197, baseline frontend :5198; logs `scripts/logs/cr-du/specs/full_d464ec4.*`, `main.*`).
+
+| | Passed | Failed / timed out | Skipped |
+|---|---|---|---|
+| origin/main `ddbe3ab` | 87 | 20 | 19 |
+| branch `d464ec4` | 99 | 20 | 19 |
+
+**Failing only on the branch: none.** The 20 failing tests and 19 skips are the same titles on both. Passes: 12 new in `cr-du.spec.js`, and 7 tests rewritten under new titles (the moved-box fixes above) replace 7 old titles. Failure messages match in full for 19 of the 20, after removing the worktree path and port. The other is `cr-dp` item 6.
+
+`cr-dp` item 6 fails at the same last assertion on both (`cr-dp.spec.js:379`): raw CVD is compared with a baseline page still on the default share line, so it fails whatever the build. The received line differs: the branch's runs from 06:49 (one manual box), main's from 09:12 (its last chained box). That is Amendment 7. The earlier assertions pass on both. The raw-mode line has no passing test on either side.
