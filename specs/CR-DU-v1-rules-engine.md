@@ -721,3 +721,40 @@ Closes the 15-pt-jump gap in v1.3, where a forming box absorbed any close as its
 - The `holdMin` parameter goes with the control (`edgeReadout`, `readHistory`, engine settings), so no dead setting remains.
 
 Rulings re-check: A2 honoured; A1.1 now honoured in the forming box's width too; every other row unchanged. Nothing in "Revoked / superseded" is used.
+
+## v1.4 results (2026-11-01)
+
+Labelled train, in-sample. No decisions from any of this. Engine tag `cr-du-engine-v1.4`.
+
+**(a) D1, copying score only.** Own box: takes fire 0 / 30, skips 4 / 55 (LONG 2, SHORT 2). At the card's start: takes 5 / 31 (LONG 3, SHORT 2), skips 3 / 58 (LONG 2, SHORT 1). First failed rule on takes (own box): no read 12, box forming 5, no larger move 3, one per box 3, GEX in path 2, FOMC 2, conflict 2, loss cap 1. Engine box = card box on 4 / 31 takes (9 / 31 at v1.3) and 10 / 58 skips; the box restarted after the card's start on 19 / 31 takes and 28 / 58 skips: the forming restart splits card boxes.
+
+**Backtest (train, in-sample; all sessions | without set-2 sessions).**
+
+| Variant | Trades | Win % | Net pts | Trades | Win % | Net pts |
+|---|---|---|---|---|---|---|
+| primary | 142 | 51.4 | +20.75 | 43 | 53.5 | +26.75 |
+| p80 lean | 112 | 52.7 | +41.25 | 37 | 54.1 | +21.0 |
+| wick + 2 | 153 | 34.0 | −8.5 | 45 | 37.8 | +36.25 |
+| D4 fill | 153 | 51.0 | +11.25 | 47 | 55.3 | +44.75 |
+| box min 10 | 123 | 48.8 | −45.25 | 39 | 51.3 | +8.25 |
+
+Contradiction bars: primary definition inconclusive; secondary (report-only, all sessions) 67 trades 38.8 % vs 75 at 62.7 %, diff −23.9 (−37.4, −10.3), reads "refuted".
+
+**(d) Set 2 verdicts at v1.4 (counts only):** SHORT 5, LONG 5, NO ACTION 105 (27 warm-up), run 8c97f8f8.
+
+**(b) Tests:** unit 154 / 154; CR-DU smoke 5 / 5 (overlay 2026-02-06: 2 = 2 trades, moved from 02-03, which has no trades at v1.4; 15-pt jump, 2 vs 2.25 and 12-pt span in unit).
+
+**(c) Existing browser specs, branch vs origin/main `ddbe3ab`** (branch 77 passed / 35 not, main 87 / 20; both include the same not-runnable-here failures). 15 branch-only failures:
+
+| Spec | Cause | Status |
+|---|---|---|
+| cr-bv L4 pixel alignment 10-23 | flake | passes on rerun |
+| cr-di "chip gating and the ⚙ box hold" | control removed (Amendment 6) | fixed: asserts the control is gone |
+| cr-di replay until 07:40 | test called `edgeReadout` with the old argument order | fixed: passes |
+| cr-di replay until 08:09, to the end | moved box: anchor 07:00 now chains 07:16, 07:48 … | assertion waits for manual-box step |
+| cr-dn 10-28 anchor 07:00; 10-29 A = 5, A = 1, set end 06:57 | same argument fix, then moved box | assertions wait for manual-box step |
+| cr-dp amendment 2 "mixed sources" | no anchor / end pair still spans the open: forming restart | waits for manual-box step |
+| cr-dq items 1–3, item 4, item 5 | fewer boxes; 02-10 07:05–07:30 restarts near the end | waits for manual-box step |
+| cr-ds smokes 1, 2 | panel verdict is the engine's on the moved box | waits for manual-box step |
+
+All of these read a chart anchor. The follow-on makes a chart anchor a manual box (no restart, no chain), so their assertions change again; they are fixed once, against that step, and listed there.

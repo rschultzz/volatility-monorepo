@@ -253,7 +253,7 @@ for (const until of [`${TODAY}T07:40`, `${TODAY}T08:09`, null]) {
     await settle(page)
     const anchor = shifted(`${TODAY}T07:00`)
     await anchorAt(page, anchor)
-    const r = edgeReadout(cells, flattenBars(cells), anchor, ptShift, 15)
+    const r = edgeReadout(cells, flattenBars(cells), anchor, ptShift)
     const want = edgeText(r, pt)
     await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
     await expect(page.getByTestId('flow-v3-edge-effort-toggle')).toHaveAttribute('aria-pressed', 'true')
@@ -421,5 +421,5 @@ test('chip gating and the ⚙ box hold setting', async ({ page }) => {
   expect(off2).toEqual(off1)
   expect(await page.evaluate(() => localStorage.getItem('ib-react-flow-v3-edge-effort'))).toBe(null)
   await page.getByRole('button', { name: 'Open Flow v3 settings' }).click()
-  await expect(page.getByTestId('flow-v3-box-hold')).toHaveValue('15')
+  await expect(page.getByTestId('flow-v3-box-hold')).toHaveCount(0) // CR-DU amendment 6: the edge-hold control is gone
 })

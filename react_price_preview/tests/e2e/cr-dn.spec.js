@@ -307,7 +307,7 @@ test('2026-10-29 anchor 06:49, Edges on, A = 5: 07:34 is a probe; one box from 0
   const anchor = shifted(`${D29}T06:49`)
   await pickAt(page, 'flow-v3-anchor-pick', anchor)
   await page.waitForTimeout(1500)
-  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, 15, null, 5)
+  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, null, 5)
   expect(ptShift(flattenBars(got.cells).t.at(-1)), 'cells cut at until').toBeLessThan(shifted(D29_UNTIL))
   await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
   const d = await drawn(page)
@@ -371,7 +371,7 @@ test('2026-10-29 anchor 06:49, A = 1: the old split at 07:34, CVD restarts at 0 
   const anchor = shifted(`${D29}T06:49`)
   await pickAt(page, 'flow-v3-anchor-pick', anchor)
   await page.waitForTimeout(1500)
-  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, 15, null, 1)
+  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, null, 1)
   await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
   expect(r.frozen.length).toBeGreaterThanOrEqual(1)
   expect({ from: pt(r.frozen[0].from), broke: pt(r.frozen[0].breakAt), dir: r.frozen[0].dir, bottom: r.frozen[0].bottom.price, top: r.frozen[0].top.price })
@@ -414,7 +414,7 @@ test('2026-10-29 set end 06:57: one box 06:49–06:57; readout, strip and profil
   await pickAt(page, 'flow-v3-end-pick', end, anchor - 10 * 60)
   await expect(page.getByTestId('flow-v3-window')).toHaveText('06:49 → 06:57 · 8 min')
   await page.waitForTimeout(1500)
-  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, 15, end, 5)
+  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, end, 5)
   await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
   expect(r.frozen.length).toBe(0)
   expect([pt(r.from), pt(r.to)]).toEqual(['06:49', '06:57'])
@@ -469,7 +469,7 @@ test('2026-10-28 anchor 07:00: breaks that hold still freeze and restart; replay
   const anchor = shifted(`${D28}T07:00`)
   await pickAt(page, 'flow-v3-anchor-pick', anchor)
   await page.waitForTimeout(1500)
-  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, 15, null, 5)
+  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, null, 5)
   await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
   const broke = r.frozen.map((f) => `${pt(f.breakAt)} ${f.dir}`)
   expect(broke.slice(0, 4)).toEqual(['08:16 up', '08:39 up', '09:54 up', '11:05 down']) // Step 0d
