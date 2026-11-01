@@ -4,7 +4,7 @@
 // the entry minute or later is read (the entry minute itself, :00 → the fill second, is not seen either).
 // Pure parts are separate from the fetch so they are unit-tested on fixed payloads.
 import {
-  DEFAULT_V3_SETTINGS, absorptionLevels, boxPanelOf, boxSegments, currentBoxVerdict, edgeBoxEntries, edgeReadout,
+  DEFAULT_V3_SETTINGS, absorptionLevels, boxPanelOf, boxRules, boxSegments, currentBoxVerdict, edgeBoxEntries, edgeReadout,
   flattenBars, makeShifter, rowCloses, segmentReadouts,
 } from './flowV3.js'
 import { alignV2ToCandles, formatShiftedHHMM, normalizeShiftedCandleTimes, utcEpochShowingZoneTime } from './flowShared.js'
@@ -59,7 +59,7 @@ export function entryContext({ cells, v2Bars, bars, anchorShifted, entryShifted,
 
   let box = null
   if (anchorShifted != null && cells) {
-    const edges = edgeReadout(cells, flattenBars(cells), anchorShifted, shift, s.boxHoldMin, null, s.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin)
+    const edges = edgeReadout(cells, flattenBars(cells), anchorShifted, shift, s.boxHoldMin, null, s.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin, { qualifyMin: boxRules(rules).minAgeMin, qualifyPts: boxRules(rules).minHeightPts })
     const seg = boxSegments(edges, shift)
     if (edges && seg) {
       const readouts = segmentReadouts(rows, rowCloses(rows, bars || [], shift), seg.spans)

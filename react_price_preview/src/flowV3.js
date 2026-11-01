@@ -440,7 +440,7 @@ export const LEVEL_ALPHA_MIN = 0.25
 // CR-DN item 5c: an unbroken level is *drawn* fading to this floor (broken levels keep LEVEL_ALPHA_MIN). The selection
 // score keeps levelAlpha with LEVEL_ALPHA_MIN, so the drawn set of LEVELS_MAX levels is unchanged.
 export const LEVEL_ALPHA_MIN_UNBROKEN = 0.5
-export const EDGE_BREAK_PTS = 2 // DF4 (CR-CP A1.1 / A1.2): only a close > 2 pts beyond moves the edge
+export const EDGE_BREAK_PTS = 2 // DF4 (CR-CP A1.1): once a box qualifies, a close > 2 pts beyond an edge is a break (CR-DU Amendment 5)
 export const EDGE_NEAR_PTS = 1 // contracts and first touch within 1 pt of the edge
 
 // Line width (px) from contracts absorbed: log scale, 1 px at <= 50, 5 px at >= 1,500 (Step 0: p50 350, max 1,426).
@@ -672,7 +672,7 @@ function boxStats(payload, bars, j0, j1, exact, e, counts = true) {
 // CR-DS item 4: `{ counts: false }` skips the edge counts and probe contracts (cells scans) for the read-history replay;
 // prices, edges, high / low, probes' times and pending are identical.
 export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAULT_V3_SETTINGS.boxHoldMin, endShifted = null,
-  breakHoldMin = DEFAULT_V3_SETTINGS.breakHoldMin, { counts = true } = {}) {
+  breakHoldMin = DEFAULT_V3_SETTINGS.breakHoldMin, { counts = true, qualifyMin = BOX_RULES_DEFAULTS.minAgeMin, qualifyPts = BOX_RULES_DEFAULTS.minHeightPts } = {}) {
   if (anchorShifted == null || !bars?.t?.length) return null
   let i0 = -1
   for (let i = 0; i < bars.t.length; i += 1) {
@@ -686,7 +686,6 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
   if (endShifted != null) while (last > i0 && shift(bars.t[last]) > endShifted) last -= 1
   let exact = true
   for (let i = i0; i <= last; i += 1) if (!bars.exact[i]) exact = false
-  const hold = Math.max(0, Number(holdMin) || 0) * 60
   const accept = Math.max(1, Math.round(Number(breakHoldMin) || 1))
   const spans = [] // [first bar, last bar, dir of the break that ended it]
   const probes = [] // CR-DN item 2: cancelled breaks, oldest first
@@ -694,12 +693,24 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
   let j0 = i0
   let top = bars.c[i0]
   let bottom = bars.c[i0]
-  let topSet = bars.t[i0]
-  let bottomSet = bars.t[i0]
   let moves = { topMoved: null, bottomMoved: null, topMoves: 0, bottomMoves: 0 }
+  let qualified = false // CR-DU Amendment 5 (A1.1 / rule 6): forming until box min and height; edges freeze then
   const edgesNow = () => ({ top, bottom, ...moves })
   for (let i = i0 + 1; i <= last; i += 1) {
     const c = bars.c[i]
+    if (!qualified) {
+      // Forming: edges = the running max / min close from the box start; no breaks yet
+      if (c > top) {
+        top = c
+        moves = { ...moves, topMoved: bars.t[i], topMoves: moves.topMoves + 1 }
+      }
+      if (c < bottom) {
+        bottom = c
+        moves = { ...moves, bottomMoved: bars.t[i], bottomMoves: moves.bottomMoves + 1 }
+      }
+      qualified = Math.round((bars.t[i] - bars.t[j0]) / 60) >= qualifyMin && top - bottom >= qualifyPts - 1e-9
+      continue
+    }
     if (pending) {
       // Strictly inside (Amendment 1): a close on the edge is not back inside. Inside within A bars = a probe.
       if (c < top - 1e-9 && c > bottom + 1e-9) {
@@ -715,28 +726,15 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
       j0 = ib
       top = bars.c[ib]
       bottom = bars.c[ib]
-      topSet = bars.t[ib]
-      bottomSet = bars.t[ib]
       moves = { topMoved: null, bottomMoved: null, topMoves: 0, bottomMoves: 0 }
+      qualified = false
       i = ib
       continue
     }
+    // Qualified: edges are frozen; a close <= 2 pts beyond an edge is a test, > 2 pts starts a pending break
     const up = c > top + EDGE_BREAK_PTS + 1e-9
     const down = c < bottom - EDGE_BREAK_PTS - 1e-9
-    if ((up && bars.t[i] - topSet >= hold) || (down && bars.t[i] - bottomSet >= hold)) {
-      pending = { i, dir: up ? 'up' : 'down' }
-      continue
-    }
-    if (up) {
-      top = c
-      topSet = bars.t[i]
-      moves = { ...moves, topMoved: bars.t[i], topMoves: moves.topMoves + 1 }
-    }
-    if (down) {
-      bottom = c
-      bottomSet = bars.t[i]
-      moves = { ...moves, bottomMoved: bars.t[i], bottomMoves: moves.bottomMoves + 1 }
-    }
+    if (up || down) pending = { i, dir: up ? 'up' : 'down' }
   }
   const tLast = bars.t[last]
   const probesOf = (from) => probes.filter((p) => p.box === from)
@@ -752,7 +750,7 @@ export function edgeReadout(payload, bars, anchorShifted, shift, holdMin = DEFAU
   const cur = { ...boxStats(payload, bars, j0, last, exact, edgesNow(), counts), probes: probesOf(bars.t[j0]) }
   const held = (e) => (e.firstTouch == null ? null : Math.round((tLast - e.firstTouch) / 60))
   return {
-    ...cur, anchor: bars.t[i0], exact, holdMin: Number(holdMin), breakHoldMin: accept, frozen, end: endShifted == null ? null : bars.t[last],
+    ...cur, anchor: bars.t[i0], exact, holdMin: Number(holdMin), breakHoldMin: accept, qualified, frozen, end: endShifted == null ? null : bars.t[last],
     lastClose: bars.c[last], // CR-DQ item 7: where price sits in the current box (its last bar's close)
     pending: pending ? { at: bars.t[pending.i], dir: pending.dir, edge: pending.dir === 'up' ? top : bottom } : null,
     startDir: frozen.length ? frozen[frozen.length - 1].dir : null,
@@ -1478,6 +1476,7 @@ export function readHistory({ payload, bars, rows, closes, anchorShifted, endShi
   const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now()
   const out = { ranges: [], minutes: 0, ms: 0 }
   if (anchorShifted == null || !bars?.t?.length || !Array.isArray(rows)) return out
+  const qualify = boxRules(rules)
   let i0 = -1
   for (let i = 0; i < bars.t.length; i += 1) if (shift(bars.t[i]) >= anchorShifted) { i0 = i; break }
   if (i0 < 0) return out
@@ -1487,7 +1486,7 @@ export function readHistory({ payload, bars, rows, closes, anchorShifted, endShi
   let cur = null
   for (let i = i0; i <= last; i += 1) {
     const tEnd = shift(bars.t[i])
-    const r = edgeReadout(payload, bars, anchorShifted, shift, holdMin, tEnd, breakHoldMin, { counts: false })
+    const r = edgeReadout(payload, bars, anchorShifted, shift, holdMin, tEnd, breakHoldMin, { counts: false, qualifyMin: qualify.minAgeMin, qualifyPts: qualify.minHeightPts })
     if (!r) continue
     out.minutes += 1
     const ro = anchorReadout(rows, closes, shift(r.from), tEnd - lag)

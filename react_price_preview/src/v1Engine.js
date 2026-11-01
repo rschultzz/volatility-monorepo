@@ -16,8 +16,8 @@ import {
 import { utcEpochShowingZoneTime } from './flowShared.js'
 
 // v1.1 (Amendments 2 / 3): lean ≥ p70, fixed 10-pt stop. v1.2 (Amendment 4): location moves from the read to the order
-// (a valid read rests a limit at the faded edge while it holds). v1.2 is frozen on train (CR-DU): no further changes.
-export const V1_ENGINE_VERSION = 'v1.2'
+// (a valid read rests a limit at the faded edge while it holds). v1.3 (Amendment 5, a bug fix): forming box edges = running max / min close, frozen at qualification (A1.1 / rule 6).
+export const V1_ENGINE_VERSION = 'v1.3'
 export const V1_DEFAULTS = {
   boxMin: 8, minHeightPts: 2, // rule 6
   notable: 80, nearPts: 2, absorbPts: 2, // CR-DQ ⚙ "Verdict rules" defaults (notable = the effort leg's cut)
@@ -199,7 +199,7 @@ export function evaluateAt(ctx, i, state = newState(), { anchorShifted = null, c
   const t = bars.t[i]
   const tClose = t + 60
   const anchor = anchorShifted != null ? Math.max(anchorShifted, ctx.anchor) : ctx.anchor
-  const r = edgeReadout(pay, bars, anchor, shift, s.holdMin, times[i], s.breakHoldMin, { counts })
+  const r = edgeReadout(pay, bars, anchor, shift, s.holdMin, times[i], s.breakHoldMin, { counts, qualifyMin: s.boxMin, qualifyPts: s.minHeightPts })
   const base = { t, verdict: 'NO ACTION', side: null, failed: [], evidence: {}, order: null, box: null, v: null }
   if (!r) return { ...base, failed: [fail(6, 'no_box', 'no box yet')] }
   const j0 = floorIndex(bars.t, r.from)
