@@ -92,7 +92,8 @@ def text(o):
     return f"{o['side']} ±10 {o['race_10']['result']}, ±20 {o['race_20']['result']}"
 
 
-def main():
+def frozen_schedule():
+    """The 235 CR-CP calls rebuilt from cr_cp_lib and asserted equal to the frozen file: (D, a, FZ)."""
     m1, im = C.load_minutes(), C.load_im()
     D = C.build(m1, im)
     assert len(D["SESS"]) == 101 and abs(D["MED_IM"] - 65.71) < 0.01
@@ -113,65 +114,76 @@ def main():
 
     FZ = {tuple(str(x[k]) for k in KEY): x for x in b.to_dict("records")}
     assert len(FZ) == len(b)
+    return D, a, FZ
 
+
+def sample_index(a):
+    """CR-CZ's sample: 60 short calls, then 60 long calls, seed 20261027, without replacement (index labels of `a`)."""
     rng = np.random.default_rng(SEED)
     pick = []
     for sd in (-1, 1):                                                  # short calls, then long calls
         idx = a.index[a["side"] == sd].to_numpy()
         pick += list(rng.choice(idx, size=N_PER_SIDE, replace=False))
-    P = a.loc[pick].sort_values(["d", "t"]).reset_index(drop=True)
+    return pick
 
-    events = []
-    for n, r in enumerate(P.itertuples(), start=1):
-        d, B, h = r.d, D["BARS"][r.d], int(r.side)
-        fz = FZ[tuple(str(getattr(r, k)) for k in KEY)]
-        ch = side_outcome(B, d, r.ch_status, r.ch_j, r.ch_px, h)
-        op = side_outcome(B, d, r.op_status, r.op_j, r.op_px, -h)
-        for o, frozen in ((ch, fz["ch_res"]), (op, fz["op_res"])):
-            assert (o.get("race_10") or {}).get("result") == frozen     # frozen ±10 results reproduced
-        lg = next(x for x in C.approach_legs(B["h"], B["l"], r.swing) if x["start_i"] == r.start_i and x["dir"] == r.dir)
-        cu, cd, ratio = cpp(B, int(r.r0), int(r.t))
-        limit = r.hi - 1.0 if h == -1 else r.lo + 1.0
-        r10 = ch.get("race_10") or {}
-        events.append(dict(
-            id=n,
-            session_date=str(d),
+
+def card(n, r, D, FZ):
+    """One review card (event) for schedule row `r`, numbered n."""
+    d, B, h = r.d, D["BARS"][r.d], int(r.side)
+    fz = FZ[tuple(str(getattr(r, k)) for k in KEY)]
+    ch = side_outcome(B, d, r.ch_status, r.ch_j, r.ch_px, h)
+    op = side_outcome(B, d, r.op_status, r.op_j, r.op_px, -h)
+    for o, frozen in ((ch, fz["ch_res"]), (op, fz["op_res"])):
+        assert (o.get("race_10") or {}).get("result") == frozen         # frozen ±10 results reproduced
+    lg = next(x for x in C.approach_legs(B["h"], B["l"], r.swing) if x["start_i"] == r.start_i and x["dir"] == r.dir)
+    cu, cd, ratio = cpp(B, int(r.r0), int(r.t))
+    limit = r.hi - 1.0 if h == -1 else r.lo + 1.0
+    r10 = ch.get("race_10") or {}
+    return dict(
+        id=n,
+        session_date=str(d),
+        cell=f"{SIDE[h]} call",
+        direction=SIDE[h],
+        entry_ts_pt=ts(d, r.t, close=True),
+        entry_price=r2(limit),
+        extreme_price=r2(r.ext_px),
+        confirm_ts_pt=ts(d, r.q, close=True),
+        meta=dict(
             cell=f"{SIDE[h]} call",
-            direction=SIDE[h],
-            entry_ts_pt=ts(d, r.t, close=True),
-            entry_price=r2(limit),
-            extreme_price=r2(r.ext_px),
-            confirm_ts_pt=ts(d, r.q, close=True),
-            meta=dict(
-                cell=f"{SIDE[h]} call",
-                range=dict(top=r2(r.hi), bottom=r2(r.lo), height=r2(r.width), formed_ts_pt=ts(d, r.r0),
-                           qualified_ts_pt=ts(d, r.q, close=True)),
-                zone=dict(lo=r2(r.lo), hi=r2(r.hi)),
-                box_basis="highest / lowest 1-min close over range start .. qualifying bar (CR-CP A1.1)",
-                approach="up" if r.dir == 1 else "down",
-                approach_start_ts_pt=ts(d, r.start_i),
-                approach_start_px=r2(lg["start_px"]),
-                approach_confirmed_ts_pt=ts(d, r.c_s, close=True),
-                approach_anchor_ts_pt=ts(d, r.e),
-                approach_extreme_px=r2(r.ext_px),
-                approach_pts=r2(r.leg_pts),
-                swing_pts=r2(r.swing),
-                range_in_session=int(r.n_in_session),
-                delta_share_pct=r2(100 * r.share),
-                progress_pts=r2(r.prog),
-                cpp_up=r2(cu), cpp_down=r2(cd), cpp_ratio=r2(ratio),
-                entry_rule="D4: limit at the called edge (short box high − 1, long box low + 1) after the decision bar",
-            ),
-            outcome=dict(
-                pnl_pts=(10.0 if r10.get("result") == "win" else -10.0 if r10.get("result") == "loss" else None),
-                result=f"called {text(ch)} · opposite {text(op)}",
-                exit_ts_pt=r10.get("exit_ts_pt"),
-                exit_price=r10.get("exit_price"),
-                called=ch,
-                opposite=op,
-                basis="CR-CP C9 / C10: stop-free races from the D4 edge fill to 12:59 PT; a direction test, not Ryan's exit (B6)",
-            ),
-        ))
+            range=dict(top=r2(r.hi), bottom=r2(r.lo), height=r2(r.width), formed_ts_pt=ts(d, r.r0),
+                       qualified_ts_pt=ts(d, r.q, close=True)),
+            zone=dict(lo=r2(r.lo), hi=r2(r.hi)),
+            box_basis="highest / lowest 1-min close over range start .. qualifying bar (CR-CP A1.1)",
+            approach="up" if r.dir == 1 else "down",
+            approach_start_ts_pt=ts(d, r.start_i),
+            approach_start_px=r2(lg["start_px"]),
+            approach_confirmed_ts_pt=ts(d, r.c_s, close=True),
+            approach_anchor_ts_pt=ts(d, r.e),
+            approach_extreme_px=r2(r.ext_px),
+            approach_pts=r2(r.leg_pts),
+            swing_pts=r2(r.swing),
+            range_in_session=int(r.n_in_session),
+            delta_share_pct=r2(100 * r.share),
+            progress_pts=r2(r.prog),
+            cpp_up=r2(cu), cpp_down=r2(cd), cpp_ratio=r2(ratio),
+            entry_rule="D4: limit at the called edge (short box high − 1, long box low + 1) after the decision bar",
+        ),
+        outcome=dict(
+            pnl_pts=(10.0 if r10.get("result") == "win" else -10.0 if r10.get("result") == "loss" else None),
+            result=f"called {text(ch)} · opposite {text(op)}",
+            exit_ts_pt=r10.get("exit_ts_pt"),
+            exit_price=r10.get("exit_price"),
+            called=ch,
+            opposite=op,
+            basis="CR-CP C9 / C10: stop-free races from the D4 edge fill to 12:59 PT; a direction test, not Ryan's exit (B6)",
+        ),
+    )
+
+
+def main():
+    D, a, FZ = frozen_schedule()
+    P = a.loc[sample_index(a)].sort_values(["d", "t"]).reset_index(drop=True)
+    events = [card(n, r, D, FZ) for n, r in enumerate(P.itertuples(), start=1)]
 
     GALLERY.parent.mkdir(parents=True, exist_ok=True)
     doc = dict(cr_id=CR_ID, set_name=SET_NAME, level_frame="es", generated_at=datetime.now(timezone.utc).isoformat(),
