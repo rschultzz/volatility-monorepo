@@ -39,6 +39,7 @@ stored = sorted(p1m["t"].unique()); lags = json.load(open(ROOT / "scripts/logs/c
 readable = dict(zip(stored, [t + 60 + l for t, l in zip(stored, lags)]))
 print(f"trades {len(tr)}, price_1m rows {len(p1m)}", flush=True)
 NOW = {"T": None}
+DROPPED = []
 orig_flow, orig_bars = flow_v2.fetch_flow_minutes, flow_v2.fetch_bar_closes
 
 def f_trade_cells(engine, symbol, a, b):
@@ -63,6 +64,11 @@ def poll(T):
     pl, _ = flow_v3._build(engine, "2026-10-30", session="RTH", until_pt=None, params=fh.AbsorbParams(),
                            session_date=dt.date(2026,10,30), session_note=None, now_utc=T)
     seg = next(s for s in pl["segments"] if s["name"] == "rth")
+    # closed minutes (3 s grace) of the RTH segment with trades received by T that the served cells lack
+    Te = T.timestamp(); closed = min(B.timestamp(), (Te - 3) // 60 * 60)
+    k = (tr["ts_e"] < closed) & (tr["rcv_e"] <= Te)
+    want = set(tr.loc[k, "t"].unique()); have = set(seg["cells"]["t"])
+    DROPPED.append((T.strftime("%H:%M:%S"), len(want - have)))
     return seg["tier"], {(m["kind"], m["time"], m["price"]): m for m in (seg["marks"] or [])}
 
 def pct(x):
@@ -94,6 +100,9 @@ print(f"marks shown live that are not in the final set: {len(shown_not_final)}")
 for k, ts in list(shown_not_final.items())[:10]:
     print("   ", k[0], dt.datetime.fromtimestamp(k[1], U).strftime("%H:%M"), k[2], "shown", len(ts), "polls from",
           dt.datetime.fromtimestamp(ts[0], U).strftime("%H:%M:%S"))
+DROPPED[:] = DROPPED[1:]   # drop the T_final poll
+bad = [d for d in DROPPED if d[1]]
+print(f"polls missing a closed minute with trades: {len(bad)} of {len(DROPPED)}" + (f" (first {bad[:5]})" if bad else ""))
 for tier, ts in tier_polls.items():
     print(f"tier {tier}: {len(ts)} polls, first {ts[0]}, last {ts[-1]}")
 conf_shown_not_final = [k for k in first_conf if k not in final]
