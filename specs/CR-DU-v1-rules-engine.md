@@ -585,3 +585,32 @@ rested a limit at the edge; the engine reads at that minute).
 
 Rulings re-check: A3 / A20 honoured (the entry is a limit at the edge after the read, never a touch-bar close). No other
 row changes.
+
+### Results at v1.2 (frozen; tag `cr-du-engine-v1.2`; train, in-sample; set-2 per-trade rows and monthly splits withheld)
+
+| Variant | Sessions | Trades | / day | Win % | Net gross | Net after 0.25 / RT | Avg win | Avg loss | Max DD | Losing streak |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **primary** | all | 102 | 1.19 | 50.0 | +3.25 | −22.25 | 9.68 | −9.61 | 83.5 | 5 |
+| primary | without set-2 | 34 | 1.13 | 41.2 | −57.0 | −65.5 | 9.46 | −9.47 | 125.25 | 5 |
+| p80 lean | all | 90 | 1.05 | 48.9 | −23.25 | −45.75 | 9.62 | −9.71 | 85.0 | 6 |
+| p80 lean | without set-2 | 28 | 0.93 | 32.1 | −103.5 | −110.5 | 9.17 | −9.79 | 142.0 | 9 |
+| wick + 2 stop | all | 113 | 1.31 | 23.9 | −112.5 | −140.75 | 9.86 | −4.40 | 170.0 | 15 |
+| wick + 2 stop | without set-2 | 34 | 1.13 | 20.6 | −51.5 | −60.0 | 10.0 | −4.50 | 91.0 | 13 |
+| D4 fill (1 pt inside) | all | 112 | 1.30 | 51.8 | +45.75 | +17.75 | 9.66 | −9.53 | 72.0 | 4 |
+| D4 fill (1 pt inside) | without set-2 | 36 | 1.20 | 44.4 | −40.0 | −49.0 | 9.47 | −9.57 | 99.0 | 5 |
+| box min 10 | all | 98 | 1.14 | 48.0 | −36.75 | −61.25 | 9.65 | −9.61 | 112.75 | 6 |
+| box min 10 | without set-2 | 32 | 1.07 | 37.5 | −77.0 | −85.0 | 9.38 | −9.47 | 135.0 | 5 |
+
+Primary exits (all): target 48, stop 48, flatten 6. Non-set-2 splits: long 9 (66.7 %, +27.75 net), short 25 (32.0 %,
+−93.25); by hour 08:00 9 (56 %, +7.75), 09:00 7 (71 %, +28.25), 10:00 9 (33 %, −32.25), 07:00 / 11:00 / 12:00 negative;
+by month Feb 12 (42 %), Mar 10 (40 %), Apr 3 (0 %), May 9 (56 %). MFE p50 7.4; stop-free ±10 race of the same entries
+13 / 18 / 3. Contradiction bars: all four rows inconclusive (9 trades with a primary bar). CR-CZ overlap at the decision
+minute: takes 1 same side / 30 NO ACTION (13 warm-up); skips 3 same side, 2 other side, 53 NO ACTION (17 warm-up).
+
+D1 (b) at v1.2 (engine's own box): takes 31 — fires 1 (card side); first failed: no read 12 (all "nothing notable"),
+one per box 5, no larger move 5, cutoff 2, FOMC 2, conflict 2, re-entry wait 1, box forming 1. Skips 57 — fires 5 (3
+card side); no read 34, cutoff 4, no larger move 4, conflict 4, one per box 3, other 3. Anchored at the card's range
+start (c): takes fire 8 (7 card side), skips 5 (3).
+
+Item 5 at v1.2 (`setup_engine_verdicts`, run `a5d15389`, counts only): set 2 — SHORT 1 · LONG 6 · NO ACTION 108 (27
+warm-up, not evaluated). The v1.0 rows stay alongside (engine_version is part of the key).
