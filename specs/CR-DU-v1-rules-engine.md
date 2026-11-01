@@ -477,3 +477,17 @@ Caveat: CR-CP called each card side from the box delta share, so 2(b) and 3 poin
 | take | 2 pts (box break threshold) | 6 / 31 | 0.38 | 6 | 6 / 2 |
 | skip | 1 tick (D2.5 first run) | 2 / 58 | 0.62 | 10 | 3 / 0 |
 | skip | 2 pts (box break threshold) | 6 / 58 | 0.75 | 15 | 5 / 2 |
+
+## Amendment 3 — Ryan, chat 2026-10-31
+
+- **Rules 7 / 8 lean cut = Δ share ≥ p70 on the card's side** (was p80), measured over the box as now. p80 becomes a
+  sensitivity row. Basis: D2's takes-vs-skips Δ share distributions (takes median ≈ p72 over the engine's and the
+  card's box, skips ≈ p49 / p57), not P&L. Only the lean leg changes: the effort leg (c/pt) and the panel's percentile
+  tiers stay at p80.
+- Backtest rerun once: **primary = p70 lean + fixed 10-pt stop** (Amendment 2). Sensitivity rows: p80 lean; wick + 2
+  stop; D4 fill; box min 10. (The earlier no-cutoff / no-loss-cap rows are not rerun.) Set-2 withholding unchanged.
+- Engine version v1.0 → **v1.1** (lean p70, fixed-10 stop). `setup_engine_verdicts` holds v1.0 rows for set 2; a v1.1 run
+  is not part of this amendment.
+
+Rulings re-check: B2 — a threshold chosen from the learning set's label distributions, disclosed here, not from
+outcomes; the train backtest stays "in-sample" and the holdout run will be pre-registered. No other row changes.
