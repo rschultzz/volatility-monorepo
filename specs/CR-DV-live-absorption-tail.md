@@ -225,3 +225,56 @@ Amend the spec and session note first, re-check the rulings table (C1 colours: h
 | C2 (off by default) | honoured | Flow v3 layers stay off by default; approved visible change limited to hollow marks + stall text |
 
 Revoked / superseded R1–R7: none used.
+
+## Smoke (2026-10-31, weekend: 2026-10-30 replayed)
+
+### Replay at a 15 s cadence (`scripts/cr_dv_step0/replay_live.py`, the real `flow_v3._build` with every read cut to the poll)
+
+1,580 polls 13:30:15 → 20:05 UTC; trades by `received_at`, `es_flow_price_1m` by CR-DD-live run completion, 1-s flow
+by time. The full session has 5 marks (14:05, 15:20, 15:43, 17:51, 18:16 UTC).
+
+| | before (`origin/main`) | after items 1–3 | after item 4 |
+|---|---|---|---|
+| final marks first drawn **before** their hold ended | **5 / 5** (median 195 s early, i.e. while the cell's own minute was forming) | 0 / 5 | 0 / 5 |
+| marks drawn as confirmed that are not marks on the full session | **19** (1–5 polls each) | **0** | **0** |
+| provisional candidates removed (broken before their hold ended) | — | 10 (3–4 polls each) | 10 (3–7 polls each) |
+| minute close → provisional mark (median / p95) | — | **15 s / 15 s** | **15 s / 15 s** |
+| minute close → confirmed mark (median / p95) | ≈ −15 s (shown at once, then repainted) | **195 s / 195 s** (= M 3 min hold + 15 s) | **195 s / 195 s** |
+| hold end → confirmed mark | ≈ −195 s | **15 s / 15 s** (one poll) | **15 s / 15 s** |
+| polls on the `price_1m` tier | 59 (18:30:45 → 20:05) | 59 | 13, all from 20:02:00 (session complete: DC17 order, expected); 0 during RTH |
+
+The 15 s figures are the poll cadence: each mark shows on the first poll after its minute closes (3 s grace, DV1).
+The two 19:59 candidates stay provisional until the session is complete (20:02) and then drop: their hold window would
+end after 13:00 PT, and the unchanged CR-DC rule never confirms those (confirm ≤ segment end).
+Logs: `scripts/logs/cr-dv/replay_before_15s.txt`, `replay_after_15s.txt`, `replay_after2_15s.txt` (+ `*_detail.json`).
+
+**Correction to Step 0 Q2.** `q2b_tier.py` said the live endpoint never picks `price_1m`. The replay of the real code
+shows **59 polls from 18:30:45** (late in RTH the stored minutes reach 99 % of the flow minutes). On those polls the
+newest 3–8 closed minutes were missing, so "closed minutes served within ~15 s" (amendment item 4) did not hold.
+**Item 4 fix** (`5641805`): a live Ironbeam segment reads `ironbeam_es_trades` whenever trades cover it; complete
+sessions keep DC17's order (es_flow_price_1m first). None of the 5 final marks fell after 18:30, so the before / after
+mark lags above weren't affected by this.
+
+### Browser check (smoke backend `scripts/cr_dv_smoke_backend.py` on :8068, simulated now on 2026-10-30)
+
+The backend's `/__crdv/sim?now=…` route makes the cells endpoint answer as if now were that moment (same read cuts as
+the replay; `stall_from` injects a gap). Frontend: a `vite build` of this branch served by the same backend (the
+folder already had 5 dev servers from other chats). Run before the item-4 fix; all checked moments are 15:3x–15:5x UTC
+on the trades tier either way.
+
+- **Hollow → solid:** buyers 7631.75 at 15:43 UTC (08:43 PT) is drawn outlined at 15:44:15 with tooltip
+  "Buyers absorbed · 7631.75 · provisional / provisional — hold window ends 08:47"; at 15:47:15 it is solid and the
+  tooltip has no "provisional". Canvas pixels at the mark: 14 slate pixels in the centre (outline) vs 66 for a solid mark.
+- **Hollow → removed:** buyers 7628.25 at 15:46 is outlined at 15:47:15 ("hold window ends 08:50") and gone at 15:48:15
+  (before the change it showed as a confirmed mark on 5 polls).
+- **The 15:39 case:** sellers 7633.50 is absent at 15:40:00, outlined at 15:40:15 and 15:40:45 ("hold window ends
+  08:43"), gone at 15:41:15. It is never drawn solid (before: solid from the 15:40:00 poll).
+- **Stall text:** `stall_from` 15:30:00, now 15:35:15, Edges on, anchor = session open: the current box's Absorption row
+  reads "sellers absorbed 7640.00 (08:20) at the bottom · flow feed stalled since 08:29 PT" (08:29 = the last trade
+  before the gap); frozen boxes' rows unchanged. Same moment without the gap: "none at the box". No console errors.
+- Servers stopped afterwards (`preview_stop`; :8068 free).
+
+### Suites
+
+Python: `test_flow_heat` 24 / 24, Ironbeam suite 108 / 108 (incl. `test_flow_cells` 21 / 21), shared `test_flow*`
+56 / 56. JS unit 111 / 111.

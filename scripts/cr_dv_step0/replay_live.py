@@ -6,7 +6,8 @@ Each poll at T calls the real flow_v3._build(now_utc=T) with every DB read cut t
   flow 1-s   : ironbeam_es_flow_1s rows with ts_utc < T - 2 s (the worker's max lateness)
   bar closes : ironbeam_es_1m_bars minutes closed by T
 Reports each final mark's first appearance vs its confirm time, and marks shown that are not final.
-Usage: replay_live.py [step_s]
+Smoke (after the CR-DV change): also minute close -> first provisional / first confirmed, per final mark, and the
+polls that picked each tier. Usage: replay_live.py [step_s] [label]
 """
 import json, sys, time, datetime as dt
 from pathlib import Path
@@ -20,6 +21,7 @@ from modules.Ironbeam import flow_v2, flow_v3
 from packages.shared import flow_heat as fh
 
 STEP = int(sys.argv[1]) if len(sys.argv) > 1 else 15
+LABEL = sys.argv[2] if len(sys.argv) > 2 else "before"
 U = dt.timezone.utc; SYM = "XCME:ES.Z26"
 A, B = dt.datetime(2026,10,30,13,30,tzinfo=U), dt.datetime(2026,10,30,20,0,tzinfo=U)
 engine = create_engine(os.environ["DATABASE_URL"], pool_size=2, max_overflow=0,
@@ -63,14 +65,21 @@ def poll(T):
     seg = next(s for s in pl["segments"] if s["name"] == "rth")
     return seg["tier"], {(m["kind"], m["time"], m["price"]): m for m in (seg["marks"] or [])}
 
+def pct(x):
+    return "n/a" if not x else (f"median {np.median(x):.0f}, p95 {np.percentile(x,95):.0f}, min {min(x):.0f}, max {max(x):.0f} (n {len(x)})")
+
 T_final = dt.datetime(2026,10,31,0,0,tzinfo=U)
 _, final = poll(T_final)
 print("final marks:", len(final), flush=True)
 first, shown_not_final, tiers, t0 = {}, {}, {}, time.time()
+first_prov, first_conf, tier_polls = {}, {}, {}
 T = A + dt.timedelta(seconds=STEP)
 while T <= B + dt.timedelta(minutes=5):
     tier, mk = poll(T)
     tiers[tier] = tiers.get(tier, 0) + 1
+    tier_polls.setdefault(tier, []).append(T.strftime("%H:%M:%S"))
+    for k, m in mk.items():
+        (first_prov if m.get("provisional") else first_conf).setdefault(k, T.timestamp())
     for k in mk:
         first.setdefault(k, T.timestamp())
         if k not in final: shown_not_final.setdefault(k, []).append(T.timestamp())
@@ -85,5 +94,21 @@ print(f"marks shown live that are not in the final set: {len(shown_not_final)}")
 for k, ts in list(shown_not_final.items())[:10]:
     print("   ", k[0], dt.datetime.fromtimestamp(k[1], U).strftime("%H:%M"), k[2], "shown", len(ts), "polls from",
           dt.datetime.fromtimestamp(ts[0], U).strftime("%H:%M:%S"))
+for tier, ts in tier_polls.items():
+    print(f"tier {tier}: {len(ts)} polls, first {ts[0]}, last {ts[-1]}")
+conf_shown_not_final = [k for k in first_conf if k not in final]
+print(f"confirmed marks shown that are not final marks: {len(conf_shown_not_final)}; provisional-only candidates "
+      f"never confirmed: {len([k for k in first_prov if k not in final])}")
+close_to_prov = [first_prov[k] - (final[k]["time"] + 60) for k in final if k in first_prov]
+close_to_conf = [first_conf[k] - (final[k]["time"] + 60) for k in final if k in first_conf]
+hold_to_conf = [first_conf[k] - final[k]["confirm_time"] for k in final if k in first_conf]
+print("minute close -> first provisional s:", pct(close_to_prov))
+print("minute close -> first confirmed s:  ", pct(close_to_conf))
+print("hold end (confirm_time) -> first confirmed s:", pct(hold_to_conf))
+early_conf = [k for k in final if k in first_conf and first_conf[k] < final[k]["confirm_time"]]
+print(f"final marks confirmed BEFORE their hold ended: {len(early_conf)}")
+json.dump({"close_to_prov": close_to_prov, "close_to_conf": close_to_conf, "hold_to_conf": hold_to_conf,
+           "early_conf": len(early_conf), "conf_not_final": len(conf_shown_not_final), "tier_polls": tier_polls},
+          open(ROOT / f"scripts/logs/cr-dv/replay_{LABEL}_detail.json", "w"))
 json.dump({"lag": lag, "final": len(final), "early": len(early), "phantom": len(shown_not_final), "tiers": tiers},
-          open(ROOT / "scripts/logs/cr-dv/replay_before.json", "w"))
+          open(ROOT / f"scripts/logs/cr-dv/replay_{LABEL}.json", "w"))
