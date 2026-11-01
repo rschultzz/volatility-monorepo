@@ -150,3 +150,44 @@ a labelled readout.
 refute a real pin. Proposed: compare (b) with its move-swap null fraction, not 50 %, and keep 50 % as a readout.
 
 STOP: B4 window, placement, null (c) and the (b) bar need Ryan's approval before any 2024 / 2025 read or outcome.
+
+---
+
+## Amendment 1 — Ryan's rulings on Step 0 (chat, 2026-10-31), frozen before any outcome read
+
+Rulings (verbatim):
+
+```
+- Window: 2026 train only (2026-01-02 → 06-05). R-a and R-b are not read. If the primary passes, R-a confirmation is a separate pre-registered CR.
+- Placement: the chart's set in SPX cash (CR-BU placement) is primary; strike space is a labelled readout.
+- Null: (c) move swap is primary; (a) is a labelled readout, with its 23% false-pin rate stated next to it.
+- (b): compare with its move-swap value; 50% is a readout only.
+- Band: pre-open (bars up to 06:30 PT).
+Run the primary test and the secondaries as pre-declared, then the results tables, the session note and the PR.
+```
+
+Definitions as amended (replace D1, D5, D7, D8, D9 where they differ):
+
+- **D1′ Universe:** the 97 Step-0 days, 2026-01-02 → 2026-06-05. FOMC decision days (01-28, 03-18, 04-29) are
+  dropped from the primary and the secondary and reported as their own cell (A22).
+- **D5′ Large level:** CR-BU placement, L = strike × S0 / F_e (S0 = `stock_price` of the nearest live expiry,
+  F_e = the row's `stock_price`), rounded to 1 pt; then the chart rule (gross ≥ 40 $bn, 5-pt spacing, |net| ≥ p95 of the
+  drawn lines). The band is the ES bars from prior 15:00 PT up to 06:30 PT, ± 150, moved to cash by the ES(15:45 ET) − S0
+  basis. Strike-space key = labelled readout.
+- **D7′ Primary:** on condition days, M = median over days of |settle − nearest large level| / IM. Null (c): for each
+  day d, settle* = open_d + IM_d × z, z drawn with replacement from the condition days' own (settle − open) / IM; 10,000
+  draws; one-sided p = (#{M* ≤ M} + 1) / 10,001. Effect size = M − median(M*) (IM units), and in SPX pts the same
+  using |settle − nearest| in pts. Seed 20261031.
+- **D8′ Secondary:** (b) fraction F of days with |settle − nearest| < |open − nearest|, 90 % Wilson CI, compared with
+  its move-swap distribution F* (one-sided p = #{F* ≥ F}); 50 % as a readout. The same primary and (b) on
+  non-condition days (those with ≥ 1 large level; the move pool is the non-condition days' own). The by-year split
+  is n/a (2026 only). Readouts: null (a) (uniform shift ± IM; **false-pin rate 23 % under no pin, Step 0**);
+  strike-space placement; A8 yellow-only vs darkest-only condition days; FOMC cell. Report-only: SPX cash RTH range
+  (06:33–13:00 prints) / IM, condition vs other.
+- **D9′ Verdict (B1)**, primary only. Day-bootstrap 90 % CI of the effect in IM units (2,000 resamples of days; the
+  move pool and the null are recomputed on each resample with 1,000 draws). **Pass**: p < 0.05 and the CI upper bound < 0.
+  **Refuted**: CI lower bound ≥ 0 (no pin inside the CI). **Inconclusive** otherwise.
+
+Rulings re-check: **B4 is now honoured** (2026 train only; R-a, R-b, holdout and forward log are not read). **A12 is
+honoured** (the chart's yellow / darkest population, corrected placement in SPX cash; strike space is a readout). A22 honoured
+(FOMC cell). The rest are unchanged from the freeze table.
