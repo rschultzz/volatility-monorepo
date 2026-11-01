@@ -137,7 +137,7 @@ function Verdict({ v, testid = 'flow-v3-box-verdict', stall = null }) {
 
 export default function BoxPanel({
   panel, place, panelRef, maxHeight, dragged, onClose, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp,
-  onHeaderDoubleClick, rules = BOX_RULES_DEFAULTS, verdict = null, feedStall = null, onRestart = null,
+  onHeaderDoubleClick, rules = BOX_RULES_DEFAULTS, verdict = null, feedStall = null, onRestart = null, armed = false,
 }) {
   const [open, setOpen] = useState({}) // section key -> expanded
   const toggle = (k) => setOpen((o) => ({ ...o, [k]: !o[k] }))
@@ -147,7 +147,9 @@ export default function BoxPanel({
       data-testid="flow-v3-box-popup"
       data-dragged={dragged ? '1' : '0'}
       data-history-ms={panel.historyMs ?? ''}
+      data-armed={armed ? '1' : '0'}
       style={{
+        pointerEvents: armed ? 'none' : undefined, // CR-DY goal 6a: while a pick is armed a click goes through to the bar under the panel
         position: 'absolute', left: place?.left ?? 0, top: place?.top ?? 0, visibility: place ? 'visible' : 'hidden',
         zIndex: 5, background: TAG_BG(0.92), border: `1px solid rgba(${MAGENTA},0.35)`, borderRadius: 4,
         fontSize: '11px', fontFamily: 'sans-serif', color: TEXT, lineHeight: 1.6, maxWidth: 460, minWidth: 220,
@@ -165,13 +167,13 @@ export default function BoxPanel({
         style={{ cursor: 'move', userSelect: 'none', touchAction: 'none', padding: '2px 20px 2px 8px', color: MUTED,
           borderBottom: `1px solid rgba(${MAGENTA},0.2)`, flex: '0 0 auto' }}
       >
-        Boxes · visual aid — untested
+        <span data-testid="flow-v3-box-panel-title" style={{ color: TEXT, fontWeight: 600 }}>{panel.title}</span> · visual aid — untested
         <button
           type="button"
           data-popup-close="1"
           data-testid="flow-v3-box-popup-close"
-          aria-label="Hide box stats until the next anchor"
-          title="Hide until the next anchor"
+          aria-label="Clear the selection"
+          title="Clear the selection (click a box to read it again)"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={onClose}
           style={{ position: 'absolute', top: 2, right: 3, width: 14, height: 14, padding: 0, border: 'none', background: 'transparent', color: MUTED, cursor: 'pointer', fontSize: '12px', lineHeight: '14px' }}
@@ -191,6 +193,7 @@ export default function BoxPanel({
                 ? { marginTop: 4, padding: '3px 6px', border: `1px solid rgba(${MAGENTA},0.8)`, borderRadius: 3 }
                 : { marginTop: 2, padding: '0 6px', color: '#cbd5e1' }}
             >
+              {s.current && panel.tradeText && <div data-testid="flow-v3-box-trade" style={{ color: TEXT, marginBottom: 2 }}>{panel.tradeText}</div>}
               {s.current && verdict && <Verdict v={verdict} stall={feedStall} />}
               {s.current && <History s={s} />}
               <div

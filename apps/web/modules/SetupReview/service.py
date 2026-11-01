@@ -198,7 +198,7 @@ class ReviewError(ValueError):
 _ANCHOR_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?")
 
 
-def _review_num(body: dict, key: str):
+def _review_num(body: dict, key: str, hi: float = 1000):
     v = body.get(key)
     if v is None or v == "":
         return None
@@ -206,7 +206,7 @@ def _review_num(body: dict, key: str):
         x = float(v)
     except (TypeError, ValueError):
         raise ReviewError(f"{key} must be a number") from None
-    if not 0 <= x <= 1000:
+    if not 0 <= x <= hi:
         raise ReviewError(f"{key} out of range")
     return x
 
@@ -238,6 +238,12 @@ def add_review(conn, candidate_id: str, body: dict) -> dict:
         raise ReviewError("anchor_ts must be YYYY-MM-DDTHH:MM[:SS] (PT)")
     box_min_age_min = _review_num(body, "box_min_age_min")
     box_min_height_pts = _review_num(body, "box_min_height_pts")
+    # CR-DY goal 7: the drawn box's end (naive PT minute), top and bottom; anchor_ts is its start; NULL without a box
+    box_end_ts = str(body.get("box_end_ts") or "").strip() or None
+    if box_end_ts is not None and not _ANCHOR_RE.fullmatch(box_end_ts):
+        raise ReviewError("box_end_ts must be YYYY-MM-DDTHH:MM[:SS] (PT)")
+    box_top = _review_num(body, "box_top", hi=100000)  # ES price, not a setting
+    box_bottom = _review_num(body, "box_bottom", hi=100000)
 
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
@@ -265,11 +271,13 @@ def add_review(conn, candidate_id: str, body: dict) -> dict:
                 raise ReviewError(f"label must be one of {LABELS}")
         cur.execute(
             "INSERT INTO setup_reviews (candidate_id, label, reasons, comment, post_reveal, "
-            "anchor_ts, box_min_age_min, box_min_height_pts) "
-            "VALUES (%s, %s, %s, %s, %s, %s::timestamp AT TIME ZONE 'America/Los_Angeles', %s, %s) "
+            "anchor_ts, box_min_age_min, box_min_height_pts, box_end_ts, box_top, box_bottom) "
+            "VALUES (%s, %s, %s, %s, %s, %s::timestamp AT TIME ZONE 'America/Los_Angeles', %s, %s, "
+            "%s::timestamp AT TIME ZONE 'America/Los_Angeles', %s, %s) "
             "RETURNING id, label, reasons, comment, reviewed_at, revealed_at, post_reveal, "
-            "anchor_ts, box_min_age_min, box_min_height_pts",
-            (candidate_id, label, reasons, comment, revealed, anchor_ts, box_min_age_min, box_min_height_pts),
+            "anchor_ts, box_min_age_min, box_min_height_pts, box_end_ts, box_top, box_bottom",
+            (candidate_id, label, reasons, comment, revealed, anchor_ts, box_min_age_min, box_min_height_pts,
+             box_end_ts, box_top, box_bottom),
         )
         return _clean(dict(cur.fetchone()))
 

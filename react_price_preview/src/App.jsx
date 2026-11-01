@@ -3,6 +3,8 @@ import PriceChart from './components/PriceChart'
 import { DEFAULT_MARKER_SETTINGS, alignV2ToCandles, effortChartMarkers } from './flowShared'
 import AggressorFlowV3Panel from './components/AggressorFlowV3Panel'
 import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, migrateBoxRules, LIVE_EFFORT_ID, boxRules, boxSegments, edgeReadout, edgeStripDrawn, endFromPick, flattenBars, liveEffortLabel, makeShifter, rollingExtraHeight, rowCloses, segmentReadouts } from './flowV3'
+import { V1_DEFAULTS } from './v1Engine'
+import { drawnBoxOf, reviewBoxRecord } from './selectableBoxes'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import TradeReviewPanel from './components/TradeReviewPanel'
 import boxBaseline from './data/boxBaseline.json'
@@ -486,6 +488,12 @@ export default function App() {
   // CR-DN item 7: the price chart's right price axis width (px); the Flow v3 pane pins its axis to it.
   const [priceAxisWidth, setPriceAxisWidth] = useState(null)
   const [flowEndArmed, setFlowEndArmed] = useState(false)
+  // CR-DY: a "draw box" in progress (start, then end) and the selected box: null, { kind: 'drawn' } or { kind: 'engine', id,
+  // k, fromT, toT } (UTC). An engine selection replaces the window the panel, read history and delta line read.
+  const [flowDrawing, setFlowDrawing] = useState(false)
+  const [flowBoxSel, setFlowBoxSel] = useState(null)
+  const flowDrawingRef = useRef(false)
+  flowDrawingRef.current = flowDrawing
   const flowEndPickRef = useRef({ anchor: null, last: null, step: 60 })
   const [flowCellsLoaded, setFlowCellsLoaded] = useState({ url: null, payload: null })
   const [flowCellsLoading, setFlowCellsLoading] = useState(false)
@@ -1124,10 +1132,16 @@ export default function App() {
       if (end == null) return
       setFlowEnd(end)
       setFlowEndArmed(false)
+      setFlowDrawing(false)
       return
     }
     setFlowAnchor(Number.isFinite(Number(t)) ? Number(t) : null)
     setFlowAnchorArmed(false)
+    // CR-DY: the start of a draw; the end pick follows (an old end goes with the old box)
+    if (flowDrawingRef.current) {
+      setFlowEnd(null)
+      setFlowEndArmed(true)
+    }
   }, [])
   // DC5: the anchor belongs to the selected session and view (CR-DN: and so does the end).
   useEffect(() => {
@@ -1135,12 +1149,18 @@ export default function App() {
     setFlowAnchorArmed(false)
     setFlowEnd(null)
     setFlowEndArmed(false)
+    setFlowDrawing(false)
+    setFlowBoxSel(null)
   }, [tradeDate, flowSession])
   // CR-DN item 1: clearing the anchor clears the end; a new anchor at or after the end drops it.
   useEffect(() => {
     if (flowAnchor == null) setFlowEndArmed(false)
     setFlowEnd((e) => (e != null && (flowAnchor == null || e <= flowAnchor) ? null : e))
   }, [flowAnchor])
+  // CR-DY: a new or moved drawn box is selected; removing it drops its selection.
+  useEffect(() => {
+    setFlowBoxSel((sel) => (flowAnchor != null ? { kind: 'drawn' } : sel?.kind === 'drawn' ? null : sel))
+  }, [flowAnchor, flowEnd])
 
   useEffect(() => {
     try {
@@ -1779,11 +1799,25 @@ export default function App() {
   // loads, the previous session's cells must not feed the levels or the edge readout (seen in the headed soak).
   const flowCells = flowCellsLoaded.url === flowCellsUrl ? flowCellsLoaded.payload : null
   const flowCellsBars = useMemo(() => (flowCells ? flattenBars(flowCells) : null), [flowCells])
-  const flowV3Edges = useMemo(() => {
+  // CR-DY: past session, between the draw's start and end clicks there is no box yet (live: it runs to now until the end).
+  const flowDrawnEdges = useMemo(() => {
     if (!flowV3Layers.edges || !flowCells || flowAnchor == null) return null
+    if (flowDrawing && flowEndArmed && !isLiveTradeDate) return null
     return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowEnd,
       flowV3Settings.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin, { qualifyMin: flowV3Rules.minAgeMin, qualifyPts: flowV3Rules.minHeightPts, manual: true })
-  }, [flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowEnd, flowV3Settings.breakHoldMin, flowV3Rules])
+  }, [flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowEnd, flowV3Settings.breakHoldMin, flowV3Rules, flowDrawing, flowEndArmed, isLiveTradeDate])
+  // CR-DY: the selected engine box's window, with the engine's own box settings (its edges are the trade's, Step 0 Q1).
+  const flowEngineSel = flowBoxSel?.kind === 'engine' ? flowBoxSel : null
+  const flowEngineEdges = useMemo(() => {
+    if (!flowEngineSel || !flowCells) return null
+    return edgeReadout(flowCells, flowCellsBars, flowV3Shift(flowEngineSel.fromT), flowV3Shift, flowV3Shift(flowEngineSel.toT),
+      V1_DEFAULTS.breakHoldMin, { qualifyMin: V1_DEFAULTS.boxMin, qualifyPts: V1_DEFAULTS.minHeightPts, manual: true })
+  }, [flowEngineSel, flowCells, flowCellsBars, flowV3Shift])
+  const flowV3Edges = flowEngineEdges || flowDrawnEdges
+  const flowDrawnBox = useMemo(() => drawnBoxOf(flowDrawnEdges), [flowDrawnEdges])
+  useEffect(() => {
+    if (!v1TradesOn) setFlowBoxSel((sel) => (sel?.kind === 'engine' ? (flowAnchor != null ? { kind: 'drawn' } : null) : sel))
+  }, [v1TradesOn, flowAnchor])
 
   // CR-DN item 3: with Edges on and an anchor, each drawn box is a CVD segment. Spans come from the edge readout (cells
   // payload); the readouts run on the same aligned v2 rows the pane draws (alignV2ToCandles + anchorReadout), once here
@@ -1796,10 +1830,28 @@ export default function App() {
     const closes = rowCloses(rows, mergedBarsWithLiveTimeline, flowV3Shift)
     const readouts = segmentReadouts(rows, closes, seg.spans)
     // CR-DU amendment 7 item 4: the delta line keeps the spans before a "restart here" and resets at each with a tick
-    const prior = flowRestarts.anchor === flowAnchor ? flowRestarts.spans : []
+    const prior = !flowEngineEdges && flowRestarts.anchor === flowAnchor ? flowRestarts.spans : []
     const lineSpans = [...prior, ...seg.spans]
     return { ...seg, readouts, rows, closes, lineSpans, ticks: lineSpans.slice(1).map((s) => s.from) } // CR-DS item 4: rows / closes also feed the read-history replay
-  }, [flowV3Edges, flowV3Shift, flowV2PanePayloads, mergedBarsWithLiveTimeline, flowRestarts, flowAnchor])
+  }, [flowV3Edges, flowEngineEdges, flowV3Shift, flowV2PanePayloads, mergedBarsWithLiveTimeline, flowRestarts, flowAnchor])
+  // CR-DY: "draw box" arms the start (Edges on, so the box can draw); again cancels. Disarming the end mid-draw: past session
+  // cancels the draw, live keeps the box running to now.
+  const handleDrawToggle = useCallback(() => {
+    if (!flowDrawing) setFlowV3Layers((l) => (l.edges ? l : { ...l, edges: true }))
+    else if (flowEndArmed && !isLiveTradeDate) setFlowAnchor(null)
+    setFlowAnchorArmed(!flowDrawing)
+    setFlowEndArmed(false)
+    setFlowDrawing(!flowDrawing)
+  }, [flowDrawing, flowEndArmed, isLiveTradeDate])
+  const handleEndArmed = useCallback((v) => {
+    if (v) {
+      setFlowAnchorArmed(false)
+    } else if (flowDrawing && flowEndArmed) {
+      setFlowDrawing(false)
+      if (!isLiveTradeDate) setFlowAnchor(null)
+    }
+    setFlowEndArmed(v)
+  }, [flowDrawing, flowEndArmed, isLiveTradeDate])
   // CR-DU amendment 7: "restart here" on the box panel re-anchors at the break bar; a fresh pick drops the kept spans.
   const handleBoxRestart = useCallback((utc) => {
     const next = flowV3Shift(utc)
@@ -1825,12 +1877,15 @@ export default function App() {
       levels: flowV3Layers.levels,
       edges: flowV3Edges,
       bars: flowCellsBars, // CR-DS item 4: the payload's 1-minute bars (edgeReadout's) for the read-history replay
-      end: flowEnd, // CR-DS item 4: set end (shifted) or null
+      end: flowEngineEdges ? flowV3Shift(flowEngineSel.toT) : flowEnd, // CR-DS item 4: the panel's end (shifted) or null
+      drawnBox: flowDrawnBox, // CR-DY: the rectangle of your box, whichever box is selected
+      boxSel: flowBoxSel, // CR-DY: the selected box (no selection: no panel)
+      onBoxSelect: setFlowBoxSel,
+      running: !flowEngineEdges && flowEnd == null && isLiveTradeDate, // CR-DY: your box runs to now
       segments: flowV3Segments, // CR-DN item 3: per-box readouts for the box labels (drawnBoxes order)
       sellLayer: flowV3Settings.sellLayer,
       buyLayer: flowV3Settings.buyLayer,
       profileFrom: flowAnchor,
-      anchor: flowAnchor, // CR-DP item 4 / CR-DQ item 3: the box panel's × resets on a new anchor
       onBoxRestart: handleBoxRestart, // CR-DU amendment 7: the panel's "restart here"
       boxRules: flowV3Settings.boxRules, // CR-DQ items 5 / 7: percentile tiers and verdict rules (⚙)
       v1Inputs, // CR-DU: the v1 engine's inputs (box panel verdict, engine's trades)
@@ -1840,7 +1895,7 @@ export default function App() {
       // CR-DN item 1: the profile stops after the end's minute ([from, to) on cell minute starts); null without an end.
       profileTo: flowAnchor != null && flowEnd != null ? flowEnd + 60 : null,
     }
-  }, [handleBoxRestart, flowCellsNeeded, flowCells, flowCellsBars, flowEnd, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, v1Inputs, v1TradesOn, v1TradesBlocked, flowV3Settings.v1Alert, flowV3Settings.contraMarks, isLiveTradeDate, flowAnchor, flowEnd])
+  }, [handleBoxRestart, flowCellsNeeded, flowCells, flowCellsBars, flowEnd, flowV3Layers, flowV3Edges, flowEngineEdges, flowEngineSel, flowV3Shift, flowDrawnBox, flowBoxSel, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, v1Inputs, v1TradesOn, v1TradesBlocked, flowV3Settings.v1Alert, flowV3Settings.contraMarks, isLiveTradeDate, flowAnchor, flowEnd])
   // CR-DN item 1: the anchor → end window, shaded on the price chart (any layer); null without an end.
   const flowV3Window = useMemo(
     () => (flowAnchor != null && flowEnd != null ? { from: flowAnchor, to: flowEnd } : null),
@@ -2291,7 +2346,7 @@ export default function App() {
             onClose={closeReview}
             rightOffset={reviewRightOffset}
             // CR-DU amendment 7b: written with every review save (anchor null without one)
-            anchorRecord={{ anchor_ts: shiftedToPt(flowAnchor), box_min_age_min: flowV3Rules.minAgeMin, box_min_height_pts: flowV3Rules.minHeightPts }}
+            anchorRecord={{ ...reviewBoxRecord(flowAnchor, flowDrawnBox, flowV3Shift, shiftedToPt), box_min_age_min: flowV3Rules.minAgeMin, box_min_height_pts: flowV3Rules.minHeightPts }}
           />
         )}
         {error ? (
@@ -2443,11 +2498,18 @@ export default function App() {
                     anchor={flowAnchor}
                     onAnchorChange={setFlowAnchor}
                     anchorArmed={flowAnchorArmed}
-                    onAnchorArmedChange={(v) => { if (v) setFlowEndArmed(false); setFlowAnchorArmed(v) }}
+                    onAnchorArmedChange={(v) => { if (v) setFlowEndArmed(false); setFlowDrawing(false); setFlowAnchorArmed(v) }}
                     end={flowEnd}
                     onEndChange={setFlowEnd}
                     endArmed={flowEndArmed}
-                    onEndArmedChange={(v) => { if (v) setFlowAnchorArmed(false); setFlowEndArmed(v) }}
+                    onEndArmedChange={handleEndArmed}
+                    drawing={flowDrawing}
+                    onDrawToggle={handleDrawToggle}
+                    onDrawStart={handleAnchorPick}
+                    lineAnchor={flowEngineEdges ? flowV3Shift(flowEngineSel.fromT) : flowAnchor}
+                    lineEnd={flowEngineEdges ? flowV3Shift(flowEngineSel.toT) : flowEnd}
+                    boxSelected={Boolean(flowBoxSel)}
+                    onBoxSelectionClear={() => setFlowBoxSel(null)}
                     effortOn={flowEffort}
                     onEffortChange={setFlowEffort}
                     myTradesOn={myTradesOn}

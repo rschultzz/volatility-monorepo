@@ -194,7 +194,8 @@ CREATE TEMP TABLE setup_reviews (
     reasons text[] NOT NULL DEFAULT '{}', comment text,
     reviewed_at timestamptz NOT NULL DEFAULT clock_timestamp(), revealed_at timestamptz,
     post_reveal boolean NOT NULL DEFAULT false,
-    anchor_ts timestamptz, box_min_age_min numeric, box_min_height_pts numeric
+    anchor_ts timestamptz, box_min_age_min numeric, box_min_height_pts numeric,
+    box_end_ts timestamptz, box_top numeric, box_bottom numeric
 ) ON COMMIT DROP;
 CREATE TRIGGER setup_reviews_guard BEFORE UPDATE OR DELETE ON setup_reviews
     FOR EACH ROW EXECUTE FUNCTION public.setup_review_guard();
@@ -301,6 +302,18 @@ class TestAgainstDb(unittest.TestCase):
         r2 = self.client.post(f"{P}/candidates/{self.cid(2)}/review", json={"label": "skip"}).get_json()["review"]
         self.assertEqual((r2["anchor_ts"], r2["box_min_age_min"], r2["box_min_height_pts"]), (None, None, None))
         bad = self.client.post(f"{P}/candidates/{self.cid(3)}/review", json={"label": "skip", "anchor_ts": "08:31"})
+        self.assertEqual(bad.status_code, 400)
+
+    def test_cr_dy_drawn_box_fields(self):
+        # CR-DY goal 7: start, end (naive PT), top, bottom stored; a save without a box stays NULL; a bad end is refused
+        r = self.client.post(f"{P}/candidates/{self.cid(1)}/review", json={
+            "label": "take", "anchor_ts": "2026-10-30T07:34:00", "box_end_ts": "2026-10-30T07:49:00",
+            "box_top": 7654.25, "box_bottom": 7637.25}).get_json()["review"]
+        self.assertTrue(r["box_end_ts"].startswith("2026-10-30T14:49:00"), r["box_end_ts"])  # 07:49 PT in UTC
+        self.assertEqual((r["box_top"], r["box_bottom"]), (7654.25, 7637.25))
+        r2 = self.client.post(f"{P}/candidates/{self.cid(2)}/review", json={"label": "skip"}).get_json()["review"]
+        self.assertEqual((r2["box_end_ts"], r2["box_top"], r2["box_bottom"]), (None, None, None))
+        bad = self.client.post(f"{P}/candidates/{self.cid(3)}/review", json={"label": "skip", "box_end_ts": "07:49"})
         self.assertEqual(bad.status_code, 400)
 
     def test_cr_dk_chip_strings_stored_unchanged(self):
