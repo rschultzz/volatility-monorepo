@@ -41,7 +41,8 @@ _CACHE: dict[tuple, object] = {}
 _CACHE_LOCK = threading.Lock()
 _STATE: dict[str, tuple[float, object]] = {}
 
-BADGES = {"price_1m": "exact: es_flow_price_1m", "trades": "exact: trades", "seconds": "approximate: 1-s data"}
+BADGES = {"price_1m": "exact: es_flow_price_1m", "trades": "exact: trades", "seconds": "approximate: 1-s data",
+          "splice": "exact: es_flow_price_1m + trades"}
 
 
 # ------------------------------------------------------------------------------------------ DB reads
@@ -142,6 +143,33 @@ def _segment_cells(engine, tier, table, symbol, source, a, b, complete, now_utc)
     return c[c["t"] < flow_v2._epoch(b)].reset_index(drop=True)
 
 
+def _closed_epoch(now_utc: dt.datetime, b: dt.datetime) -> int:
+    """End of the last closed minute (CLOSE_GRACE_S after it ends), capped at the segment end b."""
+    return min(flow_v2._epoch(b), flow_v2._epoch(now_utc - dt.timedelta(seconds=CLOSE_GRACE_S)) // 60 * 60)
+
+
+def _splice_cells(engine, symbol: str, a: dt.datetime, b: dt.datetime, now_utc: dt.datetime) -> pd.DataFrame:
+    """CR-DV amendment 2 — a live Ironbeam segment: stored es_flow_price_1m minutes up to W (the end of its last stored
+    minute; the cron writes a minute whole, insert-only) + trades for every closed minute in [W, closed). Stored cells
+    are cached and only rows from the cached W on are re-read; the trades tail is read each poll."""
+    key = ("splice", symbol, a.isoformat())
+    hit = _CACHE.get(key)
+    w, stored = hit if hit is not None else (flow_v2._epoch(a), fh.cells_from_price_1m([], [], [], []))
+    r = fetch_price_1m(engine, symbol, "ironbeam", dt.datetime.fromtimestamp(w, flow_v2.UTC), b)
+    if len(r):
+        stored = pd.concat([stored, fh.cells_from_price_1m(r["t"], r["price"], r["buy"], r["sell"])], ignore_index=True)
+        w = int(r["t"].max()) + 60
+    with _CACHE_LOCK:
+        _CACHE[key] = (w, stored)
+    closed = _closed_epoch(now_utc, b)
+    parts = [stored[stored["t"] < closed]]
+    if closed > w:
+        t = fetch_trade_cells(engine, symbol, dt.datetime.fromtimestamp(w, flow_v2.UTC),
+                              dt.datetime.fromtimestamp(closed, flow_v2.UTC))
+        parts.append(fh.cells_from_trades(t["t"], t["price"], t["size"], t["side"]))
+    return pd.concat(parts, ignore_index=True).reset_index(drop=True)
+
+
 def _trades_cover(engine, symbol: str, a: dt.datetime) -> bool:
     oldest = _cached(f"trades_oldest:{symbol}", TRADES_OLDEST_TTL_S, lambda: _trades_oldest(engine, symbol))
     return oldest is not None and oldest <= a
@@ -151,10 +179,11 @@ def choose_tier(engine, *, source: str, symbol: str, a: dt.datetime, b: dt.datet
                 live: bool = False) -> str:
     """DC17 order: es_flow_price_1m if it covers the segment, then trades (Ironbeam only), then 1-s.
 
-    CR-DV: a live Ironbeam segment reads trades whenever they cover it — the stored table trails by 3-8 min, and late
-    in RTH its 99 % coverage test can pass, which would drop the newest closed minutes (2026-10-30: 59 polls)."""
+    CR-DV amendment 2: a live Ironbeam segment with trades retained is the `splice` (stored minutes + trades after them),
+    with no coverage test — the stored table trails by 3-8 min, and late in RTH its 99 % test could pass while the
+    newest closed minutes were missing (2026-10-30: 59 polls)."""
     if live and source == "ironbeam" and _trades_cover(engine, symbol, a):
-        return "trades"
+        return "splice"
     if _cached("price_1m_exists", TABLE_RECHECK_S, lambda: _exists_price_1m(engine)):
         have = minutes.index[minutes["vol"] > 0] if minutes is not None and len(minutes) else []
         if len(have):
@@ -248,7 +277,8 @@ def _build(engine, trade_date, *, session, until_pt, params, session_date, sessi
             notes.append(f"No {name.upper()} flow rows for this session.")
             continue
         tier = choose_tier(engine, source=source, symbol=sym, a=a, b=b, minutes=m, live=not complete)
-        cells = _segment_cells(engine, tier, table, sym, source, a, b, complete, now_utc)
+        cells = _splice_cells(engine, sym, a, b, now_utc) if tier == "splice" else \
+            _segment_cells(engine, tier, table, sym, source, a, b, complete, now_utc)
         seg = {"name": name, "source": source, "symbol": sym, "tier": tier, "exact": tier != "seconds",
                "badge": BADGES[tier], "start": flow_v2._epoch(a), "end": flow_v2._epoch(b),
                "cells": {"t": cells["t"].astype(int).tolist(), "p": cells["p"].astype(int).tolist(),
@@ -261,8 +291,7 @@ def _build(engine, trade_date, *, session, until_pt, params, session_date, sessi
             else:
                 mark_end, live = seg["end"], not complete
                 if live:   # CR-DV: closed minutes only; candidates inside their hold window are provisional
-                    closed = flow_v2._epoch(now_utc - dt.timedelta(seconds=CLOSE_GRACE_S)) // 60 * 60
-                    mark_end = max(seg["start"], min(seg["end"], closed))
+                    mark_end = max(seg["start"], _closed_epoch(now_utc, b))
                 seg["marks"] = _marks_json(fh.absorption_marks(cells, m[["h", "l"]], seg["start"], mark_end, params,
                                                                provisional=live))
             if not complete and source == "ironbeam" and a <= now_utc < b:

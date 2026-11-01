@@ -197,25 +197,76 @@ class TestParamsAndCache(_Base):
 
 
 class TestLiveSegment(_Base):
-    """CR-DV: a live RTH segment (2026-10-27 FULL view replayed with now inside RTH): marks on closed minutes only, provisional
-    candidates, and the feed-stall flag (> 60 s without a trade)."""
+    """CR-DV: a live session (2026-10-27 FULL view replayed with now inside RTH): marks on closed minutes only, provisional
+    candidates, the feed-stall flag (> 60 s without a trade) and the amendment-2 splice (stored es_flow_price_1m minutes up
+    to its last written minute + trades for the closed minutes after it), with incremental reads. Reads on ranges the
+    fixture never recorded are served by slicing its recorded whole-window results."""
     NOW = dt.datetime(2026, 10, 27, 17, 0, 20, tzinfo=UTC)
 
-    def build(self, now, last):
-        last_calls = []
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        rec = cls.store["calls"]
+        pick = lambda name: [v for k, v in rec.items() if k[0] == name]
+        cls.trades = pd.concat(pick("fetch_trade_cells"), ignore_index=True).drop_duplicates()
+        cls.flow_rows = {}
+        for k, v in rec.items():
+            if k[0] == "fetch_flow_minutes":
+                cls.flow_rows.setdefault(k[1].split(",")[0], []).append(v)
+        cls.flow_rows = {t: pd.concat(v, ignore_index=True).drop_duplicates(subset=["symbol", "t"]) for t, v in cls.flow_rows.items()}
+        cls.bar_closes = {}
+        for v in pick("fetch_bar_closes"):
+            cls.bar_closes.update(v)
 
-        def trades_last(symbol):
-            last_calls.append(symbol)
-            return last
+    def trade_cells(self, symbol, a, b):
+        t = self.trades
+        return t[(t["t"] >= a.timestamp()) & (t["t"] < b.timestamp())].reset_index(drop=True)
 
-        with cf.replay(self.store, {"_trades_last": trades_last}):
+    def stored_rows(self, until):
+        """es_flow_price_1m as the cron would have written it: every minute < `until` (epoch), from the trades."""
+        def fetch(symbol, source, a, b):
+            t = self.trade_cells(symbol, a, b)
+            t = t[t["t"] < until]
+            g = t.assign(price=(t["price"] * 4) // 1 / 4,
+                         buy=t["size"].where(t["side"] == "BUY", 0.0), sell=t["size"].where(t["side"] == "SELL", 0.0))
+            return g.groupby(["t", "price"], as_index=False)[["buy", "sell"]].sum()
+        return fetch
+
+    def overrides(self, last, stored_until, reads=None):
+        def log(name, fn):
+            def w(*a, **k):
+                if reads is not None:
+                    reads.append((name,) + a)
+                return fn(*a, **k)
+            return w
+
+        def flow(table, ranges, now_utc=None):
+            rows = next(v for k, v in self.flow_rows.items() if repr(table) in k)
+            keep = pd.Series(False, index=rows.index)
+            for a, b in ranges:
+                keep |= (rows["t"] >= a.timestamp()) & (rows["t"] < b.timestamp())
+            return rows[keep].reset_index(drop=True)
+
+        return {"_trades_last": log("_trades_last", lambda s: last),
+                "fetch_price_1m": log("fetch_price_1m", self.stored_rows(stored_until)),
+                "fetch_trade_cells": log("fetch_trade_cells", self.trade_cells),
+                "fetch_flow_minutes": log("fetch_flow_minutes", flow),
+                "fetch_bar_closes": log("fetch_bar_closes", lambda a, b: {t: c for t, c in self.bar_closes.items()
+                                                                         if a.timestamp() <= t < b.timestamp()})}
+
+    def build(self, now, last, stored_until=None, reads=None, keep_cache=False):
+        o = self.overrides(last, stored_until if stored_until is not None else int(now.timestamp()) // 60 * 60 - 300, reads)
+        with cf.replay(self.store, o):
+            if keep_cache:
+                self.v3._CACHE.update(self._saved)
             p, status = self.v3._build(None, "2026-10-27", session="FULL", until_pt=None, params=self.v3.fh.AbsorbParams(),
                                        session_date=dt.date(2026, 10, 27), session_note=None, now_utc=now)
+            self._saved = dict(self.v3._CACHE)
         self.assertEqual(status, 200)
-        return self.seg(p, "rth"), last_calls
+        return p
 
     def test_live_marks_closed_minutes_only(self):
-        rth, _ = self.build(self.NOW, self.NOW - dt.timedelta(seconds=1))
+        rth = self.seg(self.build(self.NOW, self.NOW - dt.timedelta(seconds=1)), "rth")
         closed = int(self.NOW.timestamp()) // 60 * 60
         self.assertTrue(rth["marks"])
         for mk in rth["marks"]:
@@ -227,33 +278,54 @@ class TestLiveSegment(_Base):
                 self.assertLessEqual(mk["confirm_time"], closed)
 
     def test_stall_flag_fires_after_60_s(self):
-        last = self.NOW - dt.timedelta(seconds=61)
-        rth, calls = self.build(self.NOW, last)
+        last, reads = self.NOW - dt.timedelta(seconds=61), []
+        rth = self.seg(self.build(self.NOW, last, reads=reads), "rth")
         self.assertEqual(rth["feed_stalled_since"], int(last.timestamp()))
-        self.assertEqual(calls, [rth["symbol"]])
+        self.assertEqual([r[1] for r in reads if r[0] == "_trades_last"], [rth["symbol"]])
 
     def test_no_stall_flag_on_quiet_seconds(self):
         for gap in (1, 30, 60):
-            rth, _ = self.build(self.NOW, self.NOW - dt.timedelta(seconds=gap))
+            rth = self.seg(self.build(self.NOW, self.NOW - dt.timedelta(seconds=gap)), "rth")
             self.assertNotIn("feed_stalled_since", rth, gap)
 
-    def test_live_ironbeam_reads_trades_even_when_price_1m_covers(self):
-        # CR-DV item 4: late in RTH es_flow_price_1m can pass the 99 % coverage test while missing the newest minutes
-        def full_price_1m(symbol, source, a, b):
-            n = int((b - a).total_seconds() // 60)
-            return pd.DataFrame({"t": [int(a.timestamp()) + 60 * i for i in range(n)], "price": 7000.0, "buy": 1.0, "sell": 1.0})
+    def test_splice_equals_trades_for_closed_minutes_and_drops_the_forming_minute(self):
+        p = self.build(self.NOW, self.NOW)
+        closed = int(self.NOW.timestamp()) // 60 * 60
+        for s in p["segments"]:
+            self.assertEqual((s["tier"], s["badge"]), ("splice", "exact: es_flow_price_1m + trades"))
+            t = self.trade_cells(s["symbol"], dt.datetime.fromtimestamp(s["start"], UTC),
+                                 dt.datetime.fromtimestamp(min(s["end"], closed), UTC))
+            want = self.v3.fh.cells_from_trades(t["t"], t["price"], t["size"], t["side"])
+            got = pd.DataFrame(s["cells"]).rename(columns={}).sort_values(["t", "p"]).reset_index(drop=True)
+            self.assertEqual(len(got), len(want), s["name"])
+            self.assertTrue((got[["t", "p"]].to_numpy() == want[["t", "p"]].to_numpy()).all())
+            self.assertTrue(((got[["buy", "sell"]] - want[["buy", "sell"]].to_numpy()).abs().to_numpy() < 1e-9).all())
+            self.assertLess(max(s["cells"]["t"]), closed)                     # the forming minute is not served
 
-        with cf.replay(self.store, {"_trades_last": lambda s: self.NOW, "fetch_price_1m": full_price_1m}):
+    def test_stored_rows_win_over_trades(self):
+        until = int(self.NOW.timestamp()) // 60 * 60 - 600
+        base = self.stored_rows(until)
+        bumped = lambda *a: base(*a).assign(buy=lambda d: d["buy"] + 1000.0)
+        o = self.overrides(self.NOW, until)
+        o["fetch_price_1m"] = bumped
+        with cf.replay(self.store, o):
             p, _ = self.v3._build(None, "2026-10-27", session="FULL", until_pt=None, params=self.v3.fh.AbsorbParams(),
                                   session_date=dt.date(2026, 10, 27), session_note=None, now_utc=self.NOW)
-        self.assertEqual([(s["name"], s["tier"]) for s in p["segments"]], [("eth", "trades"), ("rth", "trades")])
+        c = pd.DataFrame(self.seg(p, "rth")["cells"])
+        self.assertTrue((c[c["t"] < until]["buy"] >= 1000).all())             # stored minutes come from the table
+        self.assertTrue((c[c["t"] >= until]["buy"] < 1000).all())             # later minutes from the trades
+
+    def test_no_coverage_switch_when_stored_covers_everything(self):
+        # stored minutes reach the newest closed minute: still the splice, nothing dropped
+        p = self.build(self.NOW, self.NOW, stored_until=int(self.NOW.timestamp()) // 60 * 60)
+        self.assertEqual([s["tier"] for s in p["segments"]], ["splice", "splice"])
+        self.assertEqual(max(self.seg(p, "rth")["cells"]["t"]), int(self.NOW.timestamp()) // 60 * 60 - 60)
 
     def test_no_stall_read_on_a_past_session(self):
         p, calls, _ = self.get(cf.QS_1027)
         self.assertNotIn("_trades_last", [c[0] for c in calls])
         self.assertTrue(all("feed_stalled_since" not in s for s in p["segments"]))
         self.assertTrue(all(mk["provisional"] is False for mk in self.seg(p, "rth")["marks"]))
-
 
 if __name__ == "__main__":
     unittest.main()
