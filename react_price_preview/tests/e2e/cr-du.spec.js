@@ -22,7 +22,7 @@ const FLOW_KEYS = ['ib-react-flow-mode', 'ib-react-flow-v2-markers', 'ib-react-f
 const layers = (o) => ({ 'ib-react-flow-v3-layers': JSON.stringify({ levels: false, edges: false, profile: false, heat: false, marks: false, ...o }) })
 const EDGES = layers({ edges: true })
 const D30 = '2026-10-30'
-const TRAIN = '2026-02-03' // a train session without a set-2 card (its trades are in the backtest's per-trade rows)
+const TRAIN = '2026-02-06' // a train session without a set-2 card (its trades are in the backtest's per-trade rows)
 const SET2 = '2026-02-04' // a session with a set-2 card
 const HOLDOUT = '2026-07-10'
 
@@ -158,9 +158,9 @@ const verdict = async (page) => {
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(240_000)
 
-test('1. 10-30 #5 box (anchor 07:40, replay to 07:49): the engine verdict at box min 8 vs "box still forming" at 10', async ({ page }) => {
-  const a = shifted(`${D30}T07:40`)
-  await open(page, D30, { storage: EDGES, until: `${D30}T07:49` })
+test('1. 10-30 box (anchor 07:43, replay to 07:51; Amendment 6: the 07:40 box restarts at 07:43): the engine verdict at box min 8 vs "box still forming" at 10', async ({ page }) => {
+  const a = shifted(`${D30}T07:43`)
+  await open(page, D30, { storage: EDGES, until: `${D30}T07:52` })
   await anchorAt(page, a, a - 30 * 60, shifted(`${D30}T08:00`))
   const v8 = await verdict(page)
   await shot(page, '1-min8.png')
@@ -177,7 +177,7 @@ test('1. 10-30 #5 box (anchor 07:40, replay to 07:49): the engine verdict at box
       window.localStorage.setItem(k, JSON.stringify({ ...s, boxRulesV: 2, boxRules: { ...(s.boxRules || {}), minAgeMin: 10 } }))
     } catch (e) { /* ignore */ }
   })
-  await open(page2, D30, { until: `${D30}T07:49`, keepStorage: true })
+  await open(page2, D30, { until: `${D30}T07:52`, keepStorage: true })
   await anchorAt(page2, a, a - 30 * 60, shifted(`${D30}T08:00`))
   const v10 = await verdict(page2)
   await shot(page2, '1-min10.png')
@@ -199,6 +199,7 @@ test('2. v1 overlay on a train day equals the backtest', async ({ page }) => {
   const o = await overlay(page)
   const bt = JSON.parse(fs.readFileSync(BACKTEST, 'utf8')).trades.primary.filter((x) => x.date === TRAIN)
   const key = (x) => [x.side, x.entryT, x.entry, x.stop, x.target, x.exitT, x.exit, x.reason, x.pts]
+  expect(bt.length).toBeGreaterThan(0) // not vacuous
   expect(o.trades.map(key)).toEqual(bt.map(key))
   expect(o.hits.length).toBe(2 * o.trades.length + (o.open ? 1 : 0))
   // hover the first entry: that minute's verdict
