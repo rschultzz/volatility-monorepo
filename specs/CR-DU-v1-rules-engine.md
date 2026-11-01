@@ -667,3 +667,39 @@ Implementation brought into line with A1.1 / v1 rule 6. Found from Ryan's screen
 **Real bars, 2026-04-15, anchor 09:18, set end 09:29:** closes 7037.75, 7037.75, 7039.50, 7039.50, 7039.25, 7039.75, 7039.75, 7037.25, 7038.00, 7038.50, 7037.50, 7035.75. True max − min = **4.00** (the 3.00 quoted in chat came from a synthetic reproduction). By this amendment the box qualifies by 09:26 with edges 7039.75 / 7037.25, height **2.50**; the 09:29 close is a 1.50-pt test below the bottom, so it doesn't widen the box. **The row shows 2.50, not 4.00**: flagged to Ryan. Display only: once qualified, a box stays formed either way.
 
 Rulings re-check: A2 honoured; CR-DI's C2 box-restart approval changes as above (recorded in the change log); every other row unchanged. Nothing in "Revoked / superseded" is used.
+
+## v1.3 results (train, in-sample)
+
+Rerun in Ryan's order: D1, backtest once, set-2 verdicts, then tests.
+
+**(a) D1, copying score (no P&L): cards where the engine fires**
+
+| | v1.2 takes | v1.2 skips | v1.3 takes | v1.3 skips |
+|---|---|---|---|---|
+| (b) engine's own box (06:30 anchor) | 1 / 31 | 5 / 57 | 1 / 31 | 7 / 58 |
+| (c) anchored at the card's range start | 8 / 31 | 5 / 58 | 9 / 31 | 5 / 58 |
+
+(c) box vs card: engine box = card box (±0.25 pts both edges) on 9 / 31 takes.
+
+**(b) Backtest (primary + the same rows). Set-2 per-trade rows and monthly splits withheld.**
+
+| Variant | All: trades | Win % | Net after cost | Without set-2: trades | Win % | Net after cost |
+|---|---|---|---|---|---|---|
+| **Primary** | 190 | 53.2 | **+57.0** | 57 | 54.4 | **+39.5** |
+| p80 lean | 149 | 55.0 | +94.25 | 39 | 51.3 | −11.0 |
+| Wick + 2 stop | 194 | 35.1 | −49.75 | 58 | 41.4 | +25.25 |
+| D4 fill (1 pt inside) | 195 | 51.8 | +24.0 | 58 | 51.7 | +11.0 |
+| Box min 10 | 157 | 50.3 | −40.5 | 47 | 44.7 | −57.5 |
+
+v1.2 primary: 102 trades, 50.0 %, −22.25 (without set-2: 34, 41.2 %, −65.5). Primary max drawdown 146 pts. Without set-2 by month: February +93.25, March −26.0, April −21.5, May −6.25. Side: long 23, +0.5; short 34, +39.0. Contradiction bars still inconclusive.
+
+Not a tested edge: the sign changes with box min (+57.0 at 8, −40.5 at 10), one month carries the non-set-2 total, and this is in-sample. The change wasn't chosen on P&L; it came from Ryan's screenshot.
+
+**(c) Set 2 at v1.3 (run `0d6cd6f5`):** SHORT 3 · LONG 2 · NO ACTION 110 (27 warm-up, not evaluated). The v1.0 and v1.2 rows remain beside them.
+
+**(d) Tests:** unit 151 / 151; `test_flow_heat` OK; CR-DU smoke 5 / 5, including overlay = backtest on 2026-02-03 and 2026-04-15 reading "11 min · 2.50 pts (min 8 · 2)". The full existing-spec comparison and the other panel specs (cr-dq, cr-ds, cr-dr, cr-dp) were not rerun; their boxes can move under v1.3.
+
+**Open:**
+- 2026-04-15 shows 2.50 (frozen edges) while max − min close over the box is 4.00. Ryan asked to confirm v1.3 shows the true max − min; by Amendment 5's freeze it doesn't. Display only.
+- The ⚙ 15-min edge hold control no longer has any effect on the box chain.
+- Display bug, not fixed: in the engine panel the absorption row prints a raw epoch ("buyers absorbed 7040.00 (1776270180)") because `evaluateAt` calls `boxVerdict` without `hhmm`.
