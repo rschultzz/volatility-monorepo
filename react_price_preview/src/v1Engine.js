@@ -217,7 +217,8 @@ export function evaluateAt(ctx, i, state = newState(), { anchorShifted = null, c
   const side = v.kind === 'short' || v.kind === 'long' ? v.kind : null
   if (!side) {
     const [rule, code, text] = VERDICT_RULE[v.kind] || [7, 'no_read', v.kind]
-    out.failed.push(fail(rule, code, v.reason ? `${text}: ${v.reason}` : text))
+    const why = v.reason && v.reason !== text ? (v.reason.startsWith(text) ? v.reason : `${text}: ${v.reason}`) : text
+    out.failed.push(fail(rule, code, why))
     return out
   }
   out.side = side

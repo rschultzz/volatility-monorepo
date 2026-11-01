@@ -1665,9 +1665,11 @@ export default function App() {
   // CR-DC: price cells + absorption marks for the selected session, only while v3 has a price-pane layer
   // on (DC13); live sessions refresh with the v2 cadence and pause during chart interaction (DC14).
   const flowV3AnyLayer = (flowV3Layers.heat || flowV3Layers.profile || flowV3Layers.marks || flowV3Layers.levels || flowV3Layers.edges)
+  // CR-DU item 4b: the v1 trades overlay runs on the cells payload too, so it loads with any layer or the overlay on
+  const flowCellsNeeded = flowV3AnyLayer || v1TradesOn
   const flowCellsDate = selectedSessionTradeDateKey || tradeDate
   const flowCellsUrl = useMemo(() => {
-    if (!flowEnabled || !flowV3AnyLayer || !flowCellsDate) return null
+    if (!flowEnabled || !flowCellsNeeded || !flowCellsDate) return null
     const url = new URL(`${apiBase}/api/ironbeam/flow/cells`)
     url.searchParams.set('trade_date', flowCellsDate)
     url.searchParams.set('session', flowSession)
@@ -1675,7 +1677,7 @@ export default function App() {
     url.searchParams.set('a_m', String(flowV3Settings.m))
     if (reviewUntil) url.searchParams.set('until', reviewUntil)
     return url.toString()
-  }, [apiBase, flowEnabled, flowV3AnyLayer, flowCellsDate, flowSession, flowV3Settings.k, flowV3Settings.m, reviewUntil])
+  }, [apiBase, flowEnabled, flowCellsNeeded, flowCellsDate, flowSession, flowV3Settings.k, flowV3Settings.m, reviewUntil])
 
   useEffect(() => {
     if (!flowCellsUrl || loadingCenter || error) {
@@ -1804,7 +1806,7 @@ export default function App() {
 
   // One object per real change (CR-CH): the chart's primitives recompute only when this changes.
   const flowV3Chart = useMemo(() => {
-    if (!flowV3AnyLayer || !flowCells) return null
+    if (!flowCellsNeeded || !flowCells) return null
     return {
       payload: flowCells,
       heat: flowV3Layers.heat,
@@ -1827,7 +1829,7 @@ export default function App() {
       // CR-DN item 1: the profile stops after the end's minute ([from, to) on cell minute starts); null without an end.
       profileTo: flowAnchor != null && flowEnd != null ? flowEnd + 60 : null,
     }
-  }, [flowV3AnyLayer, flowCells, flowCellsBars, flowEnd, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, v1Inputs, v1TradesOn, v1TradesBlocked, flowV3Settings.v1Alert, flowV3Settings.contraMarks, isLiveTradeDate, flowAnchor, flowEnd])
+  }, [flowCellsNeeded, flowCells, flowCellsBars, flowEnd, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, v1Inputs, v1TradesOn, v1TradesBlocked, flowV3Settings.v1Alert, flowV3Settings.contraMarks, isLiveTradeDate, flowAnchor, flowEnd])
   // CR-DN item 1: the anchor → end window, shaded on the price chart (any layer); null without an end.
   const flowV3Window = useMemo(
     () => (flowAnchor != null && flowEnd != null ? { from: flowAnchor, to: flowEnd } : null),
