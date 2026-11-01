@@ -570,3 +570,18 @@ fires 2 (both the card's side); no read 44 (nothing notable 34, not at the edge 
 notable" was 16 takes / 39 skips; at p70 the lean passes on more cards but the read then fails on location — price is
 not within 2 pts of the faded edge at the card's decision minute (CR-CP called the side at the qualifying bar and
 rested a limit at the edge; the engine reads at that minute).
+
+## Amendment 4 — Ryan, chat 2026-10-31 (last before freeze)
+
+- **Location moves from the verdict to the order.** A valid read = (lean ≥ p70 on the side **or** in-box absorption on
+  the side at the faded edge) + the stall leg + every gate (rules 1–6, 9, 19, 20, rule 4's path). It places a resting
+  limit at the faded edge by closes (box top for a short, bottom for a long), re-pegged to the current edge while the read
+  holds; cancelled when the read lapses, the box breaks, or at 12:15 PT. A fill happens only at the edge, on a 1-tick
+  trade-through. Stop = fixed 10 pts, target +10, from the fill price.
+- Panel: "READ — limit at <price>" while a read is valid and price isn't within 2 pts of the edge; "SHORT at top" /
+  "LONG at bottom" when it is. The Location row becomes informational (no longer red).
+- **Engine tagged v1.2 and frozen**: no further changes on train. Next: backtest once (primary + p80 lean, wick + 2 stop,
+  D4 fill, box min 10), D1 (b) at v1.2, item 5 re-run (v1.2 rows), CR-DU smoke on v1.2, PR (not merged).
+
+Rulings re-check: A3 / A20 honoured (the entry is a limit at the edge after the read, never a touch-bar close). No other
+row changes.
