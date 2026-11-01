@@ -572,7 +572,7 @@ test('item 7: 2026-10-28 (FOMC) shows NO TRADES', async ({ page }) => {
   log('item-7-fomc.json', v)
   expect(v.verdict.kind).toBe('no-trades')
   expect(v.verdict.pill).toBe('NO TRADES') // CR-DS item 1: the pill is the label's head; the reason sits under it
-  expect(v.verdict.title).toMatch(/Rules: A22\. .*Draft rules, untested/)
+  expect(v.verdict.title).toMatch(/^v1 rules engine .*not a tested edge\.$/) // CR-DU item 2: the verdict is the v1 engine's
   await shot(page, 'verdict-1028-fomc.png')
 })
 

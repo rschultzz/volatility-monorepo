@@ -272,7 +272,9 @@ test('smoke 2: same box with set end 07:49 (report), and anchored at 06:30 (box 
   colourOk(out.anchor0739.verdict)
   expect(out.anchor0630.verdict.kind).toBe('short')
   expect(out.anchor0630.verdict.pillBorder).toBe(RGB.good)
-  for (const k of ['event', 'formed', 'location', 'absorption']) expect(tonesOf(out.anchor0630.verdict)[k], k).toBe('good')
+  for (const k of ['event', 'formed', 'location']) expect(tonesOf(out.anchor0630.verdict)[k], k).toBe('good')
+  // CR-DU rule 5: the 07:05 buyers-absorbed mark (7660.25) starts before the 07:38 box, so it is location support, not a trigger
+  expect(tonesOf(out.anchor0630.verdict).absorption).toBe('neutral')
   expect(out.anchor0630.history).toContain('07:49 (short)')
   // Ryan (chat 2026-10-31): effort meets no advance, so progress (+3.5) is slate "not needed", not red
   expect(out.anchor0630.verdict.rows.find((r) => r.key === 'progress')).toMatchObject({ tone: 'neutral', reads: 'not needed (effort)' })

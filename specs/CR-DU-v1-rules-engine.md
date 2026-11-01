@@ -614,3 +614,14 @@ start (c): takes fire 8 (7 card side), skips 5 (3).
 
 Item 5 at v1.2 (`setup_engine_verdicts`, run `a5d15389`, counts only): set 2 — SHORT 1 · LONG 6 · NO ACTION 108 (27
 warm-up, not evaluated). The v1.0 rows stay alongside (engine_version is part of the key).
+
+## Smoke + wrap (v1.2)
+
+- **CR-DU smoke (`tests/e2e/cr-du.spec.js`) on v1.2:** 4 / 4 passed (10-30 box min 8 vs 10; the overlay on 2026-02-03 equals the backtest; the 10-30 overlay; holdout and set-2 dates blocked). Unit 142 / 142.
+- **Existing specs, branch vs origin/main** (same backend :8068, branch frontend :5197, origin/main frontend :5198 from a worktree): origin/main 87 passed · 16 failed · 4 timed out · 19 skipped. Every failure on the branch except the four below also fails on origin/main, or doesn't run here.
+- **The four branch-only failures are intended CR-DU changes.** The assertions were updated, and all four pass on v1.2:
+  - `cr-dp` items 1–3: the Display group now ends "· v1 trades off" (item 4b toggle).
+  - `cr-dq` item 7 (10-28 FOMC): still NO TRADES. The pill title is the v1 engine's, not "Rules: A22 … Draft rules, untested".
+  - `cr-ds` smoke 1: passes unchanged on v1.2 (its failure was at v1.0 / v1.1).
+  - `cr-ds` smoke 2: still SHORT at 07:49 when anchored at 06:30. The absorption row is now neutral, not green. Rule 5: the 07:05 buyers-absorbed mark at 7660.25 starts before the 07:38 box, so it counts as location support, not a trigger.
+- **Timeout, not a CR-DU change:** `cr-dq` item 7 verdict scan timed out once waiting for the chart to load. It passed on rerun.
