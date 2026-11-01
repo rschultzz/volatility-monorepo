@@ -411,3 +411,22 @@ scratch copy of `v1Engine.js`; to be committed to `src/` after the e2e compariso
   verdict SHORT / LONG on 4 takes and 1 skip. Engine box = card box (± 0.25) on 7 / 31 and 11 / 58.
 - Binding leg: Δ share ≥ p80 with the card's side on 10 / 31 takes (own box) and 13 / 31 (card anchor); the stall leg
   passes on 30 / 31 and 26 / 31.
+
+### D2 item 5 — absorption at the faded edge (read-only; `scripts/cr_du_d1/d2_absorption.py`; no outcomes)
+
+Card's side only (short: buyers absorbed; long: sellers absorbed); all exact marks of the session (not only the top 8);
+within 2 pts of the card box's faded edge (by closes); earlier than and confirmed by the decision bar's close;
+**unbroken by closes** = no 1-min close more than 1 tick beyond the mark's price between the mark and the decision bar
+(definition fixed here; D2 items 1–4 were not received in this session).
+
+| | Takes (44) | Skips (75) |
+|---|---|---|
+| ≥ 1 such mark | 5 (11 %) | 3 (4 %) |
+| nearest mark: distance to the edge, median | 0.5 pts | 0.75 pts |
+| nearest mark: minutes before the decision, median (p25–p75) | 12 (6–29) | 8 (5–16) |
+| marks inside the card's box window / before it | 3 / 2 | 4 / 0 |
+| failed the lean (D1 (b)) / of those with a mark | 21 / 2 (1 inside the window) | 49 / 1 (1 inside) |
+
+Attrition (all 119 cards): marks confirmed before the decision median 3 per card; 190 on the card's side, 39 within 2 pts
+of the edge (57 within 4), 9 of those unbroken by closes. The close test removes 30 of 39: price usually closes beyond an
+edge-mark later inside the box (a close up to 2 pts beyond an edge is a box "test", not a break).
