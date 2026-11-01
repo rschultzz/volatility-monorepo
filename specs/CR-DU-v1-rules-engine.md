@@ -491,3 +491,82 @@ Caveat: CR-CP called each card side from the box delta share, so 2(b) and 3 poin
 
 Rulings re-check: B2 — a threshold chosen from the learning set's label distributions, disclosed here, not from
 outcomes; the train backtest stays "in-sample" and the holdout run will be pre-registered. No other row changes.
+
+### Rerun after Amendments 2 / 3 (engine v1.1; train, in-sample; set-2 per-trade rows and monthly splits withheld)
+
+## Totals (train, in-sample)
+
+| Variant | Sessions | Trades | Trades / day | Win % | Net pts gross | Net pts after 0.25 / RT | Avg win | Avg loss | Max DD | Longest losing streak | Exits |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| primary | all sessions | 93 | 1.08 | 51.6 | 33.25 | 10.0 | 9.66 | -9.56 | 79.0 | 7 | flatten 6, stop 42, target 45 |
+| primary | without set-2 sessions | 30 | 1.0 | 40.0 | -57.0 | -64.5 | 9.38 | -9.42 | 124.25 | 7 | flatten 3, stop 16, target 11 |
+| p80 lean | all sessions | 80 | 0.93 | 50.0 | -3.25 | -23.25 | 9.59 | -9.67 | 73.25 | 5 | flatten 5, stop 38, target 37 |
+| p80 lean | without set-2 sessions | 24 | 0.8 | 29.2 | -103.5 | -109.5 | 8.93 | -9.76 | 141.0 | 8 | flatten 2, stop 16, target 6 |
+| wick + 2 stop | all sessions | 104 | 1.21 | 25.0 | -121.25 | -147.25 | 9.86 | -4.84 | 176.5 | 9 | flatten 1, stop 78, target 25 |
+| wick + 2 stop | without set-2 sessions | 30 | 1.0 | 20.0 | -52.25 | -59.75 | 10.0 | -4.68 | 90.75 | 12 | stop 24, target 6 |
+| D4 fill (1 pt inside) | all sessions | 105 | 1.22 | 49.5 | -4.25 | -30.5 | 9.62 | -9.52 | 89.75 | 4 | flatten 7, stop 49, target 49 |
+| D4 fill (1 pt inside) | without set-2 sessions | 33 | 1.1 | 39.4 | -70.0 | -78.25 | 9.35 | -9.57 | 128.25 | 8 | flatten 3, stop 18, target 12 |
+| box min 10 | all sessions | 89 | 1.03 | 49.4 | -6.75 | -29.0 | 9.62 | -9.56 | 101.5 | 7 | flatten 6, stop 42, target 41 |
+| box min 10 | without set-2 sessions | 28 | 0.93 | 35.7 | -77.0 | -84.0 | 9.25 | -9.42 | 134.0 | 8 | flatten 3, stop 16, target 9 |
+
+### By side (primary, non-set-2 sessions, train, in-sample)
+
+| Side | Trades | Win % | Net gross | Net after cost |
+|---|---|---|---|---|
+| long | 9 | 66.7 | 30.0 | 27.75 |
+| short | 21 | 28.6 | -87.0 | -92.25 |
+
+### By hour (PT, entry) (primary, non-set-2 sessions, train, in-sample)
+
+| Hour (pt, entry) | Trades | Win % | Net gross | Net after cost |
+|---|---|---|---|---|
+| 07:00 | 3 | 0.0 | -30.0 | -30.75 |
+| 08:00 | 6 | 50.0 | 0.0 | -1.5 |
+| 09:00 | 7 | 71.4 | 30.0 | 28.25 |
+| 10:00 | 8 | 37.5 | -20.0 | -22.0 |
+| 11:00 | 5 | 20.0 | -27.0 | -28.25 |
+| 12:00 | 1 | 0.0 | -10.0 | -10.25 |
+
+### By month (primary, non-set-2 sessions, train, in-sample)
+
+| Month | Trades | Win % | Net gross | Net after cost |
+|---|---|---|---|---|
+| 2026-02 | 12 | 41.7 | -13.5 | -16.5 |
+| 2026-03 | 7 | 28.6 | -30.0 | -31.75 |
+| 2026-04 | 3 | 0.0 | -26.0 | -26.75 |
+| 2026-05 | 8 | 62.5 | 12.5 | 10.5 |
+
+### Readouts (primary, non-set-2 sessions, train, in-sample)
+
+- Stop distance (rule 15) pts: p10 10.00 · p50 10.00 · p90 10.00 · max 10.00
+- MFE (from fill to exit, minute bars) pts: p50 7.38 · p90 10.83
+
+- Stop-free ±10 race of the same entries (A15 readout): {'win': 11, 'loss': 16, 'unresolved': 3}
+
+## Contradiction bars in the box at the faded edge (item 4; primary engine trades, train, in-sample)
+
+| Sessions | Definition | n with | Win % with | Net with (after cost) | n none | Win % none | Net none (after cost) | Win-rate diff, pts (90 % bootstrap CI) | B1 |
+|---|---|---|---|---|---|---|---|---|---|
+| all sessions | primary (p10 / p90 delta, wick ≥ 50 %, vol ≥ p80, range ≥ 2) | 8 | 50.0 | -2.0 | 85 | 51.8 | 12.0 | -1.8 (-32.2, +27.9) | inconclusive |
+| all sessions | secondary (p20 / p80 delta, wick ≥ 40 %, no volume floor) | 40 | 47.5 | -28.75 | 53 | 54.7 | 38.75 | -7.2 (-24.2, +10.3) | inconclusive |
+| without set-2 sessions | primary (p10 / p90 delta, wick ≥ 50 %, vol ≥ p80, range ≥ 2) | 3 | 33.3 | -10.75 | 27 | 40.7 | -53.75 | -7.4 (-51.9, +40.7) | inconclusive |
+| without set-2 sessions | secondary (p20 / p80 delta, wick ≥ 40 %, no volume floor) | 10 | 30.0 | -36.0 | 20 | 45.0 | -28.5 | -15.0 (-45.0, +15.0) | inconclusive |
+
+Small n: a difference this size can't be separated from chance here; the secondary definition is report-only. Bars are counted from the box start through the decision minute, on the edge being faded (bar low / high within 2 pts of the box's wick low / high); percentiles per 30-min RTH bucket from prior sessions (Databento).
+
+## Overlap with CR-CZ cards (verdict at the card's decision minute; counts only, no outcomes)
+
+| Ryan's label | Cards | Engine takes (same side) | Engine: other side | Engine: NO ACTION | No bar | Warm-up session (not evaluated) |
+|---|---|---|---|---|---|---|
+| skip | 75 | 2 | 0 | 56 | 0 | 17 |
+| take | 44 | 0 | 0 | 31 | 0 | 13 |
+
+First failed rule on those NO ACTION cards: no_read 66, conflict 6, one_per_box 5, fomc 3, box_forming 2, cutoff 2, absorption_in_path 1, two_sided 1, no_larger_move 1
+
+D1 (b) recomputed at p70 (engine's own box, overlapping, rules evaluated): takes 31 — fires 0; first failed no read 22
+(nothing notable 12, read but price not at the edge 10), one per box 4, FOMC 2, conflict 2, box forming 1. Skips 57 —
+fires 2 (both the card's side); no read 44 (nothing notable 34, not at the edge 10), conflict 4, cutoff 2, other 5.
+(c) anchored at the card's range start: takes fire 4 (3 on the card's side), skips 3 (2). At p80 (v1.0) "nothing
+notable" was 16 takes / 39 skips; at p70 the lean passes on more cards but the read then fails on location — price is
+not within 2 pts of the faded edge at the card's decision minute (CR-CP called the side at the qualifying bar and
+rested a limit at the edge; the engine reads at that minute).
