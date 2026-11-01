@@ -648,3 +648,22 @@ Merged, not rebased; tag `cr-du-engine-v1.2` stays on its commit.
 ## Open: "Box formed" height (Ryan, chat, 2026-11-01) — not fixed, waiting on Ryan
 
 The row shows `box.top − box.bottom` (edge height; an edge moves only on a close > 2 pts beyond it), so it can read 0.00 pts while closes span more. Rule 6's `formed` in engine v1.2 gates on the same value, so max close − min close is an engine change. Train counts only (86 sessions, no outcomes): the heights differ on 26,058 of 32,852 minutes; on boxes old enough to count, the height leg would go from failing to passing on 333 minutes in 49 sessions, never the other way.
+
+## Amendment 5 (Ryan, chat, 2026-11-01): engine v1.3, a bug fix, not tuning
+
+Implementation brought into line with A1.1 / v1 rule 6. Found from Ryan's screenshot, 2026-04-15, box 09:18–09:29: "Box formed 11 min · 0.00 pts" while closes moved. No P&L was read to make this change.
+
+1. **While a box is forming** (before it qualifies at box min and 2 pts), its edges = the running max / min 1-min close from the box start (CR-CP A1.1).
+2. **`EDGE_BREAK_PTS` (2 pts) applies only after the box qualifies.** Edges freeze at qualification; a close ≤ 2 pts beyond an edge is a test, > 2 pts is a break.
+3. **Height** = top − bottom of those edges = max close − min close while forming.
+4. Panel and engine share the code (`edgeReadout`). Tag `cr-du-engine-v1.3`.
+
+**Readings fixed for implementation (reported to Ryan):**
+- **15-min edge hold (`holdMin`, CR-DI):** read literally, it no longer gates anything. Frozen edges can't grow, and "> 2 pts is a break" leaves no state in which a qualified box ignores a > 2-pt close. The ⚙ control is kept but has no effect on the box chain.
+- **5-min break hold (`breakHoldMin`, CR-DN):** unchanged. A > 2-pt close starts a pending break; a close back strictly inside within 5 bars is a probe and the box stands.
+- **A forming box cannot break.** A box under 2 pts tall stays forming however far a close moves, and that close becomes its edge.
+- **Panel ⚙ rules:** the panel qualifies boxes at its own box min and height, as the engine does with its settings (the "box min 10" row qualifies at 10).
+
+**Real bars, 2026-04-15, anchor 09:18, set end 09:29:** closes 7037.75, 7037.75, 7039.50, 7039.50, 7039.25, 7039.75, 7039.75, 7037.25, 7038.00, 7038.50, 7037.50, 7035.75. True max − min = **4.00** (the 3.00 quoted in chat came from a synthetic reproduction). By this amendment the box qualifies by 09:26 with edges 7039.75 / 7037.25, height **2.50**; the 09:29 close is a 1.50-pt test below the bottom, so it doesn't widen the box. **The row shows 2.50, not 4.00**: flagged to Ryan. Display only: once qualified, a box stays formed either way.
+
+Rulings re-check: A2 honoured; CR-DI's C2 box-restart approval changes as above (recorded in the change log); every other row unchanged. Nothing in "Revoked / superseded" is used.
