@@ -71,3 +71,92 @@ Live display read path; no test, outcome, verdict or feature statistic is comput
 | C2 (off by default) | honoured | Flow v3 layers stay off by default; no other view changes |
 
 Revoked / superseded R1–R7: none used.
+
+## Step 0 findings (2026-10-31, read-only; no server started, CR-DR holds :8068)
+
+Scripts: `scripts/cr_dv_step0/` (`db.py` read-only connection, `q_schema.py`, `q2_lag.py`, `q2b_tier.py`, `q345.py`,
+`q5b.py`, `replay_live.py`); output in `scripts/logs/cr-dv/` (git-ignored). No writes.
+
+### Q1 — where marks and cells come from
+
+- **Endpoint** `GET /api/ironbeam/flow/cells` (`apps/web/modules/Ironbeam/callbacks.py`
+  `_build_react_flow_cells_payload`) → `flow_v3.build_cells_payload` → `flow_v3._build`. Per segment (RTH; ETH in FULL view)
+  `choose_tier` picks the cell source (DC17): `es_flow_price_1m` **only if its stored minutes cover ≥ 99 % of the
+  segment's minutes with flow** (`PRICE_1M_COVERAGE`), else `ironbeam_es_trades` (exact, when the oldest retained trade
+  ≤ segment start), else the 1-s table. Bars (`h`/`l` for hold / break) come from `ironbeam_es_flow_1s` via
+  `flow_v2._segment_minutes`, written by the `ironbeam_flow_1s_aggregate.py` worker (~1 s loop, 2 s max lateness), so
+  they include the minute still forming. Marks: `flow_heat.absorption_marks(cells, bars, seg.start, seg.end, K, M)`.
+- **Poll:** `react_price_preview/src/App.jsx` refetches every `FLOW_V2_LIVE_POLL_MS` = **15 s** on the live trade date,
+  only while a v3 price-pane layer is on, paused while the chart is being dragged. Live segments use an incremental
+  cache (`_segment_cells`: cached to now − 2 min, the rest re-read each poll).
+- **Consumers of the marks:** the chart triangles (`chartMarks`), the absorption levels (`absorptionLevels`, confirmed
+  by "now" = end of the payload's last bar), and the box panel's Absorption row (`boxLevels` → `boxEvidenceRows`
+  key `absorption`).
+- **Other live readers of `es_flow_price_1m`:** none. Only `flow_v3` (`choose_tier`, `fetch_price_1m`) reads it in the app.
+
+### Q2 — lag of `es_flow_price_1m` on 2026-10-30 RTH, and what is actually on screen
+
+- The table has **no insert timestamp**. Readable time per minute = `completed_at` of the CR-DD-live run whose smoke
+  `[first_minute, last_minute]` covers it (`bt_backfill_runs`, 95 runs 13:00–21:00 UTC, every ~301 s, ~2.3 s each).
+  All 390 RTH minutes assigned. **Readable − minute end: median 272 s, p95 399 s, max 412 s** (min 139 s).
+- **But the live endpoint never served those rows.** Simulating `choose_tier` at a poll 15 s after each minute close:
+  stored minutes trail the flow minutes by 4–5, and 99 % coverage would need ≥ 100 × that many minutes, which RTH
+  (390) never reaches. **All 390 polls → `trades` tier; 0 flips** (`q2b_tier.py`). The real `_build` replayed with
+  every read cut to what existed at each poll (`replay_live.py`, trades by `received_at`, price_1m by run completion)
+  confirms it: every poll was `trades`.
+- So the cron lag is **not on screen**. The delay Ryan sees is the rule's own hold window: a mark at minute t is
+  confirmed at t + (M + 1) min, i.e. 3 min after its minute closes at M 3.
+- **Repaint found.** On a live call `end` = the segment end (13:00 PT), so `confirm ≤ end` always passes and the hold
+  window only checks the bars that exist so far, including the forming minute; cells include the forming minute too.
+  A mark can appear before its hold has elapsed and vanish on a later poll. Example: sellers 7633.50 at 15:39 UTC
+  (08:39 PT) shown at the 15:40:00 poll, not in the final set.
+- **Replay at a 15 s cadence (before any change)**, 1,580 polls 13:30:15 → 20:05 UTC (`replay_before_15s.txt`):
+  1,521 polls `trades`, 59 `price_1m` (the tier check ran on the real `_segment_minutes`; the 59 are re-checked in the
+  smoke). The full session has **5 marks**; live, **all 5 first appeared before their confirm time**: first seen −
+  confirm_time median **−195 s** (p5 −207, p95 −183; min −210, max −180), i.e. while the cell's own minute was still
+  forming. **19 marks were shown live that are not marks on the full session** (shown on 1–5 polls each, e.g.
+  sellers 7633.50 at 15:39 on 2 polls from 15:40:00). Live marks are not late; they show up early and get repainted.
+
+### Q3 — trades → cells reproduce the cron rows
+
+Same SQL as the cron (`floor(price*4)/4`, BUY / SELL sums, `count(*)` incl. side `'0'`), `XCME:ES.Z26`, full outer
+join with `es_flow_price_1m` (`ironbeam`):
+
+| window | trades used | cells equal | only one side | differ |
+|---|---|---|---|---|
+| Globex day 10-30 [10-29 22:00, 10-30 21:00) UTC, 1,380 min | all retained | 13,991 / 13,992 | 0 | 1 (one minute; a print after its minute was stored) |
+| same | received ≤ minute end + 15 s | **13,992 / 13,992** | 0 | 0 |
+| same | received ≤ minute end + 5 s | 13,990 / 13,992 | 0 | 2 |
+| RTH 10-30, 390 min | all / ≤ end + 15 s | **6,266 / 6,266** | 0 | 0 |
+
+0 off-grid prices; one `'0'`-side print (126 contracts) that day, in `trade_count` only. RTH lateness
+(`received_at − ts_utc`) p50 0.47 s, p99 1.2 s, p99.9 2.0 s, max 7.3 s; 0 RTH prints later than 15 s after their minute.
+**Yes**, exactly: a closed minute built from trades 15 s after it closes equals the cron row.
+
+### Q4 — query cost (`fetch_trade_cells` SQL, index `(symbol, ts_utc DESC)`, Index Scan)
+
+| span | rows | wall (median / max of 5, from the laptop) |
+|---|---|---|
+| 8-min tail, 10:00–10:08 PT | 206 | 60 / 60 ms (server execution 6.4 ms) |
+| 8-min tail at the open | 375 | 66 / 119 ms |
+| 15-min tail at the open | 646 | 121 / 193 ms |
+| whole RTH (a live cache miss) | 12,043 | 1,141 / 1,577 ms |
+
+Under the 200 ms target for any tail ≤ 15 min. The live cache already reads only ~2–3 min per poll.
+
+### Q5 — stall threshold
+
+RTH gaps between seconds with volume in `ironbeam_es_flow_1s` (the day's main contract), 84 sessions 2026-07-06 → 10-30:
+p50 1 s, p99 3 s, p99.9 6 s, p99.99 14 s. Healthy sessions' max gap is 3–22 s. Every gap containing a whole minute
+where `ironbeam_es_1m_bars` still traded was a **stall**, and the shortest such gap was **77 s** (10-23 7,408 s; the 09-22
+"130 min" is a run of 77–108 s gaps, a degraded feed, not one hole). Labor Day 09-07 (thin, real quiet) max 35 s.
+Gaps 60–68 s without a whole minute inside can't be classified from bars (about 10 in 84 sessions).
+**Proposal N = 60 s** during RTH: catches every classified stall, never fires on the quiet holiday.
+
+### Q6 — symbol
+
+The live path picks the segment contract with `flow_v2._pick` (A1.4: the contract whose 1-s-built minute closes equal
+the chart's `ironbeam_es_1m_bars` on ≥ 90 % of minutes, else the highest volume), then reads cells for that symbol.
+The cron writes **every** symbol in `ironbeam_es_trades` (no front choice; `GROUP BY symbol`), Ironbeam format
+`XCME:ES.Z26`. Reading the chosen symbol from either source gives the same contract, including roll weeks.
+
