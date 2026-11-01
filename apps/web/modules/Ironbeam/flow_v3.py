@@ -8,7 +8,8 @@ Each segment's cells come from the first tier that covers it (spec A1.3 / DC17):
   1. `es_flow_price_1m` (exact; CR-DD) — skipped while the table does not exist;
   2. `ironbeam_es_trades` (exact) — Ironbeam segments, when the oldest retained trade <= segment start;
   3. the 1-second table (approximate: each second's sell at its low, buy at its high).
-Absorption marks (DC9) are computed for the RTH segment on exact tiers only (A1.2). Each segment also carries
+Absorption marks (DC9) are computed for the RTH segment on exact tiers only (A1.2); on a live segment only closed
+minutes feed them (CR-DV). Each segment also carries
 its 1-minute flow bars (CR-DF edge readout). Nothing after `until` is read. The DB is read only through the `fetch_*` / `_exists_price_1m` / `_trades_oldest` functions, so
 tests can record and replay them; completed segments are cached in-process, live ones incrementally (DC14).
 """
@@ -32,6 +33,7 @@ LIVE_RECHECK_MIN = 2                # DC14: a live poll re-reads from the last c
 TRADES_OLDEST_TTL_S = 60.0
 TABLE_RECHECK_S = 300.0
 CACHE_MAX = 500
+CLOSE_GRACE_S = 3                   # CR-DV DV1: a minute feeds the marks 3 s after it ends (RTH lateness p99.9 2.0 s)
 
 _CACHE: dict[tuple, object] = {}
 _CACHE_LOCK = threading.Lock()
@@ -239,7 +241,11 @@ def _build(engine, trade_date, *, session, until_pt, params, session_date, sessi
             if tier == "seconds":
                 seg["marks_note"] = "Absorbed: exact data only"       # A1.2
             else:
-                seg["marks"] = _marks_json(fh.absorption_marks(cells, m[["h", "l"]], seg["start"], seg["end"], params))
+                mark_end = seg["end"]
+                if not complete:   # CR-DV: closed minutes only, so no mark shows before its hold window has elapsed
+                    closed = flow_v2._epoch(now_utc - dt.timedelta(seconds=CLOSE_GRACE_S)) // 60 * 60
+                    mark_end = max(seg["start"], min(seg["end"], closed))
+                seg["marks"] = _marks_json(fh.absorption_marks(cells, m[["h", "l"]], seg["start"], mark_end, params))
         else:
             seg["marks_note"] = "Absorbed: RTH only"
         segments.append(seg)
