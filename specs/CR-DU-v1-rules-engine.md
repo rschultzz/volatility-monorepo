@@ -143,3 +143,187 @@ Report at the Step-0 STOP with the Q2 proposed definitions, the FOMC list and th
 
 Revoked / superseded: R1 (touch-bar close entry), R2 (automatic level entry), R3 (CR-BW exit), R5, R6, R7 — none used.
 R4 n/a.
+
+## Step 0 — diagnosis (read-only; no server started; code at `96345a7`)
+
+Scripts `scripts/cr_du_step0/`, logs `scripts/logs/cr-du/` (git-ignored). DB reads: `setup_candidates` / `setup_reviews`
+counts (no `outcome` column read), and train-only minute flow for Q5. No outcome, holdout row or
+`bt_derived_repair_archive` read.
+
+### Q1 — code map
+
+| Piece | Where | Pure? |
+|---|---|---|
+| Box chain (edges, growth, pending break, probes, freeze) | `react_price_preview/src/flowV3.js:edgeReadout` (+ `boxStats`, `probeStats`, `drawnBoxes`) | yes: (cells payload, flat bars, anchor, shift, holdMin 15, end, breakHoldMin 5) |
+| Box Δ / volume / dPrice / minutes | `flowV3.js:anchorReadout` via `segmentReadouts`, rows = `flowShared.alignV2ToCandles(v2 bars, candles)`, closes = `rowCloses(rows, candles)` | yes |
+| Δ share | `flowV3.js:readoutShare` (Σ delta ÷ Σ vol) | yes |
+| c/pt + percentiles | `flowV3.js:boxPercentiles` on `src/data/boxBaseline.json` (`scripts/cr_dq_baseline.py`) | yes, but see caveat 3 |
+| Absorption levels | server `packages/shared/flow_heat.py:absorption_marks` (called by `apps/web/modules/Ironbeam/flow_v3.py:_build`); client `flowV3.js:absorptionLevels` (top 8, `asOf`) and `boxLevels` | yes, but see caveat 4 |
+| Conflict / two-sided / reads / verdict | `flowV3.js:boxVerdict` (order A22 → forming → A24 → two-sided → A19/A23 → watch break → nothing notable); thresholds `BOX_RULES_DEFAULTS` | yes |
+| Evidence table | `flowV3.js:boxEvidenceRows` → `components/BoxPanel.jsx` | yes |
+| Shared path (CR-DR) | `flowV3.js:edgeBoxEntries` → `boxPanelOf` → `currentBoxVerdict`; used by `PriceChart.jsx:2821` and `tradeContext.js:entryContext` (until-replay) | yes |
+| Minute replay | `flowV3.js:readHistory` (CR-DS item 4) | yes |
+| FOMC list | `flowV3.js:FOMC_2026_DECISION_DAYS` (Python copy `scripts/cr_dq_step0.py:FOMC_2026`) | constant |
+
+So the engine can be `evaluate(sessionData ≤ t, settings)` over these functions, in `flowV3.js` (or a new
+`v1Engine.js` that imports them; no copy). The Python backtest drives it through `node` (v22 available) on JSON
+session inputs it builds read-only, so the box / verdict code exists once. Caveats that the engine must fix to be
+no-lookahead and single-feed:
+
+1. **Anchor.** `edgeReadout` needs an anchor (the user's click). Backtest and overlay need an automatic one → Q2 rule 6.
+2. **Mixed feeds on train dates (B5).** On a train date the box edges / lastClose come from the cells payload's
+   flow bars (Databento), but dPrice comes from the chart candles (`/api/ironbeam/bars` → `ironbeam_es_1m_bars`,
+   Ironbeam in 2026). The backtest and overlay will pass Databento minute closes as the candles. Live is Ironbeam
+   for both, unchanged.
+3. **Baseline lookahead.** `boxBaseline.json` is one train-wide baseline (2026-01-02 → 06-05, 100 / 99 sessions);
+   on a train date it contains that day and later days. Backtest and overlay need a per-session baseline from
+   prior train sessions only (same script, expanding window), with a warm-up of 20 prior sessions → first scored
+   session ≈ 2026-02-03 (R-a 2024 / R-b 2025 can't be used as warm-up, B4). Live keeps the fixed train baseline
+   (all prior to the live date).
+4. **Absorption lookahead.** `absorptionLevels(asOf)` drops marks confirmed or broken after `asOf`, but a mark's
+   `merged_vol` includes later merges, so contracts and the top-8 rank can use the future (noted in CR-DS). The
+   backtest / overlay will compute marks from cells cut at each minute (`flow_heat.absorption_marks` with
+   end = t, the CR-DV closed-minute rule) and hand the engine a per-minute marks list.
+5. **GEX band lookahead.** The chart's drawn levels use the band of the bars loaded (whole day on a past date).
+   Rule 4 needs the band of bars ≤ t (CR-DT T5 did this per card) → computed server-side, recomputed when the
+   running high / low moves.
+
+### Q2 — rules 1–20
+
+| v1 rule | Class | Code / proposed definition |
+|---|---|---|
+| 1 FOMC days | (a) | `boxVerdict` `fomc` → NO TRADES; list Q3 |
+| 2 RTH only | (a) | engine runs on the RTH segment only (06:30–13:00 PT) |
+| 3 no entries after 12:15 PT | (a) new constant | no fill at or after 12:15:00 PT; a resting limit is cancelled then; open trades run to the flatten |
+| **4 nothing strong in the path** | **(b) STOP** | at the decision minute, for entry E and target E ∓ 10: (i) **strong GEX level** = a corrected drawn level (`_select_levels`, gross ≥ 40 $bn, band from RTH bars ≤ t ± 150) with \|net\| ≥ the colour span (p95 of \|net\| over those drawn levels, `_compute_color_span`, = yellow / darkest); blocked if one lies strictly between E and the target. (ii) **earlier absorption zone** = an absorption level (the chart's top 8, as of t) that started **before the box's first bar**, is unbroken at t, and opposes the trade (sellers absorbed for a short, buyers absorbed for a long) strictly between E and the target. "Wait for a major level to break before trading through it" needs nothing extra: once a level has broken it is behind the price, so a later box can trade. No corrected levels for the day (e.g. 2026-02-19 `no_es_snapshot`) → no trade, reason "no GEX levels" (counted) |
+| **5 earlier absorption that held** | **(b) STOP** | an earlier (started before the box's first bar), unbroken absorption level of the trade's side (buyers absorbed for a short) within 2 pts (`absorbPts`) of the faded edge's wick extreme = evidence "location support", never a trigger. **Change vs today's panel:** `boxVerdict` counts any absorption at the top that started ≤ the box end as a trigger (`absTop`); the engine counts only marks that start inside the box as triggers |
+| 6 the box | (a) + **(b) STOP** | ≥ 8 min (`minAgeMin` 10 → 8) and ≥ 2 pts by closes: (a) `boxVerdict` `formed`. **Anchor (b):** the 06:30 PT RTH open (`sessionOpenAnchor`), boxes chained by the CR-DI / CR-DN break rule at their display defaults (edge hold 15 min, break hold 5 min), which become fixed engine settings. The live panel evaluates the chart's anchor, so it equals the overlay when the anchor is the open. **"After a larger move" (b):** at the box's first bar, the RTH bars of the previous 60 min contain a high or low at least one A7 swing from that bar's close (swing = 12 × session implied move ÷ 2026-train median implied move, CR-CP `swing_of`; 06:30 box: only RTH bars since 06:30 count) |
+| **7 short at the top** | **(b) STOP** | (a) as coded: price ≤ 2 pts below the top and (Δ share lean ≥ p80 buying and / or buyers absorbed at the top inside the box) and no advance. **"Highs not extending" (proposed):** no 1-min high in the last 3 closed bars above the box's wick high before them. Stall = c/pt ≥ p80 **or** highs not extending. Alternative: keep today's "progress ≤ 2 pts" (CR-DS amendment) as the stall leg. Ryan picks one |
+| 8 long at the bottom | (b) mirror of 7 | lows not extending (no new wick low in the last 3 bars) |
+| 9 conflict | (a) | `boxVerdict` CONFLICT (A24) and two-sided absorption → NO ACTION |
+| 10 balanced delta | (a) | a lean needs \|Δ share\| ≥ p80; a move on unremarkable share is never a side |
+| 11 one counter-move minute | (a) | every read is over the whole box (≥ 8 min of readout); no single-minute trigger |
+| **12 response vs push** | **(a) constraint + (b) STOP** | the constraint ("price alone is not confirmation") holds: the engine never confirms on price. Proposed pattern, **evidence only, not a gate**: for a long, a new box low L1, then within 10 min a low L2 ≥ L1 + 1 tick, with sell volume over the L2 push (bars from the last high before L2 to L2) < sell volume over the L1 push; mirror for shorts. Recorded in `evidence.rule12`; recommend the engine does not require it in v1 |
+| **13 limit at the edge** | **(b) STOP** | note: CR-CP D4 is the edge ∓ **1 pt** (not 1 tick). Proposed: limit at the **exact close-based edge** (short at the top, long at the bottom), placed at the close of the minute the verdict turns SHORT / LONG, live from the next minute; filled when a print trades ≥ 1 tick through it (Q4); cancelled at the first minute close whose verdict for that box is not the same side, at a box break, or at 12:15 PT. Alternative: D4 (edge ∓ 1 pt) |
+| 14 bracket | (a) | simulated bracket on every fill; assert stop on the far side of the entry |
+| **15 stop beyond the zone** | **(b) STOP** | A4 is not coded anywhere (CR-CP / CR-CZ were stop-free or fixed 10). Proposed: stop = the box's wick extreme on the faded side at the decision minute **+ 2 pts** (the box's break threshold `EDGE_BREAK_PTS`) for a short, mirror for a long. Alternative: wick extreme + 1 tick. Stop distances reported as a distribution |
+| 16 target +10 | (a) | constant |
+| 17 no stop moves | (a) | bracket fixed until stop / target / flatten |
+| 18 no wider stop | (a) | stop is the rule-15 definition only |
+| 19 ≤ 3 losses a day | (a) backtest | count of stopped trades per session; live Q6 |
+| **20 re-entry** | **(b) STOP** | after a stop: no entry on either side for 20 min from the stop fill; a same-side re-entry needs a box that started after the stopped trade's entry and is ≥ 8 min old. Plus **one trade per box** (any outcome). Alternative: the 20-min wait applies to the same side only |
+
+### Q3 — FOMC decision days (2026)
+
+`flowV3.js:FOMC_2026_DECISION_DAYS` already holds them (CR-DQ): **2026-01-28, 03-18, 04-29, 06-17, 07-29, 09-16,
+10-28, 12-09** (the second day of each scheduled meeting), source
+https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm (checked 2026-10-31 by CR-DQ). Proposed: the engine
+reuses this constant (no second list). Train days affected: 01-28, 03-18, 04-29.
+
+### Q4 — fill and exit realism
+
+- **Trade-through ≥ 1 tick:** supported. Short limit at P fills on the first minute after the order with high ≥
+  P + 0.25 (Databento 1-min), at P; the fill second = the first `es_flow_1s_databento` second with high ≥ P + 0.25.
+- **Same-minute stop / target:** supported from the 1-s table (per-second OHLC, 06:15–13:00 PT): walk seconds after
+  the fill second; a second whose range covers both counts the stop (needs ≥ ~12 pts in one second, practically
+  never). The fill second's own adverse range beyond P counts toward the stop (as CR-CP C10's fill bar).
+- **Flatten 12:59 PT:** exit at the open of the 12:59 bar (first 1-s print ≥ 12:59:00). Supported.
+- **Gross and net of 0.25 pt / round trip:** reported both ways.
+- **Not supported:** queue position / partial fills (trade-through is the proxy); stop slippage — no book, so a stop
+  fills at the stop price, or at the second's open if a second opens beyond it; MES vs ES (± 1 tick, CR-DR S0.7) is
+  not modelled.
+
+### Q5 — contradiction-bar percentiles (train 2026-01-02 → 06-05, FOMC days and the March expiry week out; front symbol by RTH volume)
+
+Databento 100 sessions, Ironbeam 99. Full tables in `scripts/logs/cr-du/q5_contradiction_pcts.txt`.
+
+Minute volume (contracts), p10 / p50 / p80 / p90:
+
+| Bucket PT | Databento | Ironbeam | IB / DB |
+|---|---|---|---|
+| 06:30–07:00 | 3008 / 4944 / 6955 / 8646 | 2829 / 4568 / 6238 / 7632 | 0.94 / 0.92 / 0.90 / 0.88 |
+| 07:00–07:30 | 2420 / 3958 / 5718 / 6878 | 2287 / 3648 / 5141 / 6184 | 0.94 / 0.92 / 0.90 / 0.90 |
+| 07:30–08:00 | 1923 / 3282 / 4788 / 5975 | 1797 / 3031 / 4387 / 5393 | 0.93 / 0.92 / 0.92 / 0.90 |
+| 08:00–08:30 | 1615 / 2798 / 4087 / 5095 | 1517 / 2588 / 3712 / 4526 | 0.94 / 0.93 / 0.91 / 0.89 |
+| 08:30–09:00 | 1359 / 2396 / 3546 / 4567 | 1295 / 2232 / 3285 / 4144 | 0.95 / 0.93 / 0.93 / 0.91 |
+| 09:00–09:30 | 1056 / 1935 / 3095 / 4016 | 994 / 1805 / 2854 / 3655 | 0.94 / 0.93 / 0.92 / 0.91 |
+| 09:30–10:00 | 958 / 1819 / 2966 / 3759 | 906 / 1687 / 2718 / 3434 | 0.95 / 0.93 / 0.92 / 0.91 |
+| 10:00–10:30 | 932 / 1765 / 2749 / 3513 | 888 / 1654 / 2520 / 3184 | 0.95 / 0.94 / 0.92 / 0.91 |
+| 10:30–11:00 | 815 / 1596 / 2657 / 3535 | 775 / 1484 / 2428 / 3186 | 0.95 / 0.93 / 0.91 / 0.90 |
+| 11:00–11:30 | 887 / 1622 / 2542 / 3357 | 837 / 1506 / 2324 / 2998 | 0.94 / 0.93 / 0.91 / 0.89 |
+| 11:30–12:00 | 856 / 1540 / 2492 / 3343 | 808 / 1439 / 2291 / 3001 | 0.94 / 0.93 / 0.92 / 0.90 |
+| 12:00–12:30 | 1003 / 1779 / 2748 / 3584 | 950 / 1665 / 2505 / 3234 | 0.95 / 0.94 / 0.91 / 0.90 |
+| 12:30–13:00 | 1414 / 2859 / 5426 / 7657 | 1322 / 2650 / 4942 / 7044 | 0.94 / 0.93 / 0.91 / 0.92 |
+
+Minute signed delta (buy − sell), p10 / p50 / p80 / p90 (p50 ratios are noise around 0):
+
+| Bucket PT | Databento | Ironbeam | IB / DB (p10, p80, p90) |
+|---|---|---|---|
+| 06:30–07:00 | −503 / 32 / 363 / 593 | −350 / 29 / 299 / 477 | 0.70 / 0.82 / 0.80 |
+| 07:00–07:30 | −463 / 18 / 309 / 512 | −329 / 21 / 236 / 369 | 0.71 / 0.76 / 0.72 |
+| 07:30–08:00 | −413 / 2 / 275 / 451 | −296 / 4 / 212 / 345 | 0.72 / 0.77 / 0.76 |
+| 08:00–08:30 | −367 / −4 / 235 / 405 | −273 / 5 / 188 / 300 | 0.74 / 0.80 / 0.74 |
+| 08:30–09:00 | −334 / −9 / 194 / 337 | −249 / −8 / 150 / 258 | 0.74 / 0.77 / 0.77 |
+| 09:00–09:30 | −313 / 0 / 176 / 307 | −237 / 4 / 145 / 243 | 0.76 / 0.82 / 0.79 |
+| 09:30–10:00 | −292 / −10 / 173 / 309 | −226 / −7 / 140 / 234 | 0.77 / 0.81 / 0.76 |
+| 10:00–10:30 | −295 / −4 / 164 / 284 | −213 / −4 / 124 / 216 | 0.72 / 0.76 / 0.76 |
+| 10:30–11:00 | −280 / −7 / 163 / 297 | −215 / −3 / 129 / 218 | 0.77 / 0.79 / 0.73 |
+| 11:00–11:30 | −269 / −1 / 159 / 260 | −211 / 0 / 124 / 207 | 0.78 / 0.78 / 0.80 |
+| 11:30–12:00 | −280 / −9 / 145 / 264 | −219 / −8 / 111 / 211 | 0.78 / 0.77 / 0.80 |
+| 12:00–12:30 | −292 / −15 / 162 / 296 | −226 / −9 / 133 / 228 | 0.77 / 0.82 / 0.77 |
+| 12:30–13:00 | −505 / 8 / 294 / 506 | −379 / 12 / 259 / 430 | 0.75 / 0.88 / 0.85 |
+
+Minute range (pts), p10 / p50 / p80 / p90 — Databento and Ironbeam equal to the tick in every bucket except the
+p80 / p90 of 06:30–07:30 and 12:00–13:00 (Ironbeam 0.25 lower):
+
+| Bucket PT | Databento | Bucket PT | Databento |
+|---|---|---|---|
+| 06:30–07:00 | 2.50 / 4.75 / 7.25 / 9.00 | 09:30–10:00 | 1.25 / 2.50 / 4.00 / 5.00 |
+| 07:00–07:30 | 2.25 / 4.00 / 6.50 / 8.00 | 10:00–10:30 | 1.25 / 2.50 / 4.00 / 5.25 |
+| 07:30–08:00 | 1.75 / 3.50 / 5.50 / 6.75 | 10:30–11:00 | 1.00 / 2.25 / 3.75 / 4.75 |
+| 08:00–08:30 | 1.50 / 3.00 / 4.75 / 5.75 | 11:00–11:30 | 1.00 / 2.25 / 3.50 / 4.50 |
+| 08:30–09:00 | 1.50 / 2.75 / 4.50 / 5.50 | 11:30–12:00 | 1.00 / 2.00 / 3.50 / 4.25 |
+| 09:00–09:30 | 1.25 / 2.50 / 4.00 / 5.25 | 12:00–12:30 | 1.00 / 2.00 / 3.50 / 4.50 |
+| | | 12:30–13:00 | 1.25 / 2.50 / 4.25 / 5.50 |
+
+Paired minutes (38,064): Ironbeam / Databento volume median 0.943 (p5 0.855, p95 0.981); delta slope 0.68, corr
+0.91; range difference median 0 — consistent with CR-CA (0.943, 0.71). So a raw delta threshold set on one feed
+would be ~25–30 % off on the other; percentiles per feed as the kickoff says. Reading: "range ≥ 2 pts" is below the
+median minute before 08:30 PT and near it after, so the volume and delta legs do the filtering.
+Proposed detail for item 4: "on the edge being faded" = a bar inside the box span, before the decision minute,
+whose low (bullish, for a long) / high (bearish, for a short) is within 2 pts of the box's wick bottom / top;
+percentiles per feed from **prior** train sessions only in the backtest (the table above is whole-train, descriptive).
+
+### Q6 — losses per day and re-entry
+
+Backtest / overlay: simulated (rule 19 count of stops, rule 20 timer). Live: CR-DR's tables are filled only by
+`POST /api/trade-log/upload` of a TradingView export (`apps/web/modules/TradeLog/routes.py`); there is no
+intraday broker feed. So Ryan's own losses can't be counted live unless he uploads mid-session, and **the 20-min
+timer can't start either** (it needs a stop time). Proposed (STOP): the live panel shows the engine's own
+simulated trades for today (the overlay engine run on the live session): its losses today and its re-entry timer,
+labelled "engine's trades, not yours". Alternative: rule 19 / 20 out of scope live.
+
+### Q7 — live freshness (Ironbeam)
+
+| Input | Live source | Readable after minute close |
+|---|---|---|
+| Box (edges, lastClose) | `/api/ironbeam/flow/cells` live RTH segment bars (`ironbeam_es_flow_1s` minutes), polled every 15 s (`FLOW_V2_LIVE_POLL_MS`) | ≤ ~15 s + endpoint (warm p95 ~0.7 s, CR-DV) |
+| Δ share, c/pt (delta, vol) | `/api/ironbeam/flow?mode=v2` rows, last 5 min from the 1-s table (`FRESH_1S`), 15 s poll | ≤ ~15 s |
+| dPrice (candle closes) | `/api/ironbeam/bars` (`ironbeam_es_1m_bars`, insert-once cron), full poll 30 s, live overlay 1 s | **not confirmed ≤ 15 s**: closed-minute candles can wait for the 30-s poll unless the 1-s overlay finalises them. Proposed: the engine takes dPrice from the cells payload's flow bars (same feed as the box), which also removes caveat 2 |
+| Absorption | cells payload marks (`flow_heat.absorption_marks`) | on `origin/main` marks are computed to 13:00 and **repaint** (CR-DV Step 0); with CR-DV #128 (not merged): provisional ~15 s, confirmed ~195 s (3-min hold, by definition). The engine reads confirmed marks only. Depends on #128 for no-repaint equality with the backtest |
+| Contradiction bars | v2 rows (delta, vol) + cells bars (h / l / o / c) | ≤ ~15 s |
+| GEX levels | corrected levels from the prior session's 15:45 ET snapshot (`_corrected_gex_tables`) | fixed before the open; the band moves with price (server) |
+
+### Other findings for Ryan (STOP)
+
+- **Set 2 isn't loaded.** `setup_candidates` sets: `cc:fixture` 5, `cr-cb:round-1` 63, `cr-cb:round-2` 40,
+  `cr-cz:cp-ranges` 120 (120 reviewed). So item 5 runs as a dry run on CR-CZ cards, and item 4b's "set 2 in
+  progress" block needs the set-2 `set_name` (proposed: a constant set when the set-2 loader CR names it; empty
+  list until then).
+- **Set-2 contamination through the backtest.** Set-2's ~115 calls sit on train sessions the backtest scores. A
+  per-trade list with dates, times and P&L would reveal outcomes near set-2 calls. Proposed: per-trade rows (and
+  per-month splits) exclude sessions with a set-2 call until set 2 is reviewed; totals reported with and without
+  them. Needs Ryan's call.
+- **C1 (overlay colour)** — see the conformance table.
+- **Engine vs today's panel verdict.** Besides box min 8: rule 5 (earlier absorption no longer a trigger), rule 7
+  stall leg (if "highs not extending" is chosen), WATCH BREAK becomes NO ACTION, rule 4 adds blocks.
