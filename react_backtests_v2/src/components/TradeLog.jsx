@@ -7,7 +7,7 @@
  * Sections:
  *   1. Upload strip (drag-drop CSV)
  *   2. Aggregate stats bar
- *   3. Filter bar (date + clear)
+ *   3. Filter bar (date + clear; CR-DR: setup chip, mistake chip, checklist followed, grade)
  *   4. Two-column layout: trade table (left) + detail / annotation panel (right)
  */
 
@@ -84,6 +84,70 @@ function toDatetimeLocal(isoStr) {
 function pnlColor(v) {
   if (v == null) return '#94a3b8'
   return Number(v) >= 0 ? '#4ade80' : '#f87171'
+}
+
+// ── CR-DR item 4: review tags (the price chart's trade panel sets them) ──
+// Palette (C1): blue / slate / light text only for the new controls.
+
+const SETUP_CHIPS = ['fade top', 'fade bottom', 'continuation pullback', 'break & retest', 'failed break', 'second touch', '0DTE pin', 'other']
+const MISTAKE_CHIPS = ['no stop', 'chased', 'one-minute flicker', 'against flow', 'not at edge', 'event day', 'late',
+  'moved stop', 'exited early', 'held too long', 'target past level']
+const EMPTY_FILTERS = { setup_chip: '', mistake_chip: '', checklist: '', grade: '' }
+
+function filterQuery(dateFilter, filters) {
+  const q = new URLSearchParams()
+  if (dateFilter) q.set('date', dateFilter)
+  for (const [k, v] of Object.entries(filters)) if (v) q.set(k, v)
+  const s = q.toString()
+  return s ? `?${s}` : ''
+}
+
+function checklistText(v) {
+  return v === true ? 'yes' : v === false ? 'no' : '—'
+}
+
+function TagCell({ items }) {
+  if (!items?.length) return <span style={{ color: '#475569' }}>—</span>
+  return items.map((c) => (
+    <span key={c} style={{ display: 'inline-block', margin: '0 3px 2px 0', padding: '0 5px', borderRadius: 8, fontSize: 10,
+      border: '1px solid rgba(148,163,184,0.4)', color: '#cbd5e1', whiteSpace: 'nowrap' }}>{c}</span>
+  ))
+}
+
+function FilterSelect({ label, value, onChange, options, testid }) {
+  return (
+    <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6, margin: 0 }}>
+      <span style={{ whiteSpace: 'nowrap' }}>{label}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)} data-testid={testid} style={{ maxWidth: 170 }}>
+        <option value="">any</option>
+        {options.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+      </select>
+    </label>
+  )
+}
+
+// Totals by setup chip, by mistake chip and by checklist followed (counts and pts; a trade with two chips counts in both).
+function BreakdownBar({ agg }) {
+  if (!agg?.by_setup) return null
+  const group = (title, rows, label, testid) => (
+    <div data-testid={testid} style={{ border: '1px solid #1f2937', borderRadius: 12, background: '#0f172a', padding: '8px 12px', minWidth: 0 }}>
+      <div style={{ color: '#94a3b8', fontSize: 11, marginBottom: 4 }}>{title}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', fontSize: 12 }}>
+        {rows.length ? rows.map((r) => (
+          <span key={r.key} data-key={r.key} style={{ whiteSpace: 'nowrap', color: r.key === 'none' || r.key === 'unset' ? '#64748b' : '#e5e7eb' }}>
+            {label(r.key)} <b style={{ color: '#93c5fd' }}>{r.n}</b> · {fmtPts(r.pts)} pts
+          </span>
+        )) : <span style={{ color: '#64748b' }}>—</span>}
+      </div>
+    </div>
+  )
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '2fr 2fr 1fr', gap: 10 }}>
+      {group('By setup', agg.by_setup, (k) => (k === 'none' ? 'no setup' : k), 'trade-log-by-setup')}
+      {group('By mistake', agg.by_mistake, (k) => (k === 'none' ? 'no mistake' : k), 'trade-log-by-mistake')}
+      {group('Checklist followed', agg.by_checklist, (k) => (k === 'unset' ? 'not set' : k), 'trade-log-by-checklist')}
+    </div>
+  )
 }
 
 // ── Sub-components ────────────────────────────────────────────
@@ -275,6 +339,10 @@ function TradeRow({ trade, selected, onSelect }) {
       <td style={{ color: '#60a5fa', fontSize: 11 }}>
         {trade.context_iv_atm_0dte_pct != null ? fmtIv(trade.context_iv_atm_0dte_pct) : '—'}
       </td>
+      <td style={{ maxWidth: 180 }}><TagCell items={trade.setup_chips} /></td>
+      <td style={{ maxWidth: 200 }}><TagCell items={trade.mistake_chips} /></td>
+      <td style={{ color: '#cbd5e1', fontSize: 11 }}>{checklistText(trade.checklist_followed)}</td>
+      <td style={{ color: '#cbd5e1', fontSize: 11 }}>{trade.grade ?? '—'}</td>
       <td style={{ color: '#94a3b8', fontSize: 11, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>
         {trade.notes || ''}
       </td>
@@ -678,35 +746,36 @@ export default function TradeLog() {
   const [selectedId, setSelectedId] = useState(null)
   const [detailTrade, setDetailTrade] = useState(null)
   const [dateFilter, setDateFilter] = useState('')
+  const [filters, setFilters]       = useState(EMPTY_FILTERS)
   const [loading, setLoading]       = useState(false)
   const [error, setError]           = useState('')
 
   // ── Data fetching ───────────────────────────────────────────
 
+  // CR-DR: filters can change faster than responses arrive; only the latest request's answer is applied.
+  const tradesReq = useRef(0)
+  const aggReq = useRef(0)
   const loadTrades = useCallback(async () => {
     setLoading(true)
+    const n = ++tradesReq.current
     try {
-      const url = dateFilter
-        ? `/api/trade-log/trades?date=${dateFilter}`
-        : '/api/trade-log/trades'
-      const res  = await fetch(url)
+      const res  = await fetch(`/api/trade-log/trades${filterQuery(dateFilter, filters)}`)
       const data = await res.json()
+      if (n !== tradesReq.current) return
       if (data.ok) setTrades(data.trades || [])
       else setError(data.error || 'Failed to load trades')
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }
-  }, [dateFilter])
+  }, [dateFilter, filters])
 
   const loadAgg = useCallback(async () => {
     try {
-      const url = dateFilter
-        ? `/api/trade-log/aggregate?date=${dateFilter}`
-        : '/api/trade-log/aggregate'
-      const res  = await fetch(url)
+      const n = ++aggReq.current
+      const res  = await fetch(`/api/trade-log/aggregate${filterQuery(dateFilter, filters)}`)
       const data = await res.json()
-      if (data.ok) setAgg(data)
+      if (n === aggReq.current && data.ok) setAgg(data)
     } catch { /* non-critical */ }
-  }, [dateFilter])
+  }, [dateFilter, filters])
 
   const loadDetail = useCallback(async (id) => {
     try {
@@ -750,9 +819,12 @@ export default function TradeLog() {
         <UploadStrip onUpload={refresh} />
         <AggregateBar agg={agg} />
       </div>
+      <div style={{ flexShrink: 0 }}>
+        <BreakdownBar agg={agg} />
+      </div>
 
       {/* Filter bar */}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', flexShrink: 0 }}>
         <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8, margin: 0 }}>
           <span style={{ whiteSpace: 'nowrap' }}>Filter by date</span>
           <input
@@ -762,9 +834,21 @@ export default function TradeLog() {
             style={{ width: 150 }}
           />
         </div>
-        {dateFilter && (
+        <FilterSelect label="Setup" value={filters.setup_chip} testid="trade-log-filter-setup"
+          onChange={(v) => { setFilters((f) => ({ ...f, setup_chip: v })); setSelectedId(null) }}
+          options={[...SETUP_CHIPS.map((c) => [c, c]), ['none', 'no setup chip']]} />
+        <FilterSelect label="Mistake" value={filters.mistake_chip} testid="trade-log-filter-mistake"
+          onChange={(v) => { setFilters((f) => ({ ...f, mistake_chip: v })); setSelectedId(null) }}
+          options={[...MISTAKE_CHIPS.map((c) => [c, c]), ['none', 'no mistake chip']]} />
+        <FilterSelect label="Checklist" value={filters.checklist} testid="trade-log-filter-checklist"
+          onChange={(v) => { setFilters((f) => ({ ...f, checklist: v })); setSelectedId(null) }}
+          options={[['yes', 'followed'], ['no', 'not followed'], ['unset', 'not set']]} />
+        <FilterSelect label="Grade" value={filters.grade} testid="trade-log-filter-grade"
+          onChange={(v) => { setFilters((f) => ({ ...f, grade: v })); setSelectedId(null) }}
+          options={[...['1', '2', '3', '4', '5'].map((g) => [g, g]), ['unset', 'not set']]} />
+        {(dateFilter || Object.values(filters).some(Boolean)) && (
           <button className="ghost-button" style={{ padding: '6px 10px', fontSize: 12 }}
-            onClick={() => { setDateFilter(''); setSelectedId(null) }}>
+            onClick={() => { setDateFilter(''); setFilters(EMPTY_FILTERS); setSelectedId(null) }}>
             Clear
           </button>
         )}
@@ -788,7 +872,7 @@ export default function TradeLog() {
             </div>
           ) : (
             <div className="table-wrap" style={{ flex: 1, minHeight: 0 }}>
-              <table className="results-table" style={{ minWidth: 900 }}>
+              <table className="results-table" style={{ minWidth: 1180 }}>
                 <thead>
                   <tr>
                     <th style={{ width: 28 }} />
@@ -803,6 +887,10 @@ export default function TradeLog() {
                     <th>Pts</th>
                     <th>Net P&L</th>
                     <th>IV 0DTE</th>
+                    <th>Setup</th>
+                    <th>Mistakes</th>
+                    <th title="Checklist followed">Checklist</th>
+                    <th>Grade</th>
                     <th style={{ minWidth: 140 }}>Notes</th>
                   </tr>
                 </thead>

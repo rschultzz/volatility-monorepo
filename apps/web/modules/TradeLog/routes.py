@@ -54,8 +54,10 @@ def upload():
     POST /api/trade-log/upload
     Body: multipart/form-data with field 'file' (CSV)
 
-    Parses the TV CSV, FIFO-pairs fills into round-trip trades,
-    inserts new records, and auto-computes market context.
+    Parses the TV order-history CSV, detects its time zone against ES bars
+    (refuses if not unique), stores every order, FIFO-pairs fills by fill time
+    into round-trip trades, inserts new records, and auto-computes market context.
+    ?dry_run=1 runs it all in a rolled-back transaction (CR-DR).
     """
     if 'file' not in request.files:
         return jsonify({'ok': False, 'error': 'No file in request'}), 400
@@ -65,7 +67,8 @@ def upload():
         return jsonify({'ok': False, 'error': 'Empty filename'}), 400
 
     try:
-        result = service.upload_csv(f.read())
+        dry_run = request.args.get('dry_run') in ('1', 'true')
+        result = service.upload_csv(f.read(), dry_run=dry_run)
         status = 200 if result.get('ok') else 400
         return jsonify(result), status
     except Exception as e:
@@ -75,21 +78,49 @@ def upload():
 
 # ── Trade list ────────────────────────────────────────────────
 
+def _filters() -> dict:
+    """CR-DR item 4: ?setup_chip=&mistake_chip=&checklist=yes|no|unset&grade=1..5|unset"""
+    return {k: request.args.get(k) for k in ('setup_chip', 'mistake_chip', 'checklist', 'grade') if request.args.get(k)}
+
+
 @trade_log_bp.get('/trades')
 def list_trades():
     """
-    GET /api/trade-log/trades[?date=YYYY-MM-DD]
+    GET /api/trade-log/trades[?date=YYYY-MM-DD][&setup_chip=&mistake_chip=&checklist=&grade=]
 
     Returns all trades, newest date first.
     Optional ?date= filter narrows to one session.
     """
     date_filter = request.args.get('date') or None
     try:
-        trades = service.list_trades(date_filter)
+        trades = service.list_trades(date_filter, _filters())
         return jsonify({'ok': True, 'trades': trades})
+    except service.ReviewFieldError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
     except Exception as e:
         log.exception('list_trades failed')
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ── Price chart (CR-DR item 2) ────────────────────────────────
+
+@trade_log_bp.get('/chart')
+def chart_trades():
+    """
+    GET /api/trade-log/chart?from=YYYY-MM-DD&to=YYYY-MM-DD
+
+    Trades in the date range with PT wall-clock times and the exit-side
+    orders (stop / target) resting while each position was open.
+    """
+    date_from = request.args.get('from') or request.args.get('date')
+    date_to = request.args.get('to') or date_from
+    if not date_from:
+        return jsonify({'ok': False, 'error': 'from (or date) is required'}), 400
+    try:
+        return jsonify({'ok': True, 'trades': service.chart_trades(date_from, date_to)})
+    except Exception as e:
+        log.exception('chart_trades failed')
+        return jsonify({'ok': False, 'error': type(e).__name__}), 500
 
 
 # ── Single trade ──────────────────────────────────────────────
@@ -118,6 +149,12 @@ def update_trade(trade_id):
         setup_target_ts_pt  — datetime-local string
         setup_direction     — 'long' | 'short' | ''
         notes               — free text
+      CR-DR review fields:
+        setup_chips / mistake_chips — lists of the offered chip strings
+        pre_trade_reason / lesson   — free text
+        checklist_followed          — true | false | null
+        grade                       — 1..5 | null
+        anchor_ts_pt                — 'YYYY-MM-DDTHH:MM[:SS]' PT | null (the box anchor for "at entry")
     """
     body = request.get_json(silent=True) or {}
     try:
@@ -125,9 +162,26 @@ def update_trade(trade_id):
         if trade is None:
             return jsonify({'ok': False, 'error': 'Not found'}), 404
         return jsonify({'ok': True, 'trade': trade})
+    except service.ReviewFieldError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
     except Exception as e:
         log.exception('update_trade failed')
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ── Review panel facts (CR-DR item 3) ─────────────────────────
+
+@trade_log_bp.get('/trades/<int:trade_id>/review')
+def trade_review(trade_id):
+    """GET /api/trade-log/trades/<id>/review — facts, MFE / MAE, resting orders, stop at entry."""
+    try:
+        r = service.trade_review(trade_id)
+        if r is None:
+            return jsonify({'ok': False, 'error': 'Not found'}), 404
+        return jsonify({'ok': True, 'review': r, 'setup_chips': service.SETUP_CHIPS, 'mistake_chips': service.MISTAKE_CHIPS})
+    except Exception as e:
+        log.exception('trade_review failed')
+        return jsonify({'ok': False, 'error': type(e).__name__}), 500
 
 
 # ── Recompute context ─────────────────────────────────────────
@@ -169,14 +223,17 @@ def delete_trade(trade_id):
 @trade_log_bp.get('/aggregate')
 def aggregate():
     """
-    GET /api/trade-log/aggregate[?date=YYYY-MM-DD]
+    GET /api/trade-log/aggregate[?date=YYYY-MM-DD][&setup_chip=&mistake_chip=&checklist=&grade=]
 
-    Returns win rate, avg winner/loser, R:R, total P&L, total fees.
+    Returns win rate, avg winner/loser, R:R, total P&L, total fees, and (CR-DR)
+    by_setup / by_mistake / by_checklist: [{key, n, pts}].
     """
     date_filter = request.args.get('date') or None
     try:
-        result = service.get_aggregate(date_filter)
+        result = service.get_aggregate(date_filter, _filters())
         return jsonify(result)
+    except service.ReviewFieldError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
     except Exception as e:
         log.exception('aggregate failed')
         return jsonify({'ok': False, 'error': str(e)}), 500

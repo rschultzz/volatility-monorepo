@@ -2,7 +2,7 @@
 apps/web/modules/TradeLog/service.py
 
 Business logic for the Trade Log feature:
-  - TV CSV parsing (CT → PT conversion)
+  - TV order-history CSV parsing (time zone detected against ES bars, CR-DR)
   - FIFO fill pairing into round-trip trades
   - DB insert / CRUD
   - Market-context computation via BacktestsV2 helpers
@@ -149,20 +149,28 @@ _TV_DATETIME_FORMATS = [
     '%m/%d/%y %H:%M',
 ]
 
+# CR-DR: TradingView exports name the same column differently by version
+# ('Fill Qty' in the April 2026 export, 'Fill quantity' in the 2026-10 one).
+# Headers are matched case-insensitively through this alias table.
+_HEADER_ALIASES = {
+    'qty':            'quantity',
+    'fill qty':       'fill quantity',
+    'filled qty':     'fill quantity',
+    'avg fill price': 'avg fill price',
+    'avg. fill price': 'avg fill price',
+    'order id':       'order id',
+    'id':             'order id',
+}
 
-def _parse_tv_datetime(value: str):
-    """
-    Parse a TradingView datetime string (assumed Central Time) and
-    return a timezone-aware datetime in Pacific Time.
-    Returns None on failure.
-    """
+
+def _parse_tv_naive(value: str):
+    """Parse a TradingView datetime string to a naive datetime (zone unknown). None on failure."""
     s = (value or '').strip()
     if not s:
         return None
     for fmt in _TV_DATETIME_FORMATS:
         try:
-            naive = datetime.strptime(s, fmt)
-            return naive.replace(tzinfo=CT).astimezone(PT)
+            return datetime.strptime(s, fmt)
         except ValueError:
             continue
     log.debug('Could not parse TV datetime: %r', value)
@@ -179,99 +187,172 @@ def _normalize_side(raw: str) -> str:
     return s
 
 
+def _num(v):
+    if v is None or str(v).strip() == '':
+        return None
+    try:
+        return float(v)
+    except ValueError:
+        return None
+
+
 def parse_tv_csv(file_bytes: bytes) -> tuple[list[dict], list[str]]:
     """
-    Parse a TradingView fills CSV.
+    Parse a TradingView order-history CSV (CR-DR).
+
+    Every order row is returned (Filled, Cancelled, Rejected, Working, ...);
+    times stay naive here because the export's zone is detected later
+    against ES bars (detect_timezone). A row is a fill when it carries a
+    fill quantity > 0 and an average fill price (partial fills included).
 
     Returns:
-        (fills, warnings)
-        fills    — list of fill dicts (only filled orders, CT→PT converted)
-        warnings — list of human-readable warning strings
+        (orders, warnings)
     """
     text = file_bytes.decode('utf-8-sig')   # strip BOM if present
     reader = csv.DictReader(io.StringIO(text))
 
-    fills = []
+    orders = []
     warnings = []
-    skipped_cancelled = 0
-    skipped_unparseable = 0
+    skipped_no_id = 0
 
     for raw_row in reader:
-        row = {k.strip(): (v or '').strip() for k, v in raw_row.items()}
+        raw = {(k or '').strip(): (v or '').strip() for k, v in raw_row.items()}
+        row = {}
+        for k, v in raw.items():
+            key = k.lower()
+            row[_HEADER_ALIASES.get(key, key)] = v
 
-        status = row.get('Status', '').lower()
-        if status == 'cancelled':
-            skipped_cancelled += 1
-            continue
-
-        fill_qty_raw  = row.get('Fill Qty', '')
-        fill_px_raw   = row.get('Avg Fill Price', '')
-
-        if not fill_qty_raw or not fill_px_raw:
-            skipped_unparseable += 1
-            continue
-
-        try:
-            fill_qty   = int(float(fill_qty_raw))
-            fill_price = float(fill_px_raw)
-        except ValueError:
-            skipped_unparseable += 1
-            continue
-
-        if fill_qty <= 0:
-            skipped_unparseable += 1
-            continue
-
-        order_id = row.get('Order ID', '').strip()
+        order_id = row.get('order id', '')
         if not order_id:
-            warnings.append(f'Row missing Order ID, skipped: {row}')
+            skipped_no_id += 1
             continue
 
-        placing_time_pt = _parse_tv_datetime(row.get('Placing Time', ''))
-        status_time_pt  = _parse_tv_datetime(row.get('Status Time', ''))
+        fill_qty = _num(row.get('fill quantity'))
+        fill_price = _num(row.get('avg fill price'))
+        is_fill = bool(fill_qty and fill_qty > 0 and fill_price is not None)
 
-        fills.append({
-            'order_id':       order_id,
-            'symbol':         row.get('Symbol', ''),
-            'side':           _normalize_side(row.get('Side', '')),
-            'order_type':     row.get('Type', ''),
-            'qty':            int(float(row.get('Qty', 0) or 0)),
-            'fill_qty':       fill_qty,
-            'fill_price':     fill_price,
-            'commission':     float(row.get('Commission', 0) or 0),
-            'duration':       row.get('Duration', ''),
-            'placing_time_pt': placing_time_pt,
-            'status_time_pt':  status_time_pt,
-            'raw_csv_row':    row,
+        orders.append({
+            'order_id':      order_id,
+            'symbol':        row.get('symbol', ''),
+            'side':          _normalize_side(row.get('side', '')),
+            'order_type':    row.get('type', ''),
+            'qty':           int(_num(row.get('quantity')) or 0),
+            'limit_price':   _num(row.get('limit price')),
+            'stop_price':    _num(row.get('stop price')),
+            'status':        row.get('status', '') or 'Unknown',
+            'duration':      row.get('duration', ''),
+            'commission':    _num(row.get('commission')) or 0.0,
+            'fill_qty':      int(fill_qty) if is_fill else 0,
+            'fill_price':    fill_price if is_fill else None,
+            'is_fill':       is_fill,
+            'placing_naive': _parse_tv_naive(row.get('placing time', '')),
+            'status_naive':  _parse_tv_naive(row.get('status time', '')),
+            'raw_csv_row':   raw,
         })
 
-    if skipped_cancelled:
-        warnings.append(f'{skipped_cancelled} cancelled order(s) skipped.')
-    if skipped_unparseable:
-        warnings.append(f'{skipped_unparseable} row(s) skipped (missing fill data).')
+    if skipped_no_id:
+        warnings.append(f'{skipped_no_id} row(s) without an Order ID skipped.')
+    return orders, warnings
 
-    # Sort chronologically by placing time (fall back to status time)
-    def _sort_key(f):
-        return f['placing_time_pt'] or f['status_time_pt'] or datetime.min.replace(tzinfo=PT)
 
-    fills.sort(key=_sort_key)
-    return fills, warnings
+# ══════════════════════════════════════════════════════════════
+# Timezone detection (CR-DR item 1a)
+# ══════════════════════════════════════════════════════════════
+
+TZ_CANDIDATES = [('PT', PT), ('CT', CT), ('ET', ET), ('UTC', timezone.utc)]
+FILL_MATCH_TOL_PTS = 0.25   # one tick: MES and ES are separate books (Step 0 S0.7)
+
+# B4: holdout window — no MFE / MAE, "at entry" or ORATS context is shown or computed.
+HOLDOUT_START = '2026-06-06'
+HOLDOUT_END   = '2026-10-26'
+
+
+def is_holdout_date(d) -> bool:
+    s = str(d)[:10] if d else ''
+    return bool(s) and HOLDOUT_START <= s <= HOLDOUT_END
+
+
+def _fill_naive(o: dict):
+    """The fill time of an order row: its Status time (fallback: placing time)."""
+    return o.get('status_naive') or o.get('placing_naive')
+
+
+def detect_timezone(cur, fills: list[dict]) -> dict:
+    """
+    For each candidate zone, read every fill's time in that zone and check its
+    price against the ES 1-minute bar (es_minutes, minute floor) ± one tick.
+    The zone is accepted only if it is the one zone where every fill matches.
+    Never guesses: returns {'zone': None, 'error': ...} otherwise.
+    """
+    naive = [_fill_naive(f) for f in fills]
+    if any(n is None for n in naive):
+        return {'zone': None, 'matches': {}, 'error':
+                'Some fills have no readable fill time; the export\'s time zone cannot be checked.'}
+
+    utc_by_zone = {}
+    for name, tz in TZ_CANDIDATES:
+        utc_by_zone[name] = [n.replace(second=0, microsecond=0, tzinfo=tz).astimezone(timezone.utc) for n in naive]
+    all_minutes = sorted({m for ms in utc_by_zone.values() for m in ms})
+    cur.execute('SELECT ts_utc, low, high FROM es_minutes WHERE ts_utc = ANY(%s)', (all_minutes,))
+    bars = {r['ts_utc']: (float(r['low']), float(r['high'])) for r in cur.fetchall()}
+
+    matches, misses = {}, {}
+    for name, _ in TZ_CANDIDATES:
+        ok, miss = 0, []
+        for f, m in zip(fills, utc_by_zone[name]):
+            b = bars.get(m)
+            if b and b[0] - FILL_MATCH_TOL_PTS <= f['fill_price'] <= b[1] + FILL_MATCH_TOL_PTS:
+                ok += 1
+            else:
+                miss.append(f"{_fill_naive(f):%Y-%m-%d %H:%M:%S} @ {f['fill_price']:g}"
+                            + (f' (bar {b[0]:g}–{b[1]:g})' if b else ' (no bar)'))
+        matches[name] = ok
+        misses[name] = miss
+
+    full = [name for name, n in matches.items() if n == len(fills)]
+    summary = ', '.join(f'{z} {n}/{len(fills)}' for z, n in matches.items())
+    if len(full) == 1:
+        return {'zone': full[0], 'matches': matches, 'error': None}
+    if not full:
+        best = max(matches, key=matches.get)
+        return {'zone': None, 'matches': matches, 'error':
+                f'Time zone not detected: no zone puts every fill inside its ES minute bar (± 0.25). '
+                f'Matches: {summary}. Closest zone {best} misses: {"; ".join(misses[best][:5])}. Nothing was imported.'}
+    return {'zone': None, 'matches': matches, 'error':
+            f'Time zone ambiguous: every fill matches in {" and ".join(full)}. Nothing was imported.'}
+
+
+def _localize(o: dict, zone: str) -> dict:
+    tz = dict(TZ_CANDIDATES)[zone]
+    def _pt(n):
+        return n.replace(tzinfo=tz).astimezone(PT) if n else None
+    return {**o, 'detected_tz': zone,
+            'placing_time_pt': _pt(o.get('placing_naive')),
+            'status_time_pt':  _pt(o.get('status_naive'))}
 
 
 # ══════════════════════════════════════════════════════════════
 # FIFO pairing
 # ══════════════════════════════════════════════════════════════
 
+def _fill_ts(f: dict):
+    """CR-DR: a fill happens at its Status time, not when the order was placed."""
+    return f.get('status_time_pt') or f.get('placing_time_pt')
+
+
 def fifo_pair_fills(fills: list[dict]) -> tuple[list[dict], list[str]]:
     """
-    FIFO-pair fills into round-trip trades.
-    Handles scaling into a position (buy 1, buy 1, sell 2 → two trades).
-    Open positions at the end of the fill list are silently dropped
-    with a warning per symbol.
+    FIFO-pair fills into round-trip trades, in fill (Status) time order.
+    Handles scaling into a position (buy 1, buy 1, sell 2 → two trades)
+    and partial fills (each fill row carries its own fill qty).
+    Open positions at the end of the fill list are dropped with a warning per symbol.
 
     Returns:
         (trades, warnings)
     """
+    _min = datetime.min.replace(tzinfo=PT)
+    fills = sorted(fills, key=lambda f: (_fill_ts(f) or _min, f.get('placing_time_pt') or _min, f['order_id']))
+
     # Group by symbol root so MES and ES don't cross-contaminate
     by_root: dict[str, list[dict]] = {}
     for f in fills:
@@ -289,12 +370,8 @@ def fifo_pair_fills(fills: list[dict]) -> tuple[list[dict], list[str]]:
             side      = fill['side']
             remaining = fill['fill_qty']
 
-            if not queue:
-                queue.append({**fill, 'remaining': remaining})
-                continue
-
-            if side == queue[0]['side']:
-                # Same direction — scaling in
+            if not queue or side == queue[0]['side']:
+                # Flat, or same direction — opening / scaling in
                 queue.append({**fill, 'remaining': remaining})
                 continue
 
@@ -321,9 +398,10 @@ def fifo_pair_fills(fills: list[dict]) -> tuple[list[dict], list[str]]:
                 fees_usd   = entry_comm + exit_comm
                 net_pnl    = realized_pnl_usd - fees_usd
 
-                entry_ts = entry['placing_time_pt'] or entry['status_time_pt']
-                exit_ts  = exit_fill['placing_time_pt'] or exit_fill['status_time_pt']
-                trade_date = (entry_ts or exit_ts).date().isoformat() if (entry_ts or exit_ts) else None
+                entry_ts = _fill_ts(entry)
+                exit_ts  = _fill_ts(exit_fill)
+                day_ts = entry_ts or exit_ts
+                trade_date = day_ts.astimezone(PT).date().isoformat() if day_ts else None
 
                 trades.append({
                     'trade_date':       trade_date,
@@ -362,7 +440,7 @@ def fifo_pair_fills(fills: list[dict]) -> tuple[list[dict], list[str]]:
                 f'{root}: {open_qty} lot(s) left open at end of fills — unmatched trade(s) dropped.'
             )
 
-    trades.sort(key=lambda t: t['entry_ts_pt'] or datetime.min.replace(tzinfo=PT))
+    trades.sort(key=lambda t: t['entry_ts_pt'] or _min)
     return trades, warnings
 
 
@@ -370,99 +448,131 @@ def fifo_pair_fills(fills: list[dict]) -> tuple[list[dict], list[str]]:
 # Upload orchestration
 # ══════════════════════════════════════════════════════════════
 
-def upload_csv(file_bytes: bytes) -> dict:
+def _load_db_fills(cur, roots: list[str]) -> list[dict]:
+    like_patterns = [f'F.US.{r}%' for r in roots] + roots
+    cur.execute("""
+        SELECT order_id, symbol, side, order_type,
+               qty, fill_qty, fill_price, commission, duration,
+               placing_time_pt, status_time_pt
+        FROM trade_log_fills
+        WHERE symbol LIKE ANY(%s)
+           OR symbol = ANY(%s)
+    """, (like_patterns, roots))
+    out = []
+    for r in cur.fetchall():
+        row = dict(r)
+        # psycopg2 returns NUMERIC columns as Decimal — cast to float
+        # so downstream arithmetic works without type errors.
+        row['commission'] = float(row.get('commission') or 0)
+        row['fill_price'] = float(row.get('fill_price') or 0)
+        row['fill_qty']   = int(row.get('fill_qty') or 0)
+        row['qty']        = int(row.get('qty') or 0)
+        out.append(row)
+    return out
+
+
+def upload_csv(file_bytes: bytes, dry_run: bool = False) -> dict:
     """
-    Full upload pipeline:
-      1. Parse CSV → fills
-      2. Insert new fills (dedup by order_id)
-      3. Load ALL fills from DB for affected symbols
-      4. Re-pair ALL fills → trades
+    Full upload pipeline (CR-DR):
+      1. Parse CSV → every order row; fills = rows with a fill qty and price
+      2. Detect the export's time zone against ES minute bars (refuse if not unique)
+      3. Insert new orders (trade_log_orders) and fills (trade_log_fills), dedup by order_id
+      4. Load ALL fills from DB for affected symbols, re-pair FIFO by fill time
       5. Insert new trades (dedup by entry+exit order_id)
-      6. Auto-compute context for newly inserted trades
+      6. Auto-compute ORATS context for new trades (not on B4 holdout dates)
+    dry_run: everything runs in one transaction that is rolled back.
     Returns a summary dict.
     """
-    fills, parse_warnings = parse_tv_csv(file_bytes)
+    orders, parse_warnings = parse_tv_csv(file_bytes)
+    fills = [o for o in orders if o['is_fill']]
     if not fills:
         return {'ok': False, 'error': 'No filled orders found in CSV.', 'warnings': parse_warnings}
 
     conn = get_conn()
     try:
-        with conn:
-            with conn.cursor() as cur:
-                # ── 1. Insert new fills ───────────────────────────────
-                new_fill_count = 0
-                for f in fills:
-                    cur.execute("""
-                        INSERT INTO trade_log_fills
-                            (order_id, symbol, side, order_type, qty, fill_qty,
-                             fill_price, commission, duration,
-                             placing_time_pt, status_time_pt, raw_csv_row)
-                        VALUES (%(order_id)s, %(symbol)s, %(side)s, %(order_type)s,
-                                %(qty)s, %(fill_qty)s, %(fill_price)s, %(commission)s,
-                                %(duration)s, %(placing_time_pt)s, %(status_time_pt)s,
-                                %(raw_csv_row)s)
-                        ON CONFLICT (order_id) DO NOTHING
-                    """, {**f, 'raw_csv_row': json.dumps(f['raw_csv_row'])})
-                    new_fill_count += cur.rowcount
+        with conn.cursor() as cur:
+            tz = detect_timezone(cur, fills)
+            if not tz['zone']:
+                conn.rollback()
+                return {'ok': False, 'error': tz['error'], 'zone_matches': tz['matches'],
+                        'warnings': parse_warnings}
+            zone = tz['zone']
+            orders = [_localize(o, zone) for o in orders]
+            fills = [o for o in orders if o['is_fill']]
 
-                # ── 2. Load ALL fills from DB (for affected symbols) ──
-                roots = list({extract_root(f['symbol']) for f in fills})
-                # Match by symbol prefix using LIKE patterns
-                like_patterns = [f'F.US.{r}%' for r in roots] + roots
+            # ── 1. Insert new orders (all statuses) ───────────────
+            new_order_count = 0
+            for o in orders:
                 cur.execute("""
-                    SELECT order_id, symbol, side, order_type,
-                           qty, fill_qty, fill_price, commission, duration,
-                           placing_time_pt, status_time_pt
-                    FROM trade_log_fills
-                    WHERE symbol LIKE ANY(%s)
-                       OR symbol = ANY(%s)
-                    ORDER BY placing_time_pt ASC NULLS LAST
-                """, (like_patterns, roots))
-                all_db_fills = []
-                for r in cur.fetchall():
-                    row = dict(r)
-                    # psycopg2 returns NUMERIC columns as Decimal — cast to float
-                    # so downstream arithmetic works without type errors.
-                    row['commission'] = float(row.get('commission') or 0)
-                    row['fill_price'] = float(row.get('fill_price') or 0)
-                    row['fill_qty']   = int(row.get('fill_qty') or 0)
-                    row['qty']        = int(row.get('qty') or 0)
-                    all_db_fills.append(row)
+                    INSERT INTO trade_log_orders
+                        (order_id, symbol, side, order_type, qty, limit_price, stop_price,
+                         status, placing_time_pt, status_time_pt, duration, detected_tz, raw_csv_row)
+                    VALUES (%(order_id)s, %(symbol)s, %(side)s, %(order_type)s, %(qty)s,
+                            %(limit_price)s, %(stop_price)s, %(status)s, %(placing_time_pt)s,
+                            %(status_time_pt)s, %(duration)s, %(detected_tz)s, %(raw_csv_row)s)
+                    ON CONFLICT (order_id) DO NOTHING
+                """, {**o, 'raw_csv_row': json.dumps(o['raw_csv_row'])})
+                new_order_count += cur.rowcount
 
-                # ── 3. Re-pair ALL fills ──────────────────────────────
-                paired_trades, pair_warnings = fifo_pair_fills(all_db_fills)
+            # ── 2. Insert new fills ───────────────────────────────
+            new_fill_count = 0
+            for f in fills:
+                cur.execute("""
+                    INSERT INTO trade_log_fills
+                        (order_id, symbol, side, order_type, qty, fill_qty,
+                         fill_price, commission, duration,
+                         placing_time_pt, status_time_pt, raw_csv_row, detected_tz)
+                    VALUES (%(order_id)s, %(symbol)s, %(side)s, %(order_type)s,
+                            %(qty)s, %(fill_qty)s, %(fill_price)s, %(commission)s,
+                            %(duration)s, %(placing_time_pt)s, %(status_time_pt)s,
+                            %(raw_csv_row)s, %(detected_tz)s)
+                    ON CONFLICT (order_id) DO NOTHING
+                """, {**f, 'raw_csv_row': json.dumps(f['raw_csv_row'])})
+                new_fill_count += cur.rowcount
 
-                # ── 4. Insert new trades (skip existing by unique constraint) ──
-                new_trade_ids = []
-                for t in paired_trades:
-                    cur.execute("""
-                        INSERT INTO trade_log_trades
-                            (trade_date, symbol, direction, qty,
-                             entry_order_id, entry_ts_pt, entry_price, entry_order_type,
-                             exit_order_id,  exit_ts_pt,  exit_price,  exit_order_type,
-                             realized_pts, realized_pnl_usd, fees_usd, net_pnl_usd,
-                             setup_start_ts_pt, setup_target_ts_pt)
-                        VALUES
-                            (%(trade_date)s, %(symbol)s, %(direction)s, %(qty)s,
-                             %(entry_order_id)s, %(entry_ts_pt)s, %(entry_price)s, %(entry_order_type)s,
-                             %(exit_order_id)s,  %(exit_ts_pt)s,  %(exit_price)s,  %(exit_order_type)s,
-                             %(realized_pts)s, %(realized_pnl_usd)s, %(fees_usd)s, %(net_pnl_usd)s,
-                             %(setup_start_ts_pt)s, %(setup_target_ts_pt)s)
-                        ON CONFLICT (entry_order_id, exit_order_id) DO NOTHING
-                        RETURNING id
-                    """, t)
-                    row = cur.fetchone()
-                    if row:
-                        new_trade_ids.append(row['id'])
+            # ── 3. Re-pair ALL fills for the affected symbols ─────
+            roots = list({extract_root(f['symbol']) for f in fills})
+            paired_trades, pair_warnings = fifo_pair_fills(_load_db_fills(cur, roots))
+
+            # ── 4. Insert new trades (skip existing by unique constraint) ──
+            new_trades = []
+            for t in paired_trades:
+                cur.execute("""
+                    INSERT INTO trade_log_trades
+                        (trade_date, symbol, direction, qty,
+                         entry_order_id, entry_ts_pt, entry_price, entry_order_type,
+                         exit_order_id,  exit_ts_pt,  exit_price,  exit_order_type,
+                         realized_pts, realized_pnl_usd, fees_usd, net_pnl_usd,
+                         setup_start_ts_pt, setup_target_ts_pt)
+                    VALUES
+                        (%(trade_date)s, %(symbol)s, %(direction)s, %(qty)s,
+                         %(entry_order_id)s, %(entry_ts_pt)s, %(entry_price)s, %(entry_order_type)s,
+                         %(exit_order_id)s,  %(exit_ts_pt)s,  %(exit_price)s,  %(exit_order_type)s,
+                         %(realized_pts)s, %(realized_pnl_usd)s, %(fees_usd)s, %(net_pnl_usd)s,
+                         %(setup_start_ts_pt)s, %(setup_target_ts_pt)s)
+                    ON CONFLICT (entry_order_id, exit_order_id) DO NOTHING
+                    RETURNING id
+                """, t)
+                row = cur.fetchone()
+                if row:
+                    new_trades.append({**t, 'id': row['id']})
+
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
 
         # ── 5. Auto-compute context for newly inserted trades ─────────
         ctx_errors = 0
-        for trade_id in new_trade_ids:
-            try:
-                recompute_context(trade_id)
-            except Exception as e:
-                log.warning('Context auto-compute failed for trade %s: %s', trade_id, e)
-                ctx_errors += 1
+        if not dry_run:
+            for t in new_trades:
+                if is_holdout_date(t['trade_date']):
+                    continue   # B4: no context on holdout dates
+                try:
+                    recompute_context(t['id'])
+                except Exception as e:
+                    log.warning('Context auto-compute failed for trade %s: %s', t['id'], type(e).__name__)
+                    ctx_errors += 1
 
         all_warnings = parse_warnings + pair_warnings
         if ctx_errors:
@@ -471,12 +581,29 @@ def upload_csv(file_bytes: bytes) -> dict:
                 'Use "Recompute" after setting annotation times.'
             )
 
+        def _brief(t):
+            return {'trade_date': t['trade_date'], 'direction': t['direction'], 'qty': t['qty'],
+                    'entry_ts_pt': t['entry_ts_pt'].isoformat() if t['entry_ts_pt'] else None,
+                    'entry_price': t['entry_price'],
+                    'exit_ts_pt': t['exit_ts_pt'].isoformat() if t['exit_ts_pt'] else None,
+                    'exit_price': t['exit_price'], 'realized_pts': round(t['realized_pts'], 2)}
+
         return {
             'ok': True,
-            'new_fills':  new_fill_count,
-            'new_trades': len(new_trade_ids),
-            'warnings':   all_warnings,
+            'dry_run':      dry_run,
+            'detected_tz':  zone,
+            'zone_matches': tz['matches'],
+            'fills_in_file': len(fills),
+            'orders_in_file': len(orders),
+            'new_orders':   new_order_count,
+            'new_fills':    new_fill_count,
+            'new_trades':   len(new_trades),
+            'trades':       [_brief(t) for t in new_trades],
+            'warnings':     all_warnings,
         }
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -530,24 +657,74 @@ def _format_trade(row: dict) -> dict:
         'context_computed_at':      _ts(row.get('context_computed_at')),
         'created_at':               _ts(row.get('created_at')),
         'updated_at':               _ts(row.get('updated_at')),
+        # CR-DR: naive PT wall-clock strings (the price chart's time axis is PT) and Ryan's review fields
+        'entry_pt':                 _pt_naive(row.get('entry_ts_pt')),
+        'exit_pt':                  _pt_naive(row.get('exit_ts_pt')),
+        'anchor_pt':                _pt_naive(row.get('anchor_ts_pt')),
+        'setup_chips':              list(row.get('setup_chips') or []),
+        'pre_trade_reason':         row.get('pre_trade_reason'),
+        'mistake_chips':            list(row.get('mistake_chips') or []),
+        'checklist_followed':       row.get('checklist_followed'),
+        'lesson':                   row.get('lesson'),
+        'grade':                    row.get('grade'),
+        'holdout':                  is_holdout_date(row.get('trade_date')),
     }
 
 
-def list_trades(date_filter: str | None = None) -> list[dict]:
+def _pt_naive(v):
+    """A timestamptz as a naive PT wall-clock ISO string ('2026-10-30T07:49:17'), or None."""
+    if v is None or not isinstance(v, datetime):
+        return None
+    return v.astimezone(PT).replace(tzinfo=None).isoformat(timespec='seconds')
+
+
+def _filter_sql(filters: dict | None) -> tuple[str, list]:
+    """
+    WHERE clause for the Trade Log tab's filters (CR-DR item 4). filters keys (all optional):
+      date (YYYY-MM-DD), setup_chip (a chip, or 'none' = no setup chip), mistake_chip (a chip, or 'none'),
+      checklist ('yes' | 'no' | 'unset'), grade ('1'..'5' | 'unset').
+    """
+    f = filters or {}
+    where, params = [], []
+    if f.get('date'):
+        where.append('trade_date = %s'); params.append(f['date'])
+    for key, col, allowed in (('setup_chip', 'setup_chips', SETUP_CHIPS), ('mistake_chip', 'mistake_chips', MISTAKE_CHIPS)):
+        v = f.get(key)
+        if v == 'none':
+            where.append(f"COALESCE(cardinality({col}), 0) = 0")
+        elif v:
+            if v not in allowed:
+                raise ReviewFieldError(f'{key}: unknown chip')
+            where.append(f'%s = ANY({col})'); params.append(v)
+    c = f.get('checklist')
+    if c == 'yes':
+        where.append('checklist_followed IS TRUE')
+    elif c == 'no':
+        where.append('checklist_followed IS FALSE')
+    elif c == 'unset':
+        where.append('checklist_followed IS NULL')
+    elif c:
+        raise ReviewFieldError('checklist: yes / no / unset')
+    g = f.get('grade')
+    if g == 'unset':
+        where.append('grade IS NULL')
+    elif g:
+        if str(g) not in ('1', '2', '3', '4', '5'):
+            raise ReviewFieldError('grade: 1-5 / unset')
+        where.append('grade = %s'); params.append(int(g))
+    return ('WHERE ' + ' AND '.join(where)) if where else '', params
+
+
+def list_trades(date_filter: str | None = None, filters: dict | None = None) -> list[dict]:
+    f = dict(filters or {})
+    if date_filter:
+        f['date'] = date_filter
+    where, params = _filter_sql(f)
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            if date_filter:
-                cur.execute("""
-                    SELECT * FROM trade_log_trades
-                    WHERE trade_date = %s
-                    ORDER BY entry_ts_pt ASC
-                """, (date_filter,))
-            else:
-                cur.execute("""
-                    SELECT * FROM trade_log_trades
-                    ORDER BY trade_date DESC, entry_ts_pt ASC
-                """)
+            order = 'ORDER BY entry_ts_pt ASC' if f.get('date') else 'ORDER BY trade_date DESC, entry_ts_pt ASC'
+            cur.execute(f'SELECT * FROM trade_log_trades {where} {order}', params)
             return [_format_trade(dict(r)) for r in cur.fetchall()]
     finally:
         conn.close()
@@ -564,14 +741,61 @@ def get_trade(trade_id: int) -> dict | None:
         conn.close()
 
 
+# CR-DR item 3c — Ryan's review fields. Chip strings are stored as written here; the UI offers exactly these.
+SETUP_CHIPS = ('fade top', 'fade bottom', 'continuation pullback', 'break & retest', 'failed break',
+               'second touch', '0DTE pin', 'other')
+MISTAKE_CHIPS = ('no stop', 'chased', 'one-minute flicker', 'against flow', 'not at edge', 'event day', 'late',
+                 'moved stop', 'exited early', 'held too long', 'target past level')
+
+
+class ReviewFieldError(ValueError):
+    pass
+
+
+def _clean_review_fields(updates: dict) -> dict:
+    out = {}
+    for key, allowed in (('setup_chips', SETUP_CHIPS), ('mistake_chips', MISTAKE_CHIPS)):
+        if key in updates:
+            v = updates[key] or []
+            if not isinstance(v, list) or any(c not in allowed for c in v):
+                raise ReviewFieldError(f'{key}: unknown chip')
+            out[key] = [c for c in allowed if c in v]   # canonical order, no duplicates
+    for key in ('pre_trade_reason', 'lesson'):
+        if key in updates:
+            v = updates[key]
+            out[key] = (str(v) if v is not None else None) or None
+    if 'checklist_followed' in updates:
+        v = updates['checklist_followed']
+        if v not in (True, False, None):
+            raise ReviewFieldError('checklist_followed: true / false / null')
+        out['checklist_followed'] = v
+    if 'grade' in updates:
+        v = updates['grade']
+        if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 5):
+            raise ReviewFieldError('grade: 1-5 or null')
+        out['grade'] = v
+    if 'anchor_ts_pt' in updates:
+        v = updates['anchor_ts_pt']
+        if v:
+            try:
+                out['anchor_ts_pt'] = datetime.fromisoformat(str(v)).replace(tzinfo=PT)
+            except (ValueError, TypeError):
+                raise ReviewFieldError('anchor_ts_pt: YYYY-MM-DDTHH:MM[:SS] PT')
+        else:
+            out['anchor_ts_pt'] = None
+    return out
+
+
 def update_trade(trade_id: int, patch: dict) -> dict | None:
     """
-    Apply annotation fields from patch to the trade.
-    Only setup_start_ts_pt, setup_target_ts_pt, setup_direction, notes
-    are writable this way.
+    Apply annotation / review fields from patch to the trade.
+    Writable: setup_start_ts_pt, setup_target_ts_pt, setup_direction, notes, and (CR-DR)
+    setup_chips, pre_trade_reason, mistake_chips, checklist_followed, lesson, grade, anchor_ts_pt.
+    Raises ReviewFieldError on an invalid review value.
     """
     allowed = {'setup_start_ts_pt', 'setup_target_ts_pt', 'setup_direction', 'notes'}
     updates = {k: v for k, v in patch.items() if k in allowed}
+    updates.update(_clean_review_fields(patch))
     if not updates:
         return get_trade(trade_id)
 
@@ -591,7 +815,7 @@ def update_trade(trade_id: int, patch: dict) -> dict | None:
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    f'UPDATE trade_log_trades SET {set_clauses} WHERE id = %(id)s',
+                    f'UPDATE trade_log_trades SET {set_clauses}, updated_at = now() WHERE id = %(id)s',
                     {**updates, 'id': trade_id}
                 )
         return get_trade(trade_id)
@@ -610,12 +834,42 @@ def delete_trade(trade_id: int) -> bool:
         conn.close()
 
 
-def get_aggregate(date_filter: str | None = None) -> dict:
+def _aggregate_breakdown(cur, where: str, params) -> dict:
+    """
+    CR-DR item 4: counts and points by setup chip, by mistake chip (a trade with two chips counts in both; 'none' =
+    no chip) and by checklist followed yes / no / not set. Points = sum of realized_pts (per contract, as the total).
+    """
+    def by_chip(col, allowed):
+        cur.execute(f"""
+            SELECT c AS key, count(*) AS n, COALESCE(sum(realized_pts), 0) AS pts
+            FROM (SELECT realized_pts, unnest(CASE WHEN COALESCE(cardinality({col}), 0) = 0
+                                                   THEN ARRAY['none']::text[] ELSE {col} END) AS c
+                  FROM trade_log_trades {where}) x
+            GROUP BY c
+        """, params)
+        got = {r['key']: r for r in cur.fetchall()}
+        return [{'key': k, 'n': int(got[k]['n']), 'pts': float(got[k]['pts'])} for k in (*allowed, 'none') if k in got]
+    cur.execute(f"""
+        SELECT CASE WHEN checklist_followed IS TRUE THEN 'yes' WHEN checklist_followed IS FALSE THEN 'no' ELSE 'unset' END AS key,
+               count(*) AS n, COALESCE(sum(realized_pts), 0) AS pts
+        FROM trade_log_trades {where} GROUP BY 1
+    """, params)
+    got = {r['key']: r for r in cur.fetchall()}
+    return {
+        'by_setup': by_chip('setup_chips', SETUP_CHIPS),
+        'by_mistake': by_chip('mistake_chips', MISTAKE_CHIPS),
+        'by_checklist': [{'key': k, 'n': int(got[k]['n']), 'pts': float(got[k]['pts'])} for k in ('yes', 'no', 'unset') if k in got],
+    }
+
+
+def get_aggregate(date_filter: str | None = None, filters: dict | None = None) -> dict:
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            where = 'WHERE trade_date = %s' if date_filter else ''
-            params = (date_filter,) if date_filter else ()
+            f = dict(filters or {})
+            if date_filter:
+                f['date'] = date_filter
+            where, params = _filter_sql(f)
             cur.execute(f"""
                 SELECT
                     COUNT(*)                                                   AS total_trades,
@@ -630,6 +884,7 @@ def get_aggregate(date_filter: str | None = None) -> dict:
                 {where}
             """, params)
             row = dict(cur.fetchone())
+            breakdown = _aggregate_breakdown(cur, where, params)
 
         def _f(v):
             return float(v) if v is not None else None
@@ -656,6 +911,161 @@ def get_aggregate(date_filter: str | None = None) -> dict:
             'avg_loser':          avg_l,
             'risk_reward':        rr,
             'total_fees':         _f(row['total_fees']),
+            **breakdown,
+        }
+    finally:
+        conn.close()
+
+
+# ══════════════════════════════════════════════════════════════
+# Price chart and review panel (CR-DR items 2 / 3)
+# ══════════════════════════════════════════════════════════════
+
+_STOP_TYPES = ('stop', 'stop loss', 'stop limit', 'trailing stop')
+
+
+def order_lines_for_trade(trade: dict, orders: list[dict]) -> list[dict]:
+    """
+    The exit-side orders resting while the position was open, clipped to [entry, exit]:
+    stops (a stop price) and targets (a limit price: Take Profit / Limit). Market and
+    rejected orders, and the entry order itself, are not lines. Times are tz-aware.
+    """
+    entry_ts, exit_ts = trade.get('entry_ts_pt'), trade.get('exit_ts_pt')
+    if entry_ts is None or exit_ts is None:
+        return []
+    exit_side = 'S' if trade['direction'] == 'long' else 'B'
+    lines = []
+    for o in orders:
+        if o['symbol'] != trade['symbol'] or o['side'] != exit_side or o['order_id'] == trade.get('entry_order_id'):
+            continue
+        if (o.get('status') or '').lower() == 'rejected':
+            continue
+        stop_px, limit_px = o.get('stop_price'), o.get('limit_price')
+        is_stop = stop_px is not None or (o.get('order_type') or '').lower() in _STOP_TYPES
+        price = stop_px if is_stop else limit_px
+        if price is None or o.get('placing_time_pt') is None:
+            continue
+        ended = o.get('status_time_pt') if (o.get('status') or '').lower() in ('filled', 'cancelled', 'canceled', 'expired') else None
+        start = max(o['placing_time_pt'], entry_ts)
+        end = min(ended or exit_ts, exit_ts)
+        if start >= end:
+            continue
+        lines.append({
+            'order_id':   o['order_id'],
+            'kind':       'stop' if is_stop else 'target',
+            'order_type': o.get('order_type'),
+            'status':     o.get('status'),
+            'price':      float(price),
+            'from_pt':    _pt_naive(start),
+            'to_pt':      _pt_naive(end),
+            'from_ts':    start,
+        })
+    lines.sort(key=lambda l: (l['from_ts'], l['kind']))
+    return lines
+
+
+def _stop_at_entry(trade: dict, lines: list[dict]) -> dict:
+    """Whether a stop was resting at entry, else after how many seconds one was placed (None: never)."""
+    stops = [l for l in lines if l['kind'] == 'stop']
+    if not stops:
+        return {'stop_at_entry': False, 'stop_after_s': None}
+    after = (stops[0]['from_ts'] - trade['entry_ts_pt']).total_seconds()
+    return {'stop_at_entry': after <= 0, 'stop_after_s': max(0, int(round(after)))}
+
+
+def _load_orders(cur, symbols: list[str], t0, t1) -> list[dict]:
+    cur.execute("""
+        SELECT order_id, symbol, side, order_type, qty, limit_price, stop_price, status,
+               placing_time_pt, status_time_pt
+        FROM trade_log_orders
+        WHERE symbol = ANY(%s) AND placing_time_pt <= %s
+          AND (status_time_pt IS NULL OR status_time_pt >= %s)
+    """, (symbols, t1, t0))
+    out = []
+    for r in cur.fetchall():
+        row = dict(r)
+        for k in ('limit_price', 'stop_price'):
+            row[k] = float(row[k]) if row[k] is not None else None
+        out.append(row)
+    return out
+
+
+def _strip_lines(lines):
+    return [{k: v for k, v in l.items() if k != 'from_ts'} for l in lines]
+
+
+def chart_trades(date_from: str, date_to: str) -> list[dict]:
+    """Trades with trade_date in [date_from, date_to] and their resting stop / target lines (CR-DR item 2)."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT * FROM trade_log_trades
+                WHERE trade_date BETWEEN %s AND %s
+                ORDER BY entry_ts_pt ASC
+            """, (date_from, date_to))
+            rows = [dict(r) for r in cur.fetchall()]
+            if not rows:
+                return []
+            t0 = min(r['entry_ts_pt'] for r in rows if r['entry_ts_pt'])
+            t1 = max(r['exit_ts_pt'] for r in rows if r['exit_ts_pt'])
+            orders = _load_orders(cur, sorted({r['symbol'] for r in rows}), t0, t1)
+        out = []
+        for r in rows:
+            lines = order_lines_for_trade(r, orders)
+            out.append({**_format_trade(r), **_stop_at_entry(r, lines), 'lines': _strip_lines(lines)})
+        return out
+    finally:
+        conn.close()
+
+
+def trade_review(trade_id: int) -> dict | None:
+    """
+    Facts for the trade review panel (CR-DR item 3a): the trade, $ by contract multiplier,
+    time in trade, resting stop / target lines and whether a stop rested at entry, and
+    MFE / MAE in points from ES 1-minute bars (es_minutes) from the entry minute through the
+    exit minute. MES fills vs ES bars agree to ± 1 tick (Step 0 S0.7); the entry and exit
+    minutes' bars include prices traded before the entry / after the exit within that minute.
+    B4: no MFE / MAE on holdout dates.
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT * FROM trade_log_trades WHERE id = %s', (trade_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            r = dict(row)
+            orders = _load_orders(cur, [r['symbol']], r['entry_ts_pt'], r['exit_ts_pt']) if r['entry_ts_pt'] and r['exit_ts_pt'] else []
+            lines = order_lines_for_trade(r, orders)
+            mfe = mae = None
+            holdout = is_holdout_date(r['trade_date'])
+            if not holdout and r['entry_ts_pt'] and r['exit_ts_pt']:
+                cur.execute("""
+                    SELECT max(high) AS hi, min(low) AS lo, count(*) AS n
+                    FROM es_minutes
+                    WHERE ts_utc >= date_trunc('minute', %s::timestamptz)
+                      AND ts_utc <= date_trunc('minute', %s::timestamptz)
+                """, (r['entry_ts_pt'], r['exit_ts_pt']))
+                b = cur.fetchone()
+                if b and b['n']:
+                    entry = float(r['entry_price'])
+                    hi, lo = float(b['hi']), float(b['lo'])
+                    if r['direction'] == 'long':
+                        mfe, mae = hi - entry, entry - lo
+                    else:
+                        mfe, mae = entry - lo, hi - entry
+        t = _format_trade(r)
+        mult = get_multiplier(extract_root(r['symbol']))
+        held = (r['exit_ts_pt'] - r['entry_ts_pt']).total_seconds() if r['entry_ts_pt'] and r['exit_ts_pt'] else None
+        return {
+            **t,
+            'multiplier':      mult,
+            'held_s':          int(held) if held is not None else None,
+            'mfe_pts':         round(mfe, 2) if mfe is not None else None,
+            'mae_pts':         round(mae, 2) if mae is not None else None,
+            **_stop_at_entry(r, lines),
+            'lines':           _strip_lines(lines),
         }
     finally:
         conn.close()
