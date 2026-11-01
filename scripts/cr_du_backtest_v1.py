@@ -179,6 +179,7 @@ def run():
     withheld = set() if set2_done else {d for d in days if d in set2_dates}
     cards = cz_cards()
     at = [{"id": cid, "file": str(SES / f"{d}.json"), "t": decision_bar(e)} for cid, d, _, e, _ in cards if (SES / f"{d}.json").exists()]
+    warm_cards = [(cid, lb) for cid, d, _, e, lb in cards if not (SES / f"{d}.json").exists()]
     out = node({"variants": VARIANTS, "sessions": files, "minutes": True, "at": []})
     # CR-CZ overlap: the verdict at the card's decision minute with the engine's own state that day (simulate to there)
     ov = node({"variants": {"primary": {}}, "sessions": [], "at": at})
@@ -274,9 +275,18 @@ def run():
         lb, dr = lab[a["id"]]
         same = a.get("side") == dr and a.get("verdict") in ("SHORT", "LONG")
         oc[lb]["engine takes (same side)" if same else "engine: NO ACTION" if a.get("verdict") == "NO ACTION" else "engine: other side" if a.get("verdict") else "no bar"] += 1
+    for _, lb in warm_cards:
+        oc[lb or "unlabelled"]["warm-up session (not evaluated)"] += 1
+    cols = ("engine takes (same side)", "engine: other side", "engine: NO ACTION", "no bar", "warm-up session (not evaluated)")
     lines += ["## Overlap with CR-CZ cards (verdict at the card's decision minute; counts only, no outcomes)", "",
-              fmt_table([[k, sum(v.values()), *[v.get(c, 0) for c in ("engine takes (same side)", "engine: other side", "engine: NO ACTION", "no bar")]]
-                         for k, v in sorted(oc.items())], ["Ryan's label", "Cards", "Engine takes (same side)", "Engine: other side", "Engine: NO ACTION", "No bar"]), ""]
+              fmt_table([[k, sum(v.values()), *[v.get(c, 0) for c in cols]] for k, v in sorted(oc.items())],
+                        ["Ryan's label", "Cards", "Engine takes (same side)", "Engine: other side", "Engine: NO ACTION", "No bar",
+                         "Warm-up session (not evaluated)"]), ""]
+    na = Counter()
+    for a in ov["at"]:
+        if a.get("verdict") == "NO ACTION" and a.get("failed"):
+            na[a["failed"][0]["code"]] += 1
+    lines += ["First failed rule on those NO ACTION cards: " + ", ".join(f"{k} {v}" for k, v in na.most_common()), ""]
     # per-trade rows (non-set-2 sessions)
     tr_rows = [[x["date"], x["side"], f"{pt(x['box']['from']):%H:%M} {x['box']['bottom']:.2f}–{x['box']['top']:.2f}",
                 f"{pt(x['decisionT']):%H:%M}", f"{pt(x['entryT']):%H:%M:%S}", f"{x['entry']:.2f}", f"{x['stop']:.2f}", f"{x['target']:.2f}",
