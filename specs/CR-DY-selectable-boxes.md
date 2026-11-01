@@ -55,3 +55,79 @@ UI CR: the kickoff names C1 and C2; A and B rulings have no new use here.
 | others | n/a | no test, threshold or outcome in this CR |
 
 Revoked / superseded: none used.
+
+## Step 0 — diagnosis (read-only; no server; code at `dcbcad2`)
+
+Script `scripts/cr_dy/engine_parity.mjs` (counts and hashes only; session files `scripts/logs/cr-du/sessions/`, machine-local).
+
+**Base.** The kickoff says "tip after CR-DX merge". CR-DX has no trace: no branch, PR, commit, spec or vault note, and no other session mentions it. The tip is `dcbcad2` (CR-DU #131). Branched there; re-check Q3 against CR-DX if it lands first.
+
+### Q1 — engine box per trade: yes, no engine change
+
+`simulateSession` already carries it. `order = { ...ev.order, decisionT: t, box: ev.box, … }` (`v1Engine.js:368`), kept through the re-peg (`:365`) and into the position and trade (`:348`, `:314`). So every trade and `sim.open` has `decisionT` and `box { from, top, bottom, high, low, minutes }`. End = `decisionT`. `v1Engine.js` is not edited.
+
+Measured on the 86 train sessions, 33,540 minutes, 142 trades (counts only, set-2 withholding kept):
+
+| Check | Result |
+|---|---|
+| Tag `cr-du-engine-v1.4` vs this checkout, hash of trades + minutes + state | equal (`1d4707278f8edea0`) |
+| Trades with `decisionT` and a full box | 142 / 142 |
+| Manual window (`box.from` → `decisionT`, engine box min / height) gives the engine's from, to, top, bottom, no break | 142 / 142 |
+| `panelEngine` at `decisionT` = the trade's side, same box | 142 / 142 |
+| Entry = the faded edge of the decision box | 142 / 142 |
+
+(`1d47…` is this script's hash, not comparable with CR-DU's `6fcd03aa…`, which hashed other fields. The comparison that matters is the tag's source vs this checkout, run in one pass.)
+
+### Q2 — panel rows on an arbitrary window: yes, no chaining
+
+`edgeReadout(…, anchor, shift, end, hold, { manual: true })` already is that window (CR-DU amendment 7). Call sites that feed the rows, all taking (start, end):
+
+| Function | Call site |
+|---|---|
+| `edgeReadout` manual | `App.jsx:1784` (`flowV3Edges`); `PriceChart.jsx:2814` through `readHistory` (`flowV3.js:1517`); `tradeContext.js` (`entryContext`) |
+| `boxSegments` → `segmentReadouts` (Δ, volume, dPrice, c/pt) | `App.jsx:1792`–`1796` |
+| `edgeBoxEntries`, `boxPanelOf`, `currentBoxVerdict` | `PriceChart.jsx:2787`, `:2822`, `:2841` |
+| `panelEngine` (`endShifted`) | `PriceChart.jsx:2852` |
+
+Because App's `flowV3Edges` is the one input, the plan is to feed it the selected box's window. Rows, read history, delta line and engine line then all follow with no new stat code, and rows and delta line can't read different windows (CR-DU bug 2).
+
+### Q3 — interactions
+
+| Item | Answer |
+|---|---|
+| Set 2 / review cards | Bars are cut at `entry_ts_pt` (`until`); an end pick is already limited to the last bar (`endFromPick`). Drawn box works there. The engine is blocked on set-2 dates, so no engine boxes. A review save records the drawn box only, never an engine box |
+| CR-DP y-zoom memory | The new primitive has no `autoscaleInfo` and selection calls no scale API, so zoom memory and auto-fit are untouched |
+| CR-DX default fit | Not in the repo (above); nothing to check |
+| CR-CD review fit | Selection and drawing call no `setVisibleRange` / `fitContent`, so the fit is untouched |
+| CR-DV live marks | Rows read the same levels as today. The engine reads confirmed marks only (`prepareSession`), so provisional marks can't move an engine box. **Live: confirmed as proposed.** A drawn box with no end runs to the last closed minute and updates on each poll until an end bar is clicked |
+
+Proposal for a past session, from the "310 min" complaint: between the start click and the end click nothing is computed (no rectangle, no panel). Esc there cancels the draw. Live, Esc there keeps the running box.
+
+### Q4 — goal 5: relabel, don't remove
+
+Recommend **"Engine at 12:59: NO ACTION — rule 6: box still forming"**. The engine's box moves to the hover title, so "box 12:59–12:59" is gone from the line. Removing it would lose the live engine read (the panel is where CR-DU put it) and the "Engine's trades, not yours" state. For an engine box the same line reads the decision minute ("Engine at 07:49: SHORT").
+
+### Reading to confirm: what "top / bottom" means (goal 1)
+
+The kickoff's two clauses disagree. "High / low of the bars" is wicks; "same definition the engine uses" is closes, frozen once the box qualifies. On 2026-10-30 (`es_minutes`):
+
+| Window | Wick high / low | Max / min close | Engine rule (frozen at) |
+|---|---|---|---|
+| 07:34–07:49 | 7659.75 / 7636.50 | 7657.00 / 7637.25 | 7654.25 / 7637.25 (07:42) |
+| 07:49–08:12 | 7657.50 / 7641.75 | 7656.50 / 7642.50 | 7656.50 / 7648.50 (07:57) |
+
+On the 142 engine trades the wick range is taller than the edges every time (median +4.5 pts, p90 +9.75).
+
+**Reading used: the engine rule**, through `edgeReadout` manual. It keeps "panel stat computations unchanged" and "same definition", and the same window then gives the same edges on a drawn and an engine box (142 / 142 above). Consequence, visible: closes can pass the rectangle after it freezes, and the panel flags it (07:34–07:49 shows "broke ↑"). Wicks stay available as `high` / `low`. The rectangle and the saved fields read one function (`drawnBoxOf`), so changing this is one line. Not a STOP: the plan doesn't change, and it is for Ryan to confirm on the screenshots.
+
+### Design fixed by Step 0
+
+- **Selection** lives in App: `null`, `{ kind: 'drawn' }` or `{ kind: 'engine', … }`. An engine selection replaces the window fed to `flowV3Edges`. A drawn box is selected when completed. Empty selection = no panel, and the × does the same.
+- **One drawn box at a time.** A new draw replaces it (the kickoff has one "your box").
+- **Controls.** New first chip "draw box". The two old chips stay, secondary: "start only" and "set end" (existing behaviour and test ids). Session open / last swing set the start of a draw when one is armed, and are unchanged otherwise.
+- **Esc:** armed → cancel the pick; else selected → clear selection (the box stays); else → remove the drawn box (today's Esc).
+- **Empty chart click** with a selection clears it and does nothing else. Box hit-test comes after the armed pick and the trade markers, before GEX lines.
+- **Blocked reason once:** the v1 chip keeps it; the panel's "v1 engine off: …" line goes.
+- **Engine box rows** use the engine's box min / height, so their edges are the engine's; drawn boxes keep ⚙.
+- **Engine box verdict pill** = the panel's `boxVerdict` over the window, as a drawn box; the engine's own verdict is the "Engine at …" line. They can differ (p80 vs p70 lean, location), as they do today on a manual box.
+- **`setup_reviews`** gains nullable `box_end_ts`, `box_top`, `box_bottom` (`anchor_ts` is already the start). The migration runs before any deploy that writes them.
