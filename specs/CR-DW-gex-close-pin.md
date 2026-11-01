@@ -191,3 +191,61 @@ Definitions as amended (replace D1, D5, D7, D8, D9 where they differ):
 Rulings re-check: **B4 is now honoured** (2026 train only; R-a, R-b, holdout and forward log are not read). **A12 is
 honoured** (the chart's yellow / darkest population, corrected placement in SPX cash; strike space is a readout). A22 honoured
 (FOMC cell). The rest are unchanged from the freeze table.
+
+---
+
+## Results (2026-10-31; `scripts/cr_dw/test_2026.py`, seed 20261031; logs `scripts/logs/cr_dw/test_2026.json`, `test_days_*.csv`)
+
+First outcome read in this CR. 97 Step-0 days: 2 have no large level; FOMC days come out as their own cell.
+Fix before the first reported run: the move-swap null was returned in points rather than IM units (null median 21 IM,
+p = 0). It was corrected and rerun; only the corrected run is reported.
+
+### Primary (cash-corrected, pre-open band, condition days excl. FOMC, n = 52)
+
+| Statistic | Observed | Move-swap null (c) median | Effect | One-sided p | 90 % day-bootstrap CI of effect (IM) | **Verdict** |
+|---|---|---|---|---|---|---|
+| median \|settle − nearest\| / IM | 0.295 | 0.324 | **−0.029 IM** | **0.28** | [−0.099, +0.043] | **INCONCLUSIVE** |
+| same, in SPX pts | 19.2 | 21.6 | **−2.4 pts** | | | |
+
+There is no pin beyond what the day's own moves give. The point estimate is nearer than the null by 2.4 pts, which is
+inside the noise. The CI also cannot rule out a pin of up to ~0.10 IM (≈ 6 pts at the median IM of 64).
+
+### Secondaries
+
+| Cell | n | median dist / IM obs vs null (c) | effect (pts) | p (c) | (b) settle nearer than open | (b) 90 % Wilson | (b) move-swap null median [p05, p95] | p (b) | (b) > 50 % (readout) |
+|---|---|---|---|---|---|---|---|---|---|
+| Condition (primary cell) | 52 | 0.295 vs 0.324 | −2.4 | 0.28 | 36.5 % | [26.5, 47.9] | 38.5 % [28.8, 48.1] | 0.70 | no |
+| Non-condition | 40 | 0.972 vs 0.980 | +4.5 | 0.47 | 52.5 % | [39.8, 64.9] | 52.5 % [40.0, 65.0] | 0.54 | yes (= null) |
+| By year | — | n/a: 2026 only (Amendment 1) | | | | | | | |
+
+### Readouts (labelled; no verdicts)
+
+| Readout | n | median dist / IM obs vs null | effect (pts) | p |
+|---|---|---|---|---|
+| **Null (a) uniform shift** — condition, cash-corrected (**false-pin rate 23 % under no pin; not a valid test**) | 52 | 0.295 vs 0.374 | | 0.078 |
+| Null (a) — non-condition | 40 | 0.972 vs 1.037 | | 0.33 |
+| A8 yellow-only condition days (null c) | 34 | 0.283 vs 0.332 | −0.4 | 0.21 |
+| A8 darkest-only condition days (null c) | 18 | 0.312 vs 0.330 | −8.5 | 0.41 |
+| **Strike space** — condition (null c) | 60 | 0.295 vs 0.278 | +2.4 | 0.69 |
+| Strike space — non-condition (null c) | 32 | 0.679 vs 0.792 | −8.9 | 0.22 |
+| Strike space — (b) condition | 60 | 35.0 % vs null 41.7 % | | 0.89 |
+| Strike space — A8 yellow / darkest (null c) | 36 / 24 | 0.277 vs 0.274 / 0.308 vs 0.281 | +1.6 / −1.2 | 0.52 / 0.71 |
+| FOMC cell (A22), cash-corrected: dist / IM on 01-28, 03-18, 04-29 | 3 (1 condition) | 0.35, 0.41, 0.86 | | — |
+
+### Report-only: SPX cash RTH range / IM (06:33–13:00 prints)
+
+| Placement | Condition median (mean) | Other median (mean) | n |
+|---|---|---|---|
+| Cash-corrected | 0.92 (0.95) | 0.97 (1.05) | 52 / 40 |
+| Strike space | 0.87 (0.91) | 1.09 (1.15) | 60 / 32 |
+
+### Reading
+
+- **Close-pin on 2026 train: INCONCLUSIVE** (B1). The settle lands no nearer the chart's large levels than the same
+  days' own open-to-settle moves would put it at random (−2.4 pts, p 0.28). The (b) fraction (36.5 %) sits on its
+  no-pin value (38.5 %). Under a 50 % bar it would have read as a refutation, the bias that Step 0 flagged.
+- Null (a) would have reported p 0.078 on the same data. That is the Step-0 bias showing, not a signal.
+- Per the ruling, R-a confirmation is only for a passing primary, so **no R-a CR follows**. The follow-up condor CR
+  ("if the pin passes") is not triggered.
+- Report-only: condition days have a slightly smaller range / IM (0.92 vs 0.97; strike 0.87 vs 1.09). Not tested; it is
+  the bracket idea's outcome (Strategy bench), not this CR's, and B2 applies if it is picked up.
