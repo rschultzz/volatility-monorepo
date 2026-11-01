@@ -394,3 +394,20 @@ with a primary bar). Set 2: SHORT 0 · LONG 0 · NO ACTION 115 (27 warm-up). Smo
 
 Rulings re-check: A4 still honoured (a fixed 10-pt stop is beyond the box on every trade where the box is < 10 pts from
 entry; reported); A11 unchanged (+10). No other row changes.
+
+### D1 result (read-only; `scripts/cr_du_d1/`, logs `scripts/logs/cr-du/d1/`; no outcomes)
+
+Labels (first pre-reveal): take 44, skip 75 (Ryan's "29 takes" = the takes whose limit filled; telling them apart needs
+the stored fill status, an outcome field, so all 44 are reported). Warm-up sessions (before 02-03, 13 takes / 17 skips):
+box geometry only. Rules on the card's side are listed even without a read (`forceSide`, a diagnostic option in a
+scratch copy of `v1Engine.js`; to be committed to `src/` after the e2e comparison stops serving it).
+
+- (a) The engine has a formed box overlapping the card's on 42 / 44 takes and 73 / 75 skips; its box usually starts
+  earlier (median 21 min before the card's range start for takes, 25 for skips) and is longer (median 35 vs 14 min) and
+  taller (median +4 pts).
+- (b) Own box, overlapping, rules evaluated (31 takes / 57 skips): first failed = no read 23 / 45, conflict 2 / 3,
+  FOMC 2 / 0, one per box 2 / 1, other 2 / 8. "No read" is mostly "nothing notable" (16 / 39): Δ share below p80.
+- (c) Anchored at the card's range start (31 / 58): first failed = no read 22 / 48, box forming 1 / 5, gates 4 / 4;
+  verdict SHORT / LONG on 4 takes and 1 skip. Engine box = card box (± 0.25) on 7 / 31 and 11 / 58.
+- Binding leg: Δ share ≥ p80 with the card's side on 10 / 31 takes (own box) and 13 / 31 (card anchor); the stall leg
+  passes on 30 / 31 and 26 / 31.
