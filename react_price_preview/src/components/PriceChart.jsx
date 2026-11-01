@@ -24,7 +24,7 @@ import { TradeMarksPrimitive } from './tradePrimitives'
 import boxBaseline from '../data/boxBaseline.json'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
-import { LIVE_EFFORT_ID, absorptionLevels, boxPanelOf, boxPanelOffset, boxPanelPlace, boxRules, boxVerdict, buildHeatColumns, readHistory, readHistoryText, chartMarks, currentBoxVerdict, dirArrow, edgeBoxEntries, flattenCells, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
+import { LIVE_EFFORT_ID, absorptionLevels, feedStalledSince, boxPanelOf, boxPanelOffset, boxPanelPlace, boxRules, boxVerdict, buildHeatColumns, readHistory, readHistoryText, chartMarks, currentBoxVerdict, dirArrow, edgeBoxEntries, flattenCells, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
 import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, BoxShadePrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
@@ -2839,6 +2839,11 @@ export default function PriceChart({
   // CR-DQ item 7: the current box's verdict from the panel's own inputs (its percentiles, the levels above, the trade date).
   const v3Verdict = useMemo(() => currentBoxVerdict(v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift, formatShiftedHHMM),
     [v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift])
+  // CR-DV: the live trades feed has stalled (server: no trade for > 60 s in RTH) — PT hh:mm of the last trade
+  const v3FeedStall = useMemo(() => {
+    const t = feedStalledSince(v3Payload)
+    return t == null ? null : formatShiftedHHMM(v3Shift(t))
+  }, [v3Payload, v3Shift])
   const [boxPopupClosed, setBoxPopupClosed] = useState(false)
   const [boxPanelGeom, setBoxPanelGeom] = useState(null) // { pane, w, h } plot rect (stage px) + panel size
   const [boxPanelPos, setBoxPanelPos] = useState(() => readBoxPanelPos()) // { left, bottom } or null (default)
@@ -3997,6 +4002,7 @@ export default function PriceChart({
               onHeaderDoubleClick={onBoxPanelDoubleClick}
               rules={v3Rules}
               verdict={v3Verdict}
+              feedStall={v3FeedStall}
             />
           )}
 

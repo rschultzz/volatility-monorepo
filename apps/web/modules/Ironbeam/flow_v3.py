@@ -9,8 +9,9 @@ Each segment's cells come from the first tier that covers it (spec A1.3 / DC17):
   2. `ironbeam_es_trades` (exact) — Ironbeam segments, when the oldest retained trade <= segment start;
   3. the 1-second table (approximate: each second's sell at its low, buy at its high).
 Absorption marks (DC9) are computed for the RTH segment on exact tiers only (A1.2); on a live segment only closed
-minutes feed them and candidates still inside their hold window come back `provisional` (CR-DV). Each segment also carries
-its 1-minute flow bars (CR-DF edge readout). Nothing after `until` is read. The DB is read only through the `fetch_*` / `_exists_price_1m` / `_trades_oldest` functions, so
+minutes feed them and candidates still inside their hold window come back `provisional` (CR-DV). A live RTH segment
+whose contract has not traded for more than STALL_S carries `feed_stalled_since` (CR-DV). Each segment also carries
+its 1-minute flow bars (CR-DF edge readout). Nothing after `until` is read. The DB is read only through the `fetch_*` / `_exists_price_1m` / `_trades_oldest` / `_trades_last` functions, so
 tests can record and replay them; completed segments are cached in-process, live ones incrementally (DC14).
 """
 from __future__ import annotations
@@ -34,6 +35,7 @@ TRADES_OLDEST_TTL_S = 60.0
 TABLE_RECHECK_S = 300.0
 CACHE_MAX = 500
 CLOSE_GRACE_S = 3                   # CR-DV DV1: a minute feeds the marks 3 s after it ends (RTH lateness p99.9 2.0 s)
+STALL_S = 60                        # CR-DV Q5: no trade for > 60 s during RTH = the trades feed has stalled
 
 _CACHE: dict[tuple, object] = {}
 _CACHE_LOCK = threading.Lock()
@@ -56,6 +58,13 @@ def _trades_oldest(engine, symbol: str) -> dt.datetime | None:
     """Oldest retained trade of `symbol` (index `(symbol, ts_utc DESC)`; a full min() scans the table)."""
     with engine.connect() as conn:
         return conn.execute(text(f"SELECT ts_utc FROM {TRADES_TABLE} WHERE symbol = :s ORDER BY ts_utc ASC LIMIT 1"),
+                            {"s": symbol}).scalar()
+
+
+def _trades_last(engine, symbol: str) -> dt.datetime | None:
+    """Newest retained trade of `symbol` (ordered read on `(symbol, ts_utc DESC)`)."""
+    with engine.connect() as conn:
+        return conn.execute(text(f"SELECT ts_utc FROM {TRADES_TABLE} WHERE symbol = :s ORDER BY ts_utc DESC LIMIT 1"),
                             {"s": symbol}).scalar()
 
 
@@ -247,6 +256,10 @@ def _build(engine, trade_date, *, session, until_pt, params, session_date, sessi
                     mark_end = max(seg["start"], min(seg["end"], closed))
                 seg["marks"] = _marks_json(fh.absorption_marks(cells, m[["h", "l"]], seg["start"], mark_end, params,
                                                                provisional=live))
+            if not complete and source == "ironbeam" and a <= now_utc < b:
+                last = _trades_last(engine, sym)
+                if last is None or (now_utc - last).total_seconds() > STALL_S:
+                    seg["feed_stalled_since"] = flow_v2._epoch(last) if last is not None else seg["start"]
         else:
             seg["marks_note"] = "Absorbed: RTH only"
         segments.append(seg)
