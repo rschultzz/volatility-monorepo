@@ -327,3 +327,32 @@ labelled "engine's trades, not yours". Alternative: rule 19 / 20 out of scope li
 - **C1 (overlay colour)** — see the conformance table.
 - **Engine vs today's panel verdict.** Besides box min 8: rule 5 (earlier absorption no longer a trigger), rule 7
   stall leg (if "highs not extending" is chosen), WATCH BREAK becomes NO ACTION, rule 4 adds blocks.
+
+## Amendment 1 — Ryan's rulings at the Step-0 STOP (chat 2026-10-31)
+
+| Item | Ruling |
+|---|---|
+| Q1 fixes 1–5 | approved as proposed (06:30 anchor, flow-bar closes, prior-sessions baseline with 20-session warm-up, marks from cells cut at t, GEX band ≤ t) |
+| Rules 4, 5, 7 / 8, 12, 20 | approved as written; rule 7 / 8 stall = c/pt ≥ p80 **or** no new wick high (low) in the last 3 closed bars |
+| Rule 6 | approved; confirm the 15-min edge hold doesn't stop a box qualifying at 8 min (below) |
+| Rule 13 | primary = limit at the exact edge by closes, placed when the verdict turns, cancelled on lapse / break / 12:15. **Sensitivity row added:** CR-CP D4 (1 pt inside the edge) |
+| Rule 15 | primary = box wick extreme + 2 pts. **Sensitivity row added:** fixed 10-pt stop from entry |
+| Q3, Q4, Q5 | approved |
+| Q6 | live panel shows the engine's own simulated trades for today, labelled "engine's trades, not yours" |
+| Q7 | closes from the flow bars |
+| C1 | overlay colour = **teal**; approved C1 deviation, logged in the rulings change log |
+| Set-2 contamination | approved: per-trade rows and monthly splits withheld for set-2 sessions until set 2 is reviewed; totals with and without them |
+| **New item 0** (before item 1) | load set 2 as `set-2:cp-calls`: the CR-CP calls not already in `cr-cz:cp-ranges` (train, ≤ 06-05), built the same way as CR-CZ (same meta and outcome fields; outcomes stored, not shown). Report the count. The "set 2 in progress" block and item 5 use this set name; item 5 runs on set 2 for real, counts only |
+
+Pre-declared sensitivity rows (report-only) are now: box min 10; no 12:15 cutoff; no loss cap; D4 entry; fixed
+10-pt stop.
+
+**Rule 6 check (edge hold vs box min).** No conflict. "Box formed" is `boxVerdict`'s `formed` = the box readout's
+minutes (first bar → last bar of the current box) ≥ `minAgeMin` and height by closes ≥ 2 pts; it never reads the edge
+hold. The 15-min hold (`edgeReadout` `holdMin`) only decides whether a close > 2 pts beyond an edge *grows* the box
+(edge set < 15 min ago) or starts a pending break (edge held ≥ 15 min). So a box qualifies at 8 min with whatever edges
+it has grown to; an engine unit test asserts it (a box first readable as formed at minute 8).
+
+Rulings conformance re-check: C1 changes from "deviates — STOP" to **deviates — approved by Ryan (teal)**. Item 0
+writes `setup_candidates` only, insert-only, under the backfill protocol; B4 honoured (train ≤ 06-05, outcomes stored,
+never shown or read), B8 honoured (no reviews written). Every other row unchanged.
