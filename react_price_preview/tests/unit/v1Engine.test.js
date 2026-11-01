@@ -300,6 +300,7 @@ test('panelVerdict: SHORT pill, failed rules as reason + rows, engine trades lin
   assert.equal(ok.pill, 'SHORT at top')
   assert.deepEqual(ok.extraRows, [])
   assert.equal(ok.engineLine, "Engine's trades, not yours: 0 trades")
+  assert.equal(ok.engineTag, 'engine v1.2 — untested')
   assert.equal(boxEvidenceRows(ok.checks).find((r) => r.key === 'share').reads, 'net buying') // was "buyers leaning"
   const g = { reason: null, schedule: [{ from: at(0), levels: [{ price: 6010, net: -9e10, side: 'put' }] }] }
   const ctx = session({ gex: g })

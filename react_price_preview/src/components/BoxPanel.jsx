@@ -122,6 +122,7 @@ function Verdict({ v, testid = 'flow-v3-box-verdict', stall = null }) {
           border: `1px solid ${c}`, borderLeft: `3px solid ${c}`, background: 'rgba(255,255,255,0.03)' }}>
         {v.pill}
       </span>
+      {v.engineTag && <span data-testid="flow-v3-box-engine-tag" style={{ color: MUTED, marginLeft: 6 }}>{v.engineTag}</span>}
       {v.reason && <div data-testid="flow-v3-box-verdict-reason" style={{ color: '#cbd5e1' }}>{v.reason}</div>}
       <EvidenceTable rows={rows} testid={`${testid}-table`} />
       {v.engineLine && <div data-testid="flow-v3-box-engine-line" style={{ color: MUTED }}>{v.engineLine}</div>}

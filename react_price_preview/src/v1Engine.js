@@ -408,7 +408,8 @@ export function panelVerdict(pe, fmt = (t) => String(t)) {
   const title = 'v1 rules engine (discretionary-rules-v1, applied mechanically; CR-DU). Rules 1–20: FOMC, RTH, 12:15 cutoff, '
     + 'box ≥ 8 min after a larger move, Δ share / effort / highs not extending, absorption inside the box, nothing strong in '
     + 'the +10 path, ≤ 3 losses, 20-min re-entry. Train backtest in-sample only — not a tested edge.'
-  if (!pe) return { kind: 'none', pill: 'NO ACTION', reason: 'rule 2: RTH only', checks: null, title, evidence: '', extraRows: [], engineLine: '' }
+  const engineTag = `engine ${V1_ENGINE_VERSION} — untested` // shown beside the pill (approved visible change)
+  if (!pe) return { kind: 'none', pill: 'NO ACTION', reason: 'rule 2: RTH only', checks: null, title, evidence: '', extraRows: [], engineLine: '', engineTag }
   const { ev } = pe
   const v = ev.v
   const ok = ev.verdict === 'SHORT' || ev.verdict === 'LONG'
@@ -422,6 +423,7 @@ export function panelVerdict(pe, fmt = (t) => String(t)) {
     kind, pill, reason, checks: v?.checks || null, title, evidence: v?.evidence || '', engine: { verdict: ev.verdict, failed: ev.failed },
     extraRows: ok ? [] : ev.failed.filter((f) => !['box_forming', 'no_read', 'conflict', 'two_sided', 'fomc'].includes(f.code)).map(ruleRow),
     engineLine: engineTradesText(pe, fmt),
+    engineTag,
   }
 }
 

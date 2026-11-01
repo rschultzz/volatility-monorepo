@@ -149,6 +149,7 @@ const verdict = async (page) => {
     kind: await v.getAttribute('data-kind'),
     pill: await page.getByTestId('flow-v3-box-verdict-pill').innerText(),
     reason: (await page.getByTestId('flow-v3-box-verdict-reason').count()) ? await page.getByTestId('flow-v3-box-verdict-reason').innerText() : '',
+    tag: (await page.getByTestId('flow-v3-box-engine-tag').count()) ? await page.getByTestId('flow-v3-box-engine-tag').innerText() : '',
     engine: (await page.getByTestId('flow-v3-box-engine-line').count()) ? await page.getByTestId('flow-v3-box-engine-line').innerText() : '',
     rows: await page.getByTestId('flow-v3-box-evidence-row').evaluateAll((els) => els.map((e) => [e.dataset.key, e.dataset.tone, e.innerText.replace(/\s+/g, ' ')])),
   }
@@ -164,6 +165,7 @@ test('1. 10-30 #5 box (anchor 07:40, replay to 07:49): the engine verdict at box
   const v8 = await verdict(page)
   await shot(page, '1-min8.png')
   expect(v8.reason).not.toMatch(/box still forming/)
+  expect(v8.tag).toBe('engine v1.2 — untested') // beside the pill, in the panel's muted secondary text
   expect(v8.rows.find((r) => r[0] === 'formed')[2]).toMatch(/formed/)
   expect(v8.rows.find((r) => r[0] === 'formed')[2]).toMatch(/min 8/)
   // ⚙ box minimum 10 (stored, after the CR-DU migration): box still forming
