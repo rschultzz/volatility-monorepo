@@ -11,6 +11,7 @@ fail at the DB layer regardless of code bugs.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import traceback
 from contextlib import contextmanager
@@ -20,6 +21,22 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 _SAFE_ROLE = "dash_backfill_writer"
+
+_URL_CREDS = re.compile(r"([a-zA-Z][\w+.-]*://)[^\s/@'\"]+@")
+_KV_PASSWORD = re.compile(r"(password\s*=\s*)('[^']*'|\S+)", re.IGNORECASE)
+
+
+def redact_db_url(text) -> str:
+    """Text with any credentials in a connection string removed (CR-DU amendment 7e); use before any print or log."""
+    return _KV_PASSWORD.sub(r"\1***", _URL_CREDS.sub(r"\1***@", str(text)))
+
+
+def connect_redacted(url: str, **kwargs) -> psycopg.Connection:
+    """psycopg.connect on `url`; a failure never carries the connection string (`from None` drops the original)."""
+    try:
+        return psycopg.connect(_normalize_url(url), **kwargs)
+    except Exception as e:
+        raise RuntimeError(f"DB connect failed: {type(e).__name__}: {redact_db_url(e)}") from None
 
 
 def _normalize_url(url: str) -> str:
@@ -38,7 +55,7 @@ def get_backfill_db_conn() -> psycopg.Connection:
     raw = os.environ.get("BACKFILL_DATABASE_URL", "").strip()
     if not raw:
         raise RuntimeError("BACKFILL_DATABASE_URL is not set")
-    conn = psycopg.connect(_normalize_url(raw))
+    conn = connect_redacted(raw)
     conn.autocommit = True
     return conn
 
@@ -95,7 +112,7 @@ def backfill_run(
             "UPDATE bt_backfill_runs "
             "SET status = 'aborted', completed_at = NOW(), notes = %s "
             "WHERE run_id = %s",
-            (traceback.format_exc(), run_id),
+            (redact_db_url(traceback.format_exc()), run_id),
         )
         raise
     else:

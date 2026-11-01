@@ -114,7 +114,7 @@ function FrozenRow({ s, rules }) {
 function Verdict({ v, testid = 'flow-v3-box-verdict', stall = null }) {
   const tone = VERDICT_TONE[v.kind] || 'neutral'
   const c = TONE_COLOR[tone]
-  const rows = boxEvidenceRows(v.checks, { stall })
+  const rows = [...boxEvidenceRows(v.checks, { stall }), ...(v.extraRows || [])] // CR-DU: the v1 engine's failed rules
   return (
     <div data-testid={testid} data-kind={v.kind} data-tone={tone} data-evidence={v.evidence} style={{ marginBottom: 2 }}>
       <span data-testid="flow-v3-box-verdict-pill" title={v.title}
@@ -124,13 +124,20 @@ function Verdict({ v, testid = 'flow-v3-box-verdict', stall = null }) {
       </span>
       {v.reason && <div data-testid="flow-v3-box-verdict-reason" style={{ color: '#cbd5e1' }}>{v.reason}</div>}
       <EvidenceTable rows={rows} testid={`${testid}-table`} />
+      {v.engineBox && (
+        <div data-testid="flow-v3-box-engine" title={v.engineTitle} style={{ color: '#cbd5e1', cursor: 'help' }}>
+          {v.engineBox}
+          {v.engineTag && <span data-testid="flow-v3-box-engine-tag" style={{ color: MUTED, marginLeft: 6 }}>{v.engineTag}</span>}
+        </div>
+      )}
+      {v.engineLine && <div data-testid="flow-v3-box-engine-line" style={{ color: MUTED }}>{v.engineLine}</div>}
     </div>
   )
 }
 
 export default function BoxPanel({
   panel, place, panelRef, maxHeight, dragged, onClose, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp,
-  onHeaderDoubleClick, rules = BOX_RULES_DEFAULTS, verdict = null, feedStall = null,
+  onHeaderDoubleClick, rules = BOX_RULES_DEFAULTS, verdict = null, feedStall = null, onRestart = null,
 }) {
   const [open, setOpen] = useState({}) // section key -> expanded
   const toggle = (k) => setOpen((o) => ({ ...o, [k]: !o[k] }))
@@ -193,11 +200,26 @@ export default function BoxPanel({
                 aria-expanded={isOpen}
                 onClick={() => toggle(s.key)}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(s.key) } }}
-                style={{ cursor: 'pointer', color: s.current ? '#f0abfc' : undefined, fontWeight: s.current ? 600 : 400 }}
+                style={{ display: s.current ? 'inline-block' : 'block', cursor: 'pointer', color: s.current ? '#f0abfc' : undefined, fontWeight: s.current ? 600 : 400 }}
               >
                 <span style={{ color: MUTED, display: 'inline-block', width: 10 }}>{isOpen ? '▾' : '▸'}</span>
                 {s.current ? s.summary : <FrozenRow s={s} rules={rules} />}
               </div>
+              {s.current && s.anchorText && <span data-testid="flow-v3-box-anchor" style={{ color: MUTED, marginLeft: 6 }}>{s.anchorText}</span>}
+              {s.current && s.broke && (
+                <>
+                  <span data-testid="flow-v3-box-broke" style={{ marginLeft: 6, color: TEXT }}>{s.broke.text}</span>
+                  <button
+                    type="button"
+                    data-testid="flow-v3-box-restart"
+                    title="Start a new box at the break"
+                    onClick={() => onRestart?.(s.broke.at)}
+                    style={{ marginLeft: 6, padding: '0 5px', fontSize: '10px', lineHeight: 1.4, color: TEXT, background: 'transparent', border: `1px solid rgba(${MAGENTA},0.5)`, borderRadius: 3, cursor: 'pointer' }}
+                  >
+                    restart here
+                  </button>
+                </>
+              )}
               <div style={{ display: isOpen ? 'block' : 'none' }}>
                 {!s.current && s.verdict && <Verdict v={s.verdict} testid="flow-v3-box-frozen-verdict" />}
                 {!s.current && <History s={s} />}

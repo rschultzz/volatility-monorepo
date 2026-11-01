@@ -21,15 +21,15 @@ const CLOSES = [103, 102, 101, 100, 101, 102, 103, 104, 103, 104, 103, 104, 103.
 const hist = (closes, end = null) => {
   const p = payload(closes, [mark('buyers_absorbed', 104.25, 5)])
   const rows = rowsOf(closes)
-  return readHistory({ payload: p, bars: flattenBars(p), rows, closes, anchorShifted: T0, endShifted: end, shift: id, holdMin: 15,
+  return readHistory({ payload: p, bars: flattenBars(p), rows, closes, anchorShifted: T0, endShifted: end, shift: id,
     breakHoldMin: 5, candleTimes: closes.map((_, i) => at(i)), segments: p.segments, baseline: null, tradeDate: '2026-10-30', ptMinOf: () => 0 })
 }
 
 test('light edgeReadout = full readout without edge counts / probe contracts', () => {
   const closes = [100, 101, 99, 100, 103.5, 100.5, 100, 108, 108.5, 109, 109, 109, 109, 110, 109.5]
   const p = payload(closes, [], [[1, 100, 5, 5], [4, 103.5, 9, 1], [8, 108.5, 3, 3]])
-  const full = edgeReadout(p, flattenBars(p), T0, id, 5, null, 2)
-  const light = edgeReadout(p, flattenBars(p), T0, id, 5, null, 2, { counts: false })
+  const full = edgeReadout(p, flattenBars(p), T0, id, null, 2)
+  const light = edgeReadout(p, flattenBars(p), T0, id, null, 2, { counts: false })
   const strip = (b) => ({ from: b.from, to: b.to, high: b.high, low: b.low, lastClose: b.lastClose, top: b.top.price, bottom: b.bottom.price, probes: (b.probes || []).map((x) => [x.at, x.dir, x.extreme]) })
   assert.deepEqual(light.frozen.map(strip), full.frozen.map(strip))
   assert.deepEqual(strip(light), strip(full))
@@ -54,14 +54,14 @@ test('replay: SHORT READ minutes grouped into one range per box; history up to a
   assert.ok(h.ranges.length >= 1)
   assert.equal(h.ranges[0].side, 'short')
   assert.equal(h.ranges[0].box, T0)
-  assert.ok(h.ranges[0].from >= at(10)) // not before the box is 10 min old
+  assert.ok(h.ranges[0].from >= at(8)) // not before the box is 8 min old (CR-DU: box min 8)
   for (let k = 8; k < CLOSES.length; k += 1) {
     // same history whether the later bars exist (set end at k) or not (payload cut at k)
     assert.deepEqual(hist(CLOSES, at(k)).ranges, hist(CLOSES.slice(0, k + 1)).ranges, `minute ${k}`)
   }
   // the replay's last minute = the live verdict at that end
   const p = payload(CLOSES, [mark('buyers_absorbed', 104.25, 5)])
-  const r = edgeReadout(p, flattenBars(p), T0, id, 15, at(14), 5)
+  const r = edgeReadout(p, flattenBars(p), T0, id, at(14), 5)
   const ro = { delta: 140, vol: 14000, dPrice: 1, minutes: 14, fromSeg: 'rth', toSeg: 'rth' }
   const live = boxVerdict({ box: { ...r, readout: ro, ended: { kind: 'current' } }, pct: null, levels: absorptionLevels(p, CLOSES.map((_, i) => at(i)), id, 8, at(15)), tradeDate: '2026-10-30' })
   const last = hist(CLOSES, at(14)).ranges.at(-1)

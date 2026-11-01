@@ -299,7 +299,7 @@ test('no end, Edges off: price chart pixel-identical to origin/main; Flow v3 CVD
   }
 })
 
-test('2026-10-29 anchor 06:49, Edges on, A = 5: 07:34 is a probe; one box from 06:49; label = hand sums', async ({ page }) => {
+test('2026-10-29 anchor 06:49, Edges on, A = 5: one manual box from 06:49, the 07:00 break is a flag; label = hand sums', async ({ page }) => {
   test.setTimeout(300_000)
   const got = capture(page)
   await open(page, D29, { storage: EDGES, until: D29_UNTIL })
@@ -307,12 +307,11 @@ test('2026-10-29 anchor 06:49, Edges on, A = 5: 07:34 is a probe; one box from 0
   const anchor = shifted(`${D29}T06:49`)
   await pickAt(page, 'flow-v3-anchor-pick', anchor)
   await page.waitForTimeout(1500)
-  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, 15, null, 5)
+  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, null, 5, { manual: true })
   expect(ptShift(flattenBars(got.cells).t.at(-1)), 'cells cut at until').toBeLessThan(shifted(D29_UNTIL))
   await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
   const d = await drawn(page)
   const allProbes = [...r.frozen, r].flatMap((b) => b.probes)
-  const probe0734 = allProbes.find((p) => pt(p.at) === '07:34')
   const res = {
     last_bar: pt(got.cells.segments.at(-1).bars.t.at(-1)), header: edgeText(r, pt),
     frozen: r.frozen.map((f) => ({ from: pt(f.from), broke: pt(f.breakAt), dir: f.dir })),
@@ -320,12 +319,11 @@ test('2026-10-29 anchor 06:49, Edges on, A = 5: 07:34 is a probe; one box from 0
     probes: allProbes.map((p) => ({ at: pt(p.at), ext: p.extreme, min: p.minutesOutside, back: pt(p.back), buy: p.buy, sell: p.sell })),
     drawn_probes: d.probes.map((q) => q.label), drawn_boxes: d.boxes,
   }
-  expect(probe0734, '07:34 is a probe').toBeTruthy()
-  expect(probe0734).toMatchObject({ minutesOutside: 4, extreme: 7761, buy: 8025, sell: 7432 }) // Step 0d
-  expect(d.probes.map((q) => q.label)).toEqual(drawnBoxes(r).boxes.flatMap((b) => b.probes.map((p) => `probe ${pt(p.at)}`)))
-  // one box from 06:49 unless a later break held (then the 06:49 box is frozen at that break, not at 07:34)
-  if (r.frozen.length === 0) expect(res.current.from).toBe('06:49')
-  else expect(res.frozen[0].broke).not.toBe('07:34')
+  // CR-DU amendment 7: edges freeze when formed (06:57, 7736–7744.50); the 07:00 close breaks up and holds: a flag, same box
+  expect(r.frozen.length).toBe(0)
+  expect(res.current).toMatchObject({ from: '06:49', bottom: 7736, top: 7744.5 })
+  expect({ at: pt(r.broke.at), dir: r.broke.dir }).toEqual({ at: '07:00', dir: 'up' })
+  await expect(page.getByTestId('flow-v3-box-broke')).toHaveText('broke ↑ 07:00')
   // per-box labels = hand sums from the minute data
   const hand = []
   for (const b of d.boxes) {
@@ -345,25 +343,12 @@ test('2026-10-29 anchor 06:49, Edges on, A = 5: 07:34 is a probe; one box from 0
   expect(cvd[0].time).toBe(d.boxes[0].from)
   expect(cvd[0].value).toBe(0)
   if (r.frozen.length === 0) expect(cvd.at(-1).value).toBe(cur.delta)
-  // hover the 07:34 probe tick
-  await frame(page, shifted(`${D29}T07:00`), shifted(`${D29}T08:00`))
-  const tick = await page.evaluate(({ t, price, fn }) => {
-    const { priceEl, price: pc } = eval(fn) // eslint-disable-line no-eval
-    const rect = priceEl.getBoundingClientRect()
-    return { x: rect.x + pc.chart.timeScale().timeToCoordinate(t), y: rect.y + pc.series.priceToCoordinate(price) - 3.5 }
-  }, { t: shifted(`${D29}T07:34`), price: probe0734.edge, fn: CHARTS_FN })
-  await page.mouse.move(tick.x, tick.y)
-  const tip = page.getByTestId('flow-v3-probe-tooltip')
-  await expect(tip).toContainText('Probe 07:34 ↑ · top 7756.25')
-  await expect(tip).toContainText('extreme 7761.00 (4.75 pts beyond) · 4 min outside · back inside 07:38')
-  await expect(tip).toContainText('beyond the edge: buyers 8.0k / sellers 7.4k')
-  res.probe_hover = await tip.innerText()
   fs.mkdirSync(ASSETS, { recursive: true })
   fs.writeFileSync(path.join(ASSETS, 'anchor-0649-A5.png'), await page.screenshot())
   log('anchor-0649-A5.json', res)
 })
 
-test('2026-10-29 anchor 06:49, A = 1: the old split at 07:34, CVD restarts at 0 there with a gap', async ({ page }) => {
+test('2026-10-29 anchor 06:49, A = 1: a manual box does not split: flag at the break, CVD runs through it with no gap', async ({ page }) => {
   test.setTimeout(300_000)
   const got = capture(page)
   await open(page, D29, { storage: { ...EDGES, ...settings({ breakHoldMin: 1 }) }, until: D29_UNTIL })
@@ -371,17 +356,14 @@ test('2026-10-29 anchor 06:49, A = 1: the old split at 07:34, CVD restarts at 0 
   const anchor = shifted(`${D29}T06:49`)
   await pickAt(page, 'flow-v3-anchor-pick', anchor)
   await page.waitForTimeout(1500)
-  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, 15, null, 1)
+  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, null, 1, { manual: true })
   await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
-  expect(r.frozen.length).toBeGreaterThanOrEqual(1)
-  expect({ from: pt(r.frozen[0].from), broke: pt(r.frozen[0].breakAt), dir: r.frozen[0].dir, bottom: r.frozen[0].bottom.price, top: r.frozen[0].top.price })
-    .toEqual({ from: '06:49', broke: '07:34', dir: 'up', bottom: 7736, top: 7756.25 })
+  expect(r.frozen.length).toBe(0)
+  expect({ at: pt(r.broke.at), dir: r.broke.dir }).toEqual({ at: '07:00', dir: 'up' })
   const d = await drawn(page)
   const at = (hm) => d.cvd.find((p) => p.time === shifted(`${D29}T${hm}`))
-  expect(at('07:34').value, 'CVD restarts at 0 on the break bar').toBe(0)
-  expect(at('07:33').gap, 'the line from 07:33 into the next box is not drawn').toBe(true)
-  expect(at('07:33').value).not.toBe(null)
-  expect(d.cvd.filter((p) => p.gap).length).toBe(Math.min(r.frozen.length, 4))
+  expect(d.boxes.length).toBe(1)
+  expect(d.cvd.filter((p) => p.gap).length).toBe(0)
   const hand = []
   for (const b of d.boxes) {
     const h = await handBox(page, got.v2, b.from, ptShift(b.lastUtc))
@@ -414,7 +396,7 @@ test('2026-10-29 set end 06:57: one box 06:49–06:57; readout, strip and profil
   await pickAt(page, 'flow-v3-end-pick', end, anchor - 10 * 60)
   await expect(page.getByTestId('flow-v3-window')).toHaveText('06:49 → 06:57 · 8 min')
   await page.waitForTimeout(1500)
-  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, 15, end, 5)
+  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, end, 5, { manual: true })
   await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
   expect(r.frozen.length).toBe(0)
   expect([pt(r.from), pt(r.to)]).toEqual(['06:49', '06:57'])
@@ -447,8 +429,9 @@ test('2026-10-29 set end 06:57: one box 06:49–06:57; readout, strip and profil
   // a pick after the payload's last bar is ignored; clear end keeps the anchor; clear removes both
   await page.getByTestId('flow-v3-end-clear').click()
   await expect(page.getByTestId('flow-v3-window')).toHaveCount(0)
-  // the end is gone: the boxes run on to until again and the readout is the current (latest) box
-  await expect.poll(async () => (await drawn(page)).boxes.length, { timeout: 20_000 }).toBeGreaterThan(1)
+  // the end is gone: the manual box runs on to until again (CR-DU amendment 7: still one box, it never chains)
+  await expect.poll(async () => hhmm((await drawn(page)).boxes[0].to) > '06:57', { timeout: 20_000 }).toBe(true)
+  expect((await drawn(page)).boxes.length).toBe(1)
   await expect(page.getByTestId('flow-v3-box-popup-head')).toContainText('box from ') // CR-DP item 4
   fs.mkdirSync(ASSETS, { recursive: true })
   await pickAt(page, 'flow-v3-end-pick', end, anchor - 10 * 60)
@@ -461,7 +444,7 @@ test('2026-10-29 set end 06:57: one box 06:49–06:57; readout, strip and profil
     profile_rows: d.profile.length, window: '06:49 → 06:57 · 8 min' })
 })
 
-test('2026-10-28 anchor 07:00: breaks that hold still freeze and restart; replay never uses bars after until', async ({ page }) => {
+test('2026-10-28 anchor 07:00: a break that holds is a flag on the manual box, nothing restarts', async ({ page }) => {
   test.setTimeout(300_000)
   const got = capture(page)
   await open(page, D28, { storage: EDGES })
@@ -469,10 +452,12 @@ test('2026-10-28 anchor 07:00: breaks that hold still freeze and restart; replay
   const anchor = shifted(`${D28}T07:00`)
   await pickAt(page, 'flow-v3-anchor-pick', anchor)
   await page.waitForTimeout(1500)
-  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, 15, null, 5)
+  const r = edgeReadout(got.cells, flattenBars(got.cells), anchor, ptShift, null, 5, { manual: true })
   await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
   const broke = r.frozen.map((f) => `${pt(f.breakAt)} ${f.dir}`)
-  expect(broke.slice(0, 4)).toEqual(['08:16 up', '08:39 up', '09:54 up', '11:05 down']) // Step 0d
+  expect(broke).toEqual([])
+  expect({ at: pt(r.broke.at), dir: r.broke.dir }).toEqual({ at: '08:16', dir: 'up' }) // Step 0d's first break
+  await expect(page.getByTestId('flow-v3-box-broke')).toHaveText('broke ↑ 08:16')
   const d = await drawn(page)
   for (const b of d.boxes) expect(b.label).toBe(boxLabelText(await handBox(page, got.v2, b.from, ptShift(b.lastUtc))))
   log('held-1028.json', { header: edgeText(r, pt), frozen: broke, probes: r.probes.map((p) => pt(p.at)), drawn: d.boxes.map((b) => `${hhmm(b.from)}–${hhmm(b.to)} ${b.label}`) })

@@ -37,14 +37,14 @@ test('anchoredCvd / anchorReadout with an end: nothing after the end; without on
 })
 
 test('edgeReadout with an end: bars after it are ignored, the box ends on the end bar', () => {
-  // the 110 close (minute 3) would grow the box; with the end at minute 2 it is never seen
-  const p = payload([100, 103, 99, 110, 100], [[1, 103, 5, 1], [3, 110, 50, 0]])
+  // the 103.5 close (minute 3) would grow the box; with the end at minute 2 it is never seen
+  const p = payload([100, 102, 99, 103.5, 100], [[1, 102, 5, 1], [3, 103.5, 50, 0]])
   const b = flattenBars(p)
-  const full = edgeReadout(p, b, T0, id, 15)
-  const cut = edgeReadout(p, b, T0, id, 15, T0 + 120)
-  assert.equal(full.top.price, 110)
+  const full = edgeReadout(p, b, T0, id)
+  const cut = edgeReadout(p, b, T0, id, T0 + 120)
+  assert.equal(full.top.price, 103.5)
   assert.equal(full.end, null)
-  assert.equal(cut.top.price, 103)
+  assert.equal(cut.top.price, 102)
   assert.equal(cut.to, T0 + 120)
   assert.equal(cut.end, T0 + 120)
   assert.equal(cut.top.contracts, 5)
@@ -75,7 +75,7 @@ test('item 2: a close strictly back inside within A minutes cancels the break (p
   const closes = [...held, 106.25, 104, 103, 102.5, 101]
   const cells = [[21, 105, 30, 20], [21, 103, 9, 9], [22, 104, 5, 7], [22, 106.5, 1, 2]]
   const p = payload(closes, cells)
-  const r = edgeReadout(p, flattenBars(p), T0, id, 15, null, 5)
+  const r = edgeReadout(p, flattenBars(p), T0, id, null, 5)
   assert.equal(r.frozen.length, 0)
   assert.deepEqual([r.bottom.price, r.top.price], [100, 103])
   assert.equal(r.pending, null)
@@ -90,24 +90,24 @@ test('item 2: no close strictly inside within A minutes -> held; the freeze and 
   // closes on the edge (103) are a retest, not back inside: the break holds
   const closes = [...held, 106.25, 103, 104, 103, 105, 104.5, 104]
   const p = payload(closes, [])
-  const r = edgeReadout(p, flattenBars(p), T0, id, 15, null, 5)
+  const r = edgeReadout(p, flattenBars(p), T0, id, null, 5)
   assert.equal(r.frozen.length, 1)
   const f = r.frozen[0]
   assert.deepEqual([f.from, f.to, f.breakAt, f.dir], [T0, T0 + 20 * 60, T0 + 21 * 60, 'up'])
   assert.deepEqual([f.bottom.price, f.top.price], [100, 103])
   assert.equal(f.probes.length, 0)
-  // the new box replays from the break bar with the growth rule: 106.25, then 103 is > 2 below -> bottom grows
-  assert.equal(r.from, T0 + 21 * 60)
-  assert.deepEqual([r.bottom.price, r.top.price], [103, 106.25])
+  // the new box replays from the break bar, forming: 103 is > 2 below 106.25, so it restarts at 103 (CR-DU Amendment 6)
+  assert.equal(r.from, T0 + 22 * 60)
+  assert.deepEqual([r.bottom.price, r.top.price], [103, 105])
 })
 
 test('item 2: A = 1 is the old single-close break unless the very next close is strictly inside', () => {
   const closes = [...held, 106.25, 104, 102.5, 101]
   const p = payload(closes, [])
-  const one = edgeReadout(p, flattenBars(p), T0, id, 15, null, 1)
+  const one = edgeReadout(p, flattenBars(p), T0, id, null, 1)
   assert.equal(one.frozen.length, 1)
   assert.equal(one.frozen[0].breakAt, T0 + 21 * 60)
-  const five = edgeReadout(p, flattenBars(p), T0, id, 15, null, 5)
+  const five = edgeReadout(p, flattenBars(p), T0, id, null, 5)
   assert.equal(five.frozen.length, 0)
   assert.equal(five.probes.length, 1)
 })
@@ -115,13 +115,13 @@ test('item 2: A = 1 is the old single-close break unless the very next close is 
 test('item 2: unresolved at the last bar -> pending, "testing break" in the header; nothing grows meanwhile', () => {
   const closes = [...held, 106.25, 109, 104]
   const p = payload(closes, [])
-  const r = edgeReadout(p, flattenBars(p), T0, id, 15, null, 5)
+  const r = edgeReadout(p, flattenBars(p), T0, id, null, 5)
   assert.equal(r.frozen.length, 0)
   assert.deepEqual([r.bottom.price, r.top.price], [100, 103])
   assert.deepEqual(r.pending, { at: T0 + 21 * 60, dir: 'up', edge: 103 })
   assert.match(edgeText(r, () => '06:51'), /^testing break 06:51 ↑ · Top 103\.00/)
   // an end inside the pending window: still pending at the end, box unchanged
-  const cut = edgeReadout(p, flattenBars(p), T0, id, 15, T0 + 22 * 60, 5)
+  const cut = edgeReadout(p, flattenBars(p), T0, id, T0 + 22 * 60, 5)
   assert.equal(cut.pending.at, T0 + 21 * 60)
   assert.equal(cut.frozen.length, 0)
 })
@@ -143,9 +143,9 @@ test('item 3: segmentCvd restarts at 0 per span through anchoredCvd; gap on the 
 test('item 3: boxSegments / segmentReadouts / boxLabelText on a held break', () => {
   const closes = [...held, 106.25, 103, 104, 103, 105, 104.5, 104]
   const p = payload(closes, [])
-  const e = edgeReadout(p, flattenBars(p), T0, id, 15, null, 5)
+  const e = edgeReadout(p, flattenBars(p), T0, id, null, 5)
   const seg = boxSegments(e, id)
-  assert.deepEqual(seg.spans, [{ from: T0, to: T0 + 20 * 60 }, { from: T0 + 21 * 60, to: T0 + 27 * 60 }])
+  assert.deepEqual(seg.spans, [{ from: T0, to: T0 + 20 * 60 }, { from: T0 + 22 * 60, to: T0 + 27 * 60 }])
   assert.equal(seg.dropped, 0)
   const rr = closes.map((c, i) => ({ time: T0 + 60 * i, delta: i % 2 ? 100 : -40, vol: 300 }))
   const cl = rowCloses(rr, closes.map((c, i) => ({ time: T0 + 60 * i, close: c })), id)

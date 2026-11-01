@@ -253,7 +253,7 @@ for (const until of [`${TODAY}T07:40`, `${TODAY}T08:09`, null]) {
     await settle(page)
     const anchor = shifted(`${TODAY}T07:00`)
     await anchorAt(page, anchor)
-    const r = edgeReadout(cells, flattenBars(cells), anchor, ptShift, 15)
+    const r = edgeReadout(cells, flattenBars(cells), anchor, ptShift, null, undefined, { manual: true }) // CR-DU amendment 7
     const want = edgeText(r, pt)
     await expect.poll(async () => popupEdges(page), { timeout: 20_000 }).toBe(popupWant(r, pt)) // CR-DP item 4: the popup, not the header
     await expect(page.getByTestId('flow-v3-edge-effort-toggle')).toHaveAttribute('aria-pressed', 'true')
@@ -301,64 +301,13 @@ for (const until of [`${TODAY}T07:40`, `${TODAY}T08:09`, null]) {
       fs.writeFileSync(path.join(ASSETS, 'strip-0809-anchor-0700.png'), await page.screenshot())
     }
     if (until == null) {
-      // amendment 9 at N = 15: frozen 07:00–08:16 (7762–7769.25 ↑), frozen 08:16–08:39 (↑), current from 08:39 or later
-      expect(r.frozen.length).toBeGreaterThanOrEqual(2)
-      expect(res.frozen[0]).toMatchObject({ from: '07:00', broke: '08:16', dir: 'up', bottom: 7762, top: 7769.25 })
-      expect(res.frozen[1]).toMatchObject({ from: '08:16', broke: '08:39', dir: 'up' })
-      expect(want).toMatch(/^Box from \d{2}:\d{2} [↑↓] · /)
-      // the oldest drawn frozen box (only the last 4 are drawn: on a live day later breaks push the 07:00 box out)
-      // is drawn faded on the price chart, and its hover gives its stats and how many older boxes were dropped
-      const { boxes, dropped } = drawnBoxes(r)
-      const fb = boxes[0]
-      res.drawn_frozen = boxes.length - 1
-      res.dropped = dropped
-      const span = (fb.breakAt - fb.from) / 60
-      await frame(page, ptShift(fb.from) - 10 * 60, ptShift(fb.breakAt) + 10 * 60)
-      const probe = await page.evaluate(({ a, b, price, fn }) => {
-        const { priceEl, price: pc } = eval(fn) // eslint-disable-line no-eval
-        const rect = priceEl.getBoundingClientRect()
-        const x0 = pc.chart.timeScale().timeToCoordinate(a)
-        const x1 = pc.chart.timeScale().timeToCoordinate(b)
-        const y = pc.series.priceToCoordinate(price)
-        const dpr = window.devicePixelRatio || 1
-        const out = document.createElement('canvas')
-        out.width = Math.round(rect.width * dpr)
-        out.height = Math.round(rect.height * dpr)
-        const ctx = out.getContext('2d')
-        for (const c of priceEl.querySelectorAll('canvas')) {
-          const r = c.getBoundingClientRect()
-          if (r.width && r.height) ctx.drawImage(c, (r.x - rect.x) * dpr, (r.y - rect.y) * dpr, r.width * dpr, r.height * dpr)
-        }
-        const px = []
-        for (let x = x0 + 4; x < x1 - 4; x += 1) px.push([...ctx.getImageData(Math.round(x * dpr), Math.round(y * dpr), 1, 1).data].slice(0, 3))
-        // hover where the dashed line is not under a candle: the first sampled x with a magenta-ish pixel
-        let hx = (x0 + x1) / 2
-        for (let k = 0; k < px.length; k += 1) {
-          const [rr, g, bb] = px[k]
-          if (rr - g > 25 && bb - g > 25) { hx = x0 + 4 + k; break }
-        }
-        return { x: rect.x + hx, y: rect.y + y, px }
-      }, { a: ptShift(fb.from), b: ptShift(fb.breakAt), price: fb.top.price, fn: CHARTS_FN })
-      // faded magenta over the dark background: red and blue clearly above green
-      const magentaish = probe.px.filter(([rr, g, bb]) => rr - g > 25 && bb - g > 25).length
-      res.frozen_line_magenta_px = `${magentaish} / ${probe.px.length} (box ${pt(fb.from)}–${pt(fb.breakAt)} top ${fb.top.price}, ${span} min)`
-      if (!(magentaish > 5)) {
-        log('probe-debug.json', { y: probe.y, x: probe.x, px: probe.px.slice(0, 60) })
-        fs.writeFileSync(path.join(LOGS, 'probe-debug.png'), await page.screenshot())
-      }
-      expect(magentaish, `faded magenta dashes on the oldest drawn frozen top ${fb.top.price}`).toBeGreaterThan(5)
-      // CR-DQ item 1 (re-pointed): the frozen-box hover panel is gone; the same stats are the oldest frozen section of
-      // the box panel (expanded)
-      const panel = page.getByTestId('flow-v3-box-popup')
-      const tip = panel.getByTestId('flow-v3-box-panel-frozen').first()
-      await tip.getByTestId('flow-v3-box-panel-summary').click()
-      // CR-DN item 3b: "how it ended" reads "broke ↑/↓ hh:mm"
-      // CR-DS item 5: the frozen row reads "hh:mm–hh:mm · broke ↓ hh:mm · share pNN · c/pt pNN"
-      await expect(tip).toContainText(`${pt(fb.from)}–${pt(fb.breakAt)} · broke ${dirArrow(fb.dir)} ${pt(fb.breakAt)}`)
-      await expect(tip).toContainText(`Top ${fb.top.price.toFixed(2)} · buyers ${kfmt(fb.top.contracts)} / sellers ${kfmt(fb.top.opposite)}`)
-      await expect(tip).toContainText(`Bottom ${fb.bottom.price.toFixed(2)} · sellers ${kfmt(fb.bottom.contracts)} / buyers ${kfmt(fb.bottom.opposite)}`)
-      if (dropped) await expect(panel).toContainText(`${dropped} older box${dropped === 1 ? '' : 'es'} not shown`)
-      res.box_hover = await tip.innerText()
+      // CR-DU amendment 7: a manual box never chains: 07:00 → the end, frozen edges 7762–7769.25, the 08:16 break is a flag
+      expect(r.frozen.length).toBe(0)
+      expect(pt(r.from)).toBe('07:00')
+      expect([r.bottom.price, r.top.price]).toEqual([7762, 7769.25])
+      expect({ at: pt(r.broke.at), dir: r.broke.dir }).toEqual({ at: '08:16', dir: 'up' })
+      await expect(page.getByTestId('flow-v3-box-broke')).toHaveText('broke ↑ 08:16')
+      await expect(page.getByTestId('flow-v3-box-panel-frozen')).toHaveCount(0)
       fs.mkdirSync(ASSETS, { recursive: true })
       fs.writeFileSync(path.join(ASSETS, 'boxes-end-anchor-0700.png'), await page.screenshot())
     }
@@ -421,5 +370,5 @@ test('chip gating and the ⚙ box hold setting', async ({ page }) => {
   expect(off2).toEqual(off1)
   expect(await page.evaluate(() => localStorage.getItem('ib-react-flow-v3-edge-effort'))).toBe(null)
   await page.getByRole('button', { name: 'Open Flow v3 settings' }).click()
-  await expect(page.getByTestId('flow-v3-box-hold')).toHaveValue('15')
+  await expect(page.getByTestId('flow-v3-box-hold')).toHaveCount(0) // CR-DU amendment 6: the edge-hold control is gone
 })

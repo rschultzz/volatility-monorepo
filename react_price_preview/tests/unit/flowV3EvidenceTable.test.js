@@ -35,7 +35,7 @@ test('item 3: "nothing notable" only when no flow check passes', () => {
 })
 
 test('item 3: box still forming / event day name the read they block', () => {
-  const young = box({ readout: { delta: 300, vol: 10000, dPrice: 1, minutes: 9 } })
+  const young = box({ readout: { delta: 300, vol: 10000, dPrice: 1, minutes: 7 } }) // CR-DU: box min 8
   const f = v({ box: young, pct: pct(90, 40), levels: [] })
   assert.equal(f.kind, 'forming')
   assert.equal(f.label, 'NO ACTION — short read, but box still forming')

@@ -193,7 +193,8 @@ CREATE TEMP TABLE setup_reviews (
     label text NOT NULL CHECK (label IN ('take', 'skip', 'unsure')),
     reasons text[] NOT NULL DEFAULT '{}', comment text,
     reviewed_at timestamptz NOT NULL DEFAULT clock_timestamp(), revealed_at timestamptz,
-    post_reveal boolean NOT NULL DEFAULT false
+    post_reveal boolean NOT NULL DEFAULT false,
+    anchor_ts timestamptz, box_min_age_min numeric, box_min_height_pts numeric
 ) ON COMMIT DROP;
 CREATE TRIGGER setup_reviews_guard BEFORE UPDATE OR DELETE ON setup_reviews
     FOR EACH ROW EXECUTE FUNCTION public.setup_review_guard();
@@ -290,6 +291,17 @@ class TestAgainstDb(unittest.TestCase):
         lst = self.client.get(f"{P}/candidates?cr={self.CR}&set={self.SET}&status=unreviewed").get_json()
         self.assertEqual([c["id"] for c in lst["candidates"]], [self.cid(2), self.cid(3)])
         self.assertIn("clean retest", lst["reasons"])
+
+    def test_cr_du_anchor_record(self):
+        # CR-DU amendment 7b: the anchor (naive PT) and box min / height are stored; a save without them stays NULL
+        r = self.client.post(f"{P}/candidates/{self.cid(1)}/review", json={
+            "label": "take", "anchor_ts": "2026-01-26T08:31:00", "box_min_age_min": 8, "box_min_height_pts": 2}).get_json()["review"]
+        self.assertTrue(r["anchor_ts"].startswith("2026-01-26T16:31:00"), r["anchor_ts"])  # 08:31 PT in UTC (session tz UTC)
+        self.assertEqual((r["box_min_age_min"], r["box_min_height_pts"]), (8.0, 2.0))
+        r2 = self.client.post(f"{P}/candidates/{self.cid(2)}/review", json={"label": "skip"}).get_json()["review"]
+        self.assertEqual((r2["anchor_ts"], r2["box_min_age_min"], r2["box_min_height_pts"]), (None, None, None))
+        bad = self.client.post(f"{P}/candidates/{self.cid(3)}/review", json={"label": "skip", "anchor_ts": "08:31"})
+        self.assertEqual(bad.status_code, 400)
 
     def test_cr_dk_chip_strings_stored_unchanged(self):
         # CR-DK: "take opposite" is a display label only; both CR-CZ strings are stored and counted as sent

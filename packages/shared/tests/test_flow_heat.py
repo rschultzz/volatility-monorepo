@@ -138,6 +138,7 @@ class TestAbsorption(unittest.TestCase):
         m = fh.absorption_marks(cells(rows), bars(self.H, L), T0, T0 + 2400, self.P)
         self.assertEqual([x["price"] for x in m], [100.0])          # minute 21 at +1 tick merges
         self.assertEqual(m[0]["merged_vol"], 70.0)
+        self.assertEqual(m[0]["merges"], [[T0 + 21 * 60 + 240, 70.0]])  # CR-DU: (confirm_time, contracts)
 
     def test_buyers_absorbed_mirror(self):
         H = self.H
@@ -174,12 +175,14 @@ def _causal_view(full, end):
         if mk["confirm_time"] > end:
             continue
         brk = mk["break_time"] if mk["break_time"] is not None and mk["break_time"] < end else None
-        out.append((mk["kind"], mk["time"], mk["p"], mk["aggressor"], mk["opposite"], brk))
+        merged = sum(v for at, v in mk["merges"] if at <= end)          # CR-DU: merged_vol as of `end`
+        out.append((mk["kind"], mk["time"], mk["p"], mk["aggressor"], mk["opposite"], brk, merged))
     return out
 
 
 def _view(marks):
-    return [(mk["kind"], mk["time"], mk["p"], mk["aggressor"], mk["opposite"], mk["break_time"]) for mk in marks]
+    return [(mk["kind"], mk["time"], mk["p"], mk["aggressor"], mk["opposite"], mk["break_time"], mk["merged_vol"])
+            for mk in marks]
 
 
 class TestCausality(unittest.TestCase):
@@ -270,8 +273,10 @@ class TestLiveMarks(unittest.TestCase):
         self.L[26] = 100.25
         m = self.live(T0 + 60 * 27)
         self.assertEqual([(mk["time"], mk["merged_vol"], mk["provisional"]) for mk in m], [(T0 + 1200, 0.0, False)])
+        self.assertEqual(m[0]["merges"], [])                                # CR-DU merges: no entry while provisional
         m = self.live(T0 + 60 * 30)
         self.assertEqual([(mk["time"], mk["merged_vol"]) for mk in m], [(T0 + 1200, 60.0)])
+        self.assertEqual(m[0]["merges"], [[T0 + 60 * 26 + (self.P.m + 1) * 60, 60.0]])   # added once it confirms
 
     def test_complete_call_unchanged_by_default(self):
         c, b = cells(self.rows), bars(self.H, self.L)

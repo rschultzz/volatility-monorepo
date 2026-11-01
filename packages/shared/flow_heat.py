@@ -138,6 +138,7 @@ def absorption_marks(cells: pd.DataFrame, bars: pd.DataFrame, start_epoch: int, 
                             if unbroken and abs(mk["p"] - p) <= 1:
                                 if not pending:
                                     mk["merged_vol"] += float(row[side])
+                                    mk["merges"].append([confirm, float(row[side])])   # CR-DU: merged_vol as of a time
                                 merged = True
                                 break
                         if not merged:
@@ -147,7 +148,7 @@ def absorption_marks(cells: pd.DataFrame, bars: pd.DataFrame, start_epoch: int, 
                             marks.append({"kind": "sellers_absorbed" if side == "sell" else "buyers_absorbed",
                                           "time": t, "p": p, "price": price, "confirm_time": confirm,
                                           "aggressor": float(row[side]), "opposite": float(row[opp]),
-                                          "median": float(med), "merged_vol": 0.0,
+                                          "median": float(med), "merged_vol": 0.0, "merges": [],
                                           "break_time": int(bt[hit[0]]) if len(hit) else None,
                                           "provisional": pending})
             for v in nz:

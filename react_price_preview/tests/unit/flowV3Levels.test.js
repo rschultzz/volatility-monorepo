@@ -94,26 +94,25 @@ test('approximate segments give no levels', () => {
   assert.deepEqual(absorptionLevels(payload([seg(b, [mark('sellers_absorbed', 2, 7000)], false)]), minutes(30), id), [])
 })
 
-test('edge: closes within 2 pts are tests, a close > 2 pts beyond breaks and moves the edge', () => {
-  const closes = [7000, 7001.5, 7002, 6999, 7004.25, 7005, 6998, 6997.75, 6995.5]
+test('edge: while the box is forming every new extreme close moves the edge (CR-DU Amendment 5)', () => {
+  const closes = [7000, 7001.5, 7002, 6999, 7004, 7005, 6998, 6997.75, 6995.75] // CR-DU Amendment 6: forming steps <= 2 pts
   const r = edgeReadout(payload([]), flattenBars(payload([seg(bars(closes), [])])), T0, id)
-  assert.equal(r.top.price, 7004.25) // 7001.5 / 7002 are tests; 7004.25 > 7002 breaks
-  assert.equal(r.top.brokeAt, T0 + 4 * 60)
-  assert.equal(r.top.breaks, 1)
-  // bottom: 6999 / 6998 are tests; 6997.75 is 2.25 below 7000 (break); 6995.5 is 2.25 below 6997.75 (break again)
-  assert.equal(r.bottom.price, 6995.5)
-  assert.equal(r.bottom.breaks, 2)
+  assert.equal(r.top.price, 7005)
+  assert.equal(r.top.brokeAt, T0 + 5 * 60)
+  assert.equal(r.top.breaks, 4)
+  assert.equal(r.bottom.price, 6995.75)
+  assert.equal(r.bottom.breaks, 4)
   assert.equal(r.bottom.brokeAt, T0 + 8 * 60)
 })
 
 test('edge: repeated breaks, first touch within 1 pt and held minutes', () => {
-  const closes = [7000, 7003, 7006, 7005, 7004, 7005.5]
+  const closes = [7000, 7002, 7004, 7003, 7002.5, 7003.5] // CR-DU Amendment 6: forming steps <= 2 pts
   const b = bars(closes, { hi: 0.25, lo: 0.25 })
   const r = edgeReadout(payload([]), flattenBars(payload([seg(b, [])])), T0, id)
-  assert.equal(r.top.price, 7006)
+  assert.equal(r.top.price, 7004)
   assert.equal(r.top.breaks, 2)
   assert.equal(r.top.brokeAt, T0 + 120)
-  assert.equal(r.top.firstTouch, T0 + 120) // minute 1 high 7003.25 < 7005
+  assert.equal(r.top.firstTouch, T0 + 120) // minute 1 high 7002.25 < 7003
   assert.equal(r.top.heldMin, 3)
   assert.equal(r.bottom.price, 7000)
   assert.equal(r.bottom.firstTouch, T0)
@@ -132,11 +131,11 @@ test('edge contracts: within 1 pt of the edge since the anchor, buyers at the to
   }
   const p = payload([seg(bars(closes), [], true, cells)])
   const r = edgeReadout(p, flattenBars(p), T0, id)
-  assert.equal(r.top.price, 7000)
-  assert.equal(r.bottom.price, 7000)
-  // within [6999, 7001]: t0 (7000), t1 (7001), t2 (6999), t4 (7000); 7001.25 and 6998.75 are outside; T0-60 is before the anchor
-  assert.equal(r.top.contracts, 10 + 20 + 5 + 1)
-  assert.equal(r.bottom.contracts, 3 + 1 + 30 + 4)
+  assert.equal(r.top.price, 7001) // forming: running max / min close
+  assert.equal(r.bottom.price, 6999.5)
+  // top [7000, 7002]: t0, t1 (7001, 7001.25), t4; bottom [6998.5, 7000.5]: t0, t2 (6999), t3 (6998.75), t4; T0-60 is before the anchor
+  assert.equal(r.top.contracts, 10 + 20 + 40 + 1)
+  assert.equal(r.bottom.contracts, 3 + 30 + 60 + 4)
   assert.equal(r.exact, true)
 })
 

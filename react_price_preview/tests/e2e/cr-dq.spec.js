@@ -206,7 +206,7 @@ async function cellsSegments(page) {
   }, CHARTS_FN)
 }
 
-test('items 1–3: 2026-10-30 anchor 11:57 — no box text, panel bottom-left, one section per box (current last, highlighted, verdict first); numbers = origin/main', async ({ browser }) => {
+test('items 1–3: 2026-10-30 anchor 11:57 — no box text, panel bottom-left, one manual box (highlighted, verdict first)', async ({ browser }) => {
   test.setTimeout(300_000)
   const ctxA = await browser.newContext()
   const ctxB = await browser.newContext()
@@ -220,7 +220,8 @@ test('items 1–3: 2026-10-30 anchor 11:57 — no box text, panel bottom-left, o
   const da = await drawn(a)
   const db = await drawn(b)
   const res = { boxes: da.boxes.length, frozen: da.boxes.filter((x) => x.frozen).length }
-  expect(da.boxes.length, '2+ boxes after 11:57').toBeGreaterThanOrEqual(2)
+  expect(da.boxes.length, 'CR-DU amendment 7: a manual box never chains').toBe(1)
+  expect(pt(da.boxes[0].box.from)).toBe('11:57')
   // item 1: no label on any drawn box. CR-DS: the baseline is now origin/main after CR-DQ, which has no labels either, so
   // the old "origin/main had one per box" check is stale; check that both sides show the box panel (popup) instead.
   expect(da.boxes.every((x) => x.label == null)).toBeTruthy()
@@ -228,11 +229,6 @@ test('items 1–3: 2026-10-30 anchor 11:57 — no box text, panel bottom-left, o
   await expect(a.getByTestId('flow-v3-box-popup')).toBeVisible()
   await expect(b.getByTestId('flow-v3-box-popup')).toBeVisible()
   await expect(a.getByTestId('flow-v3-box-tooltip')).toHaveCount(0)
-  // one source: the branch's box objects equal origin/main's (the branch adds lastClose only)
-  // CR-DS item 5: frozen boxes (also the current box's nested `frozen` list) gain lastClose too
-  const noLast = ({ lastClose, ...rest }) => rest // eslint-disable-line no-unused-vars
-  const clean = (x) => { const rest = noLast(x.box); if (Array.isArray(rest.frozen)) rest.frozen = rest.frozen.map(noLast); return { ...x, label: null, box: rest } }
-  expect(da.boxes.map(clean)).toEqual(db.boxes.map(clean))
   // item 4 data: the shade is fed the same boxes
   expect(da.shade).toEqual(da.boxes.map(({ from, to, top, bottom, frozen }) => ({ from, to, top, bottom, frozen })))
 
@@ -254,27 +250,11 @@ test('items 1–3: 2026-10-30 anchor 11:57 — no box text, panel bottom-left, o
   const cur = t.sections[t.sections.length - 1]
   expect(cur.first).toBe('flow-v3-box-verdict')
   expect(cur.verdict).toBeTruthy()
-  // numbers: the current section's lines = origin/main's popup lines; frozen sections carry origin/main's label numbers
-  const mainPopup = await b.getByTestId('flow-v3-box-popup').evaluate((el) => ({
-    head: el.querySelector('[data-testid=flow-v3-box-popup-head]').innerText,
-    top: el.querySelector('[data-testid=flow-v3-box-popup-top]').innerText,
-    bottom: el.querySelector('[data-testid=flow-v3-box-popup-bottom]').innerText,
-  }))
-  res.mainPopup = mainPopup
-  expect(noBadges(cur.lines[0])).toBe(noBadges(mainPopup.head)) // CR-DS: origin/main (post CR-DQ) has badges too
-  expect(cur.lines[1]).toBe(mainPopup.top)
-  expect(cur.lines[2]).toBe(mainPopup.bottom)
-  for (let k = 0; k < db.boxes.length; k += 1) {
-    const m = db.boxes[k]
-    const s = t.sections[k]
-    // CR-DS: origin/main (post CR-DQ) draws no labels; the label numbers from the same function, on its readout
-    const [d, pts, mins, cpp] = boxLabelText(m.box.readout).split(' · ')
-    for (const piece of [d, pts, mins, cpp]) expect(noBadges(s.lines[0])).toContain(piece)
-    expect(s.lines[1]).toContain(`Top ${m.top.toFixed(2)} · buyers ${m.box.top.contracts == null ? 'exact data only' : kfmt(m.box.top.contracts)}`)
-    expect(s.lines[2]).toContain(`Bottom ${m.bottom.toFixed(2)} · sellers ${m.box.bottom.contracts == null ? 'exact data only' : kfmt(m.box.bottom.contracts)}`)
-    // CR-DS item 5: the frozen row is "hh:mm–hh:mm · broke ↓ hh:mm · share pNN · c/pt pNN"
-    if (m.frozen) expect(s.summary).toContain(`${pt(m.box.from)}–${pt(m.box.breakAt)} · broke ${m.box.dir === 'up' ? '↑' : '↓'} ${pt(m.box.breakAt)} · share `)
-  }
+  // numbers: the section's lines come from the same box object (CR-DU amendment 7: origin/main chains here, so it is no baseline)
+  const [dd, pts, mins, cpp] = boxLabelText(da.boxes[0].box.readout).split(' · ')
+  for (const piece of [dd, pts, mins, cpp]) expect(noBadges(cur.lines[0])).toContain(piece)
+  expect(cur.lines[1]).toContain(`Top ${da.boxes[0].top.toFixed(2)} · buyers`)
+  expect(cur.lines[2]).toContain(`Bottom ${da.boxes[0].bottom.toFixed(2)} · sellers`)
   await shot(a, 'panel-1030-1157-expanded.png')
   log('items-1-3.json', res)
   await ctxA.close()
@@ -368,7 +348,7 @@ const COMPOSITE_FN = `((sel) => {
 test('item 4: boxes shaded (current stronger than frozen), candles on top; the set-end window stays slate and full height', async ({ page }) => {
   test.setTimeout(300_000)
   await open(page, D30, { storage: EDGES })
-  const anchor = shifted(`${D30}T11:57`)
+  const anchor = shifted(`${D30}T07:10`) // CR-DU amendment 7: one manual box, tall enough (10.50 pts) to sample inside it
   await anchorAt(page, anchor, anchor - 10 * 60, shifted(`${D30}T13:00`))
   await page.getByTestId('flow-v3-box-popup-close').click()
   // pixel deltas with the shade on vs its data removed, at sample points inside each box away from candles
@@ -393,8 +373,10 @@ test('item 4: boxes shaded (current stronger than frozen), candles on top; the s
         const yb = price.series.priceToCoordinate(b.bottom)
         const yh = price.series.priceToCoordinate(bar.high)
         const yl = price.series.priceToCoordinate(bar.low)
-        const gapTop = yh - yt
-        const gapBot = yb - yl
+        // CR-DU amendment 7: price can leave a manual box after a break; sample inside the box, on screen only
+        if (x == null || x < 0 || x > pane.width) continue
+        const gapTop = Math.min(yh, yb) - yt
+        const gapBot = yb - Math.max(yl, yt)
         const g = Math.max(gapTop, gapBot)
         if (!best || g > best.g) best = { g, x, y: gapTop > gapBot ? (yt + yh) / 2 : (yl + yb) / 2, xc: x, yc: (price.series.priceToCoordinate(bar.open) + price.series.priceToCoordinate(bar.close)) / 2, body: Math.abs(price.series.priceToCoordinate(bar.open) - price.series.priceToCoordinate(bar.close)) }
       }
@@ -404,7 +386,7 @@ test('item 4: boxes shaded (current stronger than frozen), candles on top; the s
     }
     return out
   }, { fn: CHARTS_FN, comp: COMPOSITE_FN })
-  await frame(page, anchor - 10 * 60, shifted(`${D30}T13:00`))
+  await frame(page, anchor - 10 * 60, shifted(`${D30}T08:00`))
   const on = await sample()
   const saved = await page.evaluate((fn) => { const { price } = eval(fn); const d = price.prims.boxShade._data; price.prims.boxShade.setData(null); window.__crdqShade = d; return true }, CHARTS_FN) // eslint-disable-line no-eval
   await page.waitForTimeout(400)
@@ -460,17 +442,17 @@ test('item 4: boxes shaded (current stronger than frozen), candles on top; the s
   log('item-4-shading.json', res)
 })
 
-test('item 2: more than 4 boxes → "n older boxes not shown" (2026-10-29, anchor 06:31)', async ({ page }) => {
+test('item 2 (CR-DU amendment 7): a manual box never chains: one section and no "older boxes" line (2026-10-29, anchor 06:31)', async ({ page }) => {
   test.setTimeout(300_000)
   await open(page, D29, { storage: EDGES })
   await anchorAt(page, shifted(`${D29}T06:31`), shifted(`${D29}T06:20`), shifted(`${D29}T13:00`))
   const d = await drawn(page)
-  const dropped = d.boxes[d.boxes.length - 1].box.dropped
   const t = await panelText(page)
-  log('item-2-dropped.json', { dropped, sections: t.sections.length, droppedText: t.dropped })
-  expect(dropped).toBeGreaterThan(0)
-  expect(t.sections.length).toBe(5)
-  expect(t.dropped).toBe(`${dropped} older box${dropped === 1 ? '' : 'es'} not shown`)
+  log('item-2-dropped.json', { dropped: d.boxes[d.boxes.length - 1].box.dropped, sections: t.sections.length, droppedText: t.dropped })
+  expect(d.boxes.length).toBe(1)
+  expect(t.sections.length).toBe(1)
+  expect(d.boxes[0].box.dropped).toBe(0)
+  await expect(page.getByTestId('flow-v3-box-broke')).toHaveText('broke ↑ 07:00')
   await shot(page, 'panel-1029-0631-dropped.png')
 })
 
@@ -572,7 +554,8 @@ test('item 7: 2026-10-28 (FOMC) shows NO TRADES', async ({ page }) => {
   log('item-7-fomc.json', v)
   expect(v.verdict.kind).toBe('no-trades')
   expect(v.verdict.pill).toBe('NO TRADES') // CR-DS item 1: the pill is the label's head; the reason sits under it
-  expect(v.verdict.title).toMatch(/Rules: A22\. .*Draft rules, untested/)
+  expect(v.verdict.title).toMatch(/^Rules: A22\./) // CR-DU amendment 7: the panel verdict reads the manual box; the engine has its own line
+  await expect(page.getByTestId('flow-v3-box-engine')).toContainText(/^Engine \(box /)
   await shot(page, 'verdict-1028-fomc.png')
 })
 

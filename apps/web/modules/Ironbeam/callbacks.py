@@ -5,6 +5,7 @@ import re
 import json
 import math
 import datetime as dt
+import sys
 import time
 from zoneinfo import ZoneInfo
 from io import StringIO
@@ -42,6 +43,7 @@ from modules.Ironbeam.routes import register_gex_landscape_route
 from modules.Ironbeam.skew_stickiness import register_skew_stickiness_route
 from modules.Ironbeam import flow_v2
 from modules.Ironbeam import flow_v3
+from modules.Ironbeam import v1_engine
 
 # Import skew helpers for the React API
 from modules.Skew.callbacks import (
@@ -1637,6 +1639,35 @@ def _build_react_flow_cells_payload(
                 "trade_date": str(trade_date), "effective_trade_date": session_date.isoformat()}, 500
 
 
+def _build_v1_engine_inputs(trade_date: str | None, *, until_pt: dt.datetime | None, seconds: bool,
+                            only_blocked: bool = False) -> tuple[dict, int]:
+    """CR-DU: `/api/ironbeam/v1-engine/inputs` (modules/Ironbeam/v1_engine.py). The RTH cells payload is built here only
+    to find the segment's source / contract / bars; the client runs the engine on its own cells payload."""
+    if not trade_date:
+        return {"error": "trade_date is required", "mode": "v1-engine-inputs"}, 400
+    try:
+        selected_date = dt.datetime.strptime(str(trade_date), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return {"error": "Invalid trade date", "mode": "v1-engine-inputs"}, 400
+    session_date, _ = _effective_trade_date(selected_date, ZoneInfo("America/Los_Angeles"))
+    try:
+        warmup = {dt.date.fromisoformat(x) for x in v1_engine.prior_baselines()["warmup_sessions"]}
+        why = v1_engine.blocked_reason(session_date, v1_engine.set2_open_dates(engine), warmup)
+        if why or only_blocked:   # only_blocked: the overlay toggle's enabled state, without building the inputs
+            return {"mode": "v1-engine-inputs", "trade_date": session_date.isoformat(), "blocked": why}, 200
+        cells, status = flow_v3.build_cells_payload(
+            engine, session_date.isoformat(), session="RTH", until_pt=until_pt, params=flow_v3.parse_absorb_params({}),
+            session_date=session_date, session_note=None,
+        )
+        if status != 200:
+            return {"error": "cells payload failed", "mode": "v1-engine-inputs"}, status
+        mod = sys.modules[__name__]
+        return v1_engine.build_inputs(engine, mod, session_date, cells, until_pt=until_pt, seconds=seconds,
+                                      check_blocked=False), 200
+    except Exception as e:
+        return {"error": f"Database error when loading v1 engine inputs: {type(e).__name__}", "mode": "v1-engine-inputs"}, 500
+
+
 def _build_react_flow_payload(
         trade_date: str | None,
         *,
@@ -3198,6 +3229,27 @@ def register_ironbeam_callbacks(app):
                 return resp, status
 
             app.server._ironbeam_react_flow_cells_route_registered = True
+
+        if not getattr(app.server, "_ironbeam_v1_engine_inputs_route_registered", False):
+
+            @app.server.route("/api/ironbeam/v1-engine/inputs", methods=["GET"])
+            def ironbeam_v1_engine_inputs_api():
+                # CR-DU: the v1 rules engine's inputs on top of the cells payload (modules/Ironbeam/v1_engine.py); read-only.
+                payload, status = _build_v1_engine_inputs(
+                    request.args.get("trade_date"),
+                    until_pt=_parse_until_pt(request.args.get("until"), ZoneInfo("America/Los_Angeles")),
+                    seconds=request.args.get("seconds", "1") != "0",
+                    only_blocked=request.args.get("only_blocked") == "1",
+                )
+                resp = jsonify(payload)
+                origin = request.headers.get("Origin")
+                if origin in {"http://localhost:5173", "http://127.0.0.1:5173", "http://0.0.0.0:5173"}:
+                    resp.headers["Access-Control-Allow-Origin"] = origin
+                    resp.headers["Access-Control-Allow-Credentials"] = "true"
+                    resp.headers["Vary"] = "Origin"
+                return resp, status
+
+            app.server._ironbeam_v1_engine_inputs_route_registered = True
 
         if not getattr(app.server, "_ironbeam_react_skew_data_route_registered", False):
             @app.server.route("/api/ironbeam/skew-data", methods=["GET"])

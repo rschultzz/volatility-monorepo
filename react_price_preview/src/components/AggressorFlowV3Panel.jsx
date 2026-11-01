@@ -21,7 +21,6 @@ import {
   utcEpochShowingZoneTime,
 } from '../flowShared'
 import {
-  BOX_HOLD_MIN_RANGE,
   BOX_RULES_RANGES,
   boxRules,
   BREAK_HOLD_MIN_RANGE,
@@ -65,7 +64,7 @@ import {
   volumeCap,
   sessionOpenAnchor,
 } from '../flowV3'
-import { EdgeEffortPrimitive, ORANGE_RGB, ShareCapPrimitive, VolumeCapPrimitive } from './flowV3Primitives'
+import { BoxStartTicksPrimitive, EdgeEffortPrimitive, ORANGE_RGB, ShareCapPrimitive, VolumeCapPrimitive } from './flowV3Primitives'
 
 const BG_COLOR = '#1f2937'
 const PANE_SEPARATOR_PX = 1 // CR-DI: the strip's 64 px include the 1-px pane separator, so pane 0 keeps its height
@@ -216,7 +215,7 @@ function BoxRulesFields({ draft, setDraft, input, label }) {
         {num('minAgeMin', 'Min box age (min)', 1, 'flow-v3-rule-min-age')}
         {num('minHeightPts', 'Min box height (pts)', 0.25, 'flow-v3-rule-min-height')}
       </div>
-      <div style={note}>Draft rules (A19, A22, A23, A24), applied mechanically — untested, a display aid. "Notable" in the rules is the tier above. Absorption distance is to the box's high–low range (wicks). No verdict beyond NO TRADES until the box is this old and tall ("box still forming"). Defaults 2 / 2 / 2, 10 min / 2 pts.</div>
+      <div style={note}>Draft rules (A19, A22, A23, A24), applied mechanically — untested, a display aid. "Notable" in the rules is the tier above. Absorption distance is to the box's high–low range (wicks). No verdict beyond NO TRADES until the box is this old and tall ("box still forming"). Defaults 2 / 2 / 2, 8 min / 2 pts. The box panel's verdict is the v1 rules engine's, which uses these values too.</div>
     </>
   )
 }
@@ -239,12 +238,13 @@ function Settings({ value, layers, markers = DEFAULT_MARKER_SETTINGS, onApply, o
       m: Math.round(n('m', 1, 30, DEFAULT_V3_SETTINGS.m)),
       sellLayer: Boolean(draft.sellLayer),
       buyLayer: Boolean(draft.buyLayer),
-      boxHoldMin: Math.round(n('boxHoldMin', BOX_HOLD_MIN_RANGE[0], BOX_HOLD_MIN_RANGE[1], DEFAULT_V3_SETTINGS.boxHoldMin)),
       breakHoldMin: Math.round(n('breakHoldMin', BREAK_HOLD_MIN_RANGE[0], BREAK_HOLD_MIN_RANGE[1], DEFAULT_V3_SETTINGS.breakHoldMin)),
       rollingOn: Boolean(draft.rollingOn),
       liveMinMove: n('liveMinMove', LIVE_MIN_MOVE_RANGE[0], LIVE_MIN_MOVE_RANGE[1], DEFAULT_V3_SETTINGS.liveMinMove),
       anchoredLine: draft.anchoredLine === 'raw' ? 'raw' : 'share',
       boxRules: boxRules(draft.boxRules), // CR-DQ items 5 / 7: clamped to BOX_RULES_RANGES
+      v1Alert: Boolean(draft.v1Alert), // CR-DU item 2
+      contraMarks: Boolean(draft.contraMarks), // CR-DU item 4
     }, {
       // CR-DP amendment item 1: the Flow v2 marker settings, same ranges as v2's ⚙ (swing 1–50, ratio 1–10)
       ...markers,
@@ -285,12 +285,6 @@ function Settings({ value, layers, markers = DEFAULT_MARKER_SETTINGS, onApply, o
           <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>Display defaults (3 and 3), not tested thresholds.</div>
         </label>
         <label style={{ display: 'block', marginBottom: '10px' }}>
-          {label('Box edge must hold N min before a break freezes it')}
-          <input type="number" step={1} min={BOX_HOLD_MIN_RANGE[0]} max={BOX_HOLD_MIN_RANGE[1]} aria-label="Box hold minutes" data-testid="flow-v3-box-hold"
-            value={draft.boxHoldMin ?? DEFAULT_V3_SETTINGS.boxHoldMin} style={input} onChange={(e) => setDraft((d) => ({ ...d, boxHoldMin: e.target.value }))} />
-          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>Edges box, 5–60 (default 15). A display default, not a tested threshold: ranges are measured against the prior move, not a fixed time (A2); this only decides when the drawn box restarts.</div>
-        </label>
-        <label style={{ display: 'block', marginBottom: '10px' }}>
           {label('Break must hold A min')}
           <input type="number" step={1} min={BREAK_HOLD_MIN_RANGE[0]} max={BREAK_HOLD_MIN_RANGE[1]} aria-label="Break hold minutes" data-testid="flow-v3-break-hold"
             value={draft.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin} style={input} onChange={(e) => setDraft((d) => ({ ...d, breakHoldMin: e.target.value }))} />
@@ -303,6 +297,20 @@ function Settings({ value, layers, markers = DEFAULT_MARKER_SETTINGS, onApply, o
           <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>With Effort on, the leg in progress is labelled once it has moved this far (2–12, default 4). A display default, not a tested threshold.</div>
         </label>
         <BoxRulesFields draft={draft} setDraft={setDraft} input={input} label={label} />
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '0 0 10px' }}>
+          <input type="checkbox" aria-label="Alert on SHORT / LONG" data-testid="flow-v3-v1-alert" checked={Boolean(draft.v1Alert)}
+            onChange={(e) => {
+              const on = e.target.checked
+              setDraft((d) => ({ ...d, v1Alert: on }))
+              try { if (on && window.Notification && Notification.permission === 'default') Notification.requestPermission() } catch (err) { /* none */ }
+            }} />
+          <span style={{ fontSize: '12px', color: '#cbd5e1' }}>Alert when the v1 verdict turns SHORT / LONG (live session: tone + browser notification)</span>
+        </label>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '0 0 10px' }}>
+          <input type="checkbox" aria-label="Contradiction bars" data-testid="flow-v3-contra-marks" checked={Boolean(draft.contraMarks)}
+            onChange={(e) => setDraft((d) => ({ ...d, contraMarks: e.target.checked }))} />
+          <span style={{ fontSize: '12px', color: '#cbd5e1' }}>Contradiction bars (markers) in the current box: heavy one-sided minute rejected at an edge (CR-DU item 4; untested)</span>
+        </label>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
           <input type="checkbox" aria-label="Heatmap (cells)" data-testid="flow-v3-heatmap-toggle" checked={Boolean(draft.heat)} onChange={(e) => setDraft((d) => ({ ...d, heat: e.target.checked }))} />
           Heatmap (cells) — behind the candles
@@ -381,6 +389,9 @@ export default function AggressorFlowV3Panel({
   onEffortChange,
   myTradesOn = false,
   onMyTradesChange,
+  v1TradesOn = false,
+  v1TradesBlocked = null,
+  onV1TradesChange,
   edgeEffortOn = false, // CR-DI: the Edge effort strip (stored per viewer); draws only with Edges on, an anchor and exact data
   onEdgeEffortChange,
   zoomResetKey = null, // CR-DP item 8b: the trade date; a change resets the slot zoom
@@ -422,7 +433,7 @@ export default function AggressorFlowV3Panel({
   const closes = useMemo(() => rowCloses(aligned, candles, shift), [candles, aligned, shift])
   // CR-DN item 3: with box segments, the CVD restarts at 0 on each drawn box (same anchoredCvd per span); `cvdGaps` =
   // rows whose line to the next box is drawn transparent. Without segments, one anchored line as before.
-  const cvdSeg = useMemo(() => (segments?.spans?.length ? segmentCvd(aligned, segments.spans) : null), [aligned, segments])
+  const cvdSeg = useMemo(() => (segments?.spans?.length ? segmentCvd(aligned, segments.lineSpans || segments.spans) : null), [aligned, segments])
   const plainCvd = useMemo(() => (cvdSeg ? null : anchoredCvd(aligned, anchor, end)), [cvdSeg, aligned, anchor, end])
   const cvd = cvdSeg ? cvdSeg.cvd : plainCvd
   const cvdGaps = cvdSeg ? cvdSeg.gapAt : null
@@ -431,7 +442,7 @@ export default function AggressorFlowV3Panel({
   const shareMode = anchor != null && settings.anchoredLine !== 'raw'
   const shareSeries = useMemo(() => {
     if (!shareMode) return null
-    return segments?.spans?.length ? segmentShare(aligned, segments.spans) : { ...anchoredShare(aligned, anchor, end), gapAt: null }
+    return segments?.spans?.length ? segmentShare(aligned, segments.lineSpans || segments.spans) : { ...anchoredShare(aligned, anchor, end), gapAt: null }
   }, [shareMode, aligned, segments, anchor, end])
   const rollingOn = Boolean(settings.rollingOn)
   const rolling = useMemo(() => (rollingOn ? rollingDelta(aligned, settings.rollingMin) : null), [aligned, rollingOn, settings.rollingMin])
@@ -533,7 +544,9 @@ export default function AggressorFlowV3Panel({
     chartRef.current = chart
     const shareCap = new ShareCapPrimitive() // CR-DP item 6b
     cvdS.attachPrimitive(shareCap)
-    seriesRef.current = { delta, rolling: rollingS, cvd: cvdS, vol: volS, volCap, shareCap }
+    const boxTicks = new BoxStartTicksPrimitive()
+    cvdS.attachPrimitive(boxTicks)
+    seriesRef.current = { delta, rolling: rollingS, cvd: cvdS, vol: volS, volCap, shareCap, boxTicks }
 
     const refreshDecorations = () => {
       const w = stageRef.current?.clientWidth || 0
@@ -671,6 +684,7 @@ export default function AggressorFlowV3Panel({
         : ws(r))))
       s.shareCap.setData({ marks: [] })
     }
+    s.boxTicks.setData({ color: SLATE_RGBA(0.95), times: segments?.ticks || [] }) // CR-DU amendment 7 item 4
     const shared = normalizeLogicalRange(visibleLogicalRange)
     if (chartRef.current && candleTimes.length >= 2 && !shared) {
       chartRef.current.timeScale().fitContent()
@@ -684,7 +698,7 @@ export default function AggressorFlowV3Panel({
       }
     }
     requestAnimationFrame(() => refreshDecorationsRef.current())
-  }, [aligned, rolling, cvd, cvdGaps, shareSeries, candleTimes, visibleLogicalRange])
+  }, [aligned, rolling, cvd, cvdGaps, shareSeries, candleTimes, visibleLogicalRange, segments])
 
   // CR-DP item 6b: in share mode the line's scale is fixed at ±10 % with faint slate guides at 0, ±2 % and ±5 % (no axis
   // labels); raw CVD autoscales as before. Item 8b: each slot's auto range (fixed ±10 % for the share line) is then
@@ -887,7 +901,7 @@ export default function AggressorFlowV3Panel({
 
   return (
     <div className="flow-shell" style={{ height: `${height}px`, position: 'relative', width: '100%' }} data-testid="flow-v3-panel"
-      data-anchor={anchor ?? ''} data-end={end ?? ''}>
+      data-anchor={anchor ?? ''} data-end={end ?? ''} data-box-ticks={(segments?.ticks || []).join(',')}>
       {/* CR-DP item 3: Anchor · Edges · Display groups (a small gap between groups), status notes, then ⚙ and ? at the far
           right. Same buttons and behaviour; the anchored readout moved to the price chart's box stats popup (item 4). */}
       <div className="flow-panel-header" style={{ display: 'flex', alignItems: 'center', gap: '14px', justifyContent: 'flex-start', overflowX: 'auto' }}>
@@ -961,6 +975,13 @@ export default function AggressorFlowV3Panel({
             onClick={() => onMyTradesChange?.(!myTradesOn)}
             title="Your logged trades on the price chart: ▲ / ▼ entry, × exit, resting stop (dashed) and target (dotted) while open; click a marker to review it">
             My trades {myTradesOn ? 'on' : 'off'}
+          </button>
+          <button type="button" style={{ ...chipStyle(v1TradesOn), ...(v1TradesBlocked ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+            aria-pressed={v1TradesOn} disabled={Boolean(v1TradesBlocked)} data-testid="flow-v3-v1-trades-toggle" data-blocked={v1TradesBlocked || ''}
+            onClick={() => onV1TradesChange?.(!v1TradesOn)}
+            title={v1TradesBlocked ? `v1 trades: ${v1TradesBlocked}`
+              : "The v1 rules engine's simulated trades for this session (teal): entry, exit, stop / +10 target while open, points; hover a minute for its verdict and failed rules. Run minute by minute without later bars. Engine's trades, not yours; train backtest in-sample only — untested."}>
+            v1 trades {v1TradesBlocked ? `(${v1TradesBlocked})` : v1TradesOn ? 'on' : 'off'}
           </button>
         </span>
         {(anyLayer && (approxCells || cellsLoading || cellsError)) || ((layers.marks || layers.levels) && marksNote && !approxCells) ? (

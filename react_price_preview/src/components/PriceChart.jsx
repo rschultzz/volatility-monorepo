@@ -20,6 +20,7 @@ import {
 } from 'web-shared'
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import BoxPanel from './BoxPanel'
+import { V1_TRADES_RGB, contraMarkers, engineBoxLine, engineSettingsFromRules, minuteText, overlayMarks, panelEngine, panelVerdict, prepareSession, simulateSession } from '../v1Engine'
 import { TradeMarksPrimitive } from './tradePrimitives'
 import boxBaseline from '../data/boxBaseline.json'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
@@ -2812,8 +2813,8 @@ export default function PriceChart({
     const step = v3Times.length > 1 ? Math.max(60, v3Times[1] - v3Times[0]) : 60
     return readHistory({
       payload: v3Payload, bars: v3Bars, rows: v3Segments.rows, closes: v3Segments.closes, anchorShifted: v3Shift(v3EdgeReadout.anchor),
-      endShifted: v3End, shift: v3Shift, holdMin: v3EdgeReadout.holdMin, breakHoldMin: v3EdgeReadout.breakHoldMin, candleTimes: v3Times,
-      segments: v3Payload.segments, baseline: boxBaseline, tradeDate, rules: v3Rules, ptMinOf: v3PtMin, stepSec: step,
+      endShifted: v3End, shift: v3Shift, breakHoldMin: v3EdgeReadout.breakHoldMin, candleTimes: v3Times,
+      segments: v3Payload.segments, baseline: boxBaseline, tradeDate, rules: v3Rules, ptMinOf: v3PtMin, stepSec: step, manual: true,
     })
   }, [v3EdgeReadout, v3Payload, v3Bars, v3Segments, v3Times, v3Shift, v3End, tradeDate, v3Rules, v3PtMin])
   const v3BoxPanel = useMemo(() => {
@@ -2837,8 +2838,112 @@ export default function PriceChart({
     }
   }, [v3Edges, v3Shift, v3Payload, v3Times, v3History, v3PtMin, tradeDate, v3Rules])
   // CR-DQ item 7: the current box's verdict from the panel's own inputs (its percentiles, the levels above, the trade date).
-  const v3Verdict = useMemo(() => currentBoxVerdict(v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift, formatShiftedHHMM),
+  const v3DraftVerdict = useMemo(() => currentBoxVerdict(v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift, formatShiftedHHMM),
     [v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift])
+  // CR-DU amendment 7: the panel's verdict and rows read the manual box (CR-DQ / CR-DS `boxVerdict`). The v1 rules engine
+  // gets its own line from its own chained box (v1Engine.panelEngine, 06:30 chain to the last bar / set end, with its own
+  // trades for rules 19 / 20); it never moves the manual box. Where the engine is off for the date (inputs `blocked`:
+  // holdout, set 2 in progress, …) the line gives the reason.
+  const v1Inputs = flowV3?.v1Inputs || null
+  const v1Panel = useMemo(() => {
+    if (!v3EdgeReadout || !v3Payload || !v1Inputs) return null
+    if (v1Inputs.blocked || v1Inputs.error) return { off: v1Inputs.blocked || 'engine inputs unavailable' }
+    const ctx = prepareSession({ payload: v3Payload, inputs: v1Inputs, tradeDate, fixedBaseline: boxBaseline, settings: engineSettingsFromRules(v3Rules) })
+    const pe = panelEngine(ctx, { endShifted: v3End })
+    const fmt = (t) => formatShiftedHHMM(v3Shift(t))
+    return { verdict: panelVerdict(pe, fmt), engineBox: engineBoxLine(pe, fmt), pe, ctx }
+  }, [v3EdgeReadout, v3Payload, v1Inputs, tradeDate, v3Rules, v3Shift, v3End])
+  const v3Verdict = useMemo(() => {
+    if (!v3DraftVerdict) return v3DraftVerdict
+    if (v1Panel?.off) return { ...v3DraftVerdict, engineLine: `v1 engine off: ${v1Panel.off}` }
+    if (!v1Panel?.verdict) return v3DraftVerdict
+    return { ...v3DraftVerdict, engineBox: v1Panel.engineBox, engineTag: v1Panel.verdict.engineTag, engineTitle: v1Panel.verdict.title, engineLine: v1Panel.verdict.engineLine }
+  }, [v3DraftVerdict, v1Panel])
+  // CR-DU item 4b — the v1 trades overlay: the engine run minute by minute over the session shown (06:30 anchor, no later
+  // bars at each minute), drawn in CR-DR's trade-marker style in teal (C1 approved); hover shows that minute's verdict.
+  const v1TradesOn = Boolean(flowV3?.v1TradesOn)
+  const v1Sim = useMemo(() => {
+    if (!v1TradesOn || !v3Payload || !v1Inputs || v1Inputs.blocked || v1Inputs.error) return null
+    const ctx = prepareSession({ payload: v3Payload, inputs: v1Inputs, tradeDate, fixedBaseline: boxBaseline })
+    if (!ctx) return null
+    const sim = simulateSession(ctx)
+    return { ctx, sim, marks: overlayMarks(sim, ctx), byTime: new Map(sim.minutes.map((m) => [ctx.shift(m.t), m])) }
+  }, [v1TradesOn, v3Payload, v1Inputs, tradeDate])
+  const v1MarksRef = useRef({ series: null, prim: null })
+  useEffect(() => {
+    const series = seriesRef.current
+    if (!series) return
+    if (v1MarksRef.current.series !== series) v1MarksRef.current = { series, prim: null }
+    const r = v1MarksRef.current
+    if (!v1Sim && !r.prim) return
+    if (!r.prim) {
+      r.prim = new TradeMarksPrimitive()
+      series.attachPrimitive(r.prim)
+    }
+    r.prim.setData(v1Sim ? { trades: v1Sim.marks, times: v3Times, step: v3Step, selectedId: null, rgb: V1_TRADES_RGB } : null)
+  }, [v1Sim, v3Times, v3Step])
+  const [v1Hover, setV1Hover] = useState(null)
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !v1Sim) {
+      setV1Hover(null)
+      return undefined
+    }
+    const onMove = (p) => {
+      const t = p?.time != null ? Number(p.time) : null
+      const m = t != null && p?.point ? v1Sim.byTime.get(t) : null
+      setV1Hover(m ? { x: p.point.x, y: p.point.y, text: minuteText(m, (u) => formatShiftedHHMM(v3Shift(u))), verdict: m.verdict } : null)
+    }
+    chart.subscribeCrosshairMove(onMove)
+    return () => chart.unsubscribeCrosshairMove(onMove)
+  }, [v1Sim, v3Shift])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.__crDuV1 = () => (v1Sim ? { trades: v1Sim.sim.trades, open: v1Sim.sim.open, minutes: v1Sim.sim.minutes.length, hits: v1MarksRef.current.prim?.hits() || [] } : null)
+  }, [v1Sim])
+  // CR-DU item 4 — contradiction-bar markers (⚙, off by default) for the panel's current engine box, in the effort
+  // markers' style (small circle: blue below a bullish bar, light grey above a bearish one, as Flow v2 effort markers, "C").
+  const contraRef = useRef(null)
+  const contraList = useMemo(() => (flowV3?.contraMarks && v1Panel?.ctx ? contraMarkers(v1Panel.ctx, v1Panel.pe) : []), [flowV3?.contraMarks, v1Panel])
+  useEffect(() => {
+    const series = seriesRef.current
+    if (!series) return
+    if (!contraList.length && (!contraRef.current || contraRef.current.series !== series)) return
+    if (!contraRef.current || contraRef.current.series !== series) contraRef.current = { series, api: createSeriesMarkers(series, []) }
+    const markers = []
+    for (const m of contraList) {
+      const t = snapToCandleTime(displayCandles, v3Shift(m.t), false)
+      if (t != null) {
+        markers.push(m.side === 'long'
+          ? { time: t, position: 'belowBar', shape: 'circle', color: 'rgba(96,165,250,1)', text: 'C', size: 0.5, id: `cr-du-contra-${m.t}` }
+          : { time: t, position: 'aboveBar', shape: 'circle', color: 'rgba(229,231,235,1)', text: 'C', size: 0.5, id: `cr-du-contra-${m.t}` })
+      }
+    }
+    contraRef.current.api.setMarkers(markers.sort((a, b) => a.time - b.time))
+  }, [contraList, displayCandles, v3Shift])
+  // CR-DU item 2: optional alert (⚙, off by default; live session only): a short tone + a browser notification when the
+  // engine verdict changes to SHORT / LONG.
+  const v1AlertPrev = useRef(null)
+  const v1Now = v1Panel?.pe?.ev?.verdict || null
+  useEffect(() => {
+    const prev = v1AlertPrev.current
+    v1AlertPrev.current = v1Now
+    if (!flowV3?.v1Alert || !prev || prev === v1Now || (v1Now !== 'SHORT' && v1Now !== 'LONG')) return
+    const text = `v1 engine: ${v1Now} (${v1Panel?.verdict?.reason || ''})`
+    try {
+      const ac = new (window.AudioContext || window.webkitAudioContext)()
+      const o = ac.createOscillator()
+      const g = ac.createGain()
+      o.frequency.value = v1Now === 'SHORT' ? 660 : 880
+      g.gain.value = 0.08
+      o.connect(g).connect(ac.destination)
+      o.start()
+      o.stop(ac.currentTime + 0.35)
+    } catch (err) { /* no audio */ }
+    try {
+      if (window.Notification && Notification.permission === 'granted') new Notification('Dash — v1 engine', { body: text }) // eslint-disable-line no-new
+    } catch (err) { /* no notifications */ }
+  }, [v1Now, flowV3?.v1Alert, v1Panel])
   // CR-DV: the live trades feed has stalled (server: no trade for > 60 s in RTH) — PT hh:mm of the last trade
   const v3FeedStall = useMemo(() => {
     const t = feedStalledSince(v3Payload)
@@ -4003,7 +4108,23 @@ export default function PriceChart({
               rules={v3Rules}
               verdict={v3Verdict}
               feedStall={v3FeedStall}
+              onRestart={flowV3?.onBoxRestart}
             />
+          )}
+
+          {v1Hover && (
+            <div
+              data-testid="flow-v3-v1-hover"
+              data-verdict={v1Hover.verdict}
+              style={{
+                position: 'absolute', left: Math.max(0, (hostRef.current?.offsetLeft || 0) + v1Hover.x + 12),
+                top: Math.max(0, (hostRef.current?.offsetTop || 0) + v1Hover.y + 14), zIndex: 6, pointerEvents: 'none',
+                background: 'rgba(2,6,23,0.92)', border: `1px solid rgba(${V1_TRADES_RGB},0.6)`, borderRadius: 8, padding: '4px 8px',
+                fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4, maxWidth: 360,
+              }}
+            >
+              {v1Hover.text}
+            </div>
           )}
 
           {v3ProbeHover && (

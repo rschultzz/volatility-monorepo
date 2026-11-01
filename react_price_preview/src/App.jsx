@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PriceChart from './components/PriceChart'
 import { DEFAULT_MARKER_SETTINGS, alignV2ToCandles, effortChartMarkers } from './flowShared'
 import AggressorFlowV3Panel from './components/AggressorFlowV3Panel'
-import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, LIVE_EFFORT_ID, boxRules, boxSegments, edgeReadout, edgeStripDrawn, endFromPick, flattenBars, liveEffortLabel, makeShifter, rollingExtraHeight, rowCloses, segmentReadouts } from './flowV3'
+import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, migrateBoxRules, LIVE_EFFORT_ID, boxRules, boxSegments, edgeReadout, edgeStripDrawn, endFromPick, flattenBars, liveEffortLabel, makeShifter, rollingExtraHeight, rowCloses, segmentReadouts } from './flowV3'
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import TradeReviewPanel from './components/TradeReviewPanel'
 import boxBaseline from './data/boxBaseline.json'
-import { ptToShifted } from './tradeContext'
+import { ptToShifted, shiftedToPt } from './tradeContext'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
 import {
   GEX_MIN_ABS_B_LEGACY_STORAGE_KEY,
@@ -468,7 +468,8 @@ export default function App() {
       return dflt
     }
   }
-  const [flowV3Settings, setFlowV3Settings] = useState(() => readStoredObject(FLOW_V3_SETTINGS_STORAGE_KEY, DEFAULT_V3_SETTINGS))
+  // CR-DU: a stored box minimum of 10 (the old default) becomes 8 once (flowV3.migrateBoxRules)
+  const [flowV3Settings, setFlowV3Settings] = useState(() => migrateBoxRules(readStoredObject(FLOW_V3_SETTINGS_STORAGE_KEY, DEFAULT_V3_SETTINGS)))
   const [flowV3Layers, setFlowV3Layers] = useState(() => readStoredObject(FLOW_V3_LAYERS_STORAGE_KEY, FLOW_V3_LAYERS_OFF))
   const [flowEdgeEffort, setFlowEdgeEffort] = useState(() => {
     try {
@@ -479,6 +480,7 @@ export default function App() {
   })
   const [flowAnchor, setFlowAnchor] = useState(null)
   const [flowAnchorArmed, setFlowAnchorArmed] = useState(false)
+  const [flowRestarts, setFlowRestarts] = useState({ anchor: null, spans: [] }) // CR-DU amendment 7: spans before a "restart here"
   // CR-DN item 1: the window's end (shifted PT epoch of its last 1-minute bar), like the anchor: App state only.
   const [flowEnd, setFlowEnd] = useState(null)
   // CR-DN item 7: the price chart's right price axis width (px); the Flow v3 pane pins its axis to it.
@@ -1032,6 +1034,8 @@ export default function App() {
   // CR-DR item 2 — "My trades" (Flow v3 Display group): off by default (C2), not remembered. While on, Ryan's trades
   // for the loaded dates come from /api/trade-log/chart; a marker click selects a trade (the review panel, item 3).
   const [myTradesOn, setMyTradesOn] = useState(false)
+  // CR-DU item 4b — "v1 trades" (Flow v3 Display group, beside My trades): the engine's simulated trades, off by default.
+  const [v1TradesOn, setV1TradesOn] = useState(false)
   const [myTrades, setMyTrades] = useState(null)
   const [myTradesReload, setMyTradesReload] = useState(0)
   const [selectedTradeId, setSelectedTradeId] = useState(null)
@@ -1662,9 +1666,11 @@ export default function App() {
   // CR-DC: price cells + absorption marks for the selected session, only while v3 has a price-pane layer
   // on (DC13); live sessions refresh with the v2 cadence and pause during chart interaction (DC14).
   const flowV3AnyLayer = (flowV3Layers.heat || flowV3Layers.profile || flowV3Layers.marks || flowV3Layers.levels || flowV3Layers.edges)
+  // CR-DU item 4b: the v1 trades overlay runs on the cells payload too, so it loads with any layer or the overlay on
+  const flowCellsNeeded = flowV3AnyLayer || v1TradesOn
   const flowCellsDate = selectedSessionTradeDateKey || tradeDate
   const flowCellsUrl = useMemo(() => {
-    if (!flowEnabled || !flowV3AnyLayer || !flowCellsDate) return null
+    if (!flowEnabled || !flowCellsNeeded || !flowCellsDate) return null
     const url = new URL(`${apiBase}/api/ironbeam/flow/cells`)
     url.searchParams.set('trade_date', flowCellsDate)
     url.searchParams.set('session', flowSession)
@@ -1672,7 +1678,7 @@ export default function App() {
     url.searchParams.set('a_m', String(flowV3Settings.m))
     if (reviewUntil) url.searchParams.set('until', reviewUntil)
     return url.toString()
-  }, [apiBase, flowEnabled, flowV3AnyLayer, flowCellsDate, flowSession, flowV3Settings.k, flowV3Settings.m, reviewUntil])
+  }, [apiBase, flowEnabled, flowCellsNeeded, flowCellsDate, flowSession, flowV3Settings.k, flowV3Settings.m, reviewUntil])
 
   useEffect(() => {
     if (!flowCellsUrl || loadingCenter || error) {
@@ -1709,6 +1715,63 @@ export default function App() {
     }
   }, [flowCellsUrl, loadingCenter, error, isLiveTradeDate])
 
+  // CR-DU: the v1 rules engine's inputs for the session (prior-sessions baseline, contradiction percentiles, A7 swing,
+  // strong GEX levels per minute, 1-s OHLC; /api/ironbeam/v1-engine/inputs), while Edges is on (box panel verdict) or the
+  // v1 trades overlay is on. `blocked` (holdout, set 2 in progress, …) turns the engine off for the date. Live: every 60 s.
+  const v1InputsUrl = useMemo(() => {
+    if (!flowEnabled || !(flowV3Layers.edges || v1TradesOn) || !flowCellsDate) return null
+    const url = new URL(`${apiBase}/api/ironbeam/v1-engine/inputs`)
+    url.searchParams.set('trade_date', flowCellsDate)
+    if (reviewUntil) url.searchParams.set('until', reviewUntil)
+    return url.toString()
+  }, [apiBase, flowEnabled, flowV3Layers.edges, v1TradesOn, flowCellsDate, reviewUntil])
+  const [v1InputsLoaded, setV1InputsLoaded] = useState({ url: null, payload: null })
+  useEffect(() => {
+    if (!v1InputsUrl) {
+      setV1InputsLoaded({ url: null, payload: null })
+      return undefined
+    }
+    const controller = new AbortController()
+    let disposed = false
+    const load = async () => {
+      try {
+        const response = await fetch(v1InputsUrl, { method: 'GET', credentials: 'include', signal: controller.signal, cache: 'no-store' })
+        if (!response.ok) throw new Error(`v1 engine inputs ${response.status}`)
+        const payload = await response.json()
+        if (!disposed) setV1InputsLoaded({ url: v1InputsUrl, payload })
+      } catch (err) {
+        if (err?.name !== 'AbortError' && !disposed) console.error('v1 engine inputs failed', err)
+      }
+    }
+    load()
+    const timer = isLiveTradeDate ? window.setInterval(load, 60000) : null
+    return () => {
+      disposed = true
+      if (timer) window.clearInterval(timer)
+      controller.abort()
+    }
+  }, [v1InputsUrl, isLiveTradeDate])
+  const v1Inputs = v1InputsLoaded.url === v1InputsUrl ? v1InputsLoaded.payload : null
+  // CR-DU item 4b: whether the overlay may run on this date (holdout, R-a / R-b, set 2 in progress, warm-up → disabled
+  // with the reason); a cheap check (only_blocked) so the toggle shows its state before it is turned on.
+  const [v1Blocked, setV1Blocked] = useState({ date: null, reason: null })
+  useEffect(() => {
+    if (!flowEnabled || !flowCellsDate) return undefined
+    const controller = new AbortController()
+    const url = new URL(`${apiBase}/api/ironbeam/v1-engine/inputs`)
+    url.searchParams.set('trade_date', flowCellsDate)
+    url.searchParams.set('only_blocked', '1')
+    fetch(url.toString(), { credentials: 'include', signal: controller.signal, cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((j) => setV1Blocked({ date: flowCellsDate, reason: j.blocked || null }))
+      .catch((err) => { if (err?.name !== 'AbortError') setV1Blocked({ date: flowCellsDate, reason: 'engine inputs unavailable' }) })
+    return () => controller.abort()
+  }, [apiBase, flowEnabled, flowCellsDate])
+  const v1TradesBlocked = v1Blocked.date === flowCellsDate ? v1Blocked.reason : 'checking…'
+  useEffect(() => {
+    if (v1TradesOn && v1Blocked.date === flowCellsDate && v1Blocked.reason) setV1TradesOn(false)
+  }, [v1TradesOn, v1Blocked, flowCellsDate])
+
   // CR-DF: the edge readout (DF4) from the anchor, on the cells payload's 1-minute bars; shared by the v3
   // header (text) and the price chart (dashed lines).
   const flowV3Shift = useMemo(() => makeShifter((t) => utcEpochShowingZoneTime(t, 'America/Los_Angeles')), [])
@@ -1718,9 +1781,9 @@ export default function App() {
   const flowCellsBars = useMemo(() => (flowCells ? flattenBars(flowCells) : null), [flowCells])
   const flowV3Edges = useMemo(() => {
     if (!flowV3Layers.edges || !flowCells || flowAnchor == null) return null
-    return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin, flowEnd,
-      flowV3Settings.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin)
-  }, [flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowV3Settings.boxHoldMin, flowEnd, flowV3Settings.breakHoldMin])
+    return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowEnd,
+      flowV3Settings.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin, { qualifyMin: flowV3Rules.minAgeMin, qualifyPts: flowV3Rules.minHeightPts, manual: true })
+  }, [flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowEnd, flowV3Settings.breakHoldMin, flowV3Rules])
 
   // CR-DN item 3: with Edges on and an anchor, each drawn box is a CVD segment. Spans come from the edge readout (cells
   // payload); the readouts run on the same aligned v2 rows the pane draws (alignV2ToCandles + anchorReadout), once here
@@ -1732,8 +1795,17 @@ export default function App() {
     const rows = alignV2ToCandles(allBars, mergedBarsWithLiveTimeline)
     const closes = rowCloses(rows, mergedBarsWithLiveTimeline, flowV3Shift)
     const readouts = segmentReadouts(rows, closes, seg.spans)
-    return { ...seg, readouts, rows, closes } // CR-DS item 4: rows / closes also feed the read-history replay
-  }, [flowV3Edges, flowV3Shift, flowV2PanePayloads, mergedBarsWithLiveTimeline])
+    // CR-DU amendment 7 item 4: the delta line keeps the spans before a "restart here" and resets at each with a tick
+    const prior = flowRestarts.anchor === flowAnchor ? flowRestarts.spans : []
+    const lineSpans = [...prior, ...seg.spans]
+    return { ...seg, readouts, rows, closes, lineSpans, ticks: lineSpans.slice(1).map((s) => s.from) } // CR-DS item 4: rows / closes also feed the read-history replay
+  }, [flowV3Edges, flowV3Shift, flowV2PanePayloads, mergedBarsWithLiveTimeline, flowRestarts, flowAnchor])
+  // CR-DU amendment 7: "restart here" on the box panel re-anchors at the break bar; a fresh pick drops the kept spans.
+  const handleBoxRestart = useCallback((utc) => {
+    const next = flowV3Shift(utc)
+    setFlowRestarts((r) => ({ anchor: next, spans: [...(r.anchor === flowAnchor ? r.spans : []), { from: flowAnchor, to: next - 60 }] }))
+    setFlowAnchor(next)
+  }, [flowAnchor, flowV3Shift])
 
   // CR-DI amendment 2: while the Edge effort strip is drawn the Flow v3 pane grows by its height (the price pane
   // above gives it up), so the pane's other series keep their heights; otherwise the pane is unchanged.
@@ -1744,7 +1816,7 @@ export default function App() {
 
   // One object per real change (CR-CH): the chart's primitives recompute only when this changes.
   const flowV3Chart = useMemo(() => {
-    if (!flowV3AnyLayer || !flowCells) return null
+    if (!flowCellsNeeded || !flowCells) return null
     return {
       payload: flowCells,
       heat: flowV3Layers.heat,
@@ -1759,11 +1831,16 @@ export default function App() {
       buyLayer: flowV3Settings.buyLayer,
       profileFrom: flowAnchor,
       anchor: flowAnchor, // CR-DP item 4 / CR-DQ item 3: the box panel's × resets on a new anchor
+      onBoxRestart: handleBoxRestart, // CR-DU amendment 7: the panel's "restart here"
       boxRules: flowV3Settings.boxRules, // CR-DQ items 5 / 7: percentile tiers and verdict rules (⚙)
+      v1Inputs, // CR-DU: the v1 engine's inputs (box panel verdict, engine's trades)
+      v1TradesOn: v1TradesOn && !v1TradesBlocked, // CR-DU item 4b: the overlay
+      contraMarks: Boolean(flowV3Settings.contraMarks), // CR-DU item 4: contradiction-bar markers (⚙)
+      v1Alert: Boolean(flowV3Settings.v1Alert) && isLiveTradeDate, // CR-DU item 2: alert only on the live session
       // CR-DN item 1: the profile stops after the end's minute ([from, to) on cell minute starts); null without an end.
       profileTo: flowAnchor != null && flowEnd != null ? flowEnd + 60 : null,
     }
-  }, [flowV3AnyLayer, flowCells, flowCellsBars, flowEnd, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, flowAnchor, flowEnd])
+  }, [handleBoxRestart, flowCellsNeeded, flowCells, flowCellsBars, flowEnd, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, v1Inputs, v1TradesOn, v1TradesBlocked, flowV3Settings.v1Alert, flowV3Settings.contraMarks, isLiveTradeDate, flowAnchor, flowEnd])
   // CR-DN item 1: the anchor → end window, shaded on the price chart (any layer); null without an end.
   const flowV3Window = useMemo(
     () => (flowAnchor != null && flowEnd != null ? { from: flowAnchor, to: flowEnd } : null),
@@ -2213,6 +2290,8 @@ export default function App() {
             onActivate={setReviewCandidate}
             onClose={closeReview}
             rightOffset={reviewRightOffset}
+            // CR-DU amendment 7b: written with every review save (anchor null without one)
+            anchorRecord={{ anchor_ts: shiftedToPt(flowAnchor), box_min_age_min: flowV3Rules.minAgeMin, box_min_height_pts: flowV3Rules.minHeightPts }}
           />
         )}
         {error ? (
@@ -2373,6 +2452,9 @@ export default function App() {
                     onEffortChange={setFlowEffort}
                     myTradesOn={myTradesOn}
                     onMyTradesChange={setMyTradesOn}
+                    v1TradesOn={v1TradesOn}
+                    v1TradesBlocked={v1TradesBlocked}
+                    onV1TradesChange={setV1TradesOn}
                     edgeEffortOn={flowEdgeEffort}
                     onEdgeEffortChange={setFlowEdgeEffort}
                     markerSettings={flowMarkerSettings}

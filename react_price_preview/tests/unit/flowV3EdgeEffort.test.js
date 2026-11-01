@@ -2,7 +2,7 @@
 // Run: npm --prefix react_price_preview run test:unit
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { EDGE_STRIP_HEIGHT, drawnBoxes, edgeEffortBlock, edgeStripDrawn, edgeEffortSeries, edgeReadout, edgeStripColumns, edgeText, edgeVisits, flattenBars } from '../../src/flowV3.js'
+import { EDGE_STRIP_HEIGHT, anchorReadout, boxEvidenceRows, boxVerdict, drawnBoxes, edgeEffortBlock, edgeStripDrawn, edgeEffortSeries, edgeReadout, edgeStripColumns, edgeText, edgeVisits, flattenBars } from '../../src/flowV3.js'
 
 const T0 = 1_777_642_200 // a UTC minute
 const id = (t) => t
@@ -21,14 +21,14 @@ const sum = (a) => a.reduce((x, y) => x + y, 0)
 
 test('main sides of the series sum to the header; opposite sides use the same ±1 pt inclusive band', () => {
   // box 100 .. 110 (closes); cells at the top band edges (109, 111), beyond it (111.25), at the bottom (99, 101), middle
-  const p = payload([100, 110, 105, 101, 109], [
-    [1, 109, 10, 4], [1, 111, 5, 1], [1, 111.25, 99, 99], [2, 105, 50, 50],
-    [3, 99, 7, 20], [3, 101, 3, 30], [3, 98.75, 99, 99], [4, 110, 8, 9],
+  const p = payload([100, 102, 104, 106, 108, 110, 105, 101, 109], [ // CR-DU Amendment 6: forming steps <= 2 pts
+    [5, 109, 10, 4], [5, 111, 5, 1], [5, 111.25, 99, 99], [6, 105, 50, 50],
+    [7, 99, 7, 20], [7, 101, 3, 30], [7, 98.75, 99, 99], [8, 110, 8, 9],
   ])
   const r = edgeReadout(p, flattenBars(p), T0, id)
   assert.equal(r.top.price, 110)
   assert.equal(r.bottom.price, 100)
-  assert.deepEqual(r.minutes.t, [T0 + 60, T0 + 180, T0 + 240])
+  assert.deepEqual(r.minutes.t, [T0 + 300, T0 + 420, T0 + 480])
   assert.deepEqual(r.minutes.topBuy, [15, 0, 8])
   assert.deepEqual(r.minutes.topSell, [5, 0, 9])
   assert.deepEqual(r.minutes.bottomSell, [0, 50, 0])
@@ -37,15 +37,16 @@ test('main sides of the series sum to the header; opposite sides use the same ±
   assert.equal(r.bottom.contracts, sum(r.minutes.bottomSell))
 })
 
-test('a break moves the edge and re-counts every minute since the anchor against the new edge', () => {
-  const cells = [[1, 110, 100, 90], [3, 113, 40, 30]]
-  const before = payload([100, 110, 104], cells.slice(0, 1))
+test('a widening close moves the edge and re-counts every minute since the anchor against the new edge', () => {
+  const up = [100, 102, 104, 106, 108, 110, 104]
+  const cells = [[5, 110, 100, 90], [7, 112, 40, 30]]
+  const before = payload(up, cells.slice(0, 1))
   const rb = edgeReadout(before, flattenBars(before), T0, id)
   assert.equal(rb.top.contracts, 100)
-  const after = payload([100, 110, 104, 113], cells) // 113 > 110 + 2: break
+  const after = payload([...up, 112], cells) // 112 = 110 + 2: widens (forming)
   const ra = edgeReadout(after, flattenBars(after), T0, id)
-  assert.equal(ra.top.price, 113)
-  assert.deepEqual(ra.minutes.t, [T0 + 180]) // the 110 minute is > 1 pt from 113 (and from the bottom) now
+  assert.equal(ra.top.price, 112)
+  assert.deepEqual(ra.minutes.t, [T0 + 420]) // the 110 minute is > 1 pt from 112 (and from the bottom) now
   assert.deepEqual(ra.minutes.topBuy, [40])
   assert.equal(ra.top.contracts, 40)
   assert.equal(ra.top.contracts, sum(ra.minutes.topBuy))
@@ -96,13 +97,13 @@ test('strip columns bucket minutes onto the candles (5-minute chart) and scale t
 
 // CR-DI amendment 9 — the box restarts on a break once the broken edge has held N minutes.
 const flat = (n, c) => new Array(n).fill(c)
-test('box: a close > 2 pts beyond a young edge grows the box; after N minutes it freezes the box and a new one starts', () => {
-  // minutes 0-4 at 100, 5: 103 (top young -> grows to 103), 6-24 at 102, 25: 106 (top set at 5, held 20 >= 15 -> break)
-  const closes = [...flat(5, 100), 103, ...flat(19, 102), 106, 105, 106.5]
+test('box: forming edges grow with the closes; once qualified a close > 2 pts beyond breaks and a new box starts', () => {
+  // CR-DU Amendments 5 / 6: forming 100 -> 101.5 -> 103 (steps <= 2), qualifies at minute 8 (3 pts), 6-24 at 102, 25: 106 (> 2 pts beyond -> break)
+  const closes = [...flat(3, 100), ...flat(2, 101.5), 103, ...flat(19, 102), 106, 105, 106.5]
   const cells = [[5, 103, 50, 40], [10, 102.5, 7, 3], [25, 106, 9, 1], [27, 106.5, 11, 2], [3, 100, 4, 6]]
   const p = payload(closes, cells)
   // CR-DN item 2: the break must hold A bars; CR-DI's single-close break is A = 1 (105 at minute 26 is not back inside)
-  const r = edgeReadout(p, flattenBars(p), T0, id, 15, null, 1)
+  const r = edgeReadout(p, flattenBars(p), T0, id, null, 1)
   assert.equal(r.frozen.length, 1)
   const f = r.frozen[0]
   assert.deepEqual([f.from, f.to, f.breakAt, f.dir], [T0, T0 + 24 * 60, T0 + 25 * 60, 'up'])
@@ -111,16 +112,12 @@ test('box: a close > 2 pts beyond a young edge grows the box; after N minutes it
   assert.equal(f.top.opposite, 40 + 3)
   assert.equal(f.bottom.contracts, 6)
   assert.equal(f.heldMin, 25)
-  // current box from the break bar: top = bottom = 106, 106.5 is a test (within 2 pts)
-  assert.deepEqual([r.from, r.top.price, r.bottom.price, r.startDir], [T0 + 25 * 60, 106, 106, 'up'])
+  // current box from the break bar, forming: running max / min close 106.5 / 105
+  assert.deepEqual([r.from, r.top.price, r.bottom.price, r.startDir], [T0 + 25 * 60, 106.5, 105, 'up'])
   assert.equal(r.top.contracts, 9 + 11)
   assert.equal(r.top.contracts, sum(r.minutes.topBuy))
   assert.equal(r.bottom.contracts, sum(r.minutes.bottomSell))
-  assert.match(edgeText(r, () => '07:25'), /^Box from 07:25 ↑ · Top 106\.00/)
-  // a longer hold keeps it one growing box (today's ratchet)
-  const one = edgeReadout(p, flattenBars(p), T0, id, 30)
-  assert.equal(one.frozen.length, 0)
-  assert.equal(one.top.price, 106)
+  assert.match(edgeText(r, () => '07:25'), /^Box from 07:25 ↑ · Top 106\.50/)
 })
 
 test('box: drawn boxes keep the last 4 frozen; the strip series and visits stay inside each box', () => {
@@ -129,7 +126,7 @@ test('box: drawn boxes keep the last 4 frozen; the strip series and visits stay 
   for (let k = 0; k < 7; k += 1) closes.push(...flat(6, 100 + 3 * k))
   const cells = closes.map((c, i) => [i, c, 1, 1])
   const p = payload(closes, cells)
-  const r = edgeReadout(p, flattenBars(p), T0, id, 5)
+  const r = edgeReadout(p, flattenBars(p), T0, id, null, undefined, { qualifyMin: 1, qualifyPts: 0 })
   assert.equal(r.frozen.length, 6)
   const { boxes, dropped } = drawnBoxes(r)
   assert.equal(boxes.length, 5)
@@ -145,9 +142,9 @@ test('box: drawn boxes keep the last 4 frozen; the strip series and visits stay 
 })
 
 test('edgeText uses "moved" for growth and no box prefix without a break', () => {
-  const p = payload([100, 103, 103], [])
+  const p = payload([100, 102, 102], [])
   const r = edgeReadout(p, flattenBars(p), T0, id)
-  assert.equal(edgeText(r, () => '07:01'), 'Top 103.00 · 0 buyers · held 1 m · moved 07:01 | Bottom 100.00 · 0 sellers · held 2 m')
+  assert.equal(edgeText(r, () => '07:01'), 'Top 102.00 · 0 buyers · held 1 m · moved 07:01 | Bottom 100.00 · 0 sellers · held 2 m')
 })
 
 test('amendment 2: the strip (and the pane growth) needs the chip, Edges, an anchor and an exact readout', () => {
@@ -161,4 +158,133 @@ test('amendment 2: the strip (and the pane growth) needs the chip, Edges, an anc
   assert.equal(edgeStripDrawn(true, true, T0, null), false) // cells loading: no strip, no growth yet
   const a = payload([100, 110], [[1, 110, 5, 5]], false)
   assert.equal(edgeStripDrawn(true, true, T0, edgeReadout(a, flattenBars(a), T0, id)), false)
+})
+
+// CR-DU Amendment 5 (engine v1.3): forming edges = running max / min close (A1.1); edges freeze at qualification
+const heightOf = (r) => r.top.price - r.bottom.price
+test('Amendment 5: 2026-04-15 screenshot box (real closes, 09:18–09:29): 2.50 pts by frozen edges, not 0.00; true max − min 4.00', () => {
+  const closes = [7037.75, 7037.75, 7039.5, 7039.5, 7039.25, 7039.75, 7039.75, 7037.25, 7038, 7038.5, 7037.5, 7035.75]
+  assert.equal(Math.max(...closes) - Math.min(...closes), 4)
+  const p = payload(closes, [])
+  for (const qualifyMin of [7, 8]) {
+    const r = edgeReadout(p, flattenBars(p), T0, id, null, 5, { qualifyMin, qualifyPts: 2 })
+    assert.deepEqual([r.top.price, r.bottom.price, heightOf(r), r.qualified, r.frozen.length, r.pending], [7039.75, 7037.25, 2.5, true, 0, null])
+    const rows = closes.map((_, i) => ({ time: T0 + i * 60, delta: 0, vol: 1000, seg: 'rth' }))
+    const v = boxVerdict({ box: { ...r, readout: anchorReadout(rows, closes, T0, T0 + 11 * 60), ended: { kind: 'current' } }, pct: null, levels: [], tradeDate: '2026-04-15', rules: { minAgeMin: qualifyMin, minHeightPts: 2 } })
+    const row = boxEvidenceRows(v.checks).find((x) => x.key === 'formed')
+    assert.equal(row.value, `11 min · 2.50 pts (min ${qualifyMin} · 2) · tested 1.50 below`) // Amendment 6
+    assert.equal(row.reads, 'formed')
+  }
+})
+test('Amendment 5: a forming box widens with its closes, height = max − min close at every minute', () => {
+  const closes = [100, 100.5, 99.75, 101, 103, 104.75, 103, 102, 102]
+  const p = payload(closes, [])
+  for (let i = 0; i < 8; i += 1) {
+    const r = edgeReadout(p, flattenBars(p), T0, id, T0 + i * 60, 1)
+    const seen = closes.slice(0, i + 1)
+    assert.equal(heightOf(r), Math.max(...seen) - Math.min(...seen), `minute ${i}`)
+    assert.deepEqual([r.frozen.length, r.pending, r.qualified], [0, null, false])
+  }
+  // flat under the height minimum stays forming past the box minimum
+  const q = payload([...flat(12, 100), 101, 102.5, 102], [])
+  const under = edgeReadout(q, flattenBars(q), T0, id, T0 + 13 * 60 - 60, 1)
+  assert.deepEqual([heightOf(under), under.qualified], [1, false])
+  const over = edgeReadout(q, flattenBars(q), T0, id, null, 1)
+  assert.deepEqual([over.top.price, over.bottom.price, over.qualified, over.frozen.length], [102.5, 100, true, 0])
+})
+test('Amendment 5: a qualified box tested 1.5 pts through holds; its edges stay frozen; > 2 pts breaks even with a young edge', () => {
+  const base = [100, 101, 102, 103, 102, 101, 102, 103, 102] // qualifies at minute 8: 103 / 100
+  const test15 = payload([...base, 104.5, 102, 98.5, 101, 102], [])
+  const r = edgeReadout(test15, flattenBars(test15), T0, id, null, 5)
+  assert.deepEqual([r.top.price, r.bottom.price, r.qualified, r.frozen.length, r.pending, r.probes.length], [103, 100, true, 0, null, 0])
+  const brk = payload([...base, 105.5, 106, 106, 106, 106, 106], [])
+  const b = edgeReadout(brk, flattenBars(brk), T0, id, null, 5) // top set at minute 7: only 2 min old
+  assert.equal(b.frozen.length, 1)
+  assert.deepEqual([b.frozen[0].top.price, b.frozen[0].bottom.price, b.frozen[0].dir, b.from], [103, 100, 'up', T0 + 9 * 60])
+  // a > 2-pt close back strictly inside within the break hold is a probe, the box stands
+  const prb = payload([...base, 105.5, 102, 102], [])
+  const pb = edgeReadout(prb, flattenBars(prb), T0, id, null, 5)
+  assert.deepEqual([pb.frozen.length, pb.probes.length, pb.top.price], [0, 1, 103])
+})
+test('Amendment 6: the 15-pt jump out of a flat stretch restarts the forming box at that close; it does not become an edge', () => {
+  const closes = [...flat(12, 100), 115, 114, 113.5, 114, 113, 113.5, 114, 114.5, 114]
+  const p = payload(closes, [])
+  const r = edgeReadout(p, flattenBars(p), T0, id)
+  assert.equal(r.from, T0 + 12 * 60)
+  assert.deepEqual([r.top.price, r.bottom.price, heightOf(r), r.frozen.length], [115, 113, 2, 0]) // the flat stretch was never a box
+  assert.equal(r.qualified, true)
+  // one close later than the jump: a box of one bar, not 15 pts tall
+  const j = edgeReadout(p, flattenBars(p), T0, id, T0 + 12 * 60)
+  assert.deepEqual([j.from, heightOf(j), j.qualified], [T0 + 12 * 60, 0, false])
+})
+test('Amendment 6: forming — exactly 2 pts beyond widens, 2.25 restarts; closes spanning > 12 pts restart', () => {
+  const w = payload([100, 102], [])
+  assert.deepEqual([edgeReadout(w, flattenBars(w), T0, id).top.price, edgeReadout(w, flattenBars(w), T0, id).from], [102, T0])
+  const x = payload([100, 102.25], [])
+  const rx = edgeReadout(x, flattenBars(x), T0, id)
+  assert.deepEqual([rx.from, rx.top.price, rx.bottom.price, rx.frozen.length], [T0 + 60, 102.25, 102.25, 0])
+  // a grind of 2-pt closes under the box minimum: 12 pts is allowed, 14 restarts at that close
+  const g = payload([100, 102, 104, 106, 108, 110, 112, 114], [])
+  const at12 = edgeReadout(g, flattenBars(g), T0, id, T0 + 6 * 60)
+  assert.deepEqual([at12.from, heightOf(at12)], [T0, 12])
+  const r = edgeReadout(g, flattenBars(g), T0, id)
+  assert.deepEqual([r.from, r.top.price, r.bottom.price, r.frozen.length], [T0 + 7 * 60, 114, 114, 0])
+})
+test('Amendment 6: Box formed notes tests on both sides; a pending break is not a test', () => {
+  const base = [100, 101, 102, 103, 102, 101, 102, 103, 102]
+  const p = payload([...base, 104, 102, 98.5, 101], [])
+  const r = edgeReadout(p, flattenBars(p), T0, id, null, 5)
+  assert.deepEqual(r.tests, { above: 1, below: 1.5 })
+  const v = boxVerdict({ box: { ...r, readout: { minutes: 12 }, ended: { kind: 'current' } }, pct: null, levels: [], tradeDate: '2026-04-15' })
+  assert.match(boxEvidenceRows(v.checks).find((x) => x.key === 'formed').value, /· tested 1\.00 above · tested 1\.50 below$/)
+  const q = payload([...base, 106, 102], [])
+  assert.deepEqual(edgeReadout(q, flattenBars(q), T0, id, null, 5).tests, { above: 0, below: 0 })
+})
+
+// CR-DU amendment 7 — a manual anchor: no forming restart, no chain; a held break is a flag.
+test('manual box: 2026-01-26 anchor 08:31 stays 08:31 where the automatic box restarts at 08:34', () => {
+  const closes = [6986, 6986, 6985.75, 6983.5, 6984, 6984.25, 6985.5, 6984.75, 6985, 6985]
+  const b = { ...bars(closes), exact: closes.map(() => true) }
+  const auto = edgeReadout(payload(closes, []), b, b.t[0], id, null, 5, { counts: false })
+  assert.equal(auto.from, b.t[3])
+  const m = edgeReadout(payload(closes, []), b, b.t[0], id, null, 5, { counts: false, manual: true })
+  assert.equal(m.from, b.t[0])
+  assert.equal(m.anchor, b.t[0])
+  assert.equal(m.broke, null)
+  assert.equal(m.frozen.length, 0)
+  assert.equal(m.qualified, true)
+})
+
+test('manual box: a 15-pt jump while forming widens it, it cannot break before it has formed', () => {
+  const closes = [6000, 6000.5, 6015, 6015, 6015, 6015, 6015, 6015]
+  const b = { ...bars(closes), exact: closes.map(() => true) }
+  const m = edgeReadout(payload(closes, []), b, b.t[0], id, null, 5, { counts: false, manual: true })
+  assert.equal(m.from, b.t[0])
+  assert.equal(m.top.price, 6015)
+  assert.equal(m.bottom.price, 6000)
+  assert.equal(m.broke, null)
+})
+
+test('manual box: a held break after forming is a flag; the window and the edges stay, frozen is empty', () => {
+  const closes = [...Array(10).fill(0).map((_, i) => 6000 + (i % 2) * 2), 6010, 6011, 6012, 6013, 6014, 6015, 6016]
+  const b = { ...bars(closes), exact: closes.map(() => true) }
+  const m = edgeReadout(payload(closes, []), b, b.t[0], id, null, 5, { counts: false, manual: true })
+  assert.equal(m.from, b.t[0])
+  assert.equal(m.to, b.t[b.t.length - 1])
+  assert.deepEqual(m.frozen, [])
+  assert.deepEqual(m.broke, { at: b.t[10], dir: 'up', edge: 6002 })
+  assert.equal(m.top.price, 6002)
+  const auto = edgeReadout(payload(closes, []), b, b.t[0], id, null, 5, { counts: false })
+  assert.equal(auto.frozen.length, 1)
+  assert.equal(auto.from, b.t[10])
+  assert.equal(auto.broke, null)
+})
+
+test('manual box: a break that comes back inside is a probe, no flag', () => {
+  const closes = [...Array(10).fill(0).map((_, i) => 6000 + (i % 2) * 3), 6010, 6001, 6002]
+  const b = { ...bars(closes), exact: closes.map(() => true) }
+  const m = edgeReadout(payload(closes, []), b, b.t[0], id, null, 5, { counts: false, manual: true })
+  assert.equal(m.broke, null)
+  assert.equal(m.pending, null)
+  assert.equal(m.probes.length, 1)
 })
