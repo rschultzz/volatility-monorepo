@@ -625,3 +625,26 @@ warm-up, not evaluated). The v1.0 rows stay alongside (engine_version is part of
   - `cr-ds` smoke 1: passes unchanged on v1.2 (its failure was at v1.0 / v1.1).
   - `cr-ds` smoke 2: still SHORT at 07:49 when anchored at 06:30. The absorption row is now neutral, not green. Rule 5: the 07:05 buyers-absorbed mark at 7660.25 starts before the 07:38 box, so it counts as location support, not a trigger.
 - **Timeout, not a CR-DU change:** `cr-dq` item 7 verdict scan timed out once waiting for the chart to load. It passed on rerun.
+
+## Merge of origin/main (CR-DV #128, CR-DW #130) — Ryan, chat, 2026-11-01
+
+Merged, not rebased; tag `cr-du-engine-v1.2` stays on its commit.
+
+- **Kept from CR-DV:** closed minutes only, provisional hollow marks, feed-stall flag, stored + trades splice.
+- **Kept from CR-DU:** per-minute cut of marks (`merges`). A merge is recorded only once it confirms.
+- **Engine input = confirmed marks only, as of minute t.** `prepareSession` drops provisional marks and `absorptionLevels` skips them; `chartMarks` (display only) is the only other reader and the engine doesn't call it. Unit test: verdict, per-minute evaluation and simulation are identical with and without provisional marks, even with `confirm_time` ≤ t.
+- **Visible change (approved):** "engine v1.2 — untested" beside the verdict pill, in the panel's muted secondary text.
+
+**Engine outputs unchanged.** All 86 train sessions were rebuilt with the merged code: inputs are identical except the new `provisional: false` on each mark, `backtest_results.json` is identical, and the report differs only in its build timestamp.
+
+**Reruns on the merged code:**
+- Unit 147 / 147 (JS). Python: `test_flow_heat` + `test_flow_cells` 48 / 48 before the added `merges` assertion, then `test_flow_heat` 24 / 24 with it.
+- CR-DU smoke 4 / 4, including overlay = backtest on 2026-02-03.
+- CR-DV 10-30 replay (15 s, 1,580 polls, `scripts/logs/cr-dv/replay_after_crdu_merge_15s.txt`): same as CR-DV's final replay except runtime. 0 confirmed marks that aren't final, 0 confirmed before their hold ended, minute close → provisional 15 s, → confirmed 195 s, 0 polls missing a closed minute.
+- CR-DV simulated-now API, 8 of 8: 7633.50 absent → hollow → hollow → gone (never solid); 7631.75 hollow → solid; 7628.25 hollow → gone.
+- Live provisional marks vs the engine: at 15:40:15, 15:40:45, 15:44:15 and 15:47:15 the panel verdict, every minute's verdict and the trades are identical with those marks stripped. Browser at 15:44:15, anchor session open: "NO ACTION", rule 7, absorption row "none at the box" with the hollow 7631.75 at the box bottom; no console errors.
+- Not rerun: the full existing-spec comparison against origin/main.
+
+## Open: "Box formed" height (Ryan, chat, 2026-11-01) — not fixed, waiting on Ryan
+
+The row shows `box.top − box.bottom` (edge height; an edge moves only on a close > 2 pts beyond it), so it can read 0.00 pts while closes span more. Rule 6's `formed` in engine v1.2 gates on the same value, so max close − min close is an engine change. Train counts only (86 sessions, no outcomes): the heights differ on 26,058 of 32,852 minutes; on boxes old enough to count, the height leg would go from failing to passing on 333 minutes in 49 sessions, never the other way.
