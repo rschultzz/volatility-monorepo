@@ -150,6 +150,7 @@ const verdict = async (page) => {
     pill: await page.getByTestId('flow-v3-box-verdict-pill').innerText(),
     reason: (await page.getByTestId('flow-v3-box-verdict-reason').count()) ? await page.getByTestId('flow-v3-box-verdict-reason').innerText() : '',
     tag: (await page.getByTestId('flow-v3-box-engine-tag').count()) ? await page.getByTestId('flow-v3-box-engine-tag').innerText() : '',
+    engineBox: (await page.getByTestId('flow-v3-box-engine').count()) ? await page.getByTestId('flow-v3-box-engine').innerText() : '',
     engine: (await page.getByTestId('flow-v3-box-engine-line').count()) ? await page.getByTestId('flow-v3-box-engine-line').innerText() : '',
     rows: await page.getByTestId('flow-v3-box-evidence-row').evaluateAll((els) => els.map((e) => [e.dataset.key, e.dataset.tone, e.innerText.replace(/\s+/g, ' ')])),
   }
@@ -158,14 +159,18 @@ const verdict = async (page) => {
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(240_000)
 
-test('1. 10-30 box (anchor 07:43, replay to 07:51; Amendment 6: the 07:40 box restarts at 07:43): the engine verdict at box min 8 vs "box still forming" at 10', async ({ page }) => {
+const ENGINE_LINE = /^Engine \(box \d\d:\d\d–\d\d:\d\d\): (NO ACTION( — rule \d+: .+)?|SHORT|LONG|NO TRADES( — .+)?)/
+const summary = async (page) => (await page.locator('[data-testid="flow-v3-box-panel-current"] [data-testid="flow-v3-box-panel-summary"]').innerText()).replace(/^[▸▾]\s*/, '')
+
+test('1. 10-30 manual box (anchor 07:43, replay to 07:51): box min 8 vs "box still forming" at 10; the engine line is separate', async ({ page }) => {
   const a = shifted(`${D30}T07:43`)
   await open(page, D30, { storage: EDGES, until: `${D30}T07:52` })
   await anchorAt(page, a, a - 30 * 60, shifted(`${D30}T08:00`))
   const v8 = await verdict(page)
   await shot(page, '1-min8.png')
-  expect(v8.reason).not.toMatch(/box still forming/)
-  expect(v8.tag).toBe('engine v1.4 — untested') // beside the pill, in the panel's muted secondary text
+  expect(v8.kind).not.toBe('forming')
+  expect(v8.tag).toBe('engine v1.4 — untested') // on the engine line, in the panel's muted secondary text
+  expect(v8.engineBox).toMatch(ENGINE_LINE)
   expect(v8.rows.find((r) => r[0] === 'formed')[2]).toMatch(/formed/)
   expect(v8.rows.find((r) => r[0] === 'formed')[2]).toMatch(/min 8/)
   // ⚙ box minimum 10 (stored, after the CR-DU migration): box still forming
@@ -181,7 +186,7 @@ test('1. 10-30 box (anchor 07:43, replay to 07:51; Amendment 6: the 07:40 box re
   await anchorAt(page2, a, a - 30 * 60, shifted(`${D30}T08:00`))
   const v10 = await verdict(page2)
   await shot(page2, '1-min10.png')
-  expect(v10.reason).toMatch(/rule 6: box still forming/)
+  expect(v10.kind).toBe('forming')
   log('1-verdicts.json', { min8: v8, min10: v10 })
 })
 
@@ -246,3 +251,178 @@ test('5. Amendment 5: 2026-04-15 box 09:18–09:29 (the screenshot) reads 11 min
   expect(v.rows.find((r) => r[0] === 'location')[2]).toMatch(/1\.50 below the bottom/)
   expect(v.rows.find((r) => r[0] === 'absorption')[2]).toMatch(/7040\.00 \(09:23\)/) // PT, not the epoch
 })
+
+// CR-DU amendment 7 — manual box, engine line, delta line. 01-26 holds set-2 cards (engine blocked): no screenshot, and the
+// log keeps the signs only.
+const D26 = '2026-01-26'
+const lineData = (page) => page.evaluate((fn) => {
+  const { flow } = eval(fn) // eslint-disable-line no-eval
+  return flow.reg.cvd.data().map((p) => ({ time: p.time, value: p.value ?? null }))
+}, FLOW_FN)
+const FLOW_FN = `(() => {
+  const el = document.querySelector('[data-testid=flow-v3-panel] .tv-lightweight-charts')
+  const key = Object.keys(el.parentElement).find((k) => k.startsWith('__reactFiber'))
+  let f = el.parentElement[key]
+  const reg = {}
+  for (let d = 0; f && d < 40; d += 1, f = f.return) {
+    for (let h = f.memoizedState; h; h = h.next) {
+      const c = h.memoizedState && typeof h.memoizedState === 'object' && 'current' in h.memoizedState ? h.memoizedState.current : null
+      if (c && c.delta && c.rolling && c.cvd) { reg.cvd = reg.cvd || c.cvd; reg.delta = reg.delta || c.delta }
+    }
+  }
+  return { flow: { reg } }
+})()`
+const headShare = async (page) => {
+  await page.locator('[data-testid="flow-v3-box-panel-current"] [data-testid="flow-v3-box-panel-summary"]').click()
+  const head = await page.getByTestId('flow-v3-box-popup-head').innerText()
+  const m = /share ([+-]?[\d.]+) %/.exec(head.replace('−', '-'))
+  return m ? Number(m[1]) : null
+}
+
+test('6. 2026-01-26 anchor 08:31 (card replay to 08:49): rows and line cover 08:31 →; the anchor shows; the engine is blocked; line sign = panel Δ share', async ({ page }) => {
+  const a = shifted(`${D26}T08:31`)
+  await open(page, D26, { storage: EDGES, until: `${D26}T08:50` })
+  await anchorAt(page, a, a - 20 * 60, shifted(`${D26}T09:00`))
+  await page.getByTestId('flow-v3-box-verdict').waitFor()
+  expect(await summary(page)).toBe('Box 08:31–08:49 · current')
+  expect(await page.getByTestId('flow-v3-box-anchor').innerText()).toBe('anchor 08:31')
+  expect(await page.getByTestId('flow-v3-box-broke').count()).toBe(0)
+  const v = await verdict(page)
+  expect(v.engineBox).toBe('')
+  expect(v.engine).toBe('v1 engine off: set 2 in progress')
+  const line = await lineData(page)
+  const drawn = line.filter((p) => p.value != null)
+  expect(hhmm(drawn[0].time)).toBe('08:32') // nothing is summed at the start bar
+  expect(hhmm(drawn[drawn.length - 1].time)).toBe('08:49')
+  expect(await page.locator('[data-box-ticks]').first().getAttribute('data-box-ticks')).toBe('')
+  const share = await headShare(page)
+  expect(share).not.toBeNull()
+  const same = Math.sign(drawn[drawn.length - 1].value) === Math.sign(share)
+  log('6-0126.json', { summary: await summary(page), firstLine: hhmm(drawn[0].time), lastLine: hhmm(drawn[drawn.length - 1].time), sameSign: same })
+  expect(same).toBe(true)
+})
+
+for (const [name, day, a1, a2, cut] of [
+  ['10-30 (Ironbeam)', D30, '07:10', '07:43', '08:30'],
+  ['train day with no set-2 card', TRAIN, '07:10', '07:40', '08:30'],
+]) {
+  test(`7. engine line, ${name}: its box comes from its own chain and two anchors don't move it; the rows do`, async ({ page }) => {
+    await open(page, day, { storage: EDGES, until: `${day}T${cut}` })
+    const out = {}
+    for (const a of [a1, a2]) {
+      const t = shifted(`${day}T${a}`)
+      await page.keyboard.press('Escape')
+      await anchorAt(page, t, t - 20 * 60, shifted(`${day}T${cut}`))
+      const v = await verdict(page)
+      out[a] = { summary: await summary(page), anchor: await page.getByTestId('flow-v3-box-anchor').innerText(), engineBox: v.engineBox, tag: v.tag, formed: v.rows.find((r) => r[0] === 'formed')?.[2] }
+      expect(out[a].summary.startsWith(`Box ${a}–`)).toBe(true)
+      expect(out[a].anchor).toBe(`anchor ${a}`)
+      expect(v.engineBox).toMatch(ENGINE_LINE)
+    }
+    await shot(page, `7-engine-line-${day}.png`)
+    log(`7-${day}.json`, out)
+    expect(out[a1].engineBox).toBe(out[a2].engineBox)
+    expect(out[a1].summary).not.toBe(out[a2].summary)
+  })
+}
+
+test('8. a held break is a flag, the box stays; "restart here" re-anchors, the line resets there with a tick', async ({ page }) => {
+  const D = '2026-10-28'
+  const a = shifted(`${D}T07:00`)
+  await open(page, D, { storage: EDGES })
+  await anchorAt(page, a, a - 20 * 60, shifted(`${D}T10:00`))
+  await page.getByTestId('flow-v3-box-broke').waitFor()
+  const flag = await page.getByTestId('flow-v3-box-broke').innerText()
+  expect(flag).toMatch(/^broke [↑↓] \d\d:\d\d$/)
+  expect((await summary(page)).startsWith('Box 07:00–')).toBe(true)
+  expect(await page.getByTestId('flow-v3-box-panel-frozen').count()).toBe(0)
+  await shot(page, '8-broke-flag.png')
+  const at = flag.slice(-5)
+  await page.getByTestId('flow-v3-box-restart').click()
+  await page.waitForTimeout(1500)
+  const t = shifted(`${D}T${at}`)
+  expect(Number(await page.locator('[data-anchor]').first().getAttribute('data-anchor'))).toBe(t)
+  expect((await summary(page)).startsWith(`Box ${at}–`)).toBe(true)
+  expect(await page.getByTestId('flow-v3-box-anchor').innerText()).toBe(`anchor ${at}`)
+  expect(await page.locator('[data-box-ticks]').first().getAttribute('data-box-ticks')).toBe(String(t))
+  const line = await lineData(page)
+  // data() omits whitespace rows: the new start bar has no point at all (nothing summed there, as cr-dp item 6)
+  expect(line.find((p) => p.time === t)?.value ?? null).toBeNull()
+  expect(line.some((p) => p.value != null && p.time < t)).toBe(true) // the old span stays drawn
+  expect(line.some((p) => p.value != null && p.time > t)).toBe(true) // the new span starts after it
+  await shot(page, '8-restarted.png')
+  log('8-restart.json', { flag, at })
+  // a freshly picked anchor drops the kept span and the tick
+  await page.keyboard.press('Escape')
+  await anchorAt(page, shifted(`${D}T09:00`), shifted(`${D}T08:40`), shifted(`${D}T10:00`))
+  expect(await page.locator('[data-box-ticks]').first().getAttribute('data-box-ticks')).toBe('')
+})
+
+test('9. amendment 7b: a review save sends the anchor and the box min / height in force', async ({ page }) => {
+  const c = {
+    id: 'X:fake:1', cr_id: 'X', set_name: 'fake', session_date: TRAIN, entry_ts_pt: `${TRAIN}T08:00:00`, entry_price: 6900, stop_price: 6890,
+    direction: 'long', level_price: 6900, meta: {}, reviews: [], reviewed: false, revealed: false, n_reviews: 0, label: null,
+  }
+  const posts = []
+  const json = (route, body) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+  await page.route('**/api/setup-review/**', (route) => {
+    const u = new URL(route.request().url())
+    if (u.pathname.endsWith('/review')) {
+      posts.push(route.request().postDataJSON())
+      return json(route, { ok: true, review: { id: 1, label: 'take', reasons: [], comment: null, reviewed_at: new Date().toISOString(), revealed_at: null, post_reveal: false } })
+    }
+    if (u.pathname.endsWith('/sets')) return json(route, { ok: true, sets: [{ cr_id: 'X', set_name: 'fake', n: 1 }] })
+    if (u.pathname.endsWith('/candidates')) return json(route, { ok: true, candidates: [c], reasons: [] })
+    if (u.pathname.includes('/candidates/')) return json(route, { ok: true, candidate: c })
+    return json(route, { ok: true })
+  })
+  await page.addInitScript(() => { try { window.localStorage.setItem('dash.review.set', JSON.stringify({ cr: 'X', set: 'fake' })) } catch (e) { /* ignore */ } })
+  await open(page, TRAIN, { storage: EDGES })
+  await page.getByRole('button', { name: 'Show setup review panel' }).click()
+  await page.locator('[data-testid="review-row"]').first().click()
+  await settle(page)
+  const t = shifted(`${TRAIN}T07:30`)
+  await anchorAt(page, t, t - 20 * 60, shifted(`${TRAIN}T08:00`))
+  await page.getByTestId('review-label-take').click()
+  await page.getByTestId('review-save').click()
+  await expect.poll(() => posts.length, { timeout: 20_000 }).toBe(1)
+  log('9-post.json', posts[0])
+  expect(posts[0]).toMatchObject({ label: 'take', anchor_ts: `${TRAIN}T07:30:00`, box_min_age_min: 8, box_min_height_pts: 2 })
+})
+
+// One-minute alignment, measured (Ryan, chat 2026-11-01): the same bar through the chart, panel, delta line and Flow v3 bar.
+for (const [name, day, hm, until, db] of [
+  ['10-30 07:49', D30, '07:49', null, { o: 7657, h: 7657, l: 7654, c: 7656.5 }],
+  ['01-26 08:31', D26, '08:31', `${D26}T08:50`, { o: 6984.5, h: 6986.25, l: 6984.25, c: 6986, delta: 877 - 919 }],
+]) {
+  test(`10. alignment ${name}: every layer labels this bar by its start`, async ({ page }) => {
+    const t = shifted(`${day}T${hm}`)
+    await open(page, day, { storage: EDGES, until })
+    await anchorAt(page, t, t - 15 * 60, t + 15 * 60)
+    const r = await page.evaluate(({ t, fn, fn2 }) => {
+      const { price, priceEl } = eval(fn) // eslint-disable-line no-eval
+      const { flow } = eval(fn2) // eslint-disable-line no-eval
+      const c = price.series.data().find((x) => x.time === t)
+      const opt = price.chart.options()
+      const x = price.chart.timeScale().timeToCoordinate(t)
+      const back = price.chart.timeScale().coordinateToTime(x)
+      const fm = opt.localization?.timeFormatter
+      const near = (s) => s.data().filter((p) => Math.abs(p.time - t) <= 120).map((p) => ({ time: p.time, value: p.value ?? null }))
+      return { candle: c && { time: c.time, o: c.open, h: c.high, l: c.low, c: c.close }, crosshairTime: back, crosshairLabel: fm ? fm(back) : null, tick: opt.timeScale?.tickMarkFormatter ? opt.timeScale.tickMarkFormatter(t) : null, x, line: near(flow.reg.cvd), delta: near(flow.reg.delta), rectX: priceEl.getBoundingClientRect().x }
+    }, { t, fn: CHARTS_FN, fn2: FLOW_FN })
+    const out = {
+      candle: { label: hhmm(r.candle.time), ohlc: r.candle }, crosshair: { time: hhmm(r.crosshairTime), label: r.crosshairLabel },
+      panel: { summary: await summary(page), anchor: await page.getByTestId('flow-v3-box-anchor').innerText() },
+      line: r.line.map((p) => ({ time: hhmm(p.time), hasValue: p.value != null })),
+      delta: r.delta.map((p) => ({ time: hhmm(p.time), value: Math.abs(p.value) })),
+    }
+    log(`10-align-${day}.json`, out)
+    expect([r.candle.o, r.candle.h, r.candle.l, r.candle.c]).toEqual([db.o, db.h, db.l, db.c])
+    expect(hhmm(r.crosshairTime)).toBe(hm)
+    expect(out.panel.anchor).toBe(`anchor ${hm}`)
+    expect(out.panel.summary.startsWith(`Box ${hm}–`)).toBe(true)
+    expect(r.line.find((p) => p.time === t)?.value ?? null).toBeNull() // the anchor bar's own flow is not summed
+    expect(r.line.find((p) => p.time === t + 60)?.value ?? null).not.toBeNull()
+    if (db.delta != null) expect(r.delta.find((p) => p.time === t)?.value).toBe(db.delta)
+  })
+}

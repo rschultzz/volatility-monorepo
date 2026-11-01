@@ -20,7 +20,7 @@ import {
 } from 'web-shared'
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import BoxPanel from './BoxPanel'
-import { V1_TRADES_RGB, contraMarkers, engineSettingsFromRules, minuteText, overlayMarks, panelEngine, panelVerdict, prepareSession, simulateSession } from '../v1Engine'
+import { V1_TRADES_RGB, contraMarkers, engineBoxLine, engineSettingsFromRules, minuteText, overlayMarks, panelEngine, panelVerdict, prepareSession, simulateSession } from '../v1Engine'
 import { TradeMarksPrimitive } from './tradePrimitives'
 import boxBaseline from '../data/boxBaseline.json'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
@@ -2814,7 +2814,7 @@ export default function PriceChart({
     return readHistory({
       payload: v3Payload, bars: v3Bars, rows: v3Segments.rows, closes: v3Segments.closes, anchorShifted: v3Shift(v3EdgeReadout.anchor),
       endShifted: v3End, shift: v3Shift, breakHoldMin: v3EdgeReadout.breakHoldMin, candleTimes: v3Times,
-      segments: v3Payload.segments, baseline: boxBaseline, tradeDate, rules: v3Rules, ptMinOf: v3PtMin, stepSec: step,
+      segments: v3Payload.segments, baseline: boxBaseline, tradeDate, rules: v3Rules, ptMinOf: v3PtMin, stepSec: step, manual: true,
     })
   }, [v3EdgeReadout, v3Payload, v3Bars, v3Segments, v3Times, v3Shift, v3End, tradeDate, v3Rules, v3PtMin])
   const v3BoxPanel = useMemo(() => {
@@ -2840,20 +2840,25 @@ export default function PriceChart({
   // CR-DQ item 7: the current box's verdict from the panel's own inputs (its percentiles, the levels above, the trade date).
   const v3DraftVerdict = useMemo(() => currentBoxVerdict(v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift, formatShiftedHHMM),
     [v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift])
-  // CR-DU item 2: the current box's verdict is the v1 rules engine's (v1Engine.panelEngine at the chart's anchor and the
-  // last bar / set end, with the engine's own trades since 06:30 for rules 19 / 20); its failed rules are the reason and
-  // extra evidence rows. Where the engine is off for the date (inputs `blocked`: holdout, set 2 in progress, …, or not
-  // loaded yet) the CR-DQ / CR-DS verdict is shown as before, with the reason in the panel.
+  // CR-DU amendment 7: the panel's verdict and rows read the manual box (CR-DQ / CR-DS `boxVerdict`). The v1 rules engine
+  // gets its own line from its own chained box (v1Engine.panelEngine, 06:30 chain to the last bar / set end, with its own
+  // trades for rules 19 / 20); it never moves the manual box. Where the engine is off for the date (inputs `blocked`:
+  // holdout, set 2 in progress, …) the line gives the reason.
   const v1Inputs = flowV3?.v1Inputs || null
   const v1Panel = useMemo(() => {
     if (!v3EdgeReadout || !v3Payload || !v1Inputs) return null
     if (v1Inputs.blocked || v1Inputs.error) return { off: v1Inputs.blocked || 'engine inputs unavailable' }
     const ctx = prepareSession({ payload: v3Payload, inputs: v1Inputs, tradeDate, fixedBaseline: boxBaseline, settings: engineSettingsFromRules(v3Rules) })
-    const pe = panelEngine(ctx, { anchorShifted: v3Shift(v3EdgeReadout.anchor), endShifted: v3End })
-    return { verdict: panelVerdict(pe, (t) => formatShiftedHHMM(v3Shift(t))), pe, ctx }
+    const pe = panelEngine(ctx, { endShifted: v3End })
+    const fmt = (t) => formatShiftedHHMM(v3Shift(t))
+    return { verdict: panelVerdict(pe, fmt), engineBox: engineBoxLine(pe, fmt), pe, ctx }
   }, [v3EdgeReadout, v3Payload, v1Inputs, tradeDate, v3Rules, v3Shift, v3End])
-  const v3Verdict = v1Panel?.verdict
-    || (v3DraftVerdict && v1Panel?.off ? { ...v3DraftVerdict, engineLine: `v1 engine off: ${v1Panel.off}` } : v3DraftVerdict)
+  const v3Verdict = useMemo(() => {
+    if (!v3DraftVerdict) return v3DraftVerdict
+    if (v1Panel?.off) return { ...v3DraftVerdict, engineLine: `v1 engine off: ${v1Panel.off}` }
+    if (!v1Panel?.verdict) return v3DraftVerdict
+    return { ...v3DraftVerdict, engineBox: v1Panel.engineBox, engineTag: v1Panel.verdict.engineTag, engineTitle: v1Panel.verdict.title, engineLine: v1Panel.verdict.engineLine }
+  }, [v3DraftVerdict, v1Panel])
   // CR-DU item 4b — the v1 trades overlay: the engine run minute by minute over the session shown (06:30 anchor, no later
   // bars at each minute), drawn in CR-DR's trade-marker style in teal (C1 approved); hover shows that minute's verdict.
   const v1TradesOn = Boolean(flowV3?.v1TradesOn)
@@ -4103,6 +4108,7 @@ export default function PriceChart({
               rules={v3Rules}
               verdict={v3Verdict}
               feedStall={v3FeedStall}
+              onRestart={flowV3?.onBoxRestart}
             />
           )}
 

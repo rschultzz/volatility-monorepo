@@ -64,7 +64,7 @@ import {
   volumeCap,
   sessionOpenAnchor,
 } from '../flowV3'
-import { EdgeEffortPrimitive, ORANGE_RGB, ShareCapPrimitive, VolumeCapPrimitive } from './flowV3Primitives'
+import { BoxStartTicksPrimitive, EdgeEffortPrimitive, ORANGE_RGB, ShareCapPrimitive, VolumeCapPrimitive } from './flowV3Primitives'
 
 const BG_COLOR = '#1f2937'
 const PANE_SEPARATOR_PX = 1 // CR-DI: the strip's 64 px include the 1-px pane separator, so pane 0 keeps its height
@@ -433,7 +433,7 @@ export default function AggressorFlowV3Panel({
   const closes = useMemo(() => rowCloses(aligned, candles, shift), [candles, aligned, shift])
   // CR-DN item 3: with box segments, the CVD restarts at 0 on each drawn box (same anchoredCvd per span); `cvdGaps` =
   // rows whose line to the next box is drawn transparent. Without segments, one anchored line as before.
-  const cvdSeg = useMemo(() => (segments?.spans?.length ? segmentCvd(aligned, segments.spans) : null), [aligned, segments])
+  const cvdSeg = useMemo(() => (segments?.spans?.length ? segmentCvd(aligned, segments.lineSpans || segments.spans) : null), [aligned, segments])
   const plainCvd = useMemo(() => (cvdSeg ? null : anchoredCvd(aligned, anchor, end)), [cvdSeg, aligned, anchor, end])
   const cvd = cvdSeg ? cvdSeg.cvd : plainCvd
   const cvdGaps = cvdSeg ? cvdSeg.gapAt : null
@@ -442,7 +442,7 @@ export default function AggressorFlowV3Panel({
   const shareMode = anchor != null && settings.anchoredLine !== 'raw'
   const shareSeries = useMemo(() => {
     if (!shareMode) return null
-    return segments?.spans?.length ? segmentShare(aligned, segments.spans) : { ...anchoredShare(aligned, anchor, end), gapAt: null }
+    return segments?.spans?.length ? segmentShare(aligned, segments.lineSpans || segments.spans) : { ...anchoredShare(aligned, anchor, end), gapAt: null }
   }, [shareMode, aligned, segments, anchor, end])
   const rollingOn = Boolean(settings.rollingOn)
   const rolling = useMemo(() => (rollingOn ? rollingDelta(aligned, settings.rollingMin) : null), [aligned, rollingOn, settings.rollingMin])
@@ -544,7 +544,9 @@ export default function AggressorFlowV3Panel({
     chartRef.current = chart
     const shareCap = new ShareCapPrimitive() // CR-DP item 6b
     cvdS.attachPrimitive(shareCap)
-    seriesRef.current = { delta, rolling: rollingS, cvd: cvdS, vol: volS, volCap, shareCap }
+    const boxTicks = new BoxStartTicksPrimitive()
+    cvdS.attachPrimitive(boxTicks)
+    seriesRef.current = { delta, rolling: rollingS, cvd: cvdS, vol: volS, volCap, shareCap, boxTicks }
 
     const refreshDecorations = () => {
       const w = stageRef.current?.clientWidth || 0
@@ -682,6 +684,7 @@ export default function AggressorFlowV3Panel({
         : ws(r))))
       s.shareCap.setData({ marks: [] })
     }
+    s.boxTicks.setData({ color: SLATE_RGBA(0.95), times: segments?.ticks || [] }) // CR-DU amendment 7 item 4
     const shared = normalizeLogicalRange(visibleLogicalRange)
     if (chartRef.current && candleTimes.length >= 2 && !shared) {
       chartRef.current.timeScale().fitContent()
@@ -695,7 +698,7 @@ export default function AggressorFlowV3Panel({
       }
     }
     requestAnimationFrame(() => refreshDecorationsRef.current())
-  }, [aligned, rolling, cvd, cvdGaps, shareSeries, candleTimes, visibleLogicalRange])
+  }, [aligned, rolling, cvd, cvdGaps, shareSeries, candleTimes, visibleLogicalRange, segments])
 
   // CR-DP item 6b: in share mode the line's scale is fixed at ±10 % with faint slate guides at 0, ±2 % and ±5 % (no axis
   // labels); raw CVD autoscales as before. Item 8b: each slot's auto range (fixed ±10 % for the share line) is then
@@ -898,7 +901,7 @@ export default function AggressorFlowV3Panel({
 
   return (
     <div className="flow-shell" style={{ height: `${height}px`, position: 'relative', width: '100%' }} data-testid="flow-v3-panel"
-      data-anchor={anchor ?? ''} data-end={end ?? ''}>
+      data-anchor={anchor ?? ''} data-end={end ?? ''} data-box-ticks={(segments?.ticks || []).join(',')}>
       {/* CR-DP item 3: Anchor · Edges · Display groups (a small gap between groups), status notes, then ⚙ and ? at the far
           right. Same buttons and behaviour; the anchored readout moved to the price chart's box stats popup (item 4). */}
       <div className="flow-panel-header" style={{ display: 'flex', alignItems: 'center', gap: '14px', justifyContent: 'flex-start', overflowX: 'auto' }}>

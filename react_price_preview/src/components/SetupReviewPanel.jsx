@@ -289,6 +289,7 @@ function SummaryView({ groups, loading, error }) {
 export default function SetupReviewPanel({
   apiBase = '',
   activeCandidate = null,
+  anchorRecord = null, // CR-DU amendment 7b: { anchor_ts, box_min_age_min, box_min_height_pts }, sent with every save
   onActivate,
   onClose,
   rightOffset = 0,
@@ -446,8 +447,8 @@ export default function SetupReviewPanel({
     setNotice('')
     // After reveal the label is optional: omitted, the API copies the blind label (R1)
     const payload = revealed
-      ? { ...(label ? { label } : {}), reasons: chosenReasons, comment }
-      : { label, reasons: chosenReasons, comment }
+      ? { ...(label ? { label } : {}), reasons: chosenReasons, comment, ...anchorRecord }
+      : { label, reasons: chosenReasons, comment, ...anchorRecord }
     try {
       await fetchJson(`${base}/candidates/${encodeURIComponent(activeId)}/review`, {
         method: 'POST',
@@ -475,7 +476,7 @@ export default function SetupReviewPanel({
       if (!revealed) setBusy(false)
     }
     loadList()   // the queue's label column; not awaited, so the card is usable meanwhile
-  }, [activeId, base, canSave, chosenReasons, comment, label, loadList, refreshActive, revealed])
+  }, [activeId, anchorRecord, base, canSave, chosenReasons, comment, label, loadList, refreshActive, revealed])
 
   const reveal = useCallback(async () => {
     if (!canReveal || busy) return

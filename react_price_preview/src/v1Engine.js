@@ -379,7 +379,8 @@ export function engineSettingsFromRules(r) {
 }
 
 // Item 2 / Q6 — the box panel's verdict from the engine: the engine's own trades from 06:30 through bar i (rules 19 /
-// 20 state, "engine's trades, not yours"), then the verdict at bar i at the chart's anchor. `endShifted` = the set end
+// 20 state, "engine's trades, not yours"), then the verdict at bar i (the box panel's engine line: `anchorShifted` null, the
+// engine's own chain; CR-DU amendment 7). `endShifted` = the set end
 // (or null = the last bar). Null without RTH bars at or before the end.
 export function panelEngine(ctx, { anchorShifted = null, endShifted = null } = {}) {
   if (!ctx) return null
@@ -391,6 +392,16 @@ export function panelEngine(ctx, { anchorShifted = null, endShifted = null } = {
   const tClose = ctx.bars.t[i] + 60
   const wait = sim.state.lastStop ? Math.max(0, Math.ceil(ctx.s.reentryMin - (tClose - sim.state.lastStop.at) / 60)) : 0
   return { ev, trades: sim.trades, open: sim.open, losses: sim.state.losses, wait, i }
+}
+
+// CR-DU amendment 7 — the panel's engine line, from the engine's own chained box: "Engine (box 08:34–08:49): NO ACTION —
+// rule 8: …". It never reads the chart anchor. `fmt` takes a UTC bar time.
+export function engineBoxLine(pe, fmt = (t) => String(t)) {
+  if (!pe) return 'Engine: no RTH bars yet'
+  const { ev } = pe
+  const span = ev.box ? `box ${fmt(ev.box.from)}–${fmt(ev.t)}` : 'no box'
+  const f = ev.failed?.[0]
+  return `Engine (${span}): ${ev.verdict}${f ? ` — rule ${f.rule}: ${f.text}` : ''}`
 }
 
 const ruleRow = (f) => ({ key: `rule-${f.rule}-${f.code}`, check: `Rule ${f.rule}`, value: f.text, reads: 'fails', tone: 'bad' })

@@ -252,7 +252,7 @@ test('smoke 1: 2026-10-30 anchor 07:39, set end 08:02 — NO ACTION "short read,
   expect(c.history).toMatch(/^Read live: /)
 })
 
-test('smoke 2: same box with set end 07:49 (report), and anchored at 06:30 (box from 07:38) to 07:49', async ({ page }) => {
+test('smoke 2: same box with set end 07:49 (report), and anchored at 07:38 (the box CR-DS read from a 06:30 chain) to 07:49', async ({ page }) => {
   test.setTimeout(300_000)
   const out = {}
   await open(page, D30, { storage: EDGES_LEVELS })
@@ -263,7 +263,7 @@ test('smoke 2: same box with set end 07:49 (report), and anchored at 06:30 (box 
   await shot(page, 'smoke-2-0739-0749.png')
   await page.goto('about:blank')
   await open(page, D30, { storage: EDGES_LEVELS })
-  const a2 = shifted(`${D30}T06:30`)
+  const a2 = shifted(`${D30}T07:38`) // CR-DU amendment 7: a 06:30 anchor no longer chains to this box
   await anchorAt(page, a2, a2 - 10 * 60, shifted(`${D30}T08:30`))
   await pickAt(page, 'flow-v3-end-pick', shifted(`${D30}T07:49`), a2 - 10 * 60, shifted(`${D30}T08:30`))
   out.anchor0630 = await current(page)
@@ -272,9 +272,8 @@ test('smoke 2: same box with set end 07:49 (report), and anchored at 06:30 (box 
   colourOk(out.anchor0739.verdict)
   expect(out.anchor0630.verdict.kind).toBe('short')
   expect(out.anchor0630.verdict.pillBorder).toBe(RGB.good)
-  for (const k of ['event', 'formed', 'location']) expect(tonesOf(out.anchor0630.verdict)[k], k).toBe('good')
-  // CR-DU rule 5: the 07:05 buyers-absorbed mark (7660.25) starts before the 07:38 box, so it is location support, not a trigger
-  expect(tonesOf(out.anchor0630.verdict).absorption).toBe('neutral')
+  // CR-DU amendment 7: the panel's own verdict (not the engine's rule 5), as CR-DS shipped it
+  for (const k of ['event', 'formed', 'location', 'absorption']) expect(tonesOf(out.anchor0630.verdict)[k], k).toBe('good')
   expect(out.anchor0630.history).toContain('07:49 (short)')
   // Ryan (chat 2026-10-31): effort meets no advance, so progress (+3.5) is slate "not needed", not red
   expect(out.anchor0630.verdict.rows.find((r) => r.key === 'progress')).toMatchObject({ tone: 'neutral', reads: 'not needed (effort)' })
@@ -310,28 +309,16 @@ test('smoke 4: 2026-10-28 (FOMC) — NO TRADES, event row red', async ({ page })
   colourOk(c.verdict)
 })
 
-test('smoke 5: frozen boxes collapse to one row and expand to the table as of their end (2026-10-30 anchor 06:30); live replay time', async ({ page }) => {
+test('smoke 5 (CR-DU amendment 7): a manual box has no frozen rows; the break is a flag (2026-10-30 anchor 06:30); live replay time', async ({ page }) => {
   test.setTimeout(300_000)
   await open(page, D30, { storage: EDGES_LEVELS })
   const a = shifted(`${D30}T06:30`)
   await anchorAt(page, a, a - 10 * 60, shifted(`${D30}T13:00`))
-  const panel = page.getByTestId('flow-v3-box-popup')
   const c = await current(page)
-  expect(c.frozenRows.length).toBeGreaterThan(0)
-  for (const r of c.frozenRows) expect(r).toMatch(/^\d\d:\d\d–\d\d:\d\d · broke [↑↓] \d\d:\d\d · share (p\d+|–) · c\/pt (p\d+|–)/)
-  const frozen = panel.getByTestId('flow-v3-box-panel-frozen')
-  expect(await frozen.getByTestId('flow-v3-box-frozen-verdict').first().isVisible()).toBe(false) // collapsed
-  const expanded = []
-  for (let i = 0; i < await frozen.count(); i += 1) {
-    await frozen.nth(i).getByTestId('flow-v3-box-panel-summary').click()
-    const fv = frozen.nth(i).getByTestId('flow-v3-box-frozen-verdict')
-    expect(await fv.isVisible()).toBe(true)
-    const v = await verdictOf(fv)
-    colourOk(v)
-    expanded.push({ row: c.frozenRows[i], verdict: v, history: await frozen.nth(i).getByTestId('flow-v3-box-history-frozen').innerText() })
-  }
+  expect(c.frozenRows.length).toBe(0)
+  await expect(page.getByTestId('flow-v3-box-broke')).toHaveText('broke ↓ 07:10')
   await shot(page, 'smoke-5-frozen-expanded.png')
-  log('smoke-5-frozen.json', { current: c, expanded })
+  log('smoke-5-frozen.json', { current: c })
   expect(c.historyMs).toBeLessThan(250)
 })
 

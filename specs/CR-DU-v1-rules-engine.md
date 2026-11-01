@@ -787,3 +787,52 @@ Follow-on after v1.4. Engine v1.4 stays frozen: `evaluateAt`, `simulateSession`,
 **7b run.** `scripts/cr_du_setup_reviews_anchor.py`, run 98f30069: 154 rows before and after, all new values NULL. `dash_backfill_writer` has no DDL, so the run is recorded through the backfill role and the ALTER runs as the table owner.
 
 **Standing rulings:** conformance table unchanged, no new deviation (C1 / C2 approvals above).
+
+
+## Amendment 7 results (2026-11-01)
+
+Engine unchanged: 86 sessions, 33,540 minutes hash identical to tag `cr-du-engine-v1.4` (`6fcd03aa…`). Labelled train, in-sample where outcomes appear; no new backtest was run.
+
+**Tests.** Unit 158 / 158. `cr-du.spec.js` 12 / 12. Review routes 23 / 23 against the real schema (rolled back). Specs rerun by file path: `cr-di`, `cr-dn`, `cr-dp`, `cr-dq`, `cr-ds`, `cr-df`, `cr-dr`, `cr-dm`, `cr-du`: every remaining failure also fails on origin/main `ddbe3ab` (`cr-df` live, `cr-dm` review replay log, `cr-dn` item 6, `cr-dp` items 4, 6, 8, `cr-dr` #5). The whole suite was not rerun after this step.
+
+**Moved-box assertions.** Boxes on the same bars: origin/main (15-min hold, closes widen) → v1.4 → manual box.
+
+| Assertion | origin/main | v1.4 (rule that moved it) | Manual | Fix |
+|---|---|---|---|---|
+| `cr-di` 10-28 07:00 until 07:40 | 07:00 [7762, 7769.25] | 07:16 [7766.5, 7770.75], forming restart | 07:00 [7762, 7769.25] | helper reads the manual box |
+| `cr-di` 10-28 07:00 until 08:09 | 07:00 [7762, 7769.25] | 08:03 [7766, 7768.75], 2 frozen; restart, edges freeze when formed | as main | helper; Step 0b numbers hold |
+| `cr-di` 10-28 07:00 to end | 12:46, 7 frozen from 07:00→08:16 | 12:49, 10 frozen from 07:16→07:48; restart, chain | 07:00 [7762, 7769.25], broke ↑ 08:16 | one box + flag |
+| `cr-dn` 10-28 07:00 | same | same | same | one box + flag |
+| `cr-dn` 10-29 06:49 A = 5 | 09:12, 3 frozen from 06:49→08:24; 07:34 probe | 09:11, 5 frozen from 07:17→07:32; restart, freeze | 06:49 [7736, 7744.5], broke ↑ 07:00 | 07:34 probe gone: edges freeze at 06:57, break at 07:00 |
+| `cr-dn` 10-29 06:49 A = 1 | 09:12, split 07:34 | 09:11, first frozen 07:17→07:27 | as A = 5 | no split, no gap |
+| `cr-dn` 10-29 set end 06:57 | 06:49 [7736, 7744.5] | 06:53 [7736.75, 7739.75], restart | as main | helper; "runs on" = one box |
+| `cr-dp` amendment 2 | 06:25 → 06:35 spans ETH / RTH | 06:33, restarts 06:31, 06:32, 06:33 | spans | none: passes (see below) |
+| `cr-dq` items 1–3 | 12:39, 1 frozen 11:57→12:39 | 12:59, single price; restart | 11:57 [7569.25, 7576], broke ↑ 12:06 | one section; origin/main no longer a baseline |
+| `cr-dq` item 4 | same | same | same | anchor 07:10; samples inside the box |
+| `cr-dq` item 5 02-10 07:05–07:30 | 07:05 [6989, 7003.25] | 07:30 [7003, 7003], restart | 07:05 [6989, 7004] | none: passes |
+| `cr-ds` smoke 1 | 07:39 [7649.5, 7656.5] | 07:43 [7652.5, 7657], restart | as main | none: passes |
+| `cr-ds` smoke 2 | 06:30 chain → 07:38 [7649.5, 7656.5] | 07:43 [7652.5, 7657] | 06:30 [7652.75, 7664.5], broke ↓ 07:10 | anchor 07:38 directly |
+
+Also changed because a manual box has no chain: `cr-dq` item 2 (no "older boxes"), `cr-dq` FOMC (title is the panel verdict's), `cr-ds` smoke 5 (no frozen rows), `cr-df` (helper). The frozen rows and "older boxes" UI now has no caller from a chart anchor; unit tests still cover it. Not removed.
+
+**`cr-dp` "mixed sources", cause.** The test's clicks land on the box panel (460 × 322 px, bottom-left), on origin/main as well as v1.4: pairs 1 and 2's set-end clicks and pair 3's anchor click. The pick stays armed, so the only pair actually set is anchor 06:25 / end 06:35. On origin/main that box survives. On v1.4 the 06:31 close is 2.75 above the 7264.50 top while the box is 6 min old, so it restarts, and again at 06:32 and 06:33. **Open bug, not fixed:** an armed pick clicked over the panel is swallowed and stays armed.
+
+**D1 denominators.** Eligible cards are unchanged (31 takes, 58 skips). The own-box score selects cards overlapping the engine's box at the decision minute; 4 stopped overlapping at v1.4 because a restart had just reset the box to one price: take 107 (05-15), skips 55, 58 (03-19), 72 (04-10). Over all eligible cards: 0 / 31 takes, 4 / 58 skips. Own-box scores are not strictly comparable across versions.
+
+**Alignment and test 8.** Measured table in `components/field-conventions.md`. Every layer labels by bar start. The line starting at anchor + 1 is by design, the same window as the panel's Δ share (`flowV3.js:79`, `:966`, `:997`, asserted by `cr-dp` item 6). Test 8 failed because `series.data()` omits the whitespace start bar, so the test was wrong and the line is right: the test changed. Consequence to note: the anchor bar's own flow is in no Δ share. The engine computes it the same way, so changing it would change the engine.
+
+**Item 6 / 7c, pre-anchor-record.** The card review view uses this panel, with bars cut at `entry_ts_pt`. 7 set-2 cards were labelled since CR-DS merged; `setup_reviews` held no anchor then, so the window read on each can't be recovered. Per card, on deployed code at entry: anchors in the session that chaining would have moved / all, and within the last 60 min.
+
+| Card | Session | Entry | Moved / all | Moved / last 60 min |
+|---|---|---|---|---|
+| 1 | 01-07 | 11:05 | 204 / 275 | 10 / 61 |
+| 3 | 01-08 | 10:34 | 195 / 244 | 16 / 61 |
+| 5 | 01-09 | 10:54 | 226 / 264 | 23 / 61 |
+| 7 | 01-12 | 12:46 | 329 / 376 | 14 / 61 |
+| 9 | 01-14 | 08:12 | 43 / 102 | 2 / 61 |
+| 10 | 01-16 | 09:11 | 131 / 161 | 31 / 61 |
+| 16 | 01-23 | 08:52 | 78 / 142 | 19 / 61 |
+
+No relabelling. Set 2 resumes only after this deploys.
+
+**7e.** `connect_redacted` / `redact_db_url` in `packages/shared/backfill_safety.py`; used by `scripts/cr_du_backtest_v1.py`, `cr_du_set2_verdicts.py`, `cr_du_prior_baselines.py`, `cr_du_smoke_backend.py`, `cr_du_step0/q5_contradiction_pcts.py`, `cr_du_setup_reviews_anchor.py`. The leak was `DATABASE_URL` (`new_db_cred`), from a scratch script; credential rotated by Ryan 2026-11-01.

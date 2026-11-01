@@ -240,3 +240,51 @@ test('Amendment 6: Box formed notes tests on both sides; a pending break is not 
   const q = payload([...base, 106, 102], [])
   assert.deepEqual(edgeReadout(q, flattenBars(q), T0, id, null, 5).tests, { above: 0, below: 0 })
 })
+
+// CR-DU amendment 7 — a manual anchor: no forming restart, no chain; a held break is a flag.
+test('manual box: 2026-01-26 anchor 08:31 stays 08:31 where the automatic box restarts at 08:34', () => {
+  const closes = [6986, 6986, 6985.75, 6983.5, 6984, 6984.25, 6985.5, 6984.75, 6985, 6985]
+  const b = { ...bars(closes), exact: closes.map(() => true) }
+  const auto = edgeReadout(payload(closes, []), b, b.t[0], id, null, 5, { counts: false })
+  assert.equal(auto.from, b.t[3])
+  const m = edgeReadout(payload(closes, []), b, b.t[0], id, null, 5, { counts: false, manual: true })
+  assert.equal(m.from, b.t[0])
+  assert.equal(m.anchor, b.t[0])
+  assert.equal(m.broke, null)
+  assert.equal(m.frozen.length, 0)
+  assert.equal(m.qualified, true)
+})
+
+test('manual box: a 15-pt jump while forming widens it, it cannot break before it has formed', () => {
+  const closes = [6000, 6000.5, 6015, 6015, 6015, 6015, 6015, 6015]
+  const b = { ...bars(closes), exact: closes.map(() => true) }
+  const m = edgeReadout(payload(closes, []), b, b.t[0], id, null, 5, { counts: false, manual: true })
+  assert.equal(m.from, b.t[0])
+  assert.equal(m.top.price, 6015)
+  assert.equal(m.bottom.price, 6000)
+  assert.equal(m.broke, null)
+})
+
+test('manual box: a held break after forming is a flag; the window and the edges stay, frozen is empty', () => {
+  const closes = [...Array(10).fill(0).map((_, i) => 6000 + (i % 2) * 2), 6010, 6011, 6012, 6013, 6014, 6015, 6016]
+  const b = { ...bars(closes), exact: closes.map(() => true) }
+  const m = edgeReadout(payload(closes, []), b, b.t[0], id, null, 5, { counts: false, manual: true })
+  assert.equal(m.from, b.t[0])
+  assert.equal(m.to, b.t[b.t.length - 1])
+  assert.deepEqual(m.frozen, [])
+  assert.deepEqual(m.broke, { at: b.t[10], dir: 'up', edge: 6002 })
+  assert.equal(m.top.price, 6002)
+  const auto = edgeReadout(payload(closes, []), b, b.t[0], id, null, 5, { counts: false })
+  assert.equal(auto.frozen.length, 1)
+  assert.equal(auto.from, b.t[10])
+  assert.equal(auto.broke, null)
+})
+
+test('manual box: a break that comes back inside is a probe, no flag', () => {
+  const closes = [...Array(10).fill(0).map((_, i) => 6000 + (i % 2) * 3), 6010, 6001, 6002]
+  const b = { ...bars(closes), exact: closes.map(() => true) }
+  const m = edgeReadout(payload(closes, []), b, b.t[0], id, null, 5, { counts: false, manual: true })
+  assert.equal(m.broke, null)
+  assert.equal(m.pending, null)
+  assert.equal(m.probes.length, 1)
+})

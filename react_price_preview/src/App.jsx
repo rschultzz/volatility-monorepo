@@ -6,7 +6,7 @@ import { DEFAULT_V3_SETTINGS, EDGE_STRIP_HEIGHT, migrateBoxRules, LIVE_EFFORT_ID
 import SetupReviewPanel, { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './components/SetupReviewPanel'
 import TradeReviewPanel from './components/TradeReviewPanel'
 import boxBaseline from './data/boxBaseline.json'
-import { ptToShifted } from './tradeContext'
+import { ptToShifted, shiftedToPt } from './tradeContext'
 import { PANEL_WIDTH as LANDSCAPE_PANEL_WIDTH } from 'web-shared'
 import {
   GEX_MIN_ABS_B_LEGACY_STORAGE_KEY,
@@ -480,6 +480,7 @@ export default function App() {
   })
   const [flowAnchor, setFlowAnchor] = useState(null)
   const [flowAnchorArmed, setFlowAnchorArmed] = useState(false)
+  const [flowRestarts, setFlowRestarts] = useState({ anchor: null, spans: [] }) // CR-DU amendment 7: spans before a "restart here"
   // CR-DN item 1: the window's end (shifted PT epoch of its last 1-minute bar), like the anchor: App state only.
   const [flowEnd, setFlowEnd] = useState(null)
   // CR-DN item 7: the price chart's right price axis width (px); the Flow v3 pane pins its axis to it.
@@ -1781,7 +1782,7 @@ export default function App() {
   const flowV3Edges = useMemo(() => {
     if (!flowV3Layers.edges || !flowCells || flowAnchor == null) return null
     return edgeReadout(flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowEnd,
-      flowV3Settings.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin, { qualifyMin: flowV3Rules.minAgeMin, qualifyPts: flowV3Rules.minHeightPts })
+      flowV3Settings.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin, { qualifyMin: flowV3Rules.minAgeMin, qualifyPts: flowV3Rules.minHeightPts, manual: true })
   }, [flowV3Layers.edges, flowCells, flowCellsBars, flowAnchor, flowV3Shift, flowEnd, flowV3Settings.breakHoldMin, flowV3Rules])
 
   // CR-DN item 3: with Edges on and an anchor, each drawn box is a CVD segment. Spans come from the edge readout (cells
@@ -1794,8 +1795,17 @@ export default function App() {
     const rows = alignV2ToCandles(allBars, mergedBarsWithLiveTimeline)
     const closes = rowCloses(rows, mergedBarsWithLiveTimeline, flowV3Shift)
     const readouts = segmentReadouts(rows, closes, seg.spans)
-    return { ...seg, readouts, rows, closes } // CR-DS item 4: rows / closes also feed the read-history replay
-  }, [flowV3Edges, flowV3Shift, flowV2PanePayloads, mergedBarsWithLiveTimeline])
+    // CR-DU amendment 7 item 4: the delta line keeps the spans before a "restart here" and resets at each with a tick
+    const prior = flowRestarts.anchor === flowAnchor ? flowRestarts.spans : []
+    const lineSpans = [...prior, ...seg.spans]
+    return { ...seg, readouts, rows, closes, lineSpans, ticks: lineSpans.slice(1).map((s) => s.from) } // CR-DS item 4: rows / closes also feed the read-history replay
+  }, [flowV3Edges, flowV3Shift, flowV2PanePayloads, mergedBarsWithLiveTimeline, flowRestarts, flowAnchor])
+  // CR-DU amendment 7: "restart here" on the box panel re-anchors at the break bar; a fresh pick drops the kept spans.
+  const handleBoxRestart = useCallback((utc) => {
+    const next = flowV3Shift(utc)
+    setFlowRestarts((r) => ({ anchor: next, spans: [...(r.anchor === flowAnchor ? r.spans : []), { from: flowAnchor, to: next - 60 }] }))
+    setFlowAnchor(next)
+  }, [flowAnchor, flowV3Shift])
 
   // CR-DI amendment 2: while the Edge effort strip is drawn the Flow v3 pane grows by its height (the price pane
   // above gives it up), so the pane's other series keep their heights; otherwise the pane is unchanged.
@@ -1821,6 +1831,7 @@ export default function App() {
       buyLayer: flowV3Settings.buyLayer,
       profileFrom: flowAnchor,
       anchor: flowAnchor, // CR-DP item 4 / CR-DQ item 3: the box panel's × resets on a new anchor
+      onBoxRestart: handleBoxRestart, // CR-DU amendment 7: the panel's "restart here"
       boxRules: flowV3Settings.boxRules, // CR-DQ items 5 / 7: percentile tiers and verdict rules (⚙)
       v1Inputs, // CR-DU: the v1 engine's inputs (box panel verdict, engine's trades)
       v1TradesOn: v1TradesOn && !v1TradesBlocked, // CR-DU item 4b: the overlay
@@ -1829,7 +1840,7 @@ export default function App() {
       // CR-DN item 1: the profile stops after the end's minute ([from, to) on cell minute starts); null without an end.
       profileTo: flowAnchor != null && flowEnd != null ? flowEnd + 60 : null,
     }
-  }, [flowCellsNeeded, flowCells, flowCellsBars, flowEnd, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, v1Inputs, v1TradesOn, v1TradesBlocked, flowV3Settings.v1Alert, flowV3Settings.contraMarks, isLiveTradeDate, flowAnchor, flowEnd])
+  }, [handleBoxRestart, flowCellsNeeded, flowCells, flowCellsBars, flowEnd, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, v1Inputs, v1TradesOn, v1TradesBlocked, flowV3Settings.v1Alert, flowV3Settings.contraMarks, isLiveTradeDate, flowAnchor, flowEnd])
   // CR-DN item 1: the anchor → end window, shaded on the price chart (any layer); null without an end.
   const flowV3Window = useMemo(
     () => (flowAnchor != null && flowEnd != null ? { from: flowAnchor, to: flowEnd } : null),
@@ -2279,6 +2290,8 @@ export default function App() {
             onActivate={setReviewCandidate}
             onClose={closeReview}
             rightOffset={reviewRightOffset}
+            // CR-DU amendment 7b: written with every review save (anchor null without one)
+            anchorRecord={{ anchor_ts: shiftedToPt(flowAnchor), box_min_age_min: flowV3Rules.minAgeMin, box_min_height_pts: flowV3Rules.minHeightPts }}
           />
         )}
         {error ? (

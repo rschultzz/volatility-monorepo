@@ -601,6 +601,28 @@ export class ShareCapPrimitive extends BasePrimitive {
   }
 }
 
+// CR-DU amendment 7 item 4 — a small tick on the delta line's zero where a new box starts (the line resets there).
+// data: { color, times: shifted minutes }.
+export class BoxStartTicksPrimitive extends BasePrimitive {
+  zOrder() {
+    return 'top'
+  }
+
+  paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr }, chart, series, d) {
+    if (!d.times?.length) return
+    const y = series.priceToCoordinate(0)
+    if (y == null) return
+    const ts = chart.timeScale()
+    const w = Math.max(1, Math.round(hr))
+    const h = Math.round(5 * vr)
+    ctx.fillStyle = d.color
+    for (const t of d.times) {
+      const x = ts.timeToCoordinate(t)
+      if (x != null) ctx.fillRect(Math.round(x * hr), Math.round(y * vr) - h, w, 2 * h)
+    }
+  }
+}
+
 // CR-DQ item 4 — faint box fills behind the candles: each drawn box between its top and bottom over its time span, existing
 // magenta at very low opacity (current BOX_SHADE_ALPHA_CURRENT, frozen BOX_SHADE_ALPHA_FROZEN). The edge lines stay as
 // EdgeLinesPrimitive draws them. The set-end window (WindowShadePrimitive) is slate and spans the full plot height, so it

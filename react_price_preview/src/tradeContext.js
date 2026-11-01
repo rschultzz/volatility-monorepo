@@ -59,7 +59,7 @@ export function entryContext({ cells, v2Bars, bars, anchorShifted, entryShifted,
 
   let box = null
   if (anchorShifted != null && cells) {
-    const edges = edgeReadout(cells, flattenBars(cells), anchorShifted, shift, null, s.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin, { qualifyMin: boxRules(rules).minAgeMin, qualifyPts: boxRules(rules).minHeightPts })
+    const edges = edgeReadout(cells, flattenBars(cells), anchorShifted, shift, null, s.breakHoldMin ?? DEFAULT_V3_SETTINGS.breakHoldMin, { qualifyMin: boxRules(rules).minAgeMin, qualifyPts: boxRules(rules).minHeightPts, manual: true })
     const seg = boxSegments(edges, shift)
     if (edges && seg) {
       const readouts = segmentReadouts(rows, rowCloses(rows, bars || [], shift), seg.spans)

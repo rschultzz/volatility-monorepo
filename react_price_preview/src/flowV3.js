@@ -673,8 +673,12 @@ function boxStats(payload, bars, j0, j1, exact, e, counts = true) {
 // nothing grows or breaks; `pending` is the unresolved break at the last bar (or the end), else null.
 // CR-DS item 4: `{ counts: false }` skips the edge counts and probe contracts (cells scans) for the read-history replay;
 // prices, edges, high / low, probes' times and pending are identical.
+// CR-DU amendment 7: `{ manual: true }` (a chart or trade anchor): the box is the anchor → end window, whatever happens.
+// While forming a close only widens it (no restart: it can't break before it has formed); once formed, a break that holds
+// is the flag `broke` ({ at: break bar, dir, edge }), the edges stay and nothing more is tracked; `frozen` stays empty.
+// The engine's automatic boxes (v1Engine) never pass it.
 export function edgeReadout(payload, bars, anchorShifted, shift, endShifted = null,
-  breakHoldMin = DEFAULT_V3_SETTINGS.breakHoldMin, { counts = true, qualifyMin = BOX_RULES_DEFAULTS.minAgeMin, qualifyPts = BOX_RULES_DEFAULTS.minHeightPts } = {}) {
+  breakHoldMin = DEFAULT_V3_SETTINGS.breakHoldMin, { counts = true, qualifyMin = BOX_RULES_DEFAULTS.minAgeMin, qualifyPts = BOX_RULES_DEFAULTS.minHeightPts, manual = false } = {}) {
   if (anchorShifted == null || !bars?.t?.length) return null
   let i0 = -1
   for (let i = 0; i < bars.t.length; i += 1) {
@@ -698,6 +702,7 @@ export function edgeReadout(payload, bars, anchorShifted, shift, endShifted = nu
   const newMoves = () => ({ topMoved: null, bottomMoved: null, topMoves: 0, bottomMoves: 0, testAbove: 0, testBelow: 0 })
   let moves = newMoves()
   let qualified = false // CR-DU Amendments 5 / 6 (A1.1 / rule 6): forming until box min and height; edges freeze then
+  let broke = null // CR-DU amendment 7: manual box only
   const edgesNow = () => ({ top, bottom, ...moves })
   for (let i = i0 + 1; i <= last; i += 1) {
     const c = bars.c[i]
@@ -705,7 +710,7 @@ export function edgeReadout(payload, bars, anchorShifted, shift, endShifted = nu
       // Forming: a close <= 2 pts beyond a running edge widens the box; > 2 pts beyond, or a span > 12 pts, restarts it
       // at that close (a box that never qualified is dropped, not frozen)
       const widened = Math.max(top, c) - Math.min(bottom, c)
-      if (c > top + EDGE_BREAK_PTS + 1e-9 || c < bottom - EDGE_BREAK_PTS - 1e-9 || widened > BOX_MAX_PTS + 1e-9) {
+      if (!manual && (c > top + EDGE_BREAK_PTS + 1e-9 || c < bottom - EDGE_BREAK_PTS - 1e-9 || widened > BOX_MAX_PTS + 1e-9)) {
         j0 = i
         top = c
         bottom = c
@@ -731,6 +736,11 @@ export function edgeReadout(payload, bars, anchorShifted, shift, endShifted = nu
         continue
       }
       if (i - pending.i < accept) continue
+      if (manual) {
+        broke = { at: bars.t[pending.i], dir: pending.dir, edge: pending.dir === 'up' ? top : bottom }
+        pending = null
+        break
+      }
       // held: the box freezes on the bar before the break bar, the new box starts at the break bar and replays from it
       const ib = pending.i
       spans.push([j0, ib - 1, pending.dir, edgesNow()])
@@ -764,7 +774,7 @@ export function edgeReadout(payload, bars, anchorShifted, shift, endShifted = nu
   const cur = { ...boxStats(payload, bars, j0, last, exact, edgesNow(), counts), probes: probesOf(bars.t[j0]) }
   const held = (e) => (e.firstTouch == null ? null : Math.round((tLast - e.firstTouch) / 60))
   return {
-    ...cur, anchor: bars.t[i0], exact, breakHoldMin: accept, qualified, frozen, end: endShifted == null ? null : bars.t[last],
+    ...cur, anchor: bars.t[i0], exact, breakHoldMin: accept, qualified, frozen, manual, broke, end: endShifted == null ? null : bars.t[last],
     lastClose: bars.c[last], // CR-DQ item 7: where price sits in the current box (its last bar's close)
     pending: pending ? { at: bars.t[pending.i], dir: pending.dir, edge: pending.dir === 'up' ? top : bottom } : null,
     startDir: frozen.length ? frozen[frozen.length - 1].dir : null,
@@ -1108,6 +1118,9 @@ export function boxPanelSections(entries, hhmm, segments = null, pctOf = null) {
       key: String(b.from), current: !frozen,
       summary: `Box ${hhmm(b.from)}–${hhmm(until)} · ${state}${frozen ? share : ''}`,
       span: `${hhmm(b.from)}–${hhmm(until)}`, state, // CR-DS item 5: the frozen row's pieces
+      // CR-DU amendment 7: the manual box's anchor minute and its break flag ("restart here" re-anchors on `at`)
+      anchorText: b.manual ? `anchor ${hhmm(b.anchor)}` : null,
+      broke: b.broke ? { text: `broke ${dirArrow(b.broke.dir)} ${hhmm(b.broke.at)}`, at: b.broke.at } : null,
       lines: boxPopupLines(b, hhmm, segments),
       probes: `${n} probe${n === 1 ? '' : 's'}${pend}`,
       pct: pctOf ? pctOf(b) : null, // CR-DQ item 5: boxPercentiles of this box (null: no badge)
@@ -1487,7 +1500,7 @@ export function endWindowText(anchor, end, hhmm) {
 // baseline, the trade date and the ⚙ rules. `ptMinOf(utc)` = PT minute of day (as the panel's badges).
 export const READ_KINDS = ['short', 'long']
 export function readHistory({ payload, bars, rows, closes, anchorShifted, endShifted = null, shift, breakHoldMin,
-  candleTimes, segments, baseline, tradeDate, rules = null, ptMinOf, stepSec = 60 }) {
+  candleTimes, segments, baseline, tradeDate, rules = null, ptMinOf, stepSec = 60, manual = false }) {
   const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now()
   const out = { ranges: [], minutes: 0, ms: 0 }
   if (anchorShifted == null || !bars?.t?.length || !Array.isArray(rows)) return out
@@ -1501,7 +1514,7 @@ export function readHistory({ payload, bars, rows, closes, anchorShifted, endShi
   let cur = null
   for (let i = i0; i <= last; i += 1) {
     const tEnd = shift(bars.t[i])
-    const r = edgeReadout(payload, bars, anchorShifted, shift, tEnd, breakHoldMin, { counts: false, qualifyMin: qualify.minAgeMin, qualifyPts: qualify.minHeightPts })
+    const r = edgeReadout(payload, bars, anchorShifted, shift, tEnd, breakHoldMin, { counts: false, qualifyMin: qualify.minAgeMin, qualifyPts: qualify.minHeightPts, manual })
     if (!r) continue
     out.minutes += 1
     const ro = anchorReadout(rows, closes, shift(r.from), tEnd - lag)
