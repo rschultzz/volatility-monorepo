@@ -2856,7 +2856,7 @@ export default function PriceChart({
       tradeText: engineSel && v3SelEngineBox ? tradeText(v3SelEngineBox, hhmm) : '',
       sections: panel.sections.map((sct0) => {
         // CR-DY: an engine box has no anchor or restart of yours
-        const sct = engineSel ? { ...sct0, anchorText: null, broke: null } : sct0
+        const sct = engineSel ? { ...sct0, anchorText: null, broke: null, summary: sct0.summary.replace(/ · set end .*$/, ' · at the decision minute') } : sct0
         const mine = v3History ? ranges.filter((x) => String(x.box) === sct.key) : null
         // CR-DS item 5: a frozen box's verdict and table as of its end (levels as of its break minute)
         const entry = sct.current ? null : v3Edges.boxes.find((en) => String(en.box.from) === sct.key)
