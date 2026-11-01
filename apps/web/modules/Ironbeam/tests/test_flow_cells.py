@@ -196,6 +196,54 @@ class TestParamsAndCache(_Base):
         self.assertTrue(c2.equals(full.reset_index(drop=True)))
 
 
+class TestLiveSegment(_Base):
+    """CR-DV: a live RTH segment (2026-10-27 FULL view replayed with now inside RTH): marks on closed minutes only, provisional
+    candidates, and the feed-stall flag (> 60 s without a trade)."""
+    NOW = dt.datetime(2026, 10, 27, 17, 0, 20, tzinfo=UTC)
+
+    def build(self, now, last):
+        last_calls = []
+
+        def trades_last(symbol):
+            last_calls.append(symbol)
+            return last
+
+        with cf.replay(self.store, {"_trades_last": trades_last}):
+            p, status = self.v3._build(None, "2026-10-27", session="FULL", until_pt=None, params=self.v3.fh.AbsorbParams(),
+                                       session_date=dt.date(2026, 10, 27), session_note=None, now_utc=now)
+        self.assertEqual(status, 200)
+        return self.seg(p, "rth"), last_calls
+
+    def test_live_marks_closed_minutes_only(self):
+        rth, _ = self.build(self.NOW, self.NOW - dt.timedelta(seconds=1))
+        closed = int(self.NOW.timestamp()) // 60 * 60
+        self.assertTrue(rth["marks"])
+        for mk in rth["marks"]:
+            self.assertIn(mk["provisional"], (True, False))
+            self.assertLess(mk["time"] + 60, closed + 1)                       # its minute has closed
+            if mk["provisional"]:
+                self.assertGreater(mk["confirm_time"], closed)
+            else:
+                self.assertLessEqual(mk["confirm_time"], closed)
+
+    def test_stall_flag_fires_after_60_s(self):
+        last = self.NOW - dt.timedelta(seconds=61)
+        rth, calls = self.build(self.NOW, last)
+        self.assertEqual(rth["feed_stalled_since"], int(last.timestamp()))
+        self.assertEqual(calls, [rth["symbol"]])
+
+    def test_no_stall_flag_on_quiet_seconds(self):
+        for gap in (1, 30, 60):
+            rth, _ = self.build(self.NOW, self.NOW - dt.timedelta(seconds=gap))
+            self.assertNotIn("feed_stalled_since", rth, gap)
+
+    def test_no_stall_read_on_a_past_session(self):
+        p, calls, _ = self.get(cf.QS_1027)
+        self.assertNotIn("_trades_last", [c[0] for c in calls])
+        self.assertTrue(all("feed_stalled_since" not in s for s in p["segments"]))
+        self.assertTrue(all(mk["provisional"] is False for mk in self.seg(p, "rth")["marks"]))
+
+
 if __name__ == "__main__":
     unittest.main()
 
