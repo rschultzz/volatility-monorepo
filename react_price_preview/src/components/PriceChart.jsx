@@ -20,7 +20,7 @@ import {
 } from 'web-shared'
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import BoxPanel from './BoxPanel'
-import { engineSettingsFromRules, panelEngine, panelVerdict, prepareSession } from '../v1Engine'
+import { V1_TRADES_RGB, contraMarkers, engineSettingsFromRules, minuteText, overlayMarks, panelEngine, panelVerdict, prepareSession, simulateSession } from '../v1Engine'
 import { TradeMarksPrimitive } from './tradePrimitives'
 import boxBaseline from '../data/boxBaseline.json'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
@@ -2850,10 +2850,72 @@ export default function PriceChart({
     if (v1Inputs.blocked || v1Inputs.error) return { off: v1Inputs.blocked || 'engine inputs unavailable' }
     const ctx = prepareSession({ payload: v3Payload, inputs: v1Inputs, tradeDate, fixedBaseline: boxBaseline, settings: engineSettingsFromRules(v3Rules) })
     const pe = panelEngine(ctx, { anchorShifted: v3Shift(v3EdgeReadout.anchor), endShifted: v3End })
-    return { verdict: panelVerdict(pe, (t) => formatShiftedHHMM(v3Shift(t))), pe }
+    return { verdict: panelVerdict(pe, (t) => formatShiftedHHMM(v3Shift(t))), pe, ctx }
   }, [v3EdgeReadout, v3Payload, v1Inputs, tradeDate, v3Rules, v3Shift, v3End])
   const v3Verdict = v1Panel?.verdict
     || (v3DraftVerdict && v1Panel?.off ? { ...v3DraftVerdict, engineLine: `v1 engine off: ${v1Panel.off}` } : v3DraftVerdict)
+  // CR-DU item 4b — the v1 trades overlay: the engine run minute by minute over the session shown (06:30 anchor, no later
+  // bars at each minute), drawn in CR-DR's trade-marker style in teal (C1 approved); hover shows that minute's verdict.
+  const v1TradesOn = Boolean(flowV3?.v1TradesOn)
+  const v1Sim = useMemo(() => {
+    if (!v1TradesOn || !v3Payload || !v1Inputs || v1Inputs.blocked || v1Inputs.error) return null
+    const ctx = prepareSession({ payload: v3Payload, inputs: v1Inputs, tradeDate, fixedBaseline: boxBaseline })
+    if (!ctx) return null
+    const sim = simulateSession(ctx)
+    return { ctx, sim, marks: overlayMarks(sim, ctx), byTime: new Map(sim.minutes.map((m) => [ctx.shift(m.t), m])) }
+  }, [v1TradesOn, v3Payload, v1Inputs, tradeDate])
+  const v1MarksRef = useRef({ series: null, prim: null })
+  useEffect(() => {
+    const series = seriesRef.current
+    if (!series) return
+    if (v1MarksRef.current.series !== series) v1MarksRef.current = { series, prim: null }
+    const r = v1MarksRef.current
+    if (!v1Sim && !r.prim) return
+    if (!r.prim) {
+      r.prim = new TradeMarksPrimitive()
+      series.attachPrimitive(r.prim)
+    }
+    r.prim.setData(v1Sim ? { trades: v1Sim.marks, times: v3Times, step: v3Step, selectedId: null, rgb: V1_TRADES_RGB } : null)
+  }, [v1Sim, v3Times, v3Step])
+  const [v1Hover, setV1Hover] = useState(null)
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !v1Sim) {
+      setV1Hover(null)
+      return undefined
+    }
+    const onMove = (p) => {
+      const t = p?.time != null ? Number(p.time) : null
+      const m = t != null && p?.point ? v1Sim.byTime.get(t) : null
+      setV1Hover(m ? { x: p.point.x, y: p.point.y, text: minuteText(m, (u) => formatShiftedHHMM(v3Shift(u))), verdict: m.verdict } : null)
+    }
+    chart.subscribeCrosshairMove(onMove)
+    return () => chart.unsubscribeCrosshairMove(onMove)
+  }, [v1Sim, v3Shift])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.__crDuV1 = () => (v1Sim ? { trades: v1Sim.sim.trades, open: v1Sim.sim.open, minutes: v1Sim.sim.minutes.length, hits: v1MarksRef.current.prim?.hits() || [] } : null)
+  }, [v1Sim])
+  // CR-DU item 4 — contradiction-bar markers (⚙, off by default) for the panel's current engine box, in the effort
+  // markers' style (small circle: blue below a bullish bar, light grey above a bearish one, as Flow v2 effort markers, "C").
+  const contraRef = useRef(null)
+  const contraList = useMemo(() => (flowV3?.contraMarks && v1Panel?.ctx ? contraMarkers(v1Panel.ctx, v1Panel.pe) : []), [flowV3?.contraMarks, v1Panel])
+  useEffect(() => {
+    const series = seriesRef.current
+    if (!series) return
+    if (!contraList.length && (!contraRef.current || contraRef.current.series !== series)) return
+    if (!contraRef.current || contraRef.current.series !== series) contraRef.current = { series, api: createSeriesMarkers(series, []) }
+    const markers = []
+    for (const m of contraList) {
+      const t = snapToCandleTime(displayCandles, v3Shift(m.t), false)
+      if (t != null) {
+        markers.push(m.side === 'long'
+          ? { time: t, position: 'belowBar', shape: 'circle', color: 'rgba(96,165,250,1)', text: 'C', size: 0.5, id: `cr-du-contra-${m.t}` }
+          : { time: t, position: 'aboveBar', shape: 'circle', color: 'rgba(229,231,235,1)', text: 'C', size: 0.5, id: `cr-du-contra-${m.t}` })
+      }
+    }
+    contraRef.current.api.setMarkers(markers.sort((a, b) => a.time - b.time))
+  }, [contraList, displayCandles, v3Shift])
   // CR-DU item 2: optional alert (⚙, off by default; live session only): a short tone + a browser notification when the
   // engine verdict changes to SHORT / LONG.
   const v1AlertPrev = useRef(null)
@@ -4035,6 +4097,21 @@ export default function PriceChart({
               rules={v3Rules}
               verdict={v3Verdict}
             />
+          )}
+
+          {v1Hover && (
+            <div
+              data-testid="flow-v3-v1-hover"
+              data-verdict={v1Hover.verdict}
+              style={{
+                position: 'absolute', left: Math.max(0, (hostRef.current?.offsetLeft || 0) + v1Hover.x + 12),
+                top: Math.max(0, (hostRef.current?.offsetTop || 0) + v1Hover.y + 14), zIndex: 6, pointerEvents: 'none',
+                background: 'rgba(2,6,23,0.92)', border: `1px solid rgba(${V1_TRADES_RGB},0.6)`, borderRadius: 8, padding: '4px 8px',
+                fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4, maxWidth: 360,
+              }}
+            >
+              {v1Hover.text}
+            </div>
           )}
 
           {v3ProbeHover && (

@@ -1034,7 +1034,7 @@ export default function App() {
   // for the loaded dates come from /api/trade-log/chart; a marker click selects a trade (the review panel, item 3).
   const [myTradesOn, setMyTradesOn] = useState(false)
   // CR-DU item 4b — "v1 trades" (Flow v3 Display group, beside My trades): the engine's simulated trades, off by default.
-  const [v1TradesOn, setV1TradesOn] = useState(false) // eslint-disable-line no-unused-vars
+  const [v1TradesOn, setV1TradesOn] = useState(false)
   const [myTrades, setMyTrades] = useState(null)
   const [myTradesReload, setMyTradesReload] = useState(0)
   const [selectedTradeId, setSelectedTradeId] = useState(null)
@@ -1749,6 +1749,25 @@ export default function App() {
     }
   }, [v1InputsUrl, isLiveTradeDate])
   const v1Inputs = v1InputsLoaded.url === v1InputsUrl ? v1InputsLoaded.payload : null
+  // CR-DU item 4b: whether the overlay may run on this date (holdout, R-a / R-b, set 2 in progress, warm-up → disabled
+  // with the reason); a cheap check (only_blocked) so the toggle shows its state before it is turned on.
+  const [v1Blocked, setV1Blocked] = useState({ date: null, reason: null })
+  useEffect(() => {
+    if (!flowEnabled || !flowCellsDate) return undefined
+    const controller = new AbortController()
+    const url = new URL(`${apiBase}/api/ironbeam/v1-engine/inputs`)
+    url.searchParams.set('trade_date', flowCellsDate)
+    url.searchParams.set('only_blocked', '1')
+    fetch(url.toString(), { credentials: 'include', signal: controller.signal, cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((j) => setV1Blocked({ date: flowCellsDate, reason: j.blocked || null }))
+      .catch((err) => { if (err?.name !== 'AbortError') setV1Blocked({ date: flowCellsDate, reason: 'engine inputs unavailable' }) })
+    return () => controller.abort()
+  }, [apiBase, flowEnabled, flowCellsDate])
+  const v1TradesBlocked = v1Blocked.date === flowCellsDate ? v1Blocked.reason : 'checking…'
+  useEffect(() => {
+    if (v1TradesOn && v1Blocked.date === flowCellsDate && v1Blocked.reason) setV1TradesOn(false)
+  }, [v1TradesOn, v1Blocked, flowCellsDate])
 
   // CR-DF: the edge readout (DF4) from the anchor, on the cells payload's 1-minute bars; shared by the v3
   // header (text) and the price chart (dashed lines).
@@ -1802,11 +1821,13 @@ export default function App() {
       anchor: flowAnchor, // CR-DP item 4 / CR-DQ item 3: the box panel's × resets on a new anchor
       boxRules: flowV3Settings.boxRules, // CR-DQ items 5 / 7: percentile tiers and verdict rules (⚙)
       v1Inputs, // CR-DU: the v1 engine's inputs (box panel verdict, engine's trades)
+      v1TradesOn: v1TradesOn && !v1TradesBlocked, // CR-DU item 4b: the overlay
+      contraMarks: Boolean(flowV3Settings.contraMarks), // CR-DU item 4: contradiction-bar markers (⚙)
       v1Alert: Boolean(flowV3Settings.v1Alert) && isLiveTradeDate, // CR-DU item 2: alert only on the live session
       // CR-DN item 1: the profile stops after the end's minute ([from, to) on cell minute starts); null without an end.
       profileTo: flowAnchor != null && flowEnd != null ? flowEnd + 60 : null,
     }
-  }, [flowV3AnyLayer, flowCells, flowCellsBars, flowEnd, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, v1Inputs, flowV3Settings.v1Alert, isLiveTradeDate, flowAnchor, flowEnd])
+  }, [flowV3AnyLayer, flowCells, flowCellsBars, flowEnd, flowV3Layers, flowV3Edges, flowV3Segments, flowV3Settings.sellLayer, flowV3Settings.buyLayer, flowV3Settings.boxRules, v1Inputs, v1TradesOn, v1TradesBlocked, flowV3Settings.v1Alert, flowV3Settings.contraMarks, isLiveTradeDate, flowAnchor, flowEnd])
   // CR-DN item 1: the anchor → end window, shaded on the price chart (any layer); null without an end.
   const flowV3Window = useMemo(
     () => (flowAnchor != null && flowEnd != null ? { from: flowAnchor, to: flowEnd } : null),
@@ -2416,6 +2437,9 @@ export default function App() {
                     onEffortChange={setFlowEffort}
                     myTradesOn={myTradesOn}
                     onMyTradesChange={setMyTradesOn}
+                    v1TradesOn={v1TradesOn}
+                    v1TradesBlocked={v1TradesBlocked}
+                    onV1TradesChange={setV1TradesOn}
                     edgeEffortOn={flowEdgeEffort}
                     onEdgeEffortChange={setFlowEdgeEffort}
                     markerSettings={flowMarkerSettings}

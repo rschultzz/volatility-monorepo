@@ -1639,7 +1639,8 @@ def _build_react_flow_cells_payload(
                 "trade_date": str(trade_date), "effective_trade_date": session_date.isoformat()}, 500
 
 
-def _build_v1_engine_inputs(trade_date: str | None, *, until_pt: dt.datetime | None, seconds: bool) -> tuple[dict, int]:
+def _build_v1_engine_inputs(trade_date: str | None, *, until_pt: dt.datetime | None, seconds: bool,
+                            only_blocked: bool = False) -> tuple[dict, int]:
     """CR-DU: `/api/ironbeam/v1-engine/inputs` (modules/Ironbeam/v1_engine.py). The RTH cells payload is built here only
     to find the segment's source / contract / bars; the client runs the engine on its own cells payload."""
     if not trade_date:
@@ -1652,7 +1653,7 @@ def _build_v1_engine_inputs(trade_date: str | None, *, until_pt: dt.datetime | N
     try:
         warmup = {dt.date.fromisoformat(x) for x in v1_engine.prior_baselines()["warmup_sessions"]}
         why = v1_engine.blocked_reason(session_date, v1_engine.set2_open_dates(engine), warmup)
-        if why:
+        if why or only_blocked:   # only_blocked: the overlay toggle's enabled state, without building the inputs
             return {"mode": "v1-engine-inputs", "trade_date": session_date.isoformat(), "blocked": why}, 200
         cells, status = flow_v3.build_cells_payload(
             engine, session_date.isoformat(), session="RTH", until_pt=until_pt, params=flow_v3.parse_absorb_params({}),
@@ -3238,6 +3239,7 @@ def register_ironbeam_callbacks(app):
                     request.args.get("trade_date"),
                     until_pt=_parse_until_pt(request.args.get("until"), ZoneInfo("America/Los_Angeles")),
                     seconds=request.args.get("seconds", "1") != "0",
+                    only_blocked=request.args.get("only_blocked") == "1",
                 )
                 resp = jsonify(payload)
                 origin = request.headers.get("Origin")

@@ -27,8 +27,9 @@ export function timeX(ts, times, step, t) {
   return x + (frac - 0.5) * spacing
 }
 
-// data: { trades: [{ id, direction, entryT, entryPrice, exitT, exitPrice, lines: [{ kind, price, fromT, toT }] }],
-//         times, step, selectedId }
+// data: { trades: [{ id, direction, entryT, entryPrice, exitT, exitPrice, lines: [{ kind, price, fromT, toT }], label? }],
+//         times, step, selectedId, rgb? }. CR-DU: `rgb` draws every trade in one colour (the v1-trades overlay: teal,
+// C1 deviation approved 2026-10-31) and `label` (e.g. "+10.00") is written beside the exit marker.
 export class TradeMarksPrimitive {
   constructor() {
     this._chart = null
@@ -100,7 +101,7 @@ export class TradeMarksPrimitive {
     const ts = chart.timeScale()
     const times = Array.isArray(d.times) ? d.times : []
     for (const tr of d.trades || []) {
-      const rgb = tradeRgb(tr.direction)
+      const rgb = d.rgb || tradeRgb(tr.direction)
       const sel = tr.id === d.selectedId
       const xe = timeX(ts, times, d.step, tr.entryT)
       const xx = timeX(ts, times, d.step, tr.exitT)
@@ -177,6 +178,12 @@ export class TradeMarksPrimitive {
         ctx.lineWidth = Math.max(1, Math.round(2 * hr))
         ctx.stroke()
         ctx.restore()
+        if (tr.label) {
+          ctx.fillStyle = `rgba(${rgb},1)`
+          ctx.font = `${Math.round(10 * vr)}px sans-serif`
+          ctx.textBaseline = 'middle'
+          ctx.fillText(tr.label, Math.round((xx + s + 2) * hr), Math.round(yx * vr))
+        }
         this._hit.push({ id: tr.id, kind: 'exit', x: xx, y: yx, priceY: yx })
       }
     }

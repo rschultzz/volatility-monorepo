@@ -288,3 +288,18 @@ test('box minimum default 8; a stored 10 (old default) migrates once', async () 
   assert.equal(migrateBoxRules({ boxRulesV: 2, boxRules: { minAgeMin: 10 } }).boxRules.minAgeMin, 10) // set after CR-DU: kept
   assert.equal(migrateBoxRules({ boxRules: { minAgeMin: 12 } }).boxRules.minAgeMin, 12)
 })
+
+// ------------------------------------------------------------------------------------------- item 4b (overlay)
+test('overlayMarks: teal trade marks with stop / target lines while open and the points label', async () => {
+  const { overlayMarks, minuteText } = await import('../../src/v1Engine.js')
+  const ctx = session({ over: { 29: { h: 6015.25 }, ...down(30, 6008), 31: { h: 6008.25, l: 6004.75, o: 6008, c: 6005 } } })
+  const sim = simulateSession(ctx)
+  const m = overlayMarks(sim, ctx)
+  assert.equal(m.length, 1)
+  assert.equal(m[0].direction, 'short')
+  assert.equal(m[0].label, '+10.00')
+  assert.deepEqual(m[0].lines.map((l) => [l.kind, l.price]), [['stop', 6018], ['target', 6005]])
+  assert.equal(m[0].lines[0].toT, ctx.shift(at(31)))
+  assert.equal(minuteText(sim.minutes[28], () => '06:58'), 'v1 engine 06:58 · SHORT')
+  assert.match(minuteText(sim.minutes[26], () => '06:56'), /^v1 engine 06:56 · NO ACTION · rule 6: box still forming/)
+})
