@@ -250,3 +250,35 @@ Also inserted: the 8 April order rows into `trade_log_orders` (from their fills;
 - Tab: four selects next to the date filter (any / each value / not set; the row wraps), Clear resets all; table columns Setup, Mistakes, Checklist, Grade (before Notes); a new row under the aggregate cards — "By setup", "By mistake", "Checklist followed" — each value as `count · pts`. New controls in slate / light text / blue counts (C1); existing cards and P&L colours unchanged.
 - Data check (read-only): 13 trades, −14.25 pts; all untagged so far (`none` / `unset` 13).
 - Unit: Python 19 / 19 (filter SQL, bad filters refused).
+
+## Smoke (2026-10-31, after rebasing on origin/main `cebbece` = CR-DS #127)
+
+Servers (one DB-backed): `scripts/cr_dr_smoke_backend.py` :8069 (Ironbeam + setup-review on the backfill role, read-only; trade log on the owner role), branch frontend :5197, Trade Log (react_backtests_v2) :5198, origin/main frontend :5196. Logs `scripts/logs/cr-dr/`, screenshots `specs/assets/cr-dr/`.
+
+**`cr-dr.spec.js` 7 / 7** (`smoke-run-5-rebased.log`):
+
+| Check | Result |
+|---|---|
+| 2026-10-30 from Ryan's export | zone **PT** (18 / 18; CT / ET / UTC 0), 18 fills → 9 trades, nothing open; 10-30 = vault log #3–#6: +1.75, −7.5, +13.75, −5.25 ✓; re-import: 0 new orders / fills / trades |
+| My trades off by default | button "My trades off", nothing drawn, no panel ✓ |
+| Markers on the right bars and prices | all 8 entry / exit markers of 10-30: the candle under each = its fill minute, the price at its y = the fill price (within a pixel) ✓ (`smoke/markers-2026-10-30.json`). First run caught #4's 07:10:00 exit drawn on the 07:09 / 07:10 boundary → markers now kept 10–90 % inside their bar |
+| #5 (07:49 short) facts — hand check (`smoke_entry48_facts.txt`) | +13.75 pts · +$68.75 (×5) · 18m 55s; **MFE +14.00** (low 7641.75 at 08:08) · **MAE −1.75** (high 7657.50 at 07:50) — `es_minutes` 07:49–08:08 by hand; stop at entry: no, first stop after 109 s (7647.75); TP 7642.00 ✓ |
+| #5 at entry, anchor 07:40 (`smoke_entry48_context.txt`) | last bar read 07:48 (nothing from the entry minute or later); box 07:40–07:48, 7652.25–7656.50; Δ share +8.14 % **p94**, c/pt **p65**; **NO ACTION — box still forming** (box 8 min, min 10) — same as CR-DQ's replay of this entry; buyers absorbed 7660.25 (+4.50, 375, since 07:05); last 5 min 07:44–07:48 Δ +2,564 · vol 26.4k = hand sum of the v2 minutes (+557, +264, +44, +199, +1,500) ✓ |
+| N / P / Esc | 3 / 4 → N → 09:22:50 (4 / 4, N disabled, chart scrolled to 09:22) → P P → 07:06:47 ("no stop while open") → Esc closes ✓ |
+| Chips, checklist, notes save and filter; aggregate split | fade top + target past level + checklist yes + grade 4 + reason + lesson → "saved HH:MM:SS"; stored values ✓; filters `setup_chip`, `mistake_chip & checklist=yes & grade=4` → #5 only; `checklist=no` → none; aggregate `by_checklist` yes = 1 · +13.75, `by_setup` fade top = 1 · +13.75; Trade Log tab shows the breakdown row, the checklist filter → 1 row with its tags, setup "none" → 12 rows ✓. First run caught a filter race (stale 13 rows) → only the latest response is applied. #5's fields restored to their stored (empty) values afterwards (`smoke/restore-5.json`) |
+| Holdout (10-26) | `/review` → `holdout` true, MFE / MAE null for both trades ✓ (no 10-26 bars read by the smoke) |
+
+**Unit:** JS 113 / 113 (incl. CR-DS's), Python 19 / 19. Builds clean (price chart, backtests).
+
+**Existing specs** (`existing-specs.log`, 18 other files, 119 tests, 56.8 min; then `existing-specs-rerun.log`): 80 passed, 16 skipped, 23 failed → after the rerun **84 passed**; the cr-dq line-226 assertion passes (fixed by #127). Remaining 19 failures, none from this CR:
+- **CR-DR visible change (updated):** `cr-dp` items 1–3 expected the Display group "Absorption levels on · Profile on · Effort off"; it now ends "· My trades off" (item 2, approved). Assertion updated; passes.
+- **Run env (fixed, pass):** `cr-dh` price chart ×3 (CRDH_BASE_URL not set in the first run).
+- **Data state, not code:** `cr-de` ×6 — the fixture picks an *unreviewed* card of `cr-cz:cp-ranges`; the set has 120 cards, 0 unreviewed (Ryan reviewed them all). Its API is unchanged by CR-DR.
+- **Need a live session (Saturday):** `cr-dc` live, `cr-df` live, `cr-dg` live, `cr-dp` item 8 ("a live bar arrived").
+- **Need the Dash app:** `cr-dh` Dashboard ×4.
+- **Fail on origin/main too (per CR-DQ / CR-DS):** `cr-db` T / S / U, `cr-dn` item 6 (57k closing minute), `cr-dp` items 4 and 6 (compare with pre-CR-DP main), `cr-dm` review replay 2026-10-29 (15-min timeout, as on origin/main; its hand-check file copied from the main checkout's logs).
+
+## Deferred / follow-ups
+
+- Four real trades are not in the vault [[discretionary-trade-log]] (10-26 ×2, 10-27 ×2): reported, the log is Ryan's to amend.
+- MFE / MAE use the whole entry / exit minute bars; per-second (`ironbeam_es_flow_1s`) if the V1–V3 exit study needs it.

@@ -3,6 +3,7 @@
 The Ironbeam engine is capped at 3 + 2 connections (Render DB has 103 slots; see the 2026-10-28 starvation note).
 Ironbeam routes run on the backfill role with default_transaction_read_only=on. The trade-log routes use the
 owner role (DATABASE_URL) because the smoke saves chips / checklist / notes on Ryan's trades (PATCH only).
+The setup-review routes (for the existing specs) are on the backfill role, read-only.
 
     /Users/ryan/code/volatility-monorepo/apps/web/.venv/bin/python -u scripts/cr_dr_smoke_backend.py
     ... --dump OUT_DIR TRADE_DATE UNTIL      (no server: write the three until-replay payloads as JSON via the test client)
@@ -24,7 +25,10 @@ import dash  # noqa: E402
 import sqlalchemy  # noqa: E402
 from flask import request  # noqa: E402
 
+import psycopg  # noqa: E402
+
 import modules.Ironbeam.callbacks as cb  # noqa: E402
+from modules.SetupReview import routes as review_routes  # noqa: E402
 from modules.TradeLog.routes import trade_log_bp  # noqa: E402
 
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
@@ -37,6 +41,16 @@ cb.engine = sqlalchemy.create_engine(_ib_url, pool_pre_ping=True, pool_size=3, m
                                      connect_args={"options": "-c default_transaction_read_only=on"})
 cb.register_ironbeam_callbacks(app)
 app.server.register_blueprint(trade_log_bp)
+
+
+# setup-review routes for the existing specs (as CR-DP's smoke backend): backfill role, read-only — any review POST fails
+def _review_conn():
+    return psycopg.connect(review_routes._normalize_db_url(os.environ["BACKFILL_DATABASE_URL"]),
+                           options="-c default_transaction_read_only=on")
+
+
+review_routes._conn = _review_conn
+review_routes.register_setup_review_routes(app.server)
 
 
 @app.server.after_request
@@ -52,6 +66,11 @@ def _smoke_cors(resp):
 
 @app.server.route("/api/trade-log/<path:_p>", methods=["OPTIONS"])
 def _preflight(_p):
+    return "", 204
+
+
+@app.server.route("/api/setup-review/<path:_p>", methods=["OPTIONS"])
+def _preflight_review(_p):
     return "", 204
 
 
