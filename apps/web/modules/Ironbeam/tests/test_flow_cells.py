@@ -237,6 +237,17 @@ class TestLiveSegment(_Base):
             rth, _ = self.build(self.NOW, self.NOW - dt.timedelta(seconds=gap))
             self.assertNotIn("feed_stalled_since", rth, gap)
 
+    def test_live_ironbeam_reads_trades_even_when_price_1m_covers(self):
+        # CR-DV item 4: late in RTH es_flow_price_1m can pass the 99 % coverage test while missing the newest minutes
+        def full_price_1m(symbol, source, a, b):
+            n = int((b - a).total_seconds() // 60)
+            return pd.DataFrame({"t": [int(a.timestamp()) + 60 * i for i in range(n)], "price": 7000.0, "buy": 1.0, "sell": 1.0})
+
+        with cf.replay(self.store, {"_trades_last": lambda s: self.NOW, "fetch_price_1m": full_price_1m}):
+            p, _ = self.v3._build(None, "2026-10-27", session="FULL", until_pt=None, params=self.v3.fh.AbsorbParams(),
+                                  session_date=dt.date(2026, 10, 27), session_note=None, now_utc=self.NOW)
+        self.assertEqual([(s["name"], s["tier"]) for s in p["segments"]], [("eth", "trades"), ("rth", "trades")])
+
     def test_no_stall_read_on_a_past_session(self):
         p, calls, _ = self.get(cf.QS_1027)
         self.assertNotIn("_trades_last", [c[0] for c in calls])

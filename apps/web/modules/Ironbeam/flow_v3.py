@@ -142,18 +142,27 @@ def _segment_cells(engine, tier, table, symbol, source, a, b, complete, now_utc)
     return c[c["t"] < flow_v2._epoch(b)].reset_index(drop=True)
 
 
-def choose_tier(engine, *, source: str, symbol: str, a: dt.datetime, b: dt.datetime, minutes: pd.DataFrame) -> str:
-    """DC17 order: es_flow_price_1m if it covers the segment, then trades (Ironbeam only), then 1-s."""
+def _trades_cover(engine, symbol: str, a: dt.datetime) -> bool:
+    oldest = _cached(f"trades_oldest:{symbol}", TRADES_OLDEST_TTL_S, lambda: _trades_oldest(engine, symbol))
+    return oldest is not None and oldest <= a
+
+
+def choose_tier(engine, *, source: str, symbol: str, a: dt.datetime, b: dt.datetime, minutes: pd.DataFrame,
+                live: bool = False) -> str:
+    """DC17 order: es_flow_price_1m if it covers the segment, then trades (Ironbeam only), then 1-s.
+
+    CR-DV: a live Ironbeam segment reads trades whenever they cover it — the stored table trails by 3-8 min, and late
+    in RTH its 99 % coverage test can pass, which would drop the newest closed minutes (2026-10-30: 59 polls)."""
+    if live and source == "ironbeam" and _trades_cover(engine, symbol, a):
+        return "trades"
     if _cached("price_1m_exists", TABLE_RECHECK_S, lambda: _exists_price_1m(engine)):
         have = minutes.index[minutes["vol"] > 0] if minutes is not None and len(minutes) else []
         if len(have):
             r = fetch_price_1m(engine, symbol, source, a, b)
             if r["t"].nunique() >= PRICE_1M_COVERAGE * len(have):
                 return "price_1m"
-    if source == "ironbeam":
-        oldest = _cached(f"trades_oldest:{symbol}", TRADES_OLDEST_TTL_S, lambda: _trades_oldest(engine, symbol))
-        if oldest is not None and oldest <= a:
-            return "trades"
+    if source == "ironbeam" and _trades_cover(engine, symbol, a):
+        return "trades"
     return "seconds"
 
 
@@ -238,7 +247,7 @@ def _build(engine, trade_date, *, session, until_pt, params, session_date, sessi
         if sym is None or m is None or m.empty:
             notes.append(f"No {name.upper()} flow rows for this session.")
             continue
-        tier = choose_tier(engine, source=source, symbol=sym, a=a, b=b, minutes=m)
+        tier = choose_tier(engine, source=source, symbol=sym, a=a, b=b, minutes=m, live=not complete)
         cells = _segment_cells(engine, tier, table, sym, source, a, b, complete, now_utc)
         seg = {"name": name, "source": source, "symbol": sym, "tier": tier, "exact": tier != "seconds",
                "badge": BADGES[tier], "start": flow_v2._epoch(a), "end": flow_v2._epoch(b),
