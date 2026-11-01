@@ -480,8 +480,9 @@ export function relinkHover(hover, field, list, idKey) {
 // DF1–DF3: one level per absorption mark that is confirmed by now; it starts at the mark's minute and ends at
 // its break bar or now; opacity fades with age; the top LEVELS_MAX by contracts x opacity are kept.
 // CR-DS item 4: `asOf` (UTC) replays the levels as of that minute (marks confirmed by then, broken only if their break
-// is by then, top 8 by score then); null = the payload's now. Caveat (Step 0): a mark's merged_vol can include later
-// merges, so the top-8 rank at `asOf` can differ slightly from what the live chart showed then.
+// is by then, top 8 by score then); null = the payload's now. CR-DU: a mark's `merges` ([confirm_time, contracts]) give
+// its merged volume as of `asOf`, so contracts and the top-8 rank equal a payload cut at `asOf` (without `merges`, e.g.
+// older payloads, merged_vol can include later merges).
 export function absorptionLevels(payload, candleTimes, shift, max = LEVELS_MAX, asOf = null) {
   const now = asOf != null ? Number(asOf) : payloadNow(payload)
   if (now == null) return []
@@ -493,7 +494,10 @@ export function absorptionLevels(payload, candleTimes, shift, max = LEVELS_MAX, 
       const start = Number(mk.time)
       const broken = mk.break_time != null && Number(mk.break_time) <= now
       const end = broken ? Number(mk.break_time) : now
-      const contracts = Number(mk.aggressor) + (Number(mk.merged_vol) || 0)
+      // CR-DU: with `asOf` and the mark's merges, only merges confirmed by then (merged_vol includes later ones)
+      const merged = asOf != null && Array.isArray(mk.merges)
+        ? mk.merges.reduce((a, [at, v]) => (Number(at) <= now ? a + Number(v) : a), 0) : (Number(mk.merged_vol) || 0)
+      const contracts = Number(mk.aggressor) + merged
       const ageMin = (now - start) / 60
       const alpha = levelAlpha(ageMin)
       const held = Math.max(0, Math.round((end - start) / 60))
@@ -1213,7 +1217,10 @@ export function boxLevels(levels, box, lastT, absorbPts) {
 // strings except where item 3 renames a NO ACTION reason. Item 3: a NO ACTION /
 // NO TRADES whose flow checks would make a read (location, box formed and event aside) names it ("short read, but price
 // not at the top"); "nothing notable" only when no flow check passes. Category and order unchanged.
-export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, hhmm = String, fomc = FOMC_2026_DECISION_DAYS }) {
+// CR-DU (v1 rules engine, `v1Engine.js`): with `v1` = { noExtendUp, noExtendDown }, the no-advance leg of a read is v1
+// rule 7 / 8's "highs (lows) not extending" (no new wick high / low in the last 3 closed bars) instead of progress ≤
+// progressPts; the engine also passes only the absorption levels that started inside the box (rule 5).
+export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, hhmm = String, fomc = FOMC_2026_DECISION_DAYS, v1 = null }) {
   const r = boxRules(r0)
   // edges as prices: the panel's boxes carry edge objects ({ price, contracts, … }), tests may pass numbers
   const edgePx = (e) => Number(e != null && typeof e === 'object' ? e.price : e)
@@ -1266,9 +1273,9 @@ export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, 
   const absBottom = sellersAbs.filter((l) => l.where === 'bottom')
   // A19 + A23 flow checks (location aside): short — buyers leaning and / or buyers absorbed at the top, no advance
   const shortWhy = lean > 0 || absTop.length > 0
-  const shortStall = effort || (Number.isFinite(dp) && dp <= r.progressPts + 1e-9)
+  const shortStall = effort || (v1 ? Boolean(v1.noExtendUp) : Number.isFinite(dp) && dp <= r.progressPts + 1e-9)
   const longWhy = lean < 0 || absBottom.length > 0
-  const longStall = effort || (Number.isFinite(dp) && dp >= -r.progressPts - 1e-9)
+  const longStall = effort || (v1 ? Boolean(v1.noExtendDown) : Number.isFinite(dp) && dp >= -r.progressPts - 1e-9)
   const wouldShort = shortWhy && shortStall
   const wouldLong = longWhy && longStall
   // CR-DS item 2: the candidate side — the flow lean; else the side of any absorption at the box (one side only)
@@ -1279,6 +1286,7 @@ export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, 
     lastClose: px, top: box.top, bottom: box.bottom, nearTop, nearBottom, nearPts: r.nearPts,
     share, sharePct: sp, lean, cpp: pct?.cpp?.value ?? ro.cpp ?? null, cppPct: cp, effort, notable: r.notable,
     dPrice: Number.isFinite(dp) ? dp : null, progressPts: r.progressPts, levels: lv, lvText: lv.map(lvTxt),
+    noExtend: v1 ? { up: Boolean(v1.noExtendUp), down: Boolean(v1.noExtendDown) } : null,
     edges: b0 && typeof b0.top === 'object' && typeof b0.bottom === 'object'
       ? { topBuy: b0.top.contracts, topSell: b0.top.opposite, bottomSell: b0.bottom.contracts, bottomBuy: b0.bottom.opposite } : null,
   }
@@ -1303,7 +1311,7 @@ export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, 
   if (lean === 0 && buyersAbs.length && sellersAbs.length) {
     return out('two-sided', 'NO ACTION — two-sided absorption', `${lvTxt(buyersAbs[0])} · ${lvTxt(sellersAbs[0])}; no notable flow lean (${shareTxt})`, [])
   }
-  const stallTxt = (dir) => (effort ? 'effort' : dir > 0 ? 'no advance' : 'no decline')
+  const stallTxt = (dir) => (effort ? 'effort' : v1 ? (dir > 0 ? 'highs not extending' : 'lows not extending') : dir > 0 ? 'no advance' : 'no decline')
   if (nearTop && wouldShort) {
     const ev = [posTxt('top'), lean > 0 ? `${shareTxt} buyers leaning` : null, ...absTop.map(lvTxt),
       effort ? `${cppTxt} (effort)` : `no advance ${Number.isFinite(dp) ? `${dp >= 0 ? '+' : ''}${dp.toFixed(1)} pts` : ''}`]
@@ -1368,13 +1376,16 @@ export function boxEvidenceRows(checks, { kfmtFn = kfmt } = {}) {
   // progress toward the pushing side (buyers for a short, sellers for a long)
   const dp = c.dPrice
   const toward = dp == null || !has ? null : cand === 'short' ? dp : -dp
-  const stalled = toward != null && toward <= c.progressPts + 1e-9
+  // CR-DU: in the v1 engine the no-advance leg is "highs (lows) not extending" (checks.noExtend)
+  const stalled = c.noExtend && has ? (cand === 'short' ? c.noExtend.up : c.noExtend.down)
+    : toward != null && toward <= c.progressPts + 1e-9
   // Ryan (chat 2026-10-31): no advance is "effort OR progress ≤ 2 pts"; when either leg qualifies, the other is slate
   // "not needed", never red (both ways)
   rows.push({ key: 'effort', check: 'Effort', value: `${c.cpp == null ? '–' : kfmtFn(c.cpp)}/pt${c.cppPct == null ? '' : ` · ${pctText(c.cppPct)}`}`,
     reads: c.effort ? 'effort (no advance)' : stalled ? 'not needed (no advance)' : 'not notable', tone: has && c.effort ? 'good' : 'neutral' })
   rows.push({ key: 'progress', check: 'Progress', value: dp == null ? '–' : `${dp >= 0 ? '+' : ''}${dp.toFixed(2)} pts`,
-    reads: toward == null ? 'informational' : stalled ? (cand === 'short' ? 'no advance' : 'no decline')
+    reads: toward == null ? 'informational' : stalled ? (c.noExtend ? (cand === 'short' ? 'highs not extending' : 'lows not extending')
+      : cand === 'short' ? 'no advance' : 'no decline')
       : c.effort ? 'not needed (effort)' : (cand === 'short' ? 'buyers advancing' : 'sellers advancing'),
     tone: toward == null ? 'neutral' : stalled ? 'good' : c.effort ? 'neutral' : 'bad' })
   // absorption at the box (wicks included): supports the candidate when it is the candidate's side

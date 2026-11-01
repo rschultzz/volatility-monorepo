@@ -136,6 +136,7 @@ class TestAbsorption(unittest.TestCase):
         m = fh.absorption_marks(cells(rows), bars(self.H, L), T0, T0 + 2400, self.P)
         self.assertEqual([x["price"] for x in m], [100.0])          # minute 21 at +1 tick merges
         self.assertEqual(m[0]["merged_vol"], 70.0)
+        self.assertEqual(m[0]["merges"], [[T0 + 21 * 60 + 240, 70.0]])  # CR-DU: (confirm_time, contracts)
 
     def test_buyers_absorbed_mirror(self):
         H = self.H
@@ -172,12 +173,14 @@ def _causal_view(full, end):
         if mk["confirm_time"] > end:
             continue
         brk = mk["break_time"] if mk["break_time"] is not None and mk["break_time"] < end else None
-        out.append((mk["kind"], mk["time"], mk["p"], mk["aggressor"], mk["opposite"], brk))
+        merged = sum(v for at, v in mk["merges"] if at <= end)          # CR-DU: merged_vol as of `end`
+        out.append((mk["kind"], mk["time"], mk["p"], mk["aggressor"], mk["opposite"], brk, merged))
     return out
 
 
 def _view(marks):
-    return [(mk["kind"], mk["time"], mk["p"], mk["aggressor"], mk["opposite"], mk["break_time"]) for mk in marks]
+    return [(mk["kind"], mk["time"], mk["p"], mk["aggressor"], mk["opposite"], mk["break_time"], mk["merged_vol"])
+            for mk in marks]
 
 
 class TestCausality(unittest.TestCase):

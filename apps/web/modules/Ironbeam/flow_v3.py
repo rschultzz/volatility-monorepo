@@ -167,14 +167,18 @@ def _num(x):
 def _marks_json(marks: list[dict]) -> list[dict]:
     keys = ("kind", "time", "price", "confirm_time", "aggressor", "opposite", "merged_vol", "median",
             "break_time", "held_min")
-    return [{k: (_num(mk[k]) if isinstance(mk[k], (float, np.floating)) else mk[k]) for k in keys} for mk in marks]
+    # CR-DU: each merge's (confirm_time, contracts), so a replay can rebuild merged_vol as of a minute
+    return [{**{k: (_num(mk[k]) if isinstance(mk[k], (float, np.floating)) else mk[k]) for k in keys},
+             "merges": [[int(a), float(v)] for a, v in mk.get("merges", [])]} for mk in marks]
 
 
 def _bars_json(m: pd.DataFrame, *, seg_start: int, seg_end: int) -> dict:
-    """CR-DF: the segment's 1-minute flow bars (the series the marks' hold / break use) for the edge readout."""
+    """CR-DF: the segment's 1-minute flow bars (the series the marks' hold / break use) for the edge readout. CR-DU: also
+    o / buy / sell / vol, so the v1 engine reads prices and flow from one feed (Step 0 Q7)."""
     t = np.asarray(m.index, dtype=np.int64)
     k = (t >= seg_start) & (t < seg_end)
-    return {"t": t[k].astype(int).tolist(), **{c: m[c].to_numpy(dtype=float)[k].tolist() for c in ("h", "l", "c")}}
+    cols = [c for c in ("o", "h", "l", "c", "buy", "sell", "vol") if c in m.columns]
+    return {"t": t[k].astype(int).tolist(), **{c: m[c].to_numpy(dtype=float)[k].tolist() for c in cols}}
 
 
 # ------------------------------------------------------------------------------------------ payload
