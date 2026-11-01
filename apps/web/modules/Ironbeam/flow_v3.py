@@ -9,7 +9,7 @@ Each segment's cells come from the first tier that covers it (spec A1.3 / DC17):
   2. `ironbeam_es_trades` (exact) — Ironbeam segments, when the oldest retained trade <= segment start;
   3. the 1-second table (approximate: each second's sell at its low, buy at its high).
 Absorption marks (DC9) are computed for the RTH segment on exact tiers only (A1.2); on a live segment only closed
-minutes feed them (CR-DV). Each segment also carries
+minutes feed them and candidates still inside their hold window come back `provisional` (CR-DV). Each segment also carries
 its 1-minute flow bars (CR-DF edge readout). Nothing after `until` is read. The DB is read only through the `fetch_*` / `_exists_price_1m` / `_trades_oldest` functions, so
 tests can record and replay them; completed segments are cached in-process, live ones incrementally (DC14).
 """
@@ -168,7 +168,7 @@ def _num(x):
 
 def _marks_json(marks: list[dict]) -> list[dict]:
     keys = ("kind", "time", "price", "confirm_time", "aggressor", "opposite", "merged_vol", "median",
-            "break_time", "held_min")
+            "break_time", "held_min", "provisional")
     return [{k: (_num(mk[k]) if isinstance(mk[k], (float, np.floating)) else mk[k]) for k in keys} for mk in marks]
 
 
@@ -241,11 +241,12 @@ def _build(engine, trade_date, *, session, until_pt, params, session_date, sessi
             if tier == "seconds":
                 seg["marks_note"] = "Absorbed: exact data only"       # A1.2
             else:
-                mark_end = seg["end"]
-                if not complete:   # CR-DV: closed minutes only, so no mark shows before its hold window has elapsed
+                mark_end, live = seg["end"], not complete
+                if live:   # CR-DV: closed minutes only; candidates inside their hold window are provisional
                     closed = flow_v2._epoch(now_utc - dt.timedelta(seconds=CLOSE_GRACE_S)) // 60 * 60
                     mark_end = max(seg["start"], min(seg["end"], closed))
-                seg["marks"] = _marks_json(fh.absorption_marks(cells, m[["h", "l"]], seg["start"], mark_end, params))
+                seg["marks"] = _marks_json(fh.absorption_marks(cells, m[["h", "l"]], seg["start"], mark_end, params,
+                                                               provisional=live))
         else:
             seg["marks_note"] = "Absorbed: RTH only"
         segments.append(seg)

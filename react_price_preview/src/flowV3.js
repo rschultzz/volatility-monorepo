@@ -489,7 +489,7 @@ export function absorptionLevels(payload, candleTimes, shift, max = LEVELS_MAX, 
   for (const s of Array.isArray(payload?.segments) ? payload.segments : []) {
     if (!s?.exact || !Array.isArray(s.marks)) continue
     for (const mk of s.marks) {
-      if (!(Number(mk.confirm_time) <= now)) continue
+      if (mk.provisional || !(Number(mk.confirm_time) <= now)) continue // CR-DV: confirmed marks only
       const start = Number(mk.time)
       const broken = mk.break_time != null && Number(mk.break_time) <= now
       const end = broken ? Number(mk.break_time) : now

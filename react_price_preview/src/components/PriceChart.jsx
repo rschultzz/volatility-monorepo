@@ -3928,7 +3928,8 @@ export default function PriceChart({
                 borderRadius: 8, padding: '6px 8px', fontSize: '11px', color: '#e2e8f0', lineHeight: 1.4, maxWidth: 280,
               }}
             >
-              <div style={{ fontWeight: 700 }}>{v3Hover.mark.kind === 'sellers_absorbed' ? 'Sellers absorbed' : 'Buyers absorbed'} · {Number(v3Hover.mark.price).toFixed(2)}</div>
+              <div style={{ fontWeight: 700 }}>{v3Hover.mark.kind === 'sellers_absorbed' ? 'Sellers absorbed' : 'Buyers absorbed'} · {Number(v3Hover.mark.price).toFixed(2)}{v3Hover.mark.provisional ? ' · provisional' : ''}</div>
+              {v3Hover.mark.provisional && <div data-testid="flow-v3-mark-provisional">provisional — hold window ends {formatShiftedHHMM(v3Shift(v3Hover.mark.confirm_time))}</div>}
               <div>{formatShiftedHHMM(v3Hover.mark.candleTime)} · aggressor {kfmt(Number(v3Hover.mark.aggressor))} · opposite {kfmt(Number(v3Hover.mark.opposite))}</div>
               <div>held {v3Hover.mark.heldMin} min · {v3Hover.mark.break_time != null ? `broke at ${formatShiftedHHMM(v3Shift(v3Hover.mark.break_time))}` : 'not broken'}</div>
               <div style={{ color: '#94a3b8' }}>visual aid — untested</div>
