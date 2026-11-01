@@ -160,3 +160,68 @@ the chart's `ironbeam_es_1m_bars` on ≥ 90 % of minutes, else the highest volum
 The cron writes **every** symbol in `ironbeam_es_trades` (no front choice; `GROUP BY symbol`), Ironbeam format
 `XCME:ES.Z26`. Reading the chosen symbol from either source gives the same contract, including roll weeks.
 
+## Amendment 1 (Ryan, chat 2026-10-31, after Step 0; before any implementation)
+
+Ryan, verbatim:
+
+```
+Spec amendment, from Ryan via chat, before any implementation.
+Step 0 shows the live endpoint already reads ironbeam_es_trades, so the cron lag isn't on screen. The lateness Ryan sees is the 3-min hold window. New scope:
+
+1. Fix the repaint. The hold-window check and the mark candidates use closed minutes only. A confirmed mark never appears before its hold window has fully elapsed. Test it on the 15:39 case.
+2. Provisional marks. When a minute closes with qualifying volume at a price (the CR-DC volume test passes), draw a hollow / outlined mark in the same colour, marked provisional in its tooltip. It turns into the normal solid mark when the 3-min hold passes, or is removed if price breaks the level first. The rule and thresholds are unchanged. Hollow vs solid is the only visual difference, and it's approved here (visible-change discipline).
+3. Keep the feed-stall flag (N = 60 s) as specced.
+4. Drop the "server-side live tail" item as built. Keep only whatever is needed for closed minutes to be served within about 15 s of closing, and confirm that already holds.
+Amend the spec and session note first, re-check the rulings table (C1 colours: hollow is a style, not a new colour), commit, then implement. Measure in the smoke: time from minute close to provisional mark, and to confirmed mark.
+```
+
+### Amended implementation (replaces Implementation 1–5 above)
+
+1. **Repaint fix (server, `flow_heat.absorption_marks` + `flow_v3._build`).** On a segment that is not complete, marks
+   are computed with `end` = the last **closed** minute boundary: `floor((now − 3 s) / 60) × 60`, capped at the
+   segment end (DV1). Cells and bars at or after it (the forming minute) are not read by the rule. So a confirmed
+   mark has `confirm_time ≤` the last closed minute, and a break is seen on closed bars only. Complete segments and
+   `until` replays: `end` unchanged (past sessions unchanged). Test: the 10-30 15:39 UTC sellers 7633.50 case.
+2. **Provisional marks.** Same volume test, same per-minute extreme price, same thresholds (K 3, M 3, 15 prior
+   cells). A candidate at closed minute t whose hold window has not fully elapsed (`t + (M+1) min > end`) and that
+   no closed bar since t has broken (sellers: low < P − 1 tick; buyers: high > P + 1 tick) is returned with
+   `provisional: true` (confirmed marks `false`). If a closed bar breaks it before confirmation it is dropped. A
+   provisional candidate within 1 tick of an earlier unbroken mark of the same side is not drawn and adds no volume
+   until it confirms (then it merges, as today). Chart: provisional = **outlined (unfilled) triangle, same slate
+   colour**, same slate line; tooltip first line ends "· provisional" and a line "provisional — hold window ends
+   HH:MM". Provisional marks feed neither the absorption levels nor the box panel (they need confirmed marks).
+3. **Feed-stall flag.** For the live RTH segment, when now is inside RTH and the segment contract's last trade in
+   `ironbeam_es_trades` (ordered read on `(symbol, ts_utc DESC)`) is more than **N = 60 s** old, the payload carries
+   `feed_stalled_since` (epoch of that last trade). The box panel's Absorption row then reads
+   "flow feed stalled since HH:MM PT" (existing row style; text only).
+4. **No live-tail code.** Closed minutes are already served from `ironbeam_es_trades` on every 15 s poll (Q2, Q3);
+   the smoke confirms it from the replay.
+5. **Tests:** Python — no confirmed mark before its hold has elapsed on every minute + 15 s poll of the recorded 2026-10-30 RTH session (fixture `cr_dv_trades_1030_rth.npz`, read as of each poll)
+   (incl. the 15:39 case); provisional appears at the candidate's close, becomes confirmed at confirm time or
+   disappears on a break; complete-segment marks byte-identical to before; stall flag fires on a fixture gap
+   > 60 s and not on quiet seconds ≤ 60 s or outside RTH / on past sessions. JS — `chartMarks` passes `provisional`;
+   `absorptionLevels` and the box levels skip provisional marks; the absorption row shows the stall text.
+6. **Smoke + wrap:** replay 2026-10-30 at a 15 s cadence (trades by `received_at`): minute close → provisional
+   mark, and → confirmed mark (median, p95), before vs after; repaint count before vs after. Then a browser check
+   once CR-DR releases :8068. Session note, logs to the main checkout's `scripts/logs/cr-dv/`, PR.
+
+### Decisions in the amendment (Code's calls, to confirm in review)
+
+| # | Decision | Why |
+|---|---|---|
+| DV1 | A minute is "closed" for the rule 3 s after its end | RTH lateness p99.9 2.0 s (Q3); the 1-s worker finalises seconds after 2 s. A 15 s poll then shows a closed minute 3–18 s after it closes |
+| DV2 | Provisional breaks are checked on closed bars only | the same bars the confirmed rule uses; no flicker from the forming minute |
+| DV3 | `feed_stalled_since` only on the live RTH segment, inside 06:30–13:00 PT | Q5's N was measured on RTH; ETH is thinner |
+
+### Standing rulings conformance (re-checked for amendment 1)
+
+| Ruling | Status | Note |
+|---|---|---|
+| A1–A22 | n/a | the CR-DC rule and thresholds are unchanged; provisional = the same test before its hold completes |
+| B1–B3, B6–B8 | n/a | no verdicts, no parameter search, no labels |
+| B4 | honoured | as above; the smoke replays 10-30 (live forward log, not holdout-research) mechanically: lags and counts only |
+| B5 | n/a | Ironbeam live path only |
+| C1 (palette) | honoured | hollow vs solid is a style of the existing slate mark, not a new colour; stall text in the row's existing style |
+| C2 (off by default) | honoured | Flow v3 layers stay off by default; approved visible change limited to hollow marks + stall text |
+
+Revoked / superseded R1–R7: none used.
