@@ -430,3 +430,50 @@ within 2 pts of the card box's faded edge (by closes); earlier than and confirme
 Attrition (all 119 cards): marks confirmed before the decision median 3 per card; 190 on the card's side, 39 within 2 pts
 of the edge (57 within 4), 9 of those unbroken by closes. The close test removes 30 of 39: price usually closes beyond an
 edge-mark later inside the box (a close up to 2 pts beyond an edge is a box "test", not a break).
+
+### D2 items 1–5 (read-only; `scripts/cr_du_d1/d2.mjs`, `d2.py`; evaluated sessions 31 takes / 58 skips; no outcomes)
+
+Item 1, code: absorption alone is a trigger — `flowV3.js:boxVerdict` `shortWhy = lean > 0 || absTop.length > 0` (l. 1285; long mirror l. 1287), fired by `if (nearTop && wouldShort)` (l. 1325) with the stall leg (l. 1289); `absTop` = buyers absorbed within 2 pts of the box high (l. 1282, `boxLevels`). The engine passes only levels that started inside its box (`v1Engine.js` l. 204, rule 5), from the chart top 8 (`absorptionLevels`, `LEVELS_MAX`). So absorption alone fires only if it is in the top 8, starts inside the engine box (which usually starts ~20 min before the card range), sits at the faded edge, and price is within 2 pts of the edge, with no conflict / two-sided.
+
+Caveat: CR-CP called each card side from the box delta share, so 2(b) and 3 point to the card side by construction; their magnitude is the signal.
+
+## 1. Absorption alone (lean failed, engine's own box)
+
+| Label | Cards | Lean failed | …with card-side absorption the verdict saw (in the engine box) | …at the faded edge | First failed rule on those | …with a card-side mark at the edge in the card's window (any of the session's marks) | …of those, stall leg passes |
+|---|---|---|---|---|---|---|---|
+| take | 31 | 21 | 1 | 1 | nothing notable: long read, but price not at the bottom (1) | 1 | 1 |
+| skip | 58 | 49 | 4 | 3 | two-sided absorption (2); conflicting evidence: buyers leaning vs sellers absorbed at the bottom (1) | 3 | 3 |
+
+## 2. |Δ share| percentile at the decision minute (p25 / p50 / p75)
+
+| Label | Measured over | Percentile | Signed to the card side | ≥ p80 on the card side |
+|---|---|---|---|---|
+| take | (a) engine's box | 37.0 / 70.7 / 90.7 (n 31) | -15.4 / 57.9 / 84.3 (n 31) | 10 / 31 |
+| take | (b) card's box | 58.1 / 72.4 / 89.4 (n 31) | 58.1 / 72.4 / 89.4 (n 31) | 13 / 31 |
+| take | (c) last 10 closed minutes | 29.9 / 54.7 / 77.5 (n 31) | 29.9 / 54.7 / 77.5 (n 31) | 5 / 31 |
+| skip | (a) engine's box | 30.7 / 49.3 / 73.8 (n 58) | -20.3 / 33.7 / 57.6 (n 58) | 9 / 58 |
+| skip | (b) card's box | 47.1 / 57.0 / 73.2 (n 58) | 45.3 / 57.0 / 73.2 (n 58) | 7 / 58 |
+| skip | (c) last 10 closed minutes | 19.8 / 46.5 / 71.1 (n 58) | 13.0 / 46.5 / 71.1 (n 58) | 10 / 58 |
+
+## 3. CVD inside the card's box (OLS of cumulative delta on minutes; t signed to the card side)
+
+| Label | Cards | Slope on the card side (t > 0) | t p25 / p50 / p75 | t ≥ 2 | t ≤ −2 |
+|---|---|---|---|---|---|
+| take | 31 | 30 | 3.93 / 5.70 / 8.28 (n 31) | 29 | 0 |
+| skip | 58 | 54 | 2.86 / 4.82 / 6.99 (n 58) | 47 | 2 |
+
+## 4. Card-side absorption inside the card's box window (mark minute ≥ range start, confirmed by the decision)
+
+| Label | Cards | Any price | Within the box high–low ± 2 | At the faded edge (≤ 2 pts) | Among the chart's top 8, unbroken |
+|---|---|---|---|---|---|
+| take | 31 | 5 | 5 | 5 | 3 |
+| skip | 58 | 4 | 4 | 4 | 1 |
+
+## 5. Absorption at the faded edge (≤ 2 pts, any earlier mark), unbroken by closes: two thresholds
+
+| Label | Unbroken = | Cards with ≥ 1 | Nearest distance (median) | Minutes before (median) | Marks in window / before |
+|---|---|---|---|---|---|
+| take | 1 tick (D2.5 first run) | 4 / 31 | 0.38 | 9 | 3 / 1 |
+| take | 2 pts (box break threshold) | 6 / 31 | 0.38 | 6 | 6 / 2 |
+| skip | 1 tick (D2.5 first run) | 2 / 58 | 0.62 | 10 | 3 / 0 |
+| skip | 2 pts (box break threshold) | 6 / 58 | 0.75 | 15 | 5 / 2 |
