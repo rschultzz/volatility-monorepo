@@ -126,7 +126,8 @@ export class HeatmapPrimitive extends BasePrimitive {
 }
 
 // Absorption marks: an up triangle below the cell ("sellers absorbed") or a down triangle above it
-// ("buyers absorbed"), plus a slate line at the price to the break bar or now / `until`.
+// ("buyers absorbed"), plus a slate line at the price to the break bar or now / `until`. CR-DV: a provisional mark
+// (hold window not yet elapsed) is drawn outlined instead of filled.
 // data: { marks (flowV3.chartMarks), times }. Hover: `onHover(mark | null, point)`.
 export class AbsorbMarksPrimitive extends BasePrimitive {
   constructor(onHover) {
@@ -204,7 +205,10 @@ export class AbsorbMarksPrimitive extends BasePrimitive {
         ctx.lineTo((x0 + s) * hr, (ty - s) * vr)
       }
       ctx.closePath()
-      ctx.fill()
+      if (mk.provisional) { // CR-DV: hold window not yet elapsed — outlined, same colour
+        ctx.strokeStyle = SLATE
+        ctx.stroke()
+      } else ctx.fill()
       this._hit.push({ x: x0, y: ty, mark: mk })
     }
   }

@@ -477,6 +477,14 @@ export function relinkHover(hover, field, list, idKey) {
   return hit === old ? hover : { ...hover, [field]: hit }
 }
 
+// CR-DV: the payload's `feed_stalled_since` (UTC epoch of the last trade) on any segment, or null.
+export function feedStalledSince(payload) {
+  for (const s of Array.isArray(payload?.segments) ? payload.segments : []) {
+    if (s?.feed_stalled_since != null && Number.isFinite(Number(s.feed_stalled_since))) return Number(s.feed_stalled_since)
+  }
+  return null
+}
+
 // DF1–DF3: one level per absorption mark that is confirmed by now; it starts at the mark's minute and ends at
 // its break bar or now; opacity fades with age; the top LEVELS_MAX by contracts x opacity are kept.
 // CR-DS item 4: `asOf` (UTC) replays the levels as of that minute (marks confirmed by then, broken only if their break
@@ -489,7 +497,7 @@ export function absorptionLevels(payload, candleTimes, shift, max = LEVELS_MAX, 
   for (const s of Array.isArray(payload?.segments) ? payload.segments : []) {
     if (!s?.exact || !Array.isArray(s.marks)) continue
     for (const mk of s.marks) {
-      if (!(Number(mk.confirm_time) <= now)) continue
+      if (mk.provisional || !(Number(mk.confirm_time) <= now)) continue // CR-DV: confirmed marks only
       const start = Number(mk.time)
       const broken = mk.break_time != null && Number(mk.break_time) <= now
       const end = broken ? Number(mk.break_time) : now
@@ -1339,7 +1347,9 @@ export function boxVerdict({ box: b0, pct, levels, tradeDate, rules: r0 = null, 
 // not notable / informational. With no candidate every side row is neutral; the event and box-formed rows are 'bad' when
 // they fail whatever the candidate (they stop any trade), 'good' when met only with a candidate. Rows: { key, check,
 // value, reads, tone }.
-export function boxEvidenceRows(checks, { kfmtFn = kfmt } = {}) {
+// CR-DV: `stall` = "HH:MM" (PT) of the last trade while the trades feed is stalled, else null — the Absorption row then
+// says so rather than showing nothing.
+export function boxEvidenceRows(checks, { kfmtFn = kfmt, stall = null } = {}) {
   if (!checks) return []
   const c = checks
   const cand = c.candidate
@@ -1380,8 +1390,10 @@ export function boxEvidenceRows(checks, { kfmtFn = kfmt } = {}) {
   // absorption at the box (wicks included): supports the candidate when it is the candidate's side
   const sides = new Set(c.levels.map((l) => l.side))
   const supports = cand === 'short' ? 'buyers' : 'sellers'
-  rows.push({ key: 'absorption', check: 'Absorption', value: c.lvText.length ? c.lvText.join(', ') : 'none at the box',
-    reads: sides.size === 2 ? 'two-sided absorption' : !sides.size ? 'none' : `${[...sides][0]} absorbed`,
+  const stallTxt = stall ? `flow feed stalled since ${stall} PT` : null
+  rows.push({ key: 'absorption', check: 'Absorption',
+    value: [c.lvText.length ? c.lvText.join(', ') : stallTxt ? null : 'none at the box', stallTxt].filter(Boolean).join(' · '),
+    reads: sides.size === 2 ? 'two-sided absorption' : !sides.size ? (stallTxt ? '–' : 'none') : `${[...sides][0]} absorbed`,
     tone: sides.size === 2 ? 'bad' : !sides.size || !has ? 'neutral' : sides.has(supports) ? 'good' : 'bad' })
   const e = c.edges
   const n = (v) => (v == null ? '–' : kfmtFn(v))

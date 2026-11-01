@@ -7,6 +7,7 @@ The 1-s rule (sell at the second's low, buy at its high), exact trade cells, `es
 flooring, the absorption rule on hand-built minutes (qualify, hold, break, merge, mirror, `until`),
 and causality: on every prefix, the marks equal the full session's marks confirmed in the prefix,
 with breaks seen only before the prefix end (synthetic and a recorded Databento session).
+CR-DV: live marks on closed minutes only, provisional marks, and the 2026-10-30 replay (recorded Ironbeam trades).
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from packages.shared import flow_heat as fh  # noqa: E402
 
 T0 = 1_777_642_200   # 2026-05-01 06:30 PT
 FIXTURE = REPO_ROOT / "packages/shared/tests/fixtures/cr_cd_flow_1s_3sessions.npz"
+FIXTURE_1030 = REPO_ROOT / "packages/shared/tests/fixtures/cr_dv_trades_1030_rth.npz"   # CR-DV (record_fixture_1030.py)
 
 
 def bars(H, L, t0=T0):
@@ -217,6 +219,130 @@ class TestCausality(unittest.TestCase):
             end = int((t.max() // 60) * 60)
             full = self.check(c, m, start, end, fh.AbsorbParams())
             self.assertGreater(len(full), 0, d)
+
+
+def _key(mk):
+    return (mk["kind"], mk["time"], mk["p"])
+
+
+class TestLiveMarks(unittest.TestCase):
+    """CR-DV: `end` = the last closed minute; candidates inside their hold window come back provisional."""
+    P = fh.AbsorbParams(k=3.0, m=3, min_cells=15)
+
+    def setUp(self):
+        n = 40
+        self.H = [104.0] * n
+        self.L = [101.0] * n
+        self.L[20] = 100.0
+        self.rows = background(40) + [(20, 100.0, 4, 50)]
+
+    def live(self, end, provisional=True, L=None):
+        c = cells(self.rows)
+        b = bars(self.H, L or self.L)
+        return fh.absorption_marks(c[c["t"] < end], b[b.index < end], T0, end, self.P, provisional=provisional)
+
+    def test_provisional_until_the_hold_elapses_then_confirmed(self):
+        self.assertEqual(self.live(T0 + 60 * 20), [])                      # minute 20 not closed yet
+        for k in (21, 22, 23):                                              # closed, hold window not elapsed
+            m = self.live(T0 + 60 * k)
+            self.assertEqual([(mk["provisional"], mk["price"], mk["confirm_time"]) for mk in m],
+                             [(True, 100.0, T0 + 60 * 24)])
+            self.assertEqual(self.live(T0 + 60 * k, provisional=False), [])
+        m = self.live(T0 + 60 * 24)
+        self.assertEqual([(mk["provisional"], mk["confirm_time"]) for mk in m], [(False, T0 + 60 * 24)])
+
+    def test_old_call_confirms_before_the_hold_elapsed(self):
+        # the repaint: end = segment end with only bars so far (cells / bars cut at minute 21) confirms at once
+        c, b = cells(self.rows), bars(self.H, self.L)
+        old = fh.absorption_marks(c[c["t"] < T0 + 60 * 21], b[b.index < T0 + 60 * 21], T0, T0 + 60 * 40, self.P)
+        self.assertEqual(len(old), 1)
+        self.assertNotIn(True, [mk["provisional"] for mk in old])
+
+    def test_provisional_removed_when_broken_first(self):
+        L = list(self.L)
+        L[22] = 99.5                                                        # breaks inside the hold window
+        self.assertEqual(len(self.live(T0 + 60 * 22, L=L)), 1)
+        self.assertEqual(self.live(T0 + 60 * 23, L=L), [])
+        self.assertEqual(self.live(T0 + 60 * 40, L=L), [])
+
+    def test_provisional_adds_no_volume_until_it_confirms(self):
+        self.rows.append((26, 100.25, 0, 60))                              # within 1 tick of the 20 mark
+        self.L[26] = 100.25
+        m = self.live(T0 + 60 * 27)
+        self.assertEqual([(mk["time"], mk["merged_vol"], mk["provisional"]) for mk in m], [(T0 + 1200, 0.0, False)])
+        m = self.live(T0 + 60 * 30)
+        self.assertEqual([(mk["time"], mk["merged_vol"]) for mk in m], [(T0 + 1200, 60.0)])
+
+    def test_complete_call_unchanged_by_default(self):
+        c, b = cells(self.rows), bars(self.H, self.L)
+        self.assertEqual(fh.absorption_marks(c, b, T0, T0 + 60 * 22, self.P), [])   # unconfirmed at end: not returned
+
+
+@unittest.skipUnless(FIXTURE_1030.exists(), "recorded 2026-10-30 trades fixture missing")
+class TestLiveReplay1030(unittest.TestCase):
+    """2026-10-30 RTH (XCME:ES.Z26) polled every minute + 15 s, each read as of that moment: cells received by then,
+    1-minute bars from seconds received by then (the flow-1s worker, 2 s lateness)."""
+    A, B = 1_793_367_000, 1_793_390_400                                    # 13:30, 20:00 UTC
+
+    @classmethod
+    def setUpClass(cls):
+        z = np.load(FIXTURE_1030)
+        cls.z = {k: z[k] for k in z.files}
+        cls.full = fh.absorption_marks(cls.cells(cls.B + 3600), cls.bars(cls.B + 3600), cls.A, cls.B, fh.AbsorbParams())
+
+    @classmethod
+    def cells(cls, T):
+        z = cls.z
+        k = z["cell_rcv"] <= T
+        return pd.DataFrame({"t": z["cell_t"][k], "p": z["cell_p"][k], "buy": z["cell_buy"][k], "sell": z["cell_sell"][k]})
+
+    @classmethod
+    def bars(cls, T):
+        z = cls.z
+        k = (z["sec_ts"] < T - 2) & (z["sec_rcv"] <= T)
+        df = pd.DataFrame({"t": fh.minute_of(z["sec_ts"][k]), "h": z["sec_h"][k], "l": z["sec_l"][k]})
+        return df.groupby("t").agg(h=("h", "max"), l=("l", "min"))
+
+    @classmethod
+    def live(cls, T):
+        end = min(cls.B, (T - 3) // 60 * 60)
+        c, b = cls.cells(T), cls.bars(T)
+        return end, fh.absorption_marks(c[c["t"] < end], b[b.index < end], cls.A, end, fh.AbsorbParams(), provisional=True)
+
+    def test_full_session_has_marks(self):
+        self.assertGreater(len(self.full), 0)
+
+    def test_no_confirmed_mark_before_its_hold_and_prefix_equal(self):
+        for T in range(self.A + 75, self.B + 300, 60):
+            end, m = self.live(T)
+            conf = [mk for mk in m if not mk["provisional"]]
+            for mk in conf:
+                self.assertLessEqual(mk["confirm_time"], end)
+                self.assertLessEqual(mk["confirm_time"], T - 3)
+            self.assertEqual(_view(conf), _causal_view(self.full, end), f"T {T}")
+            prov = {_key(mk) for mk in m if mk["provisional"]}
+            due = {_key(mk) for mk in self.full if mk["time"] + 60 <= end < mk["confirm_time"]}
+            self.assertLessEqual(due, prov, f"T {T}")                        # every later-confirmed mark shows hollow first
+            self.assertFalse(prov & {_key(mk) for mk in self.full if mk["confirm_time"] <= end})
+
+    def test_1539_sellers_case(self):
+        t, p = 1_793_374_740, fh.to_ticks(7633.5)                          # 15:39 UTC (08:39 PT), sellers 7633.50
+        key = ("sellers_absorbed", t, int(p))
+        self.assertNotIn(key, {_key(mk) for mk in self.full})               # not a mark on the full session
+        T = t + 60                                                          # the 15:40:00 poll
+        c, b = self.cells(T), self.bars(T)
+        old = fh.absorption_marks(c, b, self.A, self.B, fh.AbsorbParams())  # pre-CR-DV live call: end = 13:00 PT
+        self.assertIn(key, {_key(mk) for mk in old})                        # shown as confirmed: the repaint
+        self.assertEqual(self.live(T)[1], [mk for mk in self.live(T)[1] if mk["time"] < t])   # 15:39 not closed yet
+        shown = {}
+        for T in range(t + 60, t + 6 * 60, 15):
+            for mk in self.live(T)[1]:
+                if _key(mk) == key:
+                    shown[T] = mk["provisional"]
+        self.assertTrue(shown)
+        self.assertTrue(all(shown.values()), shown)                          # only ever provisional (hollow)
+        self.assertLess(max(shown), t + 4 * 60)                              # removed before its hold would end
+
 
 if __name__ == "__main__":
     unittest.main()
