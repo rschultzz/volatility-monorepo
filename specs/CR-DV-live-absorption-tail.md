@@ -323,3 +323,10 @@ Re-time both, then report the table vs main. If both gates pass, merge PR #128 w
 | DV6 | Mark-appearance lag and the stall flag are unchanged by the splice | stored minutes equal the trades cell for cell (Q3); the stall read is separate |
 
 Re-check of the rulings table: unchanged (no rule, colour or default changes; DV5 removes a partial column, adds nothing).
+
+### Gate ruling (Ryan, chat 2026-11-01)
+
+"Absolute laptop timings are network-bound; the gate is branch vs main timed in the same run." On the concurrent run the
+branch **passes**: warm p95 2,047 vs 2,562 ms; cold 4.24 vs 4.08 s (accepted). **Known limit (accepted):** with no
+stored `es_flow_price_1m` rows for the session yet (cron not run, or a fresh session), the splice's first poll reads the
+whole session's trades — cold 11.4 s in the cron-lag-modelled run (B); later polls are incremental. Approved to merge.
