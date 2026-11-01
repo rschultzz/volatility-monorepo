@@ -278,3 +278,48 @@ on the trades tier either way.
 
 Python: `test_flow_heat` 24 / 24, Ironbeam suite 108 / 108 (incl. `test_flow_cells` 21 / 21), shared `test_flow*`
 56 / 56. JS unit 111 / 111.
+
+## Pre-merge gate and Amendment 2 (Ryan, chat 2026-10-31)
+
+**Gate 1 (Ryan):** warm p95 < 300 ms after 12:00 PT, or don't merge. Measured (`scripts/cr_dv_step0/time_endpoint.py`, real
+DB reads cut at the simulated now, 10-30 polls every 15 s 12:00:15 → 13:00 PT, warm caches, laptop timing):
+PR p50 554 / p95 755 / max 905 ms, cold 8.6 s; `origin/main` p50 625 / p95 668 / max 865 ms, cold 2.1 s. **Failed; not merged.**
+Warm poll split (mean 630 ms): DB 398 ms (`fetch_flow_minutes` 180, `fetch_bar_closes` 108, `fetch_trade_cells` 58,
+`_trades_last` 51), compute + JSON 232 ms.
+
+Ryan, verbatim:
+
+```
+Gate revised (Ryan via chat): the 300 ms limit was set without a baseline. New gate, same harness, polls 12:00–13:00 PT on 10-30:
+- warm p95 ≤ origin/main's warm p95 (668 ms);
+- cold first poll ≤ 2.5 s.
+
+Amendment before code (amend the spec and session note first):
+1. Replace "live always reads trades" with the original splice: stored es_flow_price_1m minutes up to its last fully written minute + trades for every closed minute after it. Drop the 99 % coverage switch entirely. Re-run the replay and confirm the 59 dropped-minute polls stay at 0 and marks are unchanged.
+2. Cache the 1-s flow minutes and bar-close reads incrementally (re-read only the newest minutes), the same pattern as the trades cache.
+
+Re-time both, then report the table vs main. If both gates pass, merge PR #128 with a merge commit, confirm on origin/main, report the SHA, and clean up. Otherwise stop and report.
+```
+
+### Amended implementation (replaces item 4's "live always reads trades")
+
+1. **Splice (live Ironbeam segments, tier `splice`, badge "exact: es_flow_price_1m + trades").** W = the end of the last
+   minute stored in `es_flow_price_1m` (`ironbeam`, the segment's symbol) inside the segment (the cron writes a minute
+   whole in one INSERT, so every visible minute is complete); no stored minute → W = segment start. Cells = stored
+   rows for minutes < W + `ironbeam_es_trades` for every **closed** minute in [W, last closed minute) (3 s grace, DV1).
+   Stored rows are immutable (insert-only), so they are cached and each poll reads only rows from the cached W on;
+   the trades tail [W, closed) is read every poll (3–8 min). No 99 % coverage test on live segments.
+2. **Incremental 1-s flow minutes and bar closes (live only).** Both cached up to now − 2 min (`LIVE_RECHECK_MIN`, as
+   the cells) and re-read from there each poll; the contract choice (`flow_v2._pick`) runs on the merged rows.
+3. Unchanged: complete segments keep DC17's order (es_flow_price_1m if it covers ≥ 99 %, else trades, else 1-s), so
+   past sessions are unchanged.
+
+### Decisions (amendment 2)
+
+| # | Decision | Why |
+|---|---|---|
+| DV4 | "Drop the 99 % switch" applies to live segments; complete segments keep DC17 | the kickoff says past sessions unchanged; DC17's partial-coverage fall-through (e.g. 10-26 before 04:27 UTC) still needs it there |
+| DV5 | The minute still forming is no longer in a live segment's cells | "trades for every closed minute" (and kickoff item 1). Consequence: the heat / profile no longer draw the forming minute's partial column; it appears on the first poll after the minute closes |
+| DV6 | Mark-appearance lag and the stall flag are unchanged by the splice | stored minutes equal the trades cell for cell (Q3); the stall read is separate |
+
+Re-check of the rulings table: unchanged (no rule, colour or default changes; DV5 removes a partial column, adds nothing).
