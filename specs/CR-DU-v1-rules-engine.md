@@ -703,3 +703,21 @@ Not a tested edge: the sign changes with box min (+57.0 at 8, −40.5 at 10), on
 - 2026-04-15 shows 2.50 (frozen edges) while max − min close over the box is 4.00. Ryan asked to confirm v1.3 shows the true max − min; by Amendment 5's freeze it doesn't. Display only.
 - The ⚙ 15-min edge hold control no longer has any effect on the box chain.
 - Display bug, not fixed: in the engine panel the absorption row prints a raw epoch ("buyers absorbed 7040.00 (1776270180)") because `evaluateAt` calls `boxVerdict` without `hhmm`.
+
+## Amendment 6 (Ryan, chat, 2026-11-01): engine v1.4, a bug fix
+
+Closes the 15-pt-jump gap in v1.3, where a forming box absorbed any close as its edge. Rulings:
+
+1. **While forming:** a close ≤ 2 pts beyond the running edge widens the box; a close > 2 pts beyond restarts the box at that close; a forming box whose closes span > 12 pts also restarts (A1.1's width limit).
+2. **Remove the dead edge-hold ⚙ control. The 15-min edge hold stays dropped, as intended.**
+3. **Box formed shows the frozen-edge height** (2.50 on 2026-04-15), with a test noted as "tested 1.50 below". This settles the 2.50 vs 4.00 question from Amendment 5.
+4. **Absorption row:** show PT time, not the epoch.
+5. Tag `cr-du-engine-v1.4`.
+
+**Readings fixed for implementation (reported to Ryan):**
+- **A restarted forming box is dropped, not frozen.** It never qualified, so it isn't a box: it doesn't appear in `frozen`, isn't drawn and has no CVD segment; its minutes belong to no box. `startDir` stays that of the last frozen box.
+- **A restart is immediate.** The 5-min break hold applies only to a qualified box.
+- **"tested N above / below"** = the deepest close beyond each frozen edge in the box, ≤ 2 pts only; closes during a pending break don't count. Both sides are shown when both were tested. A close that came back still counts.
+- The `holdMin` parameter goes with the control (`edgeReadout`, `readHistory`, engine settings), so no dead setting remains.
+
+Rulings re-check: A2 honoured; A1.1 now honoured in the forming box's width too; every other row unchanged. Nothing in "Revoked / superseded" is used.
