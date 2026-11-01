@@ -356,3 +356,27 @@ it has grown to; an engine unit test asserts it (a box first readable as formed 
 Rulings conformance re-check: C1 changes from "deviates — STOP" to **deviates — approved by Ryan (teal)**. Item 0
 writes `setup_candidates` only, insert-only, under the backfill protocol; B4 honoured (train ≤ 06-05, outcomes stored,
 never shown or read), B8 honoured (no reviews written). Every other row unchanged.
+
+## Implementation and smoke (2026-10-31)
+
+| Commit | Item |
+|---|---|
+| `0f67e93` | 0 — `set-2:cp-calls` loaded: 115 cards (235 CR-CP calls − CR-CZ's 120), short 48 / long 67, 72 sessions 01-07 → 06-05, run `fcd42d44`; outcomes stored, not shown |
+| `4ff652a` | 1 — `react_price_preview/src/v1Engine.js` (`evaluateAt`, `simulateSession`), boxVerdict `v1` option, cells bars o / buy / sell / vol, marks `merges`, prior-sessions baselines, `modules/Ironbeam/v1_engine.py` inputs |
+| `2f2d629` | 2 — panel verdict from the engine + failed rules, engine's trades line, ⚙ box min 8 (+ one-time migration of a stored 10), "net buying / net selling", optional alert; inputs route |
+| `6c6abf7` | 3 — `scripts/cr_du_backtest_v1.py` |
+| `6696e3b` | 4 — contradiction-bar comparison and ⚙ markers (the 4b toggle markup also landed here) |
+| `0ce58bd` | 4b — v1 trades overlay (teal), hover, blocked dates; Python blocking test |
+| `2663912` | 5 — `setup_engine_verdicts` + `scripts/cr_du_set2_verdicts.py`; run `709a9b94` |
+| `d9701f7` | smoke fixes + `tests/e2e/cr-du.spec.js` |
+
+Design notes (no rule changed): the panel runs the engine at the chart's anchor (clamped to 06:30, rule 2) with the
+engine's own trades since 06:30 as state; overlay, backtest and item 5 use the 06:30 anchor. A placed order keeps its
+price and stop; it is cancelled at the first close whose verdict is not the same side for that box. Without 1-s data
+(live panel inputs carry them; a missing second) a same-minute stop + target counts the stop, and a target in the fill
+minute is not counted. On blocked dates the panel keeps the CR-DS verdict and says "v1 engine off: …".
+
+Results (train, in-sample): see the session note (vault `sessions/2026-10-31 - CR-DU — v1 Rules Engine.md`) and
+`scripts/logs/cr-du/backtest_report.md`. Primary: 90 trades on 86 sessions, 27.8 % wins, −69.5 pts gross / −92.0 after
+0.25 per round trip; fixed 10-pt stop: 80 trades, 50.0 %, −23.25 after cost. Contradiction bars: inconclusive (n = 6
+with a primary bar). Set 2: SHORT 0 · LONG 0 · NO ACTION 115 (27 warm-up). Smoke 4 / 4.
