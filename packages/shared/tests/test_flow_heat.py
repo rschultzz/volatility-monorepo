@@ -273,8 +273,10 @@ class TestLiveMarks(unittest.TestCase):
         self.L[26] = 100.25
         m = self.live(T0 + 60 * 27)
         self.assertEqual([(mk["time"], mk["merged_vol"], mk["provisional"]) for mk in m], [(T0 + 1200, 0.0, False)])
+        self.assertEqual(m[0]["merges"], [])                                # CR-DU merges: no entry while provisional
         m = self.live(T0 + 60 * 30)
         self.assertEqual([(mk["time"], mk["merged_vol"]) for mk in m], [(T0 + 1200, 60.0)])
+        self.assertEqual(m[0]["merges"], [[T0 + 60 * 26 + (self.P.m + 1) * 60, 60.0]])   # added once it confirms
 
     def test_complete_call_unchanged_by_default(self):
         c, b = cells(self.rows), bars(self.H, self.L)

@@ -61,7 +61,8 @@ export function prepareSession({ payload, inputs, tradeDate, fixedBaseline = nul
     bars.vol.push(num(b.vol, i) || 0)
     bars.exact.push(Boolean(rth.exact))
   }
-  const seg = { ...rth, marks: rth.exact ? rth.marks : null }
+  // CR-DV merge: provisional (hollow) marks are display-only — the engine reads confirmed marks only, live or backtest
+  const seg = { ...rth, marks: rth.exact && Array.isArray(rth.marks) ? rth.marks.filter((mk) => !mk.provisional) : null }
   const pay = { ...payload, segments: [seg] } // rule 2: RTH only
   const times = bars.t.map(shift)
   // Q7: closes, delta and volume from the same flow bars as the box (one feed)

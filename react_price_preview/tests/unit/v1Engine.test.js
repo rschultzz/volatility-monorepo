@@ -353,3 +353,22 @@ test('fixed 10-pt stop: a 3-pt pop that stops the wick + 2 bracket leaves this o
   assert.deepEqual([f.trades[0].stop, f.trades[0].reason, f.trades[0].pts], [6025, 'target', 10])
   assert.equal(simulateSession(session({ over, settings: { stop: 'zone' } })).trades[0].reason, 'stop')
 })
+
+test('CR-DV merge: provisional marks never reach the engine (panel, overlay, backtest) — confirmed marks only', () => {
+  const flat = {}
+  for (let i = 22; i < 40; i += 1) flat[i] = { buy: 500, sell: 500 }
+  const confirmed = mark('buyers_absorbed', 6015, 22)
+  const provisional = { ...mark('buyers_absorbed', 6015, 22), provisional: true } // even with confirm_time <= t
+  const conflictProv = { ...mark('sellers_absorbed', 6012.5, 22), provisional: true }
+  assert.equal(evaluateAt(session({ over: flat, marks: [confirmed] }), 28).verdict, 'SHORT')
+  const none = evaluateAt(session({ over: flat, marks: [] }), 28)
+  const prov = evaluateAt(session({ over: flat, marks: [provisional] }), 28)
+  assert.equal(prov.verdict, 'NO ACTION')
+  assert.deepEqual(prov, none)
+  assert.ok(session({ marks: [confirmed, provisional, conflictProv] }).pay.segments[0].marks.every((mk) => !mk.provisional))
+  // a provisional opposing mark beside a confirmed one changes nothing (no conflict), minute by minute and in the simulation
+  const withProv = session({ over: flat, marks: [confirmed, conflictProv] })
+  const only = session({ over: flat, marks: [confirmed] })
+  for (let i = 0; i < 40; i += 1) assert.deepEqual(evaluateAt(withProv, i), evaluateAt(only, i), `minute ${i}`)
+  assert.deepEqual(simulateSession(withProv).trades, simulateSession(only).trades)
+})
