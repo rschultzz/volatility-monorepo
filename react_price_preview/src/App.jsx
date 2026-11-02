@@ -2508,7 +2508,7 @@ export default function App() {
                     onDrawStart={handleAnchorPick}
                     lineAnchor={flowEngineEdges ? flowV3Shift(flowEngineSel.fromT) : flowAnchor}
                     lineEnd={flowEngineEdges ? flowV3Shift(flowEngineSel.toT) : flowEnd}
-                    boxSelected={Boolean(flowBoxSel)}
+                    boxSelected={Boolean(flowBoxSel && flowV3Edges)} // CR-DY: with no box on the chart (Edges off) nothing is selected to clear
                     onBoxSelectionClear={() => setFlowBoxSel(null)}
                     effortOn={flowEffort}
                     onEffortChange={setFlowEffort}

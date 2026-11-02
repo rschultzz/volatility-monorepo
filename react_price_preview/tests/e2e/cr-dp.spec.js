@@ -131,7 +131,7 @@ test('items 1–3: header groups in order, no mode toggle, no pills; an approxim
   await open(page, D29, { storage: { ...V3, 'ib-react-flow-mode': 'v2', ...layers({ profile: true, levels: true }) } })
   const groups = await page.locator('[data-testid=flow-v3-panel] .flow-panel-header > *').evaluateAll((els) => els.map((e) => e.innerText.replace(/\n/g, ' · ')))
   log('header-10-29.json', groups)
-  expect(groups[1]).toBe('📍 set anchor · set end · session open · last swing · clear')
+  expect(groups[1]).toBe('▭ draw box · 📍 start only · set end · session open · last swing · clear')
   expect(groups[2]).toBe('Edges off · Edge effort off')
   expect(groups[3]).toBe('Absorption levels on · Profile on · Effort off · My trades off · v1 trades off') // CR-DR item 2: My trades joins the Display group; CR-DU item 4b: v1 trades after it
   expect(groups[groups.length - 1]).toBe('⚙ · ?')
