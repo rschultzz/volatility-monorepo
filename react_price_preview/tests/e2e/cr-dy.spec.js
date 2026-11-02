@@ -187,6 +187,19 @@ test('1. 10-30 draw 07:34–07:49: rectangle, title, rows for that window, selec
   log('1-draw.json', { list: st.list, rows, summary: await page.getByTestId('flow-v3-box-panel-summary').innerText(),
     broke: (await page.getByTestId('flow-v3-box-broke').count()) ? await page.getByTestId('flow-v3-box-broke').innerText() : null })
   expect(rows.length).toBeGreaterThan(3)
+  expect([st.list[0].high, st.list[0].low]).toEqual([7659.75, 7636.5]) // ruling 1: the wick range, display only
+  expect(st.list[0].top).toBe(7654.25) // the edges stay the engine rule
+  await expect(page.getByTestId('flow-v3-box-panel-rules')).toHaveCount(0) // ruling 2: drawn boxes keep panel rules
+  // ruling 3: with an end set at 1440 px the chips wrap: nothing scrolls or clips, the v1 chip is inside the header
+  const hdr = await page.evaluate(() => {
+    const h = document.querySelector('[data-testid=flow-v3-panel] .flow-panel-header')
+    const c = document.querySelector('[data-testid=flow-v3-v1-trades-toggle]').getBoundingClientRect()
+    const r = h.getBoundingClientRect()
+    return { over: h.scrollWidth - h.clientWidth, right: c.right, hRight: r.right, h: r.height }
+  })
+  log('1-header.json', hdr)
+  expect(hdr.over).toBeLessThanOrEqual(0)
+  expect(hdr.right).toBeLessThanOrEqual(hdr.hRight)
   await shot(page, '1-draw-0734-0749.png')
 })
 
@@ -260,7 +273,13 @@ test('3. 10-30 v1 trades on: one box per trade at its decision minute; each clic
     expect(tradeLine).toContain(`TP ${tr.target.toFixed(2)}`)
     const eng = await page.getByTestId('flow-v3-box-engine').innerText()
     expect(eng).toContain(`Engine at ${hhmm(lb.to)}: ${tr.side.toUpperCase()}`)
-    seen.push({ id, title: t, trade: tradeLine, engine: eng, pill: await page.getByTestId('flow-v3-box-verdict-pill').innerText() })
+    const pill = await page.getByTestId('flow-v3-box-verdict-pill').innerText()
+    expect(pill).toBe(tr.side.toUpperCase()) // ruling 2: the engine's verdict, as "Engine at …"
+    const panelRules = await page.getByTestId('flow-v3-box-panel-rules').innerText()
+    expect(panelRules).toMatch(/^Panel rules \(p80 lean\): /)
+    expect((st.list.find((b) => b.id === id).high)).toBe(tr.box.high) // ruling 1: wick lines from the engine's own box
+    expect((st.list.find((b) => b.id === id).low)).toBe(tr.box.low)
+    seen.push({ id, title: t, trade: tradeLine, engine: eng, pill, panelRules })
     if (k === 0) await shot(page, '3-engine-box-selected.png')
   }
   log('3-engine-boxes.json', { seen, n: trades.length })

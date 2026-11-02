@@ -635,6 +635,7 @@ export const BOX_SHADE_ALPHA_CURRENT = 0.10
 export const BOX_FILL_ALPHA = BOX_SHADE_ALPHA_CURRENT
 export const BOX_FILL_ALPHA_HOVER = 0.16
 export const BOX_FILL_ALPHA_SELECTED = 0.26
+export const BOX_WICK_ALPHA = 0.55
 export class SelectableBoxesPrimitive extends BasePrimitive {
   constructor() {
     super()
@@ -679,6 +680,21 @@ export class SelectableBoxesPrimitive extends BasePrimitive {
         ctx.lineWidth = Math.max(1, Math.round(1.5 * hr))
         ctx.strokeRect(...px)
       }
+      // Ruling 1: the wick range (the box's high / low), faint dotted lines, display only; hit-testing stays on the edges
+      ctx.save()
+      ctx.strokeStyle = `rgba(${b.rgb},${BOX_WICK_ALPHA})`
+      ctx.lineWidth = Math.max(1, Math.round(hr))
+      ctx.setLineDash([Math.round(1 * hr), Math.round(3 * hr)])
+      for (const p of [b.high, b.low]) {
+        const y = Number.isFinite(p) ? series.priceToCoordinate(p) : null
+        if (y == null) continue
+        const yy = Math.round(y * vr) + 0.5
+        ctx.beginPath()
+        ctx.moveTo(px[0], yy)
+        ctx.lineTo(px[0] + px[2], yy)
+        ctx.stroke()
+      }
+      ctx.restore()
       this._rects.push({ id: b.id, x0, x1, y0, y1: y0 + h, selected: sel, hover: hov })
     }
   }

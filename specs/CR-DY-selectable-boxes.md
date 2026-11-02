@@ -166,3 +166,17 @@ On the 142 engine trades the wick range is taller than the edges every time (med
 3. **CR-DX** doesn't exist in the repo; its fit is unchecked.
 4. **Header width:** with an end set at 1440 px the Flow header scrolls and clips "v1 trades" (it already scrolled; the new chip brings it on). Screenshot 1.
 5. Two clicks inside lightweight-charts' 500 ms double-click window lose the second; the pick stays armed, so click again.
+
+## Rulings (Ryan, chat 2026-11-01, after the PR)
+
+1. **Drawn box top / bottom: engine rule** (closes, frozen once formed). The wick range (box high / low) is added as faint dotted lines on every box, drawn and engine. Display only, stats unchanged.
+2. **Engine boxes:** the pill shows the engine's verdict, matching "Engine at …". Under it, a secondary line "Panel rules (p80 lean): <verdict>". Drawn boxes unchanged (panel rules).
+3. **Flow header:** the chip row wraps instead of scrolling / clipping at 1440 px with an end set.
+4. **Fast-click loss** (the chart's 500 ms double-click window): not in scope; listed in the session note.
+5. **Accepted:** "start only" chip, "set end" kept, a new draw replaces the old box.
+
+Then: engine hash check, one clean full browser suite on the final head by explicit paths, as a diff vs the CR-DU baseline (99 / 20 / 19). A spec failing only on the branch blocks. Not merged.
+
+Rulings conformance: C1 honoured (existing magenta / teal, no new hue); C2 approved by these rulings; recorded in the rulings change log.
+
+Results of the hash check and the full suite on this head: session note and PR description, so the suite's head is the final head.

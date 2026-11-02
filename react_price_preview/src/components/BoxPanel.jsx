@@ -123,6 +123,7 @@ function Verdict({ v, testid = 'flow-v3-box-verdict', stall = null }) {
         {v.pill}
       </span>
       {v.reason && <div data-testid="flow-v3-box-verdict-reason" style={{ color: '#cbd5e1' }}>{v.reason}</div>}
+      {v.panelRules && <div data-testid="flow-v3-box-panel-rules" title={v.panelRulesTitle} style={{ color: MUTED }}>{v.panelRules}</div>}
       <EvidenceTable rows={rows} testid={`${testid}-table`} />
       {v.engineBox && (
         <div data-testid="flow-v3-box-engine" title={v.engineTitle} style={{ color: '#cbd5e1', cursor: 'help' }}>

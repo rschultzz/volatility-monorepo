@@ -1,7 +1,7 @@
 // CR-DY — pure helpers of the selectable boxes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { boxPanelTitle, drawnBoxOf, engineAtLine, engineTradeBoxes, escAction, hitBox, reviewBoxRecord, snapBox, tradeText } from '../../src/selectableBoxes.js'
+import { boxPanelTitle, drawnBoxOf, engineAtLine, engineBoxVerdict, engineTradeBoxes, escAction, hitBox, reviewBoxRecord, snapBox, tradeText } from '../../src/selectableBoxes.js'
 
 const fmt = (t) => `t${t}`
 const trade = (o = {}) => ({ side: 'short', entry: 7655.75, stop: 7665.75, target: 7645.75, entryT: 300, exitT: 400, reason: 'target', pts: 10,
@@ -10,19 +10,19 @@ const trade = (o = {}) => ({ side: 'short', entry: 7655.75, stop: 7665.75, targe
 test('engineTradeBoxes reads the engine fields, ids as overlayMarks, open last', () => {
   const b = engineTradeBoxes({ trades: [trade(), trade({ decisionT: 500 })], open: trade({ decisionT: 900 }) })
   assert.deepEqual(b.map((x) => [x.id, x.k, x.toT, x.open]), [['v1-0', 0, 120, false], ['v1-1', 1, 500, false], ['v1-2', 2, 900, true]])
-  assert.deepEqual([b[0].fromT, b[0].top, b[0].bottom], [60, 7655.75, 7650])
+  assert.deepEqual([b[0].fromT, b[0].top, b[0].bottom, b[0].high, b[0].low], [60, 7655.75, 7650, 7657, 7649])
   assert.deepEqual(engineTradeBoxes(null), [])
 })
 
 test('drawnBoxOf: the readout edges, not its wicks', () => {
   const r = { from: 60, to: 120, top: { price: 10 }, bottom: { price: 5 }, high: 12, low: 4 }
-  assert.deepEqual(drawnBoxOf(r), { fromT: 60, toT: 120, top: 10, bottom: 5 })
+  assert.deepEqual(drawnBoxOf(r), { fromT: 60, toT: 120, top: 10, bottom: 5, high: 12, low: 4 })
   assert.equal(drawnBoxOf(null), null)
 })
 
 test('snapBox floors to candle times; null before the first candle', () => {
   const box = { fromT: 70, toT: 130, top: 2, bottom: 1 }
-  assert.deepEqual(snapBox('a', box, [60, 120, 180], (t) => t, '1,2,3'), { id: 'a', from: 60, to: 120, top: 2, bottom: 1, rgb: '1,2,3' })
+  assert.deepEqual(snapBox('a', box, [60, 120, 180], (t) => t, '1,2,3'), { id: 'a', from: 60, to: 120, top: 2, bottom: 1, high: undefined, low: undefined, rgb: '1,2,3' })
   assert.equal(snapBox('a', { ...box, fromT: 10 }, [60, 120], (t) => t, 'x'), null)
 })
 
@@ -67,4 +67,16 @@ test('reviewBoxRecord: start, end, top, bottom; nulls without a box', () => {
   const pt = (t) => (t == null ? null : `pt${t}`)
   assert.deepEqual(reviewBoxRecord(60, { toT: 120, top: 10, bottom: 5 }, (t) => t, pt), { anchor_ts: 'pt60', box_end_ts: 'pt120', box_top: 10, box_bottom: 5 })
   assert.deepEqual(reviewBoxRecord(60, null, (t) => t, pt), { anchor_ts: 'pt60', box_end_ts: null, box_top: null, box_bottom: null })
+})
+
+test('engineBoxVerdict: the engine in the pill, panel rules on the second line, panel rows kept', () => {
+  const draft = { kind: 'none', pill: 'NO ACTION', reason: 'nothing notable', checks: { a: 1 }, extraRows: [] }
+  const pv = { kind: 'short', pill: 'SHORT at top', reason: 'buyers leaning', title: 'v1', extraRows: [] }
+  const v = engineBoxVerdict(draft, { ev: { verdict: 'SHORT' } }, pv, 80)
+  assert.equal(v.pill, 'SHORT')
+  assert.equal(v.kind, 'short')
+  assert.equal(v.reason, 'buyers leaning')
+  assert.equal(v.panelRules, 'Panel rules (p80 lean): NO ACTION')
+  assert.deepEqual(v.checks, { a: 1 })
+  assert.equal(engineBoxVerdict(draft, null, pv, 80), draft)
 })

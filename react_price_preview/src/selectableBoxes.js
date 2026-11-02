@@ -8,7 +8,7 @@ export const DRAWN_BOX_ID = 'drawn'
 // engine's rule — edges by closes, frozen once the box qualifies; wicks stay on the readout as high / low).
 export function drawnBoxOf(r) {
   if (!r) return null
-  return { fromT: r.from, toT: r.to, top: r.top.price, bottom: r.bottom.price }
+  return { fromT: r.from, toT: r.to, top: r.top.price, bottom: r.bottom.price, high: r.high, low: r.low }
 }
 
 // One entry per engine trade (open one last), ids as overlayMarks' so box and trade mark link: the box as it stood at the
@@ -17,7 +17,7 @@ export function engineTradeBoxes(sim) {
   if (!sim) return []
   const all = [...sim.trades, ...(sim.open ? [sim.open] : [])]
   return all.map((tr, k) => ({
-    id: `v1-${k}`, k, fromT: tr.box.from, toT: tr.decisionT, top: tr.box.top, bottom: tr.box.bottom, trade: tr,
+    id: `v1-${k}`, k, fromT: tr.box.from, toT: tr.decisionT, top: tr.box.top, bottom: tr.box.bottom, high: tr.box.high, low: tr.box.low, trade: tr,
     open: k >= sim.trades.length,
   }))
 }
@@ -27,7 +27,7 @@ export function snapBox(id, box, times, shift, rgb) {
   const i0 = floorIndex(times, shift(box.fromT))
   const i1 = floorIndex(times, shift(box.toT))
   if (i0 < 0 || i1 < i0) return null
-  return { id, from: times[i0], to: times[i1], top: box.top, bottom: box.bottom, rgb }
+  return { id, from: times[i0], to: times[i1], top: box.top, bottom: box.bottom, high: box.high, low: box.low, rgb }
 }
 
 // The rectangle under a point (css px): the smallest one when they overlap. rects: { id, x0, x1, y0, y1 }.
@@ -76,6 +76,19 @@ export function engineAtLine(pe, fmt) {
 export function engineAtTitle(pe, fmt) {
   const b = pe?.ev?.box
   return b ? `The engine's own chained box at that minute: ${fmt(b.from)}–${fmt(pe.ev.t)}. It never moves your box.` : ''
+}
+
+// Ruling 2 — an engine box's verdict: the pill is the engine's at the decision minute (as "Engine at …"), the reason
+// its own; the rows stay the panel's, and the panel rules' verdict moves to a secondary line. `draft` = boxVerdict on panel rules, `pv`
+// = panelVerdict, `pe` = panelEngine at that minute.
+export function engineBoxVerdict(draft, pe, pv, leanPct) {
+  const ev = pe?.ev
+  if (!draft || !ev) return draft
+  const ok = ev.verdict === 'SHORT' || ev.verdict === 'LONG'
+  return {
+    ...draft, kind: pv.kind, pill: ok ? ev.verdict : pv.pill, reason: pv.reason, title: pv.title,
+    panelRules: `Panel rules (p${leanPct} lean): ${draft.pill}`, panelRulesTitle: draft.reason || '', extraRows: pv.extraRows,
+  }
 }
 
 // What Esc does next: cancel the armed pick, else clear the selection (the box stays), else remove the drawn box.

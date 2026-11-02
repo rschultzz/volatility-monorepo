@@ -27,7 +27,7 @@ import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
 import { LIVE_EFFORT_ID, absorptionLevels, feedStalledSince, boxPanelOf, boxPanelOffset, boxPanelPlace, boxRules, boxVerdict, buildHeatColumns, readHistory, readHistoryText, chartMarks, currentBoxVerdict, dirArrow, edgeBoxEntries, flattenCells, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
 import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, MAGENTA_RGB, ProfilePrimitive, SelectableBoxesPrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
-import { DRAWN_BOX_ID, boxPanelTitle, engineAtLine, engineAtTitle, engineTradeBoxes, snapBox, tradeText } from '../selectableBoxes'
+import { DRAWN_BOX_ID, boxPanelTitle, engineAtLine, engineBoxVerdict, engineAtTitle, engineTradeBoxes, snapBox, tradeText } from '../selectableBoxes'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
 const ETH_BG_COLOR = '#1f2937'
@@ -2890,8 +2890,9 @@ export default function PriceChart({
   const v3Verdict = useMemo(() => {
     if (!v3DraftVerdict) return v3DraftVerdict
     if (!v1Panel?.verdict) return v3DraftVerdict
-    return { ...v3DraftVerdict, engineBox: v1Panel.engineBox, engineTag: v1Panel.verdict.engineTag, engineTitle: `${v1Panel.engineBoxTitle} ${v1Panel.verdict.title}`, engineLine: v1Panel.verdict.engineLine }
-  }, [v3DraftVerdict, v1Panel])
+    const base = v3SelEngineBox ? engineBoxVerdict(v3DraftVerdict, v1Panel.pe, v1Panel.verdict, v3Rules.notable) : v3DraftVerdict
+    return { ...base, engineBox: v1Panel.engineBox, engineTag: v1Panel.verdict.engineTag, engineTitle: `${v1Panel.engineBoxTitle} ${v1Panel.verdict.title}`, engineLine: v1Panel.verdict.engineLine }
+  }, [v3DraftVerdict, v1Panel, v3SelEngineBox, v3Rules])
   const v1MarksRef = useRef({ series: null, prim: null })
   // CR-DY goal 4: the rectangles (your box magenta, engine boxes teal), hover and selection; a click goes through the ref.
   const [boxHover, setBoxHover] = useState(null)
