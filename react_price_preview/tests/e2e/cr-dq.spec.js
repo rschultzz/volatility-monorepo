@@ -152,7 +152,7 @@ const drawn = (page) => page.evaluate((fn) => {
   const strip = (b) => JSON.parse(JSON.stringify(b))
   return {
     boxes: e ? e.boxes.map((b) => ({ from: b.from, to: b.to, top: b.top, bottom: b.bottom, frozen: b.frozen, label: b.label ?? null, box: strip(b.box) })) : null,
-    shade: price.prims?.boxShade?._data ? price.prims.boxShade._data.boxes.map((b) => ({ from: b.from, to: b.to, top: b.top, bottom: b.bottom, frozen: b.frozen })) : null,
+    shade: price.prims?.boxes?._data ? price.prims.boxes._data.boxes.map((b) => ({ from: b.from, to: b.to, top: b.top, bottom: b.bottom, frozen: false })) : null, // CR-DY: the selectable boxes primitive
     levels: price.prims?.levels?._data ? strip(price.prims.levels._data.levels) : null,
   }
 }, CHARTS_FN)
@@ -388,10 +388,10 @@ test('item 4: boxes shaded (current stronger than frozen), candles on top; the s
   }, { fn: CHARTS_FN, comp: COMPOSITE_FN })
   await frame(page, anchor - 10 * 60, shifted(`${D30}T08:00`))
   const on = await sample()
-  const saved = await page.evaluate((fn) => { const { price } = eval(fn); const d = price.prims.boxShade._data; price.prims.boxShade.setData(null); window.__crdqShade = d; return true }, CHARTS_FN) // eslint-disable-line no-eval
+  const saved = await page.evaluate((fn) => { const { price } = eval(fn); const d = price.prims.boxes._data; price.prims.boxes.setData(null); window.__crdqShade = d; return true }, CHARTS_FN) // eslint-disable-line no-eval
   await page.waitForTimeout(400)
   const off = await sample()
-  await page.evaluate((fn) => { const { price } = eval(fn); price.prims.boxShade.setData(window.__crdqShade) }, CHARTS_FN) // eslint-disable-line no-eval
+  await page.evaluate((fn) => { const { price } = eval(fn); price.prims.boxes.setData(window.__crdqShade) }, CHARTS_FN) // eslint-disable-line no-eval
   await page.waitForTimeout(400)
   const res = { saved, boxes: on.map((x, i) => ({ frozen: x.frozen, gapPx: Math.round(x.gap), on: x.inBox, off: off[i].inBox, candleOn: x.candle, candleOff: off[i].candle })) }
   // shade adds magenta: red and blue rise more than green; current more than frozen; candle body pixels unchanged
@@ -555,7 +555,7 @@ test('item 7: 2026-10-28 (FOMC) shows NO TRADES', async ({ page }) => {
   expect(v.verdict.kind).toBe('no-trades')
   expect(v.verdict.pill).toBe('NO TRADES') // CR-DS item 1: the pill is the label's head; the reason sits under it
   expect(v.verdict.title).toMatch(/^Rules: A22\./) // CR-DU amendment 7: the panel verdict reads the manual box; the engine has its own line
-  await expect(page.getByTestId('flow-v3-box-engine')).toContainText(/^Engine \(box /)
+  await expect(page.getByTestId('flow-v3-box-engine')).toContainText(/^Engine at \d\d:\d\d: /) // CR-DY goal 5
   await shot(page, 'verdict-1028-fomc.png')
 })
 

@@ -20,13 +20,14 @@ import {
 } from 'web-shared'
 import LandscapeChartOverlay from './LandscapeChartOverlay'
 import BoxPanel from './BoxPanel'
-import { V1_TRADES_RGB, contraMarkers, engineBoxLine, engineSettingsFromRules, minuteText, overlayMarks, panelEngine, panelVerdict, prepareSession, simulateSession } from '../v1Engine'
+import { V1_TRADES_RGB, contraMarkers, engineSettingsFromRules, minuteText, overlayMarks, panelEngine, panelVerdict, prepareSession, simulateSession } from '../v1Engine'
 import { TradeMarksPrimitive } from './tradePrimitives'
 import boxBaseline from '../data/boxBaseline.json'
 import { PANEL_WIDTH as REVIEW_PANEL_WIDTH } from './SetupReviewPanel'
 import { GEX_MIN_ABS_B_DEFAULT, coerceGexMinAbsB } from '../gexMinAbsB'
 import { LIVE_EFFORT_ID, absorptionLevels, feedStalledSince, boxPanelOf, boxPanelOffset, boxPanelPlace, boxRules, boxVerdict, buildHeatColumns, readHistory, readHistoryText, chartMarks, currentBoxVerdict, dirArrow, edgeBoxEntries, flattenCells, kfmt, makeShifter, mergeRows, profileTotals, relinkHover } from '../flowV3'
-import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, BoxShadePrimitive, EdgeLinesPrimitive, HeatmapPrimitive, ProfilePrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
+import { AbsorbMarksPrimitive, AbsorptionLevelsPrimitive, EdgeLinesPrimitive, HeatmapPrimitive, MAGENTA_RGB, ProfilePrimitive, SelectableBoxesPrimitive, TAG_BG, WindowShadePrimitive } from './flowV3Primitives'
+import { DRAWN_BOX_ID, boxPanelTitle, engineAtLine, engineBoxVerdict, engineAtTitle, engineTradeBoxes, snapBox, tradeText } from '../selectableBoxes'
 
 const LIVE_LABEL_BAND_PX = 36 // CR-DM: the live label's hover area beyond the bar (circle + text, size 0.5)
 const ETH_BG_COLOR = '#1f2937'
@@ -2014,6 +2015,17 @@ export default function PriceChart({
       // running the existing timeslice-toggle behavior.
       setClickedGexSegment(null)
 
+      // CR-DY goal 3 / 4: a v1 trade mark or a box selects that box; with a selection, an empty click only clears it.
+      const boxHit = v1MarksRef.current.prim?.hitTest(param?.point) ?? v3PrimRef.current.boxes?.hitTest(param?.point)
+      if (boxHit != null) {
+        selectBoxRef.current?.(boxHit)
+        return
+      }
+      if (param?.point && selectBoxRef.current?.selected) {
+        selectBoxRef.current(null)
+        return
+      }
+
       if (!param?.time) return
       const hhmm = toPtHHMM(param.time, intervalRef.current)
 
@@ -2788,7 +2800,7 @@ export default function PriceChart({
     [v3EdgeReadout, v3Segments, v3Times, v3Shift])
   const v3SellLayer = flowV3?.sellLayer !== false
   const v3BuyLayer = flowV3?.buyLayer !== false
-  const v3PrimRef = useRef({ series: null, heat: null, boxShade: null, marks: null, profile: null, levels: null, edges: null, window: null })
+  const v3PrimRef = useRef({ series: null, heat: null, boxes: null, marks: null, profile: null, levels: null, edges: null, window: null })
   const [v3Hover, setV3Hover] = useState(null)
   const [v3LevelHover, setV3LevelHover] = useState(null)
   const [v3ProbeHover, setV3ProbeHover] = useState(null) // CR-DN item 2
@@ -2799,7 +2811,6 @@ export default function PriceChart({
   // BOX_PANEL_POS_KEY) and reused for later anchors and sessions; a double-click on the header returns it to the
   // default. It is re-clamped into the plot every frame (resize). × hides it until the next anchor. Max height = half
   // the plot; the body scrolls beyond that. Text: flowV3.boxPanelSections (CR-DP's boxPopupLines).
-  const v3Anchor = flowV3?.anchor ?? null
   // CR-DQ item 5: each drawn box's percentiles (same-source train baseline; null = no badge), computed once here.
   const v3Rules = useMemo(() => boxRules(flowV3?.boxRules), [flowV3?.boxRules])
   const v3PtMin = useCallback((utc) => Math.floor(((((v3Shift(utc) % 86400) + 86400) % 86400)) / 60), [v3Shift])
@@ -2817,48 +2828,7 @@ export default function PriceChart({
       segments: v3Payload.segments, baseline: boxBaseline, tradeDate, rules: v3Rules, ptMinOf: v3PtMin, stepSec: step, manual: true,
     })
   }, [v3EdgeReadout, v3Payload, v3Bars, v3Segments, v3Times, v3Shift, v3End, tradeDate, v3Rules, v3PtMin])
-  const v3BoxPanel = useMemo(() => {
-    // CR-DR: the base sections + percentiles from flowV3.boxPanelOf (shared with the trade panel's "at entry")
-    const panel = boxPanelOf(v3Edges, v3Shift, v3Payload, boxBaseline, formatShiftedHHMM)
-    if (!panel) return null
-    const ranges = v3History?.ranges || []
-    const hhmm = (t) => formatShiftedHHMM(v3Shift(t))
-    return {
-      ...panel, historyMs: v3History?.ms ?? null,
-      sections: panel.sections.map((sct) => {
-        const mine = v3History ? ranges.filter((x) => String(x.box) === sct.key) : null
-        // CR-DS item 5: a frozen box's verdict and table as of its end (levels as of its break minute)
-        const entry = sct.current ? null : v3Edges.boxes.find((en) => String(en.box.from) === sct.key)
-        const verdict = entry ? boxVerdict({
-          box: entry.box, pct: sct.pct, levels: absorptionLevels(v3Payload, v3Times, v3Shift, undefined, entry.box.ended.at),
-          tradeDate, rules: v3Rules, hhmm,
-        }) : null
-        return { ...sct, verdict, history: mine, historyText: mine ? readHistoryText(mine, hhmm) : '', historyShort: mine ? readHistoryText(mine, hhmm, true) : '' }
-      }),
-    }
-  }, [v3Edges, v3Shift, v3Payload, v3Times, v3History, v3PtMin, tradeDate, v3Rules])
-  // CR-DQ item 7: the current box's verdict from the panel's own inputs (its percentiles, the levels above, the trade date).
-  const v3DraftVerdict = useMemo(() => currentBoxVerdict(v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift, formatShiftedHHMM),
-    [v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift])
-  // CR-DU amendment 7: the panel's verdict and rows read the manual box (CR-DQ / CR-DS `boxVerdict`). The v1 rules engine
-  // gets its own line from its own chained box (v1Engine.panelEngine, 06:30 chain to the last bar / set end, with its own
-  // trades for rules 19 / 20); it never moves the manual box. Where the engine is off for the date (inputs `blocked`:
-  // holdout, set 2 in progress, …) the line gives the reason.
   const v1Inputs = flowV3?.v1Inputs || null
-  const v1Panel = useMemo(() => {
-    if (!v3EdgeReadout || !v3Payload || !v1Inputs) return null
-    if (v1Inputs.blocked || v1Inputs.error) return { off: v1Inputs.blocked || 'engine inputs unavailable' }
-    const ctx = prepareSession({ payload: v3Payload, inputs: v1Inputs, tradeDate, fixedBaseline: boxBaseline, settings: engineSettingsFromRules(v3Rules) })
-    const pe = panelEngine(ctx, { endShifted: v3End })
-    const fmt = (t) => formatShiftedHHMM(v3Shift(t))
-    return { verdict: panelVerdict(pe, fmt), engineBox: engineBoxLine(pe, fmt), pe, ctx }
-  }, [v3EdgeReadout, v3Payload, v1Inputs, tradeDate, v3Rules, v3Shift, v3End])
-  const v3Verdict = useMemo(() => {
-    if (!v3DraftVerdict) return v3DraftVerdict
-    if (v1Panel?.off) return { ...v3DraftVerdict, engineLine: `v1 engine off: ${v1Panel.off}` }
-    if (!v1Panel?.verdict) return v3DraftVerdict
-    return { ...v3DraftVerdict, engineBox: v1Panel.engineBox, engineTag: v1Panel.verdict.engineTag, engineTitle: v1Panel.verdict.title, engineLine: v1Panel.verdict.engineLine }
-  }, [v3DraftVerdict, v1Panel])
   // CR-DU item 4b — the v1 trades overlay: the engine run minute by minute over the session shown (06:30 anchor, no later
   // bars at each minute), drawn in CR-DR's trade-marker style in teal (C1 approved); hover shows that minute's verdict.
   const v1TradesOn = Boolean(flowV3?.v1TradesOn)
@@ -2869,7 +2839,100 @@ export default function PriceChart({
     const sim = simulateSession(ctx)
     return { ctx, sim, marks: overlayMarks(sim, ctx), byTime: new Map(sim.minutes.map((m) => [ctx.shift(m.t), m])) }
   }, [v1TradesOn, v3Payload, v1Inputs, tradeDate])
+  // CR-DY goal 2: each engine trade's box as it stood at its decision minute, from the engine's own fields
+  const v1Boxes = useMemo(() => engineTradeBoxes(v1Sim?.sim), [v1Sim])
+  const v3Sel = flowV3?.boxSel || null
+  const v3SelEngineBox = v3Sel?.kind === 'engine' ? v1Boxes.find((b) => b.id === v3Sel.id) || null : null
+  const v3BoxPanel = useMemo(() => {
+    // CR-DR: the base sections + percentiles from flowV3.boxPanelOf (shared with the trade panel's "at entry")
+    const panel = boxPanelOf(v3Edges, v3Shift, v3Payload, boxBaseline, formatShiftedHHMM)
+    if (!panel) return null
+    const ranges = v3History?.ranges || []
+    const hhmm = (t) => formatShiftedHHMM(v3Shift(t))
+    const engineSel = v3Sel?.kind === 'engine'
+    return {
+      ...panel, historyMs: v3History?.ms ?? null,
+      title: boxPanelTitle(v3Sel, v3EdgeReadout, hhmm, { running: Boolean(flowV3?.running), engineBox: v3SelEngineBox }),
+      tradeText: engineSel && v3SelEngineBox ? tradeText(v3SelEngineBox, hhmm) : '',
+      sections: panel.sections.map((sct0) => {
+        // CR-DY: an engine box has no anchor or restart of yours
+        const sct = engineSel ? { ...sct0, anchorText: null, broke: null, summary: sct0.summary.replace(/ · set end .*$/, ' · at the decision minute') } : sct0
+        const mine = v3History ? ranges.filter((x) => String(x.box) === sct.key) : null
+        // CR-DS item 5: a frozen box's verdict and table as of its end (levels as of its break minute)
+        const entry = sct.current ? null : v3Edges.boxes.find((en) => String(en.box.from) === sct.key)
+        const verdict = entry ? boxVerdict({
+          box: entry.box, pct: sct.pct, levels: absorptionLevels(v3Payload, v3Times, v3Shift, undefined, entry.box.ended.at),
+          tradeDate, rules: v3Rules, hhmm,
+        }) : null
+        return { ...sct, verdict, history: mine, historyText: mine ? readHistoryText(mine, hhmm) : '', historyShort: mine ? readHistoryText(mine, hhmm, true) : '' }
+      }),
+    }
+  }, [v3Edges, v3Shift, v3Payload, v3Times, v3History, v3PtMin, tradeDate, v3Rules, v3Sel, v3EdgeReadout, v3SelEngineBox, flowV3?.running])
+  // CR-DQ item 7: the current box's verdict from the panel's own inputs (its percentiles, the levels above, the trade date).
+  // CR-DY: an engine box reads the absorption levels as of its decision minute's close (it is frozen there).
+  const v3DraftVerdict = useMemo(() => {
+    const levels = v3SelEngineBox ? absorptionLevels(v3Payload, v3Times, v3Shift, undefined, v3SelEngineBox.toT + 60) : v3LevelsAll
+    return currentBoxVerdict(v3BoxPanel, v3Edges, levels, tradeDate, v3Rules, v3Shift, formatShiftedHHMM)
+  }, [v3BoxPanel, v3Edges, v3LevelsAll, tradeDate, v3Rules, v3Shift, v3SelEngineBox, v3Payload, v3Times])
+  // CR-DU amendment 7: the panel's verdict and rows read the manual box (CR-DQ / CR-DS `boxVerdict`). The v1 rules engine
+  // gets its own line from its own chained box (v1Engine.panelEngine, 06:30 chain to the last bar / set end, with its own
+  // trades for rules 19 / 20); it never moves the manual box. Where the engine is off for the date (inputs `blocked`:
+  // holdout, set 2 in progress, …) the line gives the reason.
+  const v1Panel = useMemo(() => {
+    if (!v3EdgeReadout || !v3Payload || !v1Inputs) return null
+    if (v1Inputs.blocked || v1Inputs.error) return null // CR-DY: the v1 chip states the reason, once
+    // CR-DY: an engine box reads the engine at its decision minute on the overlay's settings, so it is the trade's verdict
+    const ctx = prepareSession({ payload: v3Payload, inputs: v1Inputs, tradeDate, fixedBaseline: boxBaseline, settings: v3SelEngineBox ? null : engineSettingsFromRules(v3Rules) })
+    const pe = panelEngine(ctx, { endShifted: v3End })
+    const fmt = (t) => formatShiftedHHMM(v3Shift(t))
+    return { verdict: panelVerdict(pe, fmt), engineBox: engineAtLine(pe, fmt), engineBoxTitle: engineAtTitle(pe, fmt), pe, ctx }
+  }, [v3EdgeReadout, v3Payload, v1Inputs, tradeDate, v3Rules, v3Shift, v3End, v3SelEngineBox])
+  const v3Verdict = useMemo(() => {
+    if (!v3DraftVerdict) return v3DraftVerdict
+    if (!v1Panel?.verdict) return v3DraftVerdict
+    const base = v3SelEngineBox ? engineBoxVerdict(v3DraftVerdict, v1Panel.pe, v1Panel.verdict, v3Rules.notable) : v3DraftVerdict
+    return { ...base, engineBox: v1Panel.engineBox, engineTag: v1Panel.verdict.engineTag, engineTitle: `${v1Panel.engineBoxTitle} ${v1Panel.verdict.title}`, engineLine: v1Panel.verdict.engineLine }
+  }, [v3DraftVerdict, v1Panel, v3SelEngineBox, v3Rules])
   const v1MarksRef = useRef({ series: null, prim: null })
+  // CR-DY goal 4: the rectangles (your box magenta, engine boxes teal), hover and selection; a click goes through the ref.
+  const [boxHover, setBoxHover] = useState(null)
+  const v3SelId = v3Sel?.kind === 'drawn' ? DRAWN_BOX_ID : v3SelEngineBox?.id ?? null
+  const v3BoxList = useMemo(() => {
+    const out = []
+    const drawn = flowV3?.drawnBox ? snapBox(DRAWN_BOX_ID, flowV3.drawnBox, v3Times, v3Shift, MAGENTA_RGB) : null
+    if (drawn) out.push(drawn)
+    for (const b of v1Boxes) {
+      const sb = snapBox(b.id, b, v3Times, v3Shift, V1_TRADES_RGB)
+      if (sb) out.push(sb)
+    }
+    return out
+  }, [flowV3?.drawnBox, v1Boxes, v3Times, v3Shift])
+  const selectBoxRef = useRef(null)
+  const onBoxSelect = flowV3?.onBoxSelect
+  selectBoxRef.current = Object.assign((id) => {
+    if (id == null) onBoxSelect?.(null)
+    else if (id === DRAWN_BOX_ID) onBoxSelect?.({ kind: 'drawn' })
+    else {
+      const b = v1Boxes.find((x) => x.id === id)
+      if (b) onBoxSelect?.({ kind: 'engine', id: b.id, k: b.k, fromT: b.fromT, toT: b.toT })
+    }
+  }, { selected: Boolean(v3Sel) })
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !v3BoxList.length) {
+      setBoxHover(null)
+      return undefined
+    }
+    const onMove = (p) => {
+      setBoxHover(p?.point ? (v1MarksRef.current.prim?.hitTest(p.point) ?? v3PrimRef.current.boxes?.hitTest(p.point) ?? null) : null)
+    }
+    chart.subscribeCrosshairMove(onMove)
+    return () => chart.unsubscribeCrosshairMove(onMove)
+  }, [v3BoxList.length > 0]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.__crDyBoxes = () => ({ rects: v3PrimRef.current.boxes?.rects() || [], list: v3BoxList, selected: v3SelId, hover: boxHover })
+  }, [v3BoxList, v3SelId, boxHover])
   useEffect(() => {
     const series = seriesRef.current
     if (!series) return
@@ -2880,8 +2943,8 @@ export default function PriceChart({
       r.prim = new TradeMarksPrimitive()
       series.attachPrimitive(r.prim)
     }
-    r.prim.setData(v1Sim ? { trades: v1Sim.marks, times: v3Times, step: v3Step, selectedId: null, rgb: V1_TRADES_RGB } : null)
-  }, [v1Sim, v3Times, v3Step])
+    r.prim.setData(v1Sim ? { trades: v1Sim.marks, times: v3Times, step: v3Step, selectedId: v3SelEngineBox?.id ?? (String(boxHover).startsWith('v1-') ? boxHover : null), rgb: V1_TRADES_RGB } : null)
+  }, [v1Sim, v3Times, v3Step, v3SelEngineBox, boxHover])
   const [v1Hover, setV1Hover] = useState(null)
   useEffect(() => {
     const chart = chartRef.current
@@ -2949,16 +3012,12 @@ export default function PriceChart({
     const t = feedStalledSince(v3Payload)
     return t == null ? null : formatShiftedHHMM(v3Shift(t))
   }, [v3Payload, v3Shift])
-  const [boxPopupClosed, setBoxPopupClosed] = useState(false)
   const [boxPanelGeom, setBoxPanelGeom] = useState(null) // { pane, w, h } plot rect (stage px) + panel size
   const [boxPanelPos, setBoxPanelPos] = useState(() => readBoxPanelPos()) // { left, bottom } or null (default)
   const [boxPanelDragging, setBoxPanelDragging] = useState(false)
   const boxPopupRef = useRef(null)
   const boxPopupDragRef = useRef(null)
-  useEffect(() => {
-    setBoxPopupClosed(false)
-  }, [v3Anchor])
-  const boxPopupOn = Boolean(v3BoxPanel && !boxPopupClosed)
+  const boxPopupOn = Boolean(v3BoxPanel && v3Sel) // CR-DY goal 4: the panel reads the selected box
   useEffect(() => {
     if (!boxPopupOn) {
       setBoxPanelGeom(null)
@@ -3022,7 +3081,7 @@ export default function PriceChart({
     const series = seriesRef.current
     if (!series) return
     const reg = v3PrimRef.current
-    if (reg.series !== series) v3PrimRef.current = { series, heat: null, boxShade: null, marks: null, profile: null, levels: null, edges: null, window: null }
+    if (reg.series !== series) v3PrimRef.current = { series, heat: null, boxes: null, marks: null, profile: null, levels: null, edges: null, window: null }
     const r = v3PrimRef.current
     const feed = (key, make, data) => {
       if (!data && !r[key]) return
@@ -3033,13 +3092,13 @@ export default function PriceChart({
       r[key].setData(data)
     }
     feed('heat', () => new HeatmapPrimitive(), v3Columns ? { columns: v3Columns, times: v3Times, sell: v3SellLayer, buy: v3BuyLayer } : null)
-    feed('boxShade', () => new BoxShadePrimitive(), v3Edges) // CR-DQ item 4: over the heat, under the candles
+    feed('boxes', () => new SelectableBoxesPrimitive(), v3BoxList.length ? { boxes: v3BoxList, selectedId: v3SelId, hoverId: boxHover } : null) // CR-DQ item 4 / CR-DY: over the heat, under the candles
     feed('marks', () => new AbsorbMarksPrimitive((mark, pt) => setV3Hover(mark ? { mark, pt } : null)),
       v3Marks ? { marks: v3Marks, times: v3Times } : null)
     feed('profile', () => new ProfilePrimitive(), v3Profile)
     feed('levels', () => new AbsorptionLevelsPrimitive((level, pt) => setV3LevelHover(level ? { level, pt } : null)),
       v3Levels ? { levels: v3Levels, times: v3Times } : null)
-    feed('edges', () => new EdgeLinesPrimitive((probe, pt) => setV3ProbeHover(probe ? { probe, pt } : null)), v3Edges)
+    feed('edges', () => new EdgeLinesPrimitive((probe, pt) => setV3ProbeHover(probe ? { probe, pt } : null)), v3SelEngineBox ? null : v3Edges) // CR-DY: an engine box has its border
     feed('window', () => new WindowShadePrimitive(), flowWindow ? { ...flowWindow, times: v3Times } : null)
     // CR-DG: an open hover re-reads its mark / level from the new payload, so held minutes update on a refresh
     // while the pointer is still (gone from the new list = hover closed).
@@ -3049,7 +3108,7 @@ export default function PriceChart({
       const hit = h && v3Edges?.probes.find((q) => q.probe.at === h.probe.at && q.probe.dir === h.probe.dir)
       return hit ? { ...h, probe: hit.probe } : null
     })
-  }, [v3Columns, v3Marks, v3Profile, v3Levels, v3Edges, flowWindow, v3Times, v3SellLayer, v3BuyLayer, displayCandles])
+  }, [v3Columns, v3Marks, v3Profile, v3Levels, v3Edges, flowWindow, v3Times, v3SellLayer, v3BuyLayer, displayCandles, v3BoxList, v3SelId, boxHover, v3SelEngineBox])
 
   // CR-DP item 8a — y-axis zoom memory. Dragging the right price axis stretches / compresses the scale (lightweight-charts'
   // axisPressedMouseMove, as before; the wheel zoom and plot drag also set a manual range) and a double-click on the
@@ -4100,7 +4159,8 @@ export default function PriceChart({
               panelRef={boxPopupRef}
               maxHeight={boxPanelGeom ? Math.max(80, Math.round(boxPanelGeom.pane.height * 0.5)) : undefined}
               dragged={Boolean(boxPanelPos) || boxPanelDragging}
-              onClose={() => setBoxPopupClosed(true)}
+              onClose={() => onBoxSelect?.(null)}
+              armed={anchorPickArmed}
               onHeaderPointerDown={onBoxPopupPointerDown}
               onHeaderPointerMove={onBoxPopupPointerMove}
               onHeaderPointerUp={onBoxPopupPointerUp}

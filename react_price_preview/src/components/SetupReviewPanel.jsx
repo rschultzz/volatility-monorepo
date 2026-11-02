@@ -289,7 +289,7 @@ function SummaryView({ groups, loading, error }) {
 export default function SetupReviewPanel({
   apiBase = '',
   activeCandidate = null,
-  anchorRecord = null, // CR-DU amendment 7b: { anchor_ts, box_min_age_min, box_min_height_pts }, sent with every save
+  anchorRecord = null, // CR-DU amendment 7b / CR-DY: { anchor_ts, box_end_ts, box_top, box_bottom, box_min_age_min, box_min_height_pts }, sent with every save
   onActivate,
   onClose,
   rightOffset = 0,

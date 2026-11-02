@@ -159,7 +159,7 @@ const verdict = async (page) => {
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(240_000)
 
-const ENGINE_LINE = /^Engine \(box \d\d:\d\d–\d\d:\d\d\): (NO ACTION( — rule \d+: .+)?|SHORT|LONG|NO TRADES( — .+)?)/
+const ENGINE_LINE = /^Engine at \d\d:\d\d: (NO ACTION( — rule \d+: .+)?|SHORT|LONG|NO TRADES( — .+)?)/
 const summary = async (page) => (await page.locator('[data-testid="flow-v3-box-panel-current"] [data-testid="flow-v3-box-panel-summary"]').innerText()).replace(/^[▸▾]\s*/, '')
 
 test('1. 10-30 manual box (anchor 07:43, replay to 07:51): box min 8 vs "box still forming" at 10; the engine line is separate', async ({ page }) => {
@@ -289,7 +289,7 @@ test('6. 2026-01-26 anchor 08:31 (card replay to 08:49): rows and line cover 08:
   expect(await page.getByTestId('flow-v3-box-broke').count()).toBe(0)
   const v = await verdict(page)
   expect(v.engineBox).toBe('')
-  expect(v.engine).toBe('v1 engine off: set 2 in progress')
+  expect(v.engine).toBe('') // CR-DY: the reason is on the v1 chip, once
   const line = await lineData(page)
   const drawn = line.filter((p) => p.value != null)
   expect(hhmm(drawn[0].time)).toBe('08:32') // nothing is summed at the start bar
@@ -380,6 +380,7 @@ test('9. amendment 7b: a review save sends the anchor and the box min / height i
   await open(page, TRAIN, { storage: EDGES })
   await page.getByRole('button', { name: 'Show setup review panel' }).click()
   await page.locator('[data-testid="review-row"]').first().click()
+  await page.locator('.tv-lightweight-charts').first().waitFor() // the card's replay remounts the chart
   await settle(page)
   const t = shifted(`${TRAIN}T07:30`)
   await anchorAt(page, t, t - 20 * 60, shifted(`${TRAIN}T08:00`))

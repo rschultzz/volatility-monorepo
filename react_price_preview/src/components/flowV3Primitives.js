@@ -4,6 +4,7 @@
 // once per data change (flowV3.js, memoised by the caller); a draw only reads them.
 // Palette (C1): sell = light grey, buy = blue, marks / lines = slate. No green, no red.
 import { CROWDED_TICK_PX, TICK, floorIndex } from '../flowV3.js'
+import { hitBox } from '../selectableBoxes.js'
 
 const SELL_RGB = '229,231,235'
 const BUY_RGB = '96,165,250'
@@ -256,7 +257,7 @@ export class ProfilePrimitive extends BasePrimitive {
 
 // CR-DF — absorption levels and the edge lines, in magenta (C1 deviation approved by Ryan in the kickoff:
 // distinct from candles, heat and GEX lines; still no red / green).
-const MAGENTA_RGB = '232,121,249' // #e879f9
+export const MAGENTA_RGB = '232,121,249' // #e879f9
 // CR-DG — "sellers absorbed" (floor) levels in orange (C1 deviation approved by Ryan, chat 2026-10-28; still no
 // red / green). "Buyers absorbed" (ceiling) levels and the edge lines stay magenta.
 export const ORANGE_RGB = '251,146,60' // #fb923c
@@ -623,36 +624,78 @@ export class BoxStartTicksPrimitive extends BasePrimitive {
   }
 }
 
-// CR-DQ item 4 — faint box fills behind the candles: each drawn box between its top and bottom over its time span, existing
-// magenta at very low opacity (current BOX_SHADE_ALPHA_CURRENT, frozen BOX_SHADE_ALPHA_FROZEN). The edge lines stay as
+// CR-DQ item 4 — faint box fill behind the candles, existing magenta at very low opacity. The edge lines stay as
 // EdgeLinesPrimitive draws them. The set-end window (WindowShadePrimitive) is slate and spans the full plot height, so it
-// stays distinct. data: the same { boxes: [{ from, to, top, bottom, frozen }] } as EdgeLinesPrimitive.
+// stays distinct.
 export const BOX_SHADE_ALPHA_CURRENT = 0.10
-export const BOX_SHADE_ALPHA_FROZEN = 0.05
-export class BoxShadePrimitive extends BasePrimitive {
+// CR-DY goal 4 — the selectable boxes, over the heat and under the candles (no autoscaleInfo: never moves the scale). All
+// light fill; hover a little darker; selected darker with a solid border. Half a bar past each end, so the first and last
+// bars sit inside. data: { boxes: [{ id, from, to, top, bottom, rgb }], selectedId, hoverId, times }. `rects()` = where each
+// was last drawn (css px): the click / hover hit list, also read by the smoke spec.
+export const BOX_FILL_ALPHA = BOX_SHADE_ALPHA_CURRENT
+export const BOX_FILL_ALPHA_HOVER = 0.16
+export const BOX_FILL_ALPHA_SELECTED = 0.26
+export const BOX_WICK_ALPHA = 0.55
+export class SelectableBoxesPrimitive extends BasePrimitive {
+  constructor() {
+    super()
+    this._rects = []
+  }
+
   zOrder() {
     return 'bottom'
   }
 
+  rects() {
+    return this._rects.slice()
+  }
+
+  hitTest(pt) {
+    return hitBox(this._rects, pt)
+  }
+
   paint({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }, chart, series, d) {
+    this._rects = []
     const ts = chart.timeScale()
     const plotW = bitmapSize.width / hr
-    const vrange = ts.getVisibleRange?.()
-    if (!vrange) return
+    const half = (Number(ts.options().barSpacing) || 6) / 2
     for (const b of d.boxes || []) {
-      if (b.to < Number(vrange.from) || b.from > Number(vrange.to)) continue
       const xa = ts.timeToCoordinate(b.from)
       const xb = ts.timeToCoordinate(b.to)
       const yt = series.priceToCoordinate(b.top)
       const yb = series.priceToCoordinate(b.bottom)
-      if (yt == null || yb == null) continue
-      const x0 = Math.max(0, xa == null ? 0 : xa)
-      const x1 = Math.min(plotW, xb == null ? plotW : xb)
+      if (xa == null || xb == null || yt == null || yb == null) continue
+      const x0 = Math.max(0, xa - half)
+      const x1 = Math.min(plotW, xb + half)
       if (x1 <= x0) continue
       const y0 = Math.min(yt, yb)
       const h = Math.max(1, Math.abs(yb - yt))
-      ctx.fillStyle = `rgba(${MAGENTA_RGB},${b.frozen ? BOX_SHADE_ALPHA_FROZEN : BOX_SHADE_ALPHA_CURRENT})`
-      ctx.fillRect(Math.round(x0 * hr), Math.round(y0 * vr), Math.round((x1 - x0) * hr), Math.round(h * vr))
+      const sel = b.id === d.selectedId
+      const hov = b.id === d.hoverId
+      ctx.fillStyle = `rgba(${b.rgb},${sel ? BOX_FILL_ALPHA_SELECTED : hov ? BOX_FILL_ALPHA_HOVER : BOX_FILL_ALPHA})`
+      const px = [Math.round(x0 * hr), Math.round(y0 * vr), Math.round((x1 - x0) * hr), Math.round(h * vr)]
+      ctx.fillRect(...px)
+      if (sel) {
+        ctx.strokeStyle = `rgba(${b.rgb},0.95)`
+        ctx.lineWidth = Math.max(1, Math.round(1.5 * hr))
+        ctx.strokeRect(...px)
+      }
+      // Ruling 1: the wick range (the box's high / low), faint dotted lines, display only; hit-testing stays on the edges
+      ctx.save()
+      ctx.strokeStyle = `rgba(${b.rgb},${BOX_WICK_ALPHA})`
+      ctx.lineWidth = Math.max(1, Math.round(hr))
+      ctx.setLineDash([Math.round(1 * hr), Math.round(3 * hr)])
+      for (const p of [b.high, b.low]) {
+        const y = Number.isFinite(p) ? series.priceToCoordinate(p) : null
+        if (y == null) continue
+        const yy = Math.round(y * vr) + 0.5
+        ctx.beginPath()
+        ctx.moveTo(px[0], yy)
+        ctx.lineTo(px[0] + px[2], yy)
+        ctx.stroke()
+      }
+      ctx.restore()
+      this._rects.push({ id: b.id, x0, x1, y0, y1: y0 + h, selected: sel, hover: hov })
     }
   }
 }
