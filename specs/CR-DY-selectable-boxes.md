@@ -118,7 +118,7 @@ The kickoff's two clauses disagree. "High / low of the bars" is wicks; "same def
 
 On the 142 engine trades the wick range is taller than the edges every time (median +4.5 pts, p90 +9.75).
 
-**Reading used: the engine rule**, through `edgeReadout` manual. It keeps "panel stat computations unchanged" and "same definition", and the same window then gives the same edges on a drawn and an engine box (142 / 142 above). Consequence, visible: closes can pass the rectangle after it freezes, and the panel flags it (07:34–07:49 shows "broke ↑"). Wicks stay available as `high` / `low`. The rectangle and the saved fields read one function (`drawnBoxOf`), so changing this is one line. Not a STOP: the plan doesn't change, and it is for Ryan to confirm on the screenshots.
+**Reading used: the engine rule**, through `edgeReadout` manual. It keeps "panel stat computations unchanged" and "same definition", and the same window then gives the same edges on a drawn and an engine box (142 / 142 above). Consequence, visible: closes can pass the rectangle after it freezes (07:34–07:49: rectangle top 7654.25, a later close 7657.00). A held break is flagged; that one was not held inside the window. Wicks stay available as `high` / `low`. The rectangle and the saved fields read one function (`drawnBoxOf`), so changing this is one line. Not a STOP: the plan doesn't change, and it is for Ryan to confirm on the screenshots.
 
 ### Design fixed by Step 0
 
@@ -126,8 +126,43 @@ On the 142 engine trades the wick range is taller than the edges every time (med
 - **One drawn box at a time.** A new draw replaces it (the kickoff has one "your box").
 - **Controls.** New first chip "draw box". The two old chips stay, secondary: "start only" and "set end" (existing behaviour and test ids). Session open / last swing set the start of a draw when one is armed, and are unchanged otherwise.
 - **Esc:** armed → cancel the pick; else selected → clear selection (the box stays); else → remove the drawn box (today's Esc).
-- **Empty chart click** with a selection clears it and does nothing else. Box hit-test comes after the armed pick and the trade markers, before GEX lines.
+- **Empty chart click** with a selection clears it and does nothing else. Box hit-test comes after the armed pick, the trade markers and the GEX lines (a GEX line has an 8-px hit band and a box is large, so a level stays clickable inside a box).
 - **Blocked reason once:** the v1 chip keeps it; the panel's "v1 engine off: …" line goes.
 - **Engine box rows** use the engine's box min / height, so their edges are the engine's; drawn boxes keep ⚙.
 - **Engine box verdict pill** = the panel's `boxVerdict` over the window, as a drawn box; the engine's own verdict is the "Engine at …" line. They can differ (p80 vs p70 lean, location), as they do today on a manual box.
 - **`setup_reviews`** gains nullable `box_end_ts`, `box_top`, `box_bottom` (`anchor_ts` is already the start). The migration runs before any deploy that writes them.
+
+## Smoke + wrap (2026-11-01)
+
+| Commit | Step |
+|---|---|
+| `7d95ec4` | spec freeze |
+| `ff92f94` | Step 0 |
+| step 1 | helpers (`src/selectableBoxes.js`), rectangle primitive |
+| `5e75b80` | step 2: draw box, engine boxes, selection, panel, relabel, click-through, help text, review fields, migration |
+| `163d0bc` | smoke `tests/e2e/cr-dy.spec.js` |
+| `8b62f5d` | Esc fix, moved assertions |
+
+**Engine.** `v1Engine.js` is not edited (no diff vs `origin/main`). 86 sessions / 33,540 minutes: hash of trades + minutes + state equal to tag `cr-du-engine-v1.4`; 142 / 142 trades on box edges and verdict through the panel path (`scripts/logs/cr-dy/engine_parity.txt`). `engineBoxLine` in `v1Engine.js` now has no caller; left there to keep the file untouched.
+
+**Smoke `cr-dy.spec.js`, 7 / 7.** 10-30 draw 07:34–07:49 gives rectangle 7654.25 / 7637.25, title "Your box 07:34–07:49", all rows. 10-30 with v1 trades: 5 trades, 5 boxes at their decision minutes (08:03–08:16, 08:27–08:35, 09:11–09:21, 09:50–09:58, 11:01–11:10); each click moves the panel and the highlight; the delta line follows. 01-26: drawn box works, no engine boxes, "set 2 in progress" once on the page. Armed click over the panel lands on the bar. Review POST carries the four fields. Unit 167 / 167; review routes 24 / 24 on temp copies; a save on the real `setup_reviews` in a transaction wrote all four, rolled back (154 rows before and after). Live check deferred to the first RTH session after deploy.
+
+**Migration.** `scripts/cr_dy_setup_reviews_box.py`, run `9188623c`: `box_end_ts`, `box_top`, `box_bottom` nullable, 154 rows before and after, all NULL. Already applied, so the deploy has nothing to wait for.
+
+**Existing specs vs baseline.** Baseline: CR-DU's `d464ec4` run (`scripts/logs/cr-du/specs/full_d464ec4.*`); `react_price_preview`, `apps` and `packages` are identical between `d464ec4` and `dcbcad2`.
+
+| | Passed | Failed / timed out | Skipped |
+|---|---|---|---|
+| baseline | 99 | 20 | 19 |
+| branch | 106 | 19 | 20 |
+
+**Failing only on the branch: none.** Passes: +7 `cr-dy`. `cr-dg` live moved from timed out to skipped (it needs a live session; not this CR). The 19 failing are the same titles; messages differ on 3 only (`cr-dc` live and `cr-df` live, weekend, timeout vs assertion; `cr-dm` the worktree path in a missing-log error). This is one full run plus reruns of the changed files after the fixes (`cr-dc`, `cr-dp`, `cr-dq`, `cr-du`, `cr-dy`), not one clean full run after the last commit. Assertions changed, all for an intended change: `cr-dp` items 1–3 (chips), `cr-dq` shade helper and item 4 (primitive name), `cr-dq` FOMC and `cr-du` `ENGINE_LINE` ("Engine at"), `cr-du` 6 (reason on the chip), `cr-du` 9 (waits for the chart after the card's remount).
+
+**Bugs the suite and smoke caught.** `_review_num` capped values at 1000, which would have refused every box price. With Edges off, the first Esc cleared an invisible selection.
+
+**For Ryan.**
+1. **Top / bottom** (reading above): engine rule used, not wicks. Screenshot `specs/assets/cr-dy/1-draw-0734-0749.png`.
+2. **Pill vs engine line on an engine box:** all 5 on 10-30 read pill NO ACTION with "Engine at …: SHORT / LONG". The pill is `boxVerdict` on panel rules (lean p80), the engine leans at p70 and only counts in-box absorption. Kickoff followed; the alternative is the engine's verdict in the pill on an engine box.
+3. **CR-DX** doesn't exist in the repo; its fit is unchecked.
+4. **Header width:** with an end set at 1440 px the Flow header scrolls and clips "v1 trades" (it already scrolled; the new chip brings it on). Screenshot 1.
+5. Two clicks inside lightweight-charts' 500 ms double-click window lose the second; the pick stays armed, so click again.
